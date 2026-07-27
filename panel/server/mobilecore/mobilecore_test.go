@@ -211,6 +211,33 @@ func TestMobileCoreCapabilityGuardsExecutionRoutesAndInitializesAdmin(t *testing
 	started := startForTest(t, t.TempDir())
 	client := localClient()
 
+	unauthenticated, err := http.NewRequest(http.MethodPut, started.Endpoint+"/api/tasks/1/run", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthenticatedResponse, err := client.Do(unauthenticated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthenticatedResponse.Body.Close()
+	if unauthenticatedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("JWT route without JWT status=%d want=401", unauthenticatedResponse.StatusCode)
+	}
+
+	body := bytes.NewBufferString(`{"username":"mobile_admin","password":"secret123"}`)
+	response, err := client.Post(started.Endpoint+"/api/auth/init", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("admin init status=%d", response.StatusCode)
+	}
+	accessToken, err := middleware.GenerateAccessToken("mobile_admin", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	for _, request := range []struct {
 		method string
 		path   string
@@ -227,6 +254,7 @@ func TestMobileCoreCapabilityGuardsExecutionRoutesAndInitializesAdmin(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
 		response, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("%s %s: %v", request.method, request.path, err)
@@ -241,16 +269,6 @@ func TestMobileCoreCapabilityGuardsExecutionRoutesAndInitializesAdmin(t *testing
 		}
 	}
 
-	body := bytes.NewBufferString(`{"username":"mobile_admin","password":"secret123"}`)
-	response, err := client.Post(started.Endpoint+"/api/auth/init", "application/json", body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		payload, _ := io.ReadAll(response.Body)
-		t.Fatalf("admin init status=%d body=%s", response.StatusCode, payload)
-	}
 	check, err := client.Get(started.Endpoint + "/api/auth/check-init")
 	if err != nil {
 		t.Fatal(err)

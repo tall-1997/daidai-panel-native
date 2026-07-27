@@ -2,7 +2,6 @@ package router
 
 import (
 	"net/http"
-	"strings"
 
 	"daidai-panel/handler"
 	"daidai-panel/middleware"
@@ -122,6 +121,11 @@ func mobileCapabilityMiddleware(platform MobilePlatform) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		if metadata, ok := MetadataForRoute(c.Request.Method, c.FullPath()); ok && metadata.AuthContract == "jwt" {
+			if !middleware.AuthenticateAccessToken(c) {
+				return
+			}
+		}
 
 		state := platform.Capability(capability)
 		status := http.StatusConflict
@@ -139,33 +143,5 @@ func mobileCapabilityMiddleware(platform MobilePlatform) gin.HandlerFunc {
 			"state":      state.State,
 			"reasonCode": reasonCode,
 		})
-	}
-}
-
-func mobileRouteCapability(method, routePath string) string {
-	path := strings.TrimPrefix(routePath, "/api/v1")
-	path = strings.TrimPrefix(path, "/api")
-	switch {
-	case strings.HasPrefix(path, "/tasks/") && (strings.HasSuffix(path, "/run") || strings.HasSuffix(path, "/stop")),
-		path == "/tasks/batch/run":
-		return CapabilityTaskExecution
-	case strings.HasPrefix(path, "/scripts/run"), path == "/scripts/format":
-		return CapabilityScriptExecution
-	case strings.HasPrefix(path, "/deps") && method != http.MethodGet:
-		return CapabilityDependencyMutation
-	case strings.HasPrefix(path, "/subscriptions/") && strings.Contains(path, "/pull"):
-		return CapabilitySubscriptionPull
-	case path == "/system/update":
-		return CapabilitySystemUpdate
-	case path == "/system/restart":
-		return CapabilitySystemRestart
-	case path == "/system/restore", path == "/system/backup", path == "/system/backup/upload":
-		return CapabilityBackupMutation
-	case strings.HasPrefix(path, "/android-runtime/") && method != http.MethodGet:
-		return CapabilityRuntimeMutation
-	case path == "/notifications/send", strings.HasSuffix(path, "/test") && strings.HasPrefix(path, "/notifications/"):
-		return CapabilityNotificationDispatch
-	default:
-		return ""
 	}
 }

@@ -15,8 +15,8 @@ func main() {
 	check := flag.Bool("check", false, "verify that the generated contract is current")
 	flag.Parse()
 
-	contracts := router.BuildRouteContracts(router.CanonicalServerRoutes(), router.CanonicalMobileRoutes())
-	data, err := json.MarshalIndent(contracts, "", "  ")
+	document := router.BuildContractDocument(router.CanonicalServerRoutes(), router.CanonicalMobileRoutes())
+	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		fatal(err)
 	}
@@ -31,7 +31,7 @@ func main() {
 		if !bytes.Equal(current, data) {
 			fatal(fmt.Errorf("%s is stale or contains unclassified route changes; run go run scripts/generate-route-contract.go", contractPath))
 		}
-		fmt.Printf("route contract is current: %d routes\n", len(contracts))
+		fmt.Printf("route contract is current: %d routes\n", len(document.Routes))
 		return
 	}
 
@@ -41,7 +41,7 @@ func main() {
 	if err := os.WriteFile(contractPath, data, 0o644); err != nil {
 		fatal(err)
 	}
-	fmt.Printf("generated %s: %d routes\n", contractPath, len(contracts))
+	fmt.Printf("generated %s: %d routes\n", contractPath, len(document.Routes))
 }
 
 func fatal(err error) {

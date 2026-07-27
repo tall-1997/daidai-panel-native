@@ -130,43 +130,43 @@ func ExtractBearerToken(authHeader string) string {
 
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenStr := ExtractBearerToken(c.GetHeader("Authorization"))
-
-		if tokenStr == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少授权令牌"})
-			c.Abort()
+		if !AuthenticateAccessToken(c) {
 			return
-		}
-
-		claims, err := ParseToken(tokenStr)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌无效或已过期"})
-			c.Abort()
-			return
-		}
-
-		if claims.TokenType != "access" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌类型错误"})
-			c.Abort()
-			return
-		}
-
-		if IsTokenBlocked(claims.ID) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌已被撤销"})
-			c.Abort()
-			return
-		}
-
-		c.Set("username", claims.Username)
-		c.Set("role", claims.Role)
-		c.Set("jti", claims.ID)
-		if isAppToken(claims.Username, claims.Role) {
-			c.Set("token_kind", "app")
-		} else {
-			c.Set("token_kind", "user")
 		}
 		c.Next()
 	}
+}
+
+func AuthenticateAccessToken(c *gin.Context) bool {
+	tokenStr := ExtractBearerToken(c.GetHeader("Authorization"))
+	if tokenStr == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "缺少授权令牌"})
+		return false
+	}
+
+	claims, err := ParseToken(tokenStr)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "令牌无效或已过期"})
+		return false
+	}
+	if claims.TokenType != "access" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "令牌类型错误"})
+		return false
+	}
+	if IsTokenBlocked(claims.ID) {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "令牌已被撤销"})
+		return false
+	}
+
+	c.Set("username", claims.Username)
+	c.Set("role", claims.Role)
+	c.Set("jti", claims.ID)
+	if isAppToken(claims.Username, claims.Role) {
+		c.Set("token_kind", "app")
+	} else {
+		c.Set("token_kind", "user")
+	}
+	return true
 }
 
 func RequireAdmin() gin.HandlerFunc {

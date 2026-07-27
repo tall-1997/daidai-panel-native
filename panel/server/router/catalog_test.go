@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -76,11 +77,100 @@ func TestRouteContractClassifiesEveryServerRoute(t *testing.T) {
 		if contract.MobileStatus == "planned" {
 			t.Errorf("route %s remains planned in Milestone 1", key)
 		}
+		wantTestCase := "TestMobileRouteContract/" + routeSubtestKey(contract.Method, contract.Path)
+		if contract.TestCase != wantTestCase {
+			t.Errorf("route %s testCase=%q want=%q", key, contract.TestCase, wantTestCase)
+		}
 	}
 	for key := range serverKeys {
 		if !contractKeys[key] {
 			t.Errorf("server route %s is absent from the contract", key)
 		}
+	}
+}
+
+func TestRouteMetadataCoversCanonicalRoutesAndExplicitExceptions(t *testing.T) {
+	wantPublic := map[string]bool{
+		"POST /api/open-api/token":    true,
+		"POST /api/v1/open-api/token": true,
+	}
+	wantStreams := map[string]bool{
+		"GET /api/deps/:id/log-stream":              true,
+		"GET /api/v1/deps/:id/log-stream":           true,
+		"GET /api/subscriptions/:id/pull-stream":    true,
+		"GET /api/v1/subscriptions/:id/pull-stream": true,
+		"POST /api/android-runtime/install":         true,
+		"POST /api/v1/android-runtime/install":      true,
+	}
+
+	for _, route := range CanonicalServerRoutes() {
+		metadata, ok := MetadataForRoute(route.Method, route.Path)
+		if !ok {
+			t.Errorf("route %s has no explicit metadata source", routeKey(route))
+			continue
+		}
+		key := routeKey(route)
+		if wantPublic[key] && metadata.AuthContract != "public" {
+			t.Errorf("route %s auth=%q want=public", key, metadata.AuthContract)
+		}
+		if wantStreams[key] && metadata.StreamContract != "sse" {
+			t.Errorf("route %s stream=%q want=sse", key, metadata.StreamContract)
+		}
+	}
+}
+
+func TestRouteMetadataListsOnlyRealSSEHandlers(t *testing.T) {
+	want := map[string]bool{
+		"GET /api/deps/:id/log-stream":              true,
+		"GET /api/v1/deps/:id/log-stream":           true,
+		"GET /api/logs/:id/stream":                  true,
+		"GET /api/v1/logs/:id/stream":               true,
+		"GET /api/subscriptions/:id/pull-stream":    true,
+		"GET /api/v1/subscriptions/:id/pull-stream": true,
+		"POST /api/android-runtime/install":         true,
+		"POST /api/v1/android-runtime/install":      true,
+	}
+	got := make(map[string]bool)
+	for _, route := range CanonicalServerRoutes() {
+		metadata, ok := MetadataForRoute(route.Method, route.Path)
+		if ok && metadata.StreamContract == "sse" {
+			got[routeKey(route)] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("SSE routes=%v want=%v", got, want)
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("missing SSE route %s", key)
+		}
+	}
+}
+
+func TestCanonicalServerRoutesUnionsNamedFixtures(t *testing.T) {
+	base := CanonicalServerRoutesForFixtures([]ServerRouteFixture{{
+		Name:     "base",
+		Register: func(engine *gin.Engine) { engine.GET("/base", func(*gin.Context) {}) },
+	}})
+	union := CanonicalServerRoutesForFixtures([]ServerRouteFixture{
+		{Name: "base", Register: func(engine *gin.Engine) { engine.GET("/base", func(*gin.Context) {}) }},
+		{Name: "optional", Register: func(engine *gin.Engine) { engine.POST("/optional", func(*gin.Context) {}) }},
+	})
+	if len(base) != 1 || len(union) != 2 || !routeKeys(union)["POST /optional"] {
+		t.Fatalf("fixture union base=%v union=%v", routeKeys(base), routeKeys(union))
+	}
+}
+
+func TestBuildContractDocumentCarriesSourceAndFixtureMetadata(t *testing.T) {
+	document := BuildContractDocument(CanonicalServerRoutes(), CanonicalMobileRoutes())
+	if !strings.HasPrefix(document.SourceVersion, "0e33d022") {
+		t.Fatalf("sourceVersion=%q", document.SourceVersion)
+	}
+	if len(document.Fixtures) == 0 || document.Fixtures[0] != "all-enabled-default" {
+		t.Fatalf("fixtures=%v", document.Fixtures)
+	}
+	if len(document.Routes) != 423 {
+		t.Fatalf("routes=%d want=423", len(document.Routes))
 	}
 }
 

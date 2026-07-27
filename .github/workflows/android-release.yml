@@ -48,7 +48,10 @@ jobs:
 
       - name: Test embedded Go core
         working-directory: panel/server
-        run: go test -race ./mobilecore ./database
+        run: go test -race ./router ./mobilecore ./database
+
+      - name: Verify generated route contract
+        run: go run ./scripts/generate-route-contract.go -check
 
       - name: Build embedded Core AAR
         working-directory: app

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"fmt"
 	"path"
 	"sort"
 	"strings"
@@ -25,11 +24,25 @@ type RouteDiff struct {
 	MissingFromServer []gin.RouteInfo `json:"missingFromServer"`
 }
 
+type ContractDocument struct {
+	SourceVersion string          `json:"sourceVersion"`
+	Fixtures      []string        `json:"fixtures"`
+	Routes        []RouteContract `json:"routes"`
+}
+
 func CanonicalServerRoutes() []gin.RouteInfo {
+	return CanonicalServerRoutesForFixtures([]ServerRouteFixture{{Name: "all-enabled-default", Register: Setup}})
+}
+
+func CanonicalServerRoutesForFixtures(fixtures []ServerRouteFixture) []gin.RouteInfo {
 	gin.SetMode(gin.TestMode)
-	engine := gin.New()
-	Setup(engine)
-	return canonicalRoutes(engine.Routes())
+	routes := make([]gin.RouteInfo, 0)
+	for _, fixture := range fixtures {
+		engine := gin.New()
+		fixture.Register(engine)
+		routes = append(routes, engine.Routes()...)
+	}
+	return canonicalRoutes(routes)
 }
 
 func CanonicalMobileRoutes() []gin.RouteInfo {
@@ -76,18 +89,30 @@ func BuildRouteContracts(server, mobile []gin.RouteInfo) []RouteContract {
 			status = "planned"
 			androidEquivalent = "planned:" + module
 		}
+		metadata, ok := MetadataForRoute(route.Method, route.Path)
+		if !ok {
+			panic("route metadata missing for " + routeKey(route))
+		}
 		contracts = append(contracts, RouteContract{
 			Method:            route.Method,
 			Path:              route.Path,
 			Module:            module,
 			MobileStatus:      status,
 			AndroidEquivalent: androidEquivalent,
-			AuthContract:      routeAuthContract(route.Path),
-			StreamContract:    routeStreamContract(route.Path),
-			TestCase:          fmt.Sprintf("route:%s %s", route.Method, route.Path),
+			AuthContract:      metadata.AuthContract,
+			StreamContract:    metadata.StreamContract,
+			TestCase:          "TestMobileRouteContract/" + routeSubtestKey(route.Method, route.Path),
 		})
 	}
 	return contracts
+}
+
+func BuildContractDocument(server, mobile []gin.RouteInfo) ContractDocument {
+	return ContractDocument{
+		SourceVersion: upstreamSourceVersion,
+		Fixtures:      []string{"all-enabled-default"},
+		Routes:        BuildRouteContracts(server, mobile),
+	}
 }
 
 func canonicalRoutes(routes []gin.RouteInfo) []gin.RouteInfo {
@@ -149,24 +174,4 @@ func routeModule(routePath string) string {
 		return "metadata"
 	}
 	return parts[0]
-}
-
-func routeAuthContract(routePath string) string {
-	for _, publicPath := range []string{
-		"/auth/check-init", "/auth/init", "/auth/login", "/auth/refresh",
-		"/auth/captcha-config", "/auth/avatar/:id", "/health", "/version",
-		"/system/public-version", "/system/panel-settings", "/robots.txt",
-	} {
-		if strings.HasSuffix(routePath, publicPath) {
-			return "public"
-		}
-	}
-	return "jwt"
-}
-
-func routeStreamContract(routePath string) string {
-	if strings.HasSuffix(routePath, "/stream") || strings.HasSuffix(routePath, "/live-logs") {
-		return "sse"
-	}
-	return "none"
 }
