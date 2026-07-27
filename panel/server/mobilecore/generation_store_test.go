@@ -3,9 +3,11 @@ package mobilecore
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 )
@@ -50,6 +52,7 @@ func TestFlatImportPreservesLegacyPrefixFilesAndSkipsExactRecoveryNamespace(t *t
 	for name, value := range legacyFiles {
 		writeTestFile(t, filepath.Join(root, name), value)
 	}
+	writeTestFile(t, filepath.Join(root, ".recovery-probe", "business"), "business-data")
 	writeTestFile(t, filepath.Join(root, recoveryMetadataDirName, recoveryMetadataMarkerName), recoveryMetadataMarkerValue)
 	if err := os.MkdirAll(filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName), 0o700); err != nil {
 		t.Fatal(err)
@@ -68,6 +71,9 @@ func TestFlatImportPreservesLegacyPrefixFilesAndSkipsExactRecoveryNamespace(t *t
 	}
 	if _, err := os.Stat(filepath.Join(active, recoveryMetadataDirName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("reserved namespace copied into generation: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(active, ".recovery-probe", "business")); err != nil || string(data) != "business-data" {
+		t.Fatalf("ordinary probe-named directory was not imported: %q %v", data, err)
 	}
 }
 
@@ -493,6 +499,118 @@ func TestExistingTargetPublishSyncFailuresRollback(t *testing.T) {
 			recoveryPublishBoundary = old
 			if err := store.convergeMetadataJournals(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProbeOwnershipBusinessDirectoryConcurrencyAndCleanup(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".recovery-probe", "business"), "keep")
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- platformProbeRecoveryMetadata(root) }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".recovery-probe", "business"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("business probe directory changed: %q %v", data, err)
+	}
+	bad := filepath.Join(root, recoveryProbePrefix+"1785180000000000000-aabbccddeeff0011")
+	if err := os.Mkdir(bad, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformProbeRecoveryMetadata(root); err == nil {
+		t.Fatal("marker-less reserved probe was accepted")
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatalf("marker-less business directory removed: %v", err)
+	}
+}
+
+func TestProbeCleanupFailuresAreOwnedAndConverge(t *testing.T) {
+	for _, point := range []string{"probe-remove-first", "probe-remove-second", "probe-remove-target", "probe-remove-" + recoveryProbeMarkerName, "probe-remove-directory"} {
+		t.Run(point, func(t *testing.T) {
+			root := t.TempDir()
+			old := recoveryProbeBoundary
+			fired := false
+			recoveryProbeBoundary = func(got string) error {
+				if got == point && !fired {
+					fired = true
+					return errors.New("crash")
+				}
+				return nil
+			}
+			if err := platformProbeRecoveryMetadata(root); err == nil {
+				t.Fatalf("boundary %s not reached", point)
+			}
+			recoveryProbeBoundary = old
+			if err := platformProbeRecoveryMetadata(root); err != nil {
+				t.Fatal(err)
+			}
+			entries, _ := os.ReadDir(root)
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), recoveryProbePrefix) {
+					t.Fatalf("probe remains: %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestPublishFailureRollbackFailureRestartsFromPrepared(t *testing.T) {
+	for _, oldPresent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("old-%t", oldPresent), func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureTrustedContainer(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, activeGenerationName)
+			if oldPresent {
+				writeTestFile(t, target, "old\n")
+			}
+			oldPublish := recoveryPublishBoundary
+			oldRollback := recoveryRollbackBoundary
+			recoveryPublishBoundary = func(point string) error {
+				if point == "publish-after-target-sync" {
+					return errors.New("publish sync failed")
+				}
+				return nil
+			}
+			recoveryRollbackBoundary = func(string) error { return errors.New("rollback still failed") }
+			err := store.writeAtomic(target, []byte("new\n"), 0o600, "test")
+			recoveryPublishBoundary = oldPublish
+			recoveryRollbackBoundary = oldRollback
+			if err == nil {
+				t.Fatal("expected rollback failure")
+			}
+			ops := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName)
+			entries, _ := os.ReadDir(ops)
+			if len(entries) != 1 {
+				t.Fatalf("prepared operation not retained: %v", entries)
+			}
+			if err := store.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+			data, readErr := os.ReadFile(target)
+			if oldPresent {
+				if readErr != nil || string(data) != "old\n" {
+					t.Fatalf("old not restored: %q %v", data, readErr)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatalf("absent old restored target: %v", readErr)
 			}
 		})
 	}

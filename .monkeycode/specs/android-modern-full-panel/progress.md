@@ -102,6 +102,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Made the capability probe execute two O_TMPFILE inodes, linkat, NOREPLACE, EXCHANGE, content/identity checks, cleanup, and parent fsync inside an exact recoverable probe namespace.
   - Synchronized the operation slot immediately after linking and both target/operation parents after publication before validation or COMMITTED.
   - Bound PREPARED exchange rollback to opened inode identities before and after rename, and covered every cleanup durability boundary with second-start convergence tests.
+- Final probe ownership and rollback retention fixes verified:
+  - Replaced the fixed probe directory with marker-bound random operation namespaces, flock-based concurrent isolation, and marker-last tombstone cleanup.
+  - Preserved ordinary probe-named business directories during flat import and safely rejected marker-less reserved-looking operations.
+  - Removed platform-side destructive rollback, retained exchange-state until journal-level rollback succeeded, and verified restart convergence after persistent rollback failures.
 
 ## Task 1.3 Review Findings Resolved
 

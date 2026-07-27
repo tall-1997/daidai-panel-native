@@ -38,7 +38,8 @@ const (
 	recoveryMetadataOldName      = "old-state"
 	recoveryMetadataNewName      = "new-state"
 	recoveryMetadataExchangeName = "exchange-state"
-	recoveryProbeDirName         = ".recovery-probe"
+	recoveryProbePrefix          = ".recovery-probe-"
+	recoveryProbeMarkerName      = "owner.json"
 	metadataJournalPrepared      = "PREPARED"
 	metadataJournalCommitted     = "COMMITTED"
 	metadataJournalRolledBack    = "ROLLED_BACK"
@@ -59,6 +60,41 @@ type metadataJournal struct {
 	State       string        `json:"state"`
 	Staging     string        `json:"staging"`
 	Checksum    string        `json:"checksum"`
+}
+
+type recoveryProbeMarker struct {
+	Version     int    `json:"version"`
+	OperationID string `json:"operationId"`
+	Checksum    string `json:"checksum"`
+}
+
+func probeMarkerData(id string) ([]byte, error) {
+	marker := recoveryProbeMarker{Version: 1, OperationID: id}
+	base, err := json.Marshal(marker)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(base)
+	marker.Checksum = hex.EncodeToString(digest[:])
+	return json.Marshal(marker)
+}
+
+func validProbeMarker(data []byte, id string) bool {
+	var marker recoveryProbeMarker
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&marker) != nil || decoder.Decode(&struct{}{}) != io.EOF || marker.Version != 1 || marker.OperationID != id || len(marker.Checksum) != 64 {
+		return false
+	}
+	want := marker.Checksum
+	marker.Checksum = ""
+	base, err := json.Marshal(marker)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(base)
+	canonical, _ := probeMarkerData(id)
+	return want == hex.EncodeToString(digest[:]) && bytes.Equal(data, canonical)
 }
 
 type recoveryTransaction struct {
@@ -100,6 +136,8 @@ type filesystemOps struct {
 
 var probeRecoveryMetadataPlatform = platformProbeRecoveryMetadata
 var recoveryPublishBoundary = func(string) error { return nil }
+var recoveryProbeBoundary = func(string) error { return nil }
+var recoveryRollbackBoundary = func(string) error { return nil }
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
@@ -514,7 +552,8 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 			return err
 		}
 		first := strings.Split(relative, string(filepath.Separator))[0]
-		if flat && (first == generationsDirName || first == recoveryMetadataDirName || first == recoveryProbeDirName || relative == activeGenerationName || relative == recoveryTransactionName) {
+		probeOwned := flat && store.isOwnedProbeNamespace(filepath.Join(source, first))
+		if flat && (first == generationsDirName || first == recoveryMetadataDirName || probeOwned || relative == activeGenerationName || relative == recoveryTransactionName) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -1044,6 +1083,22 @@ func (store *generationStore) canonicalMetadataTarget(path string) (string, erro
 	return "", errors.New("metadata target is outside the recovery allowlist")
 }
 
+func (store *generationStore) isOwnedProbeNamespace(path string) bool {
+	name := filepath.Base(path)
+	if !strings.HasPrefix(name, recoveryProbePrefix) {
+		return false
+	}
+	id := strings.TrimPrefix(name, recoveryProbePrefix)
+	if !validOperationID(id) {
+		return false
+	}
+	data, err := platformReadRegularFile(filepath.Join(path, recoveryProbeMarkerName))
+	if errors.Is(err, os.ErrNotExist) {
+		data, err = platformReadRegularFile(path + ".owner")
+	}
+	return err == nil && validProbeMarker(data, id)
+}
+
 func (store *generationStore) ensureRecoveryMetadataNamespace() error {
 	base := filepath.Join(store.root, recoveryMetadataDirName)
 	if info, err := store.ops.lstat(base); err == nil {
@@ -1527,6 +1582,9 @@ func (store *generationStore) convergePreparedMetadata(opDir, target string, jou
 			return err
 		}
 		return store.verifyMetadataState(target, old)
+	}
+	if old.Present && targetState == newState && exchangeState == absent {
+		return store.restoreJournalOld(opDir, target, journal)
 	}
 	if !old.Present && targetState == newState && exchangeState == absent {
 		return platformRemoveMetadata(target, exchange, newState)
