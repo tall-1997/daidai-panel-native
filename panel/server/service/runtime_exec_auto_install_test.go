@@ -221,7 +221,9 @@ func TestApplySinglePythonRuntimePolicyOnStartupResetsDefaultAndTasks(t *testing
 		t.Fatalf("create old python task: %v", err)
 	}
 
-	ApplySinglePythonRuntimePolicyOnStartup()
+	if err := ApplySinglePythonRuntimePolicyOnStartup(); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := model.GetRegisteredConfig("python_default_version"); got != "3.12" {
 		t.Fatalf("expected default python version reset to 3.12, got %q", got)

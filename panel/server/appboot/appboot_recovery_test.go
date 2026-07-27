@@ -9,6 +9,7 @@ import (
 
 	"daidai-panel/config"
 	"daidai-panel/database"
+	"daidai-panel/service"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -137,5 +138,53 @@ func TestSchemaDescriptorUsesConfiguredNamingStrategy(t *testing.T) {
 	}
 	if !strings.Contains(descriptor, "table:mobile_fingerprint_naming_model") {
 		t.Fatalf("descriptor ignored naming strategy: %s", descriptor)
+	}
+}
+
+func TestInitWithConfigPropagatesStartupMutationFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		inject func(error) func()
+	}{
+		{name: "default configs", inject: func(want error) func() {
+			old := initDefaultConfigs
+			initDefaultConfigs = func() error { return want }
+			return func() { initDefaultConfigs = old }
+		}},
+		{name: "legacy python migration", inject: func(want error) func() {
+			old := migrateLegacyPythonVenv
+			migrateLegacyPythonVenv = func() (service.LegacyPythonVenvMigration, error) { return service.LegacyPythonVenvMigration{}, want }
+			return func() { migrateLegacyPythonVenv = old }
+		}},
+		{name: "python normalization", inject: func(want error) func() {
+			old := normalizeLegacyPythonColumns
+			normalizeLegacyPythonColumns = func(service.LegacyPythonVenvMigration) error { return want }
+			return func() { normalizeLegacyPythonColumns = old }
+		}},
+		{name: "python runtime policy", inject: func(want error) func() {
+			old := applyPythonRuntimePolicy
+			applyPythonRuntimePolicy = func() error { return want }
+			return func() { applyPythonRuntimePolicy = old }
+		}},
+		{name: "dependency dedupe", inject: func(want error) func() {
+			old := mergePythonDependencies
+			mergePythonDependencies = func() error { return want }
+			return func() { mergePythonDependencies = old }
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := errors.New(tt.name)
+			restore := tt.inject(want)
+			t.Cleanup(restore)
+			cfg := &config.Config{Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "startup.db")}}
+			err := InitWithConfigWriter(cfg, io.Discard)
+			if !errors.Is(err, want) {
+				t.Fatalf("error=%v want=%v", err, want)
+			}
+			if database.DB != nil {
+				t.Fatal("database remains open after startup mutation failure")
+			}
+		})
 	}
 }

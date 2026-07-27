@@ -11,23 +11,23 @@ import (
 
 func TestCanonicalizePythonPackageName(t *testing.T) {
 	cases := map[string]string{
-		"requests":                    "requests",
-		"Requests":                    "requests",
-		"  REQUESTS  ":                "requests",
-		"Flask_SQLAlchemy":            "flask-sqlalchemy",
-		"flask-sqlalchemy":            "flask-sqlalchemy",
-		"zope.interface":              "zope-interface",
-		"requests==2.31.0":            "requests",
-		"requests>=2.0":               "requests",
-		"requests~=2.31.0":            "requests",
-		"requests!=2.0":               "requests",
-		"requests<3":                  "requests",
-		"requests[security]":          "requests",
-		"zope.interface[test]":        "zope-interface",
+		"requests":                     "requests",
+		"Requests":                     "requests",
+		"  REQUESTS  ":                 "requests",
+		"Flask_SQLAlchemy":             "flask-sqlalchemy",
+		"flask-sqlalchemy":             "flask-sqlalchemy",
+		"zope.interface":               "zope-interface",
+		"requests==2.31.0":             "requests",
+		"requests>=2.0":                "requests",
+		"requests~=2.31.0":             "requests",
+		"requests!=2.0":                "requests",
+		"requests<3":                   "requests",
+		"requests[security]":           "requests",
+		"zope.interface[test]":         "zope-interface",
 		"requests; python_version<'3'": "requests",
-		"requests == 2.31.0":          "requests",
-		"":                            "",
-		"   ":                         "",
+		"requests == 2.31.0":           "requests",
+		"":                             "",
+		"   ":                          "",
 	}
 
 	for input, expected := range cases {
@@ -88,7 +88,9 @@ func TestMergeDuplicatePythonDependenciesKeepsInstalledWinner(t *testing.T) {
 		}
 	}
 
-	MergeDuplicatePythonDependencies()
+	if err := MergeDuplicatePythonDependencies(); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3.12 的三条 requests 应合并为一条，保留 installed 的那条。
 	var remaining []model.Dependency
@@ -112,7 +114,9 @@ func TestMergeDuplicatePythonDependenciesKeepsInstalledWinner(t *testing.T) {
 	}
 
 	// 幂等：再跑一次不应再删任何行。
-	MergeDuplicatePythonDependencies()
+	if err := MergeDuplicatePythonDependencies(); err != nil {
+		t.Fatal(err)
+	}
 	database.DB.Model(&model.Dependency{}).Count(&total)
 	if total != 4 {
 		t.Fatalf("expected merge to be idempotent (still 4 rows), got %d", total)

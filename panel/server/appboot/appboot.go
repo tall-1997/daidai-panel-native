@@ -22,7 +22,16 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-var ensureColumns = database.EnsureColumns
+var (
+	ensureColumns           = database.EnsureColumns
+	initDefaultConfigs      = model.InitDefaultConfigs
+	migrateLegacyPythonVenv = func() (service.LegacyPythonVenvMigration, error) {
+		return service.MigrateLegacyManagedPythonVenvInfo(), nil
+	}
+	normalizeLegacyPythonColumns = service.NormalizeLegacyPythonVersionColumnsAfterVenvMigration
+	applyPythonRuntimePolicy     = service.ApplySinglePythonRuntimePolicyOnStartup
+	mergePythonDependencies      = service.MergeDuplicatePythonDependencies
+)
 
 func SchemaFingerprint() string {
 	fingerprint, err := schemaFingerprint(allModels(), database.ManualSchemaRevision)
@@ -196,16 +205,32 @@ func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool, gat
 		return fmt.Errorf("ensure database columns: %w", err)
 	}
 
-	legacyPythonVenvMigration := service.MigrateLegacyManagedPythonVenvInfo()
+	legacyPythonVenvMigration, err := migrateLegacyPythonVenv()
+	if err != nil {
+		_ = database.Close()
+		return fmt.Errorf("migrate legacy python environment: %w", err)
+	}
 
-	model.InitDefaultConfigs()
+	if err := initDefaultConfigs(); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("initialize default configs: %w", err)
+	}
 	if err := service.ApplyRegisteredPanelTimezone(); err != nil {
 		_ = database.Close()
 		return fmt.Errorf("failed to apply panel timezone: %w", err)
 	}
-	service.NormalizeLegacyPythonVersionColumnsAfterVenvMigration(legacyPythonVenvMigration)
-	service.ApplySinglePythonRuntimePolicyOnStartup()
-	service.MergeDuplicatePythonDependencies()
+	if err := normalizeLegacyPythonColumns(legacyPythonVenvMigration); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("normalize legacy python columns: %w", err)
+	}
+	if err := applyPythonRuntimePolicy(); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("apply python runtime policy: %w", err)
+	}
+	if err := mergePythonDependencies(); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("merge python dependencies: %w", err)
+	}
 	if err := middleware.ConfigureTrustedProxyCIDRs(model.GetRegisteredConfig("trusted_proxy_cidrs")); err != nil {
 		_ = database.Close()
 		return fmt.Errorf("failed to configure trusted proxies: %w", err)

@@ -316,6 +316,99 @@ func TestValidateGenerationRejectsGenerationRootSymlink(t *testing.T) {
 	}
 }
 
+func TestGenerationStoreRejectsSymlinkedGenerationsContainerWithoutExternalWrites(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(root, generationsDirName)); err != nil {
+		t.Fatal(err)
+	}
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if _, err := store.converge(); err == nil {
+		t.Fatal("expected symlinked generations container rejection")
+	}
+	entries, err := os.ReadDir(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("external directory was modified: %v", entries)
+	}
+}
+
+func TestGenerationStoreRejectsSymlinkedDataDirComponentWithoutExternalWrites(t *testing.T) {
+	rootParent := t.TempDir()
+	external := t.TempDir()
+	writeTestFile(t, filepath.Join(external, "sentinel"), "safe")
+	linkedParent := filepath.Join(rootParent, "linked")
+	if err := os.Symlink(external, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	store := newGenerationStore(filepath.Join(linkedParent, "data"), defaultFilesystemOps())
+	if _, err := store.converge(); err == nil {
+		t.Fatal("expected symlinked dataDir component rejection")
+	}
+	if _, err := os.Stat(filepath.Join(external, "data")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external data directory was created: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(external, "sentinel"))
+	if err != nil || string(data) != "safe" {
+		t.Fatalf("external sentinel changed: data=%q err=%v", data, err)
+	}
+}
+
+func TestGenerationStoreCreatesMissingTrustedRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "new-data-root")
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(active) != filepath.Join(root, generationsDirName) {
+		t.Fatalf("active=%q", active)
+	}
+}
+
+func TestPruneRejectsSymlinkedGenerationsContainerWithoutExternalCleanup(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir()
+	writeTestFile(t, filepath.Join(external, "keep", "data"), "safe")
+	if err := os.Symlink(external, filepath.Join(root, generationsDirName)); err != nil {
+		t.Fatal(err)
+	}
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.pruneGenerations("active", "previous"); err == nil {
+		t.Fatal("expected symlinked generations container rejection")
+	}
+	if _, err := os.Stat(filepath.Join(external, "keep", "data")); err != nil {
+		t.Fatalf("external data was cleaned: %v", err)
+	}
+}
+
+func TestCopyDatasetRejectsSymlinkedGenerationTargetWithoutExternalWrites(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source")
+	writeTestFile(t, filepath.Join(source, "payload"), "unsafe")
+	external := t.TempDir()
+	target := store.generationPath("candidate")
+	if err := os.Symlink(external, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.copyDataset(source, target, false); err == nil {
+		t.Fatal("expected symlinked generation target rejection")
+	}
+	entries, err := os.ReadDir(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("external target was modified: %v", entries)
+	}
+}
+
 func TestSealGenerationWritesManifestAtomically(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())

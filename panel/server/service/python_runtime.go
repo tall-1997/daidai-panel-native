@@ -247,58 +247,63 @@ func legacyManagedPythonVenvDir() string {
 	return filepath.Join(dataDir, "deps", "python", "venv")
 }
 
-func NormalizeLegacyPythonVersionColumns(version string) {
+func NormalizeLegacyPythonVersionColumns(version string) error {
 	if database.DB == nil {
-		return
+		return nil
 	}
 
 	version = NormalizePythonVersionOrDefault(version)
 	if err := database.DB.Exec("UPDATE dependencies SET python_version = ? WHERE type = ? AND (python_version IS NULL OR python_version = '')", version, model.DepTypePython).Error; err != nil {
-		log.Printf("warn: failed to normalize legacy python dependency versions: %v", err)
+		return fmt.Errorf("normalize legacy python dependency versions: %w", err)
 	}
 	if err := database.DB.Exec("UPDATE tasks SET python_version = ? WHERE python_version IS NULL OR python_version = ''", version).Error; err != nil {
-		log.Printf("warn: failed to normalize legacy task python versions: %v", err)
+		return fmt.Errorf("normalize legacy task python versions: %w", err)
 	}
+	return nil
 }
 
-func NormalizeLegacyPythonVersionColumnsAfterVenvMigration(migration LegacyPythonVenvMigration) {
+func NormalizeLegacyPythonVersionColumnsAfterVenvMigration(migration LegacyPythonVenvMigration) error {
 	version := NormalizePythonVersionOrDefault(migration.Version)
-	NormalizeLegacyPythonVersionColumns(version)
+	if err := NormalizeLegacyPythonVersionColumns(version); err != nil {
+		return err
+	}
 
 	if !migration.MigratedRoot || version == defaultPythonRuntimeVersion || migration.DefaultVersionExisted || database.DB == nil {
-		return
+		return nil
 	}
 
 	if err := database.DB.Exec("UPDATE dependencies SET python_version = ? WHERE type = ? AND python_version = ?", version, model.DepTypePython, defaultPythonRuntimeVersion).Error; err != nil {
-		log.Printf("warn: failed to move legacy python dependency records to detected version %s: %v", version, err)
+		return fmt.Errorf("move legacy python dependency records: %w", err)
 	}
 	if err := database.DB.Exec("UPDATE tasks SET python_version = ? WHERE python_version = ?", version, defaultPythonRuntimeVersion).Error; err != nil {
-		log.Printf("warn: failed to move legacy python task records to detected version %s: %v", version, err)
+		return fmt.Errorf("move legacy python task records: %w", err)
 	}
 	if strings.TrimSpace(model.GetRegisteredConfig("python_default_version")) == defaultPythonRuntimeVersion {
 		if err := model.SetConfig("python_default_version", version); err != nil {
-			log.Printf("warn: failed to update default python version to detected legacy version %s: %v", version, err)
+			return fmt.Errorf("update default python version: %w", err)
 		}
 	}
+	return nil
 }
 
-func ApplySinglePythonRuntimePolicyOnStartup() {
+func ApplySinglePythonRuntimePolicyOnStartup() error {
 	version, single := SinglePythonRuntimeVersion()
 	if !single || database.DB == nil {
-		return
+		return nil
 	}
 
 	// 单版本 Docker 镜像只保留一个 Python 小版本。旧版 latest 曾经内置三套 Python，
 	// 用户升级到新的 single 镜像后，需要把系统默认值和任务显式版本统一切回镜像版本，
 	// 否则历史任务仍可能指向已被删除的 3.10 / 3.11 环境。
 	if err := model.SetConfig("python_default_version", version); err != nil {
-		log.Printf("warn: failed to reset python_default_version to image runtime %s: %v", version, err)
+		return fmt.Errorf("reset python default version: %w", err)
 	}
 	if err := database.DB.Model(&model.Task{}).
 		Where("python_version IS NULL OR python_version = '' OR python_version <> ?", version).
 		Update("python_version", version).Error; err != nil {
-		log.Printf("warn: failed to reset task python versions to image runtime %s: %v", version, err)
+		return fmt.Errorf("reset task python versions: %w", err)
 	}
+	return nil
 }
 
 func PythonRuntimeInfos() []PythonRuntimeInfo {

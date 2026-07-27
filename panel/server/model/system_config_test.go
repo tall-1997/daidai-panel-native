@@ -109,7 +109,9 @@ func TestInitDefaultConfigsRemovesDeprecatedCommandTimeout(t *testing.T) {
 		t.Fatalf("create deprecated config: %v", err)
 	}
 
-	model.InitDefaultConfigs()
+	if err := model.InitDefaultConfigs(); err != nil {
+		t.Fatal(err)
+	}
 
 	var count int64
 	if err := database.DB.Model(&model.SystemConfig{}).Where("`key` = ?", "command_timeout").Count(&count).Error; err != nil {

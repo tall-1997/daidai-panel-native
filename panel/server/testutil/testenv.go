@@ -97,7 +97,9 @@ func SetupTestEnv(t *testing.T) string {
 	); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
-	model.InitDefaultConfigs()
+	if err := model.InitDefaultConfigs(); err != nil {
+		t.Fatalf("init default configs: %v", err)
+	}
 
 	t.Cleanup(func() {
 		config.C = nil

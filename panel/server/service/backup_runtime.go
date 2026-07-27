@@ -811,7 +811,9 @@ func restoreBackupManifest(manifest BackupManifest, extractedDir string) error {
 	}
 
 	UpdateRestoreProgress("finalizing", "正在刷新任务调度与恢复后状态...", 92)
-	model.InitDefaultConfigs()
+	if err := model.InitDefaultConfigs(); err != nil {
+		return err
+	}
 	_ = middleware.ConfigureTrustedProxyCIDRs(model.GetRegisteredConfig("trusted_proxy_cidrs"))
 
 	if scheduler := GetSchedulerV2(); scheduler != nil {

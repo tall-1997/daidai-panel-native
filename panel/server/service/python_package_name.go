@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -120,19 +121,18 @@ func FindExistingPythonDependency(name, pythonVersion string, statuses ...string
 // MergeDuplicatePythonDependencies 在启动期一次性合并 Python 依赖的重复行。
 //
 // 按（归一化 python 版本, PEP 503 归一化键）分组，组内多行只保留状态优先级最高 / 最新一条，
-// 删除其余行。幂等：重复执行无副作用（每组只剩一行后不再删除）。失败只记日志不 panic。
-func MergeDuplicatePythonDependencies() {
+// 删除其余行。幂等：重复执行无副作用（每组只剩一行后不再删除）。
+func MergeDuplicatePythonDependencies() error {
 	if database.DB == nil {
-		return
+		return nil
 	}
 
 	var deps []model.Dependency
 	if err := database.DB.Where("type = ?", model.DepTypePython).Find(&deps).Error; err != nil {
-		log.Printf("warn: failed to load python dependencies for dedup merge: %v", err)
-		return
+		return fmt.Errorf("load python dependencies for dedup merge: %w", err)
 	}
 	if len(deps) <= 1 {
-		return
+		return nil
 	}
 
 	groups := make(map[string][]model.Dependency)
@@ -166,11 +166,11 @@ func MergeDuplicatePythonDependencies() {
 	}
 
 	if len(removeIDs) == 0 {
-		return
+		return nil
 	}
 	if err := database.DB.Where("id IN ?", removeIDs).Delete(&model.Dependency{}).Error; err != nil {
-		log.Printf("warn: failed to remove duplicate python dependencies: %v", err)
-		return
+		return fmt.Errorf("remove duplicate python dependencies: %w", err)
 	}
 	log.Printf("info: merged duplicate python dependencies, removed %d redundant rows", len(removeIDs))
+	return nil
 }

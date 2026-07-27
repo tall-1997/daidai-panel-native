@@ -622,6 +622,7 @@ func TestStopCoreCheckpointsRealSQLiteWALBeforeSeal(t *testing.T) {
 }
 
 func TestStartCoreReportsRollbackFailureAndKeepsGateClosed(t *testing.T) {
+	resetRecoveryLifecycle(t)
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
 	active, err := store.converge()
@@ -702,6 +703,7 @@ func TestStartFailureRestoresGlobalState(t *testing.T) {
 }
 
 func TestStartFailureCloseErrorReturnsRecoveryRequiredWithoutOverwritingGlobals(t *testing.T) {
+	resetRecoveryLifecycle(t)
 	previousConfig := &config.Config{Server: config.ServerConfig{Mode: "previous"}}
 	previousDB := database.DB
 	config.C = previousConfig
@@ -736,6 +738,123 @@ func TestRecoveryFailureAlwaysRequiresCleanup(t *testing.T) {
 	if result.Status != "cleanup_required" || !result.CleanupRequired {
 		t.Fatalf("result=%+v", result)
 	}
+}
+
+func TestCommittedRollbackCloseFailurePreservesCandidateAndPointer(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finalize(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	txn, err := store.prepareMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.commitPointer(txn); err != nil {
+		t.Fatal(err)
+	}
+	candidate := store.generationPath(txn.NewGeneration)
+	currentConfig := &config.Config{Data: config.DataConfig{Dir: candidate}}
+	currentDB := &gorm.DB{}
+	previous := globalState{config: &config.Config{}, database: &gorm.DB{}}
+	config.C = currentConfig
+	database.DB = currentDB
+	oldClose := closeDatabase
+	closeDatabase = func() error { return errors.New("candidate close failed") }
+	oldOpen := openDatabase
+	openCalls := 0
+	openDatabase = func(*config.DatabaseConfig, io.Writer) error {
+		openCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		closeDatabase = oldClose
+		openDatabase = oldOpen
+		config.C = nil
+		database.DB = nil
+	})
+
+	if err := rollbackCommittedMigration(store, txn, currentConfig, io.Discard, previous); err == nil {
+		t.Fatal("expected close failure")
+	}
+	pointer, err := store.readPointerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pointer != txn.NewGeneration {
+		t.Fatalf("pointer=%q want candidate=%q", pointer, txn.NewGeneration)
+	}
+	if _, err := os.Stat(candidate); err != nil {
+		t.Fatalf("candidate was removed: %v", err)
+	}
+	if database.DB != currentDB || config.C != currentConfig || openCalls != 0 {
+		t.Fatal("rollback continued after candidate close failure")
+	}
+}
+
+func TestRecoveryRequiredPersistsInLifecycleAndBlocksRestart(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	oldInit := initApp
+	initApp = func(*config.Config, io.Writer, func() error) error {
+		database.DB = &gorm.DB{}
+		return errors.New("bootstrap failed")
+	}
+	oldClose := closeDatabase
+	closeDatabase = func() error { return errors.New("close failed") }
+	t.Cleanup(func() {
+		initApp = oldInit
+		closeDatabase = oldClose
+		database.DB = nil
+		lifecycle.mu.Lock()
+		lifecycle.status = ""
+		lifecycle.errorCode = ""
+		lifecycle.errorText = ""
+		lifecycle.cleanup = nil
+		lifecycle.mu.Unlock()
+	})
+	options := `{"dataDir":"` + t.TempDir() + `","localToken":"` + testLocalToken + `"}`
+	first := decodeResult(t, StartCore(options))
+	if first.ErrorCode != codeRecoveryFailed || first.Status != "cleanup_required" {
+		t.Fatalf("first=%+v", first)
+	}
+	status := decodeResult(t, CoreStatus())
+	if status.OK || status.ErrorCode != codeRecoveryFailed || status.Status != "cleanup_required" || !status.CleanupRequired {
+		t.Fatalf("status=%+v", status)
+	}
+	second := decodeResult(t, StartCore(options))
+	if second.ErrorCode != codeRecoveryFailed || second.Status != "cleanup_required" {
+		t.Fatalf("second=%+v", second)
+	}
+	closeDatabase = func() error {
+		database.DB = nil
+		return nil
+	}
+	cleaned := decodeResult(t, StopCore(1000))
+	if !cleaned.OK || cleaned.Status != "stopped" {
+		t.Fatalf("cleanup=%+v", cleaned)
+	}
+}
+
+func resetRecoveryLifecycle(t *testing.T) {
+	t.Helper()
+	lifecycle.mu.Lock()
+	lifecycle.status = ""
+	lifecycle.errorCode = ""
+	lifecycle.errorText = ""
+	lifecycle.cleanup = nil
+	lifecycle.mu.Unlock()
+	t.Cleanup(func() {
+		lifecycle.mu.Lock()
+		lifecycle.status = ""
+		lifecycle.errorCode = ""
+		lifecycle.errorText = ""
+		lifecycle.cleanup = nil
+		lifecycle.mu.Unlock()
+	})
 }
 
 func TestStartCoreMigrationFailureKeepsOldGenerationAndGateClosed(t *testing.T) {
@@ -806,6 +925,35 @@ func TestStartCoreCheckpointsLegacyFlatDatabaseBeforeImport(t *testing.T) {
 	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
 	if result.OK || !checkpointed {
 		t.Fatalf("unexpected result=%+v checkpointed=%v", result, checkpointed)
+	}
+}
+
+func TestStartCoreRejectsSymlinkedDataDirComponentBeforeLegacyCheckpoint(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	rootParent := t.TempDir()
+	external := t.TempDir()
+	linkedParent := filepath.Join(rootParent, "linked")
+	if err := os.Symlink(external, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	oldCheckpoint := checkpointFlatDatabase
+	checkpointCalls := 0
+	checkpointFlatDatabase = func(string) error {
+		checkpointCalls++
+		return nil
+	}
+	t.Cleanup(func() { checkpointFlatDatabase = oldCheckpoint })
+
+	dataDir := filepath.Join(linkedParent, "data")
+	result := decodeResult(t, StartCore(`{"dataDir":"`+dataDir+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeInvalidDataDir {
+		t.Fatalf("result=%+v", result)
+	}
+	if checkpointCalls != 0 {
+		t.Fatalf("legacy checkpoint reached untrusted dataDir %d times", checkpointCalls)
+	}
+	if _, err := os.Stat(filepath.Join(external, "data")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external data directory was created: %v", err)
 	}
 }
 

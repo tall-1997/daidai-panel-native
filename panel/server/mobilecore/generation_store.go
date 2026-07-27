@@ -95,6 +95,9 @@ type generationStore struct {
 }
 
 func newGenerationStore(root string, ops filesystemOps) *generationStore {
+	if absolute, err := filepath.Abs(root); err == nil {
+		root = absolute
+	}
 	return &generationStore{root: root, ops: ops}
 }
 
@@ -102,8 +105,81 @@ func (store *generationStore) generationPath(id string) string {
 	return filepath.Join(store.root, generationsDirName, id)
 }
 
+func (store *generationStore) validateRootComponents() error {
+	return store.ensureTrustedDirectoryComponents(store.root, true)
+}
+
+func (store *generationStore) ensureTrustedContainer() error {
+	root := store.root
+	if err := store.ensureTrustedDirectoryComponents(root, true); err != nil {
+		return err
+	}
+	if err := store.ops.mkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	if err := store.ensureTrustedDirectoryComponents(root, false); err != nil {
+		return errors.New("generation root is not a trusted directory")
+	}
+	container := filepath.Join(root, generationsDirName)
+	if err := store.ensureTrustedDirectoryComponents(container, true); err != nil {
+		return err
+	}
+	if err := store.ops.mkdirAll(container, 0o700); err != nil {
+		return err
+	}
+	if err := store.ensureTrustedDirectoryComponents(container, false); err != nil {
+		return errors.New("generations container is not a trusted directory")
+	}
+	return nil
+}
+
+func (store *generationStore) ensureTrustedDirectoryComponents(path string, allowMissing bool) error {
+	path = filepath.Clean(path)
+	components := []string{}
+	for current := path; ; current = filepath.Dir(current) {
+		components = append(components, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	for i := len(components) - 1; i >= 0; i-- {
+		info, err := store.ops.lstat(components[i])
+		if allowMissing && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("untrusted directory component: %s", components[i])
+		}
+	}
+	return nil
+}
+
+func (store *generationStore) ensureTrustedGeneration(id string, allowMissing bool) error {
+	if err := store.ensureTrustedContainer(); err != nil {
+		return err
+	}
+	if !validGenerationID(id) {
+		return errors.New("generation ID is invalid")
+	}
+	info, err := store.ops.lstat(store.generationPath(id))
+	if allowMissing && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("generation is not a trusted directory")
+	}
+	return nil
+}
+
 func (store *generationStore) converge() (string, error) {
-	if err := store.ops.mkdirAll(filepath.Join(store.root, generationsDirName), 0o700); err != nil {
+	if err := store.ensureTrustedContainer(); err != nil {
 		return "", err
 	}
 	txn, err := store.readTransaction()
@@ -125,6 +201,9 @@ func (store *generationStore) converge() (string, error) {
 				if err := store.writePointer(txn.OldGeneration); err != nil {
 					return "", err
 				}
+			}
+			if err := store.ensureTrustedGeneration(txn.NewGeneration, true); err != nil {
+				return "", err
 			}
 			if err := store.ops.removeAll(store.generationPath(txn.NewGeneration)); err != nil {
 				return "", err
@@ -158,6 +237,9 @@ func (store *generationStore) converge() (string, error) {
 				if err := store.writeTransaction(txn); err != nil {
 					return "", err
 				}
+				if err := store.ensureTrustedGeneration(txn.NewGeneration, true); err != nil {
+					return "", err
+				}
 				if err := store.ops.removeAll(store.generationPath(txn.NewGeneration)); err != nil {
 					return "", err
 				}
@@ -178,6 +260,9 @@ func (store *generationStore) converge() (string, error) {
 }
 
 func (store *generationStore) importFlatData() (string, error) {
+	if err := store.ensureTrustedContainer(); err != nil {
+		return "", err
+	}
 	id, err := newGenerationID()
 	if err != nil {
 		return "", err
@@ -212,6 +297,9 @@ func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
 	if err != nil {
 		return recoveryTransaction{}, err
 	}
+	if err := store.ensureTrustedGeneration(oldID, false); err != nil {
+		return recoveryTransaction{}, err
+	}
 	active := store.generationPath(oldID)
 	baseline, err := store.generationBaseline(oldID)
 	if err != nil {
@@ -232,6 +320,9 @@ func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
 	}
 	txn := recoveryTransaction{Version: 1, Phase: recoveryPhaseBuilding, OldGeneration: oldID, NewGeneration: newID}
 	if err := store.writeTransaction(txn); err != nil {
+		if trustErr := store.ensureTrustedGeneration(newID, true); trustErr != nil {
+			return recoveryTransaction{}, errors.Join(err, trustErr)
+		}
 		cleanupErr := store.ops.removeAll(store.generationPath(newID))
 		return recoveryTransaction{}, errors.Join(err, cleanupErr)
 	}
@@ -250,6 +341,9 @@ func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
 }
 
 func (store *generationStore) commitPointer(txn recoveryTransaction) error {
+	if err := store.ensureTrustedGeneration(txn.NewGeneration, true); err != nil {
+		return err
+	}
 	if err := store.verifyGeneration(txn.NewGeneration); err != nil {
 		return err
 	}
@@ -268,6 +362,9 @@ func (store *generationStore) finalize(id string, baseline generationBaseline) e
 }
 
 func (store *generationStore) markReady(id string) error {
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
+		return err
+	}
 	txn, err := store.readTransaction()
 	if err != nil {
 		return err
@@ -293,6 +390,12 @@ func (store *generationStore) rollback(txn recoveryTransaction) error {
 	if txn.OldGeneration == "" {
 		return errors.New("recovery transaction has no old generation")
 	}
+	if err := store.ensureTrustedGeneration(txn.OldGeneration, false); err != nil {
+		return err
+	}
+	if err := store.ensureTrustedGeneration(txn.NewGeneration, true); err != nil {
+		return err
+	}
 	if err := store.writePointer(txn.OldGeneration); err != nil {
 		return err
 	}
@@ -314,12 +417,8 @@ func (store *generationStore) activeGeneration() (string, error) {
 }
 
 func (store *generationStore) validateGeneration(id string) error {
-	info, err := store.ops.lstat(store.generationPath(id))
-	if err != nil {
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
 		return err
-	}
-	if !info.IsDir() {
-		return errors.New("active generation is not a directory")
 	}
 	return store.verifyGeneration(id)
 }
@@ -337,7 +436,20 @@ func (store *generationStore) readPointerID() (string, error) {
 }
 
 func (store *generationStore) copyDataset(source, destination string, flat bool) error {
+	if err := store.ensureTrustedContainer(); err != nil {
+		return err
+	}
+	id := filepath.Base(destination)
+	if filepath.Clean(filepath.Dir(destination)) != filepath.Clean(filepath.Join(store.root, generationsDirName)) {
+		return errors.New("generation destination escapes trusted container")
+	}
+	if err := store.ensureTrustedGeneration(id, true); err != nil {
+		return err
+	}
 	if err := store.ops.mkdirAll(destination, 0o700); err != nil {
+		return err
+	}
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
 		return err
 	}
 	directories := []string{destination, filepath.Dir(destination)}
@@ -438,6 +550,9 @@ func (store *generationStore) copyFile(source, destination string, mode fs.FileM
 }
 
 func (store *generationStore) verifyGeneration(id string) error {
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
+		return err
+	}
 	directory := store.generationPath(id)
 	data, err := store.ops.readFile(filepath.Join(directory, generationManifestName))
 	if err != nil {
@@ -509,6 +624,9 @@ func isSQLiteSidecar(relative string) bool {
 }
 
 func (store *generationStore) sealGeneration(id string, baseline generationBaseline) error {
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
+		return err
+	}
 	directory := store.generationPath(id)
 	directories := []string{directory, filepath.Dir(directory)}
 	manifest := generationManifest{Version: 1, Baseline: baseline, Files: map[string]manifestFile{}}
@@ -578,6 +696,9 @@ func (store *generationStore) sealGeneration(id string, baseline generationBasel
 }
 
 func (store *generationStore) generationBaseline(id string) (generationBaseline, error) {
+	if err := store.ensureTrustedGeneration(id, false); err != nil {
+		return generationBaseline{}, err
+	}
 	data, err := store.ops.readFile(filepath.Join(store.generationPath(id), generationManifestName))
 	if err != nil {
 		return generationBaseline{}, err
@@ -636,6 +757,9 @@ func (store *generationStore) preflightMigration(source string) error {
 }
 
 func (store *generationStore) cleanupOrphans(activeID string) error {
+	if err := store.ensureTrustedGeneration(activeID, false); err != nil {
+		return err
+	}
 	keep := map[string]bool{activeID: true}
 	if txn, err := store.readTransaction(); err == nil && txn.Phase == recoveryPhaseVerified && txn.NewGeneration == activeID && txn.OldGeneration != "" {
 		keep[txn.OldGeneration] = true
@@ -648,6 +772,9 @@ func (store *generationStore) cleanupOrphans(activeID string) error {
 		if keep[entry.Name()] {
 			continue
 		}
+		if err := store.ensureTrustedGeneration(entry.Name(), false); err != nil {
+			return err
+		}
 		if err := store.ops.removeAll(store.generationPath(entry.Name())); err != nil {
 			return err
 		}
@@ -656,6 +783,14 @@ func (store *generationStore) cleanupOrphans(activeID string) error {
 }
 
 func (store *generationStore) pruneGenerations(activeID, previousID string) error {
+	if err := store.ensureTrustedGeneration(activeID, false); err != nil {
+		return err
+	}
+	if previousID != "" {
+		if err := store.ensureTrustedGeneration(previousID, false); err != nil {
+			return err
+		}
+	}
 	entries, err := os.ReadDir(filepath.Join(store.root, generationsDirName))
 	if err != nil {
 		return err
@@ -663,6 +798,9 @@ func (store *generationStore) pruneGenerations(activeID, previousID string) erro
 	for _, entry := range entries {
 		if entry.Name() == activeID || entry.Name() == previousID {
 			continue
+		}
+		if err := store.ensureTrustedGeneration(entry.Name(), false); err != nil {
+			return err
 		}
 		if err := store.ops.removeAll(store.generationPath(entry.Name())); err != nil {
 			return err

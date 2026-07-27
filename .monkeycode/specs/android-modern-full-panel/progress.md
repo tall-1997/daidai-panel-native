@@ -70,6 +70,11 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Propagated startup database close failures as stable recovery-required responses without overwriting live globals.
   - Rejected generation-root symlinks with `Lstat`.
   - Made verified-generation pruning idempotent on every startup, including crash recovery after verified transaction persistence.
+- Final recovery review fixes verified:
+  - Added trusted-root guards for `dataDir`, the generations container, and every generation path before create, validate, prune, or rollback operations.
+  - Preserved committed candidate state when candidate database close fails.
+  - Persisted recovery-required lifecycle state, blocked repeated starts, and exposed cleanup retry through `StopCore`.
+  - Propagated startup default-config, Python migration, runtime-policy, and dependency-dedupe database errors through appboot.
 
 ## Task 1.3 Review Findings Resolved
 

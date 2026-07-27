@@ -104,17 +104,21 @@ func SetConfig(key, value string) error {
 	return database.DB.Model(&cfg).Updates(updates).Error
 }
 
-func InitDefaultConfigs() {
+func InitDefaultConfigs() error {
 	db := silentDB()
 	for _, def := range SystemConfigDefinitions() {
 		var existing SystemConfig
-		if err := db.Where("`key` = ?", def.Key).First(&existing).Error; err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
-			database.DB.Create(&SystemConfig{
+		if err := db.Where("`key` = ?", def.Key).First(&existing).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			if err := database.DB.Create(&SystemConfig{
 				Key:         def.Key,
 				Value:       def.DefaultValue,
 				Description: def.Description,
-			})
+			}).Error; err != nil {
+				return err
+			}
 			continue
+		} else if err != nil {
+			return err
 		}
 
 		normalizedValue := existing.Value
@@ -137,11 +141,13 @@ func InitDefaultConfigs() {
 			updates["value"] = normalizedValue
 		}
 		if len(updates) > 0 {
-			database.DB.Model(&existing).Updates(updates)
+			if err := database.DB.Model(&existing).Updates(updates).Error; err != nil {
+				return err
+			}
 		}
 	}
 
-	removeDeprecatedSystemConfigs("command_timeout")
+	return removeDeprecatedSystemConfigs("command_timeout")
 }
 
 func removeDeprecatedSystemConfigs(keys ...string) error {
