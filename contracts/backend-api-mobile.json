@@ -1,0 +1,4232 @@
+[
+  {
+    "method": "DELETE",
+    "path": "/api/auth/avatar",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/auth/avatar"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/configs/:id",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/configs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/deps/:id",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/deps/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/envs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/envs/batch",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/envs/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/logs/:id",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/logs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/logs/batch",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/logs/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/logs/clean",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/logs/clean"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/notifications/:id",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/notifications/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/open-api/apps/:id",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/open-api/apps/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/platform-tokens/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/platform-tokens/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/platform-tokens/platforms/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/platform-tokens/platforms/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/scripts",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/scripts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/scripts/batch",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/scripts/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/scripts/run/:id",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/scripts/run/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/scripts/versions",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/scripts/versions"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/2fa",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/2fa"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/ip-whitelist/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/ip-whitelist/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/login-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/login-logs"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/sessions/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/sessions/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/sessions/others",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/sessions/others"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/security/sessions/user/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/security/sessions/user/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/ssh-keys/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/subscriptions/:id",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/subscriptions/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/subscriptions/batch",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/subscriptions/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/system/backup",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/system/backup"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tasks/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/tasks/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tasks/:id/log-files/:id",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/tasks/:id/log-files/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tasks/batch/delete",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/tasks/batch/delete"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tasks/clean-logs",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/tasks/clean-logs"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tasks/views/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/tasks/views/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/users/:id",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/users/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/auth/avatar",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/auth/avatar"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/configs/:id",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/configs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/deps/:id",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/deps/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/envs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/envs/batch",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/envs/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/logs/:id",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/logs/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/logs/batch",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/logs/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/logs/clean",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/logs/clean"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/notifications/:id",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/notifications/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/open-api/apps/:id",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/open-api/apps/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/platform-tokens/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/platform-tokens/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/platform-tokens/platforms/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/platform-tokens/platforms/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/scripts",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/scripts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/scripts/batch",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/scripts/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/scripts/run/:id",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/scripts/run/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/scripts/versions",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/scripts/versions"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/2fa",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/2fa"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/ip-whitelist/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/ip-whitelist/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/login-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/login-logs"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/sessions/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/sessions/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/sessions/others",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/sessions/others"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/security/sessions/user/:id",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/security/sessions/user/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/ssh-keys/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/subscriptions/:id",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/subscriptions/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/subscriptions/batch",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/subscriptions/batch"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/system/backup",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/system/backup"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/tasks/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/tasks/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/tasks/:id/log-files/:id",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/tasks/:id/log-files/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/tasks/batch/delete",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/tasks/batch/delete"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/tasks/clean-logs",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/tasks/clean-logs"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/tasks/views/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/tasks/views/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/users/:id",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:DELETE /api/v1/users/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/android-runtime/status",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/android-runtime/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/avatar/:id",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/auth/avatar/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/captcha-config",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/auth/captcha-config"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/check-init",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/auth/check-init"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/user",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/auth/user"
+  },
+  {
+    "method": "GET",
+    "path": "/api/configs",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/configs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/configs/:id",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/configs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/:id/log-stream",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/:id/log-stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/:id/status",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/:id/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/export",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/mirrors",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/mirrors"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/npm",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/npm"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/pip",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/pip"
+  },
+  {
+    "method": "GET",
+    "path": "/api/deps/python-runtimes",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/deps/python-runtimes"
+  },
+  {
+    "method": "GET",
+    "path": "/api/envs",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/envs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/envs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/envs/export",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/envs/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/envs/export-all",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/envs/export-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/envs/groups",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/envs/groups"
+  },
+  {
+    "method": "GET",
+    "path": "/api/health",
+    "module": "metadata",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:metadata",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/health"
+  },
+  {
+    "method": "GET",
+    "path": "/api/logs",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/logs/:id",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/logs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/logs/:id/stream",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "sse",
+    "testCase": "route:GET /api/logs/:id/stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/notifications",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/notifications"
+  },
+  {
+    "method": "GET",
+    "path": "/api/notifications/types",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/notifications/types"
+  },
+  {
+    "method": "GET",
+    "path": "/api/open-api/apps",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/open-api/apps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/open-api/apps/:id/logs",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/open-api/apps/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/platform-tokens",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/platform-tokens"
+  },
+  {
+    "method": "GET",
+    "path": "/api/platform-tokens/platforms",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/platform-tokens/platforms"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/content",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/content"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/download",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/run/:id/logs",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/run/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/tree",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/tree"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/versions",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/versions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scripts/versions/:id",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/scripts/versions/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/2fa/status",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/2fa/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/audit-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/audit-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/ip-whitelist",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/ip-whitelist"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/login-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/login-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/login-stats",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/login-stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/security/sessions",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/security/sessions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sponsors",
+    "module": "sponsors",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:sponsors",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/sponsors"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ssh-keys",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/ssh-keys"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/ssh-keys/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/subscriptions",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/subscriptions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/subscriptions/:id/logs",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/subscriptions/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/subscriptions/:id/pull-stream",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/subscriptions/:id/pull-stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/backup/download",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/backup/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/backup/download/:id",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/backup/download/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/backups",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/backups"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/check-update",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/check-update"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/config-script",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/config-script"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/dashboard",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/dashboard"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/health-check",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/health-check"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/info",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/info"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/machine-code",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/machine-code"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/panel-log",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/panel-log"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/panel-settings",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/panel-settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/public-version",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/public-version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/restore/progress",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/restore/progress"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/stats",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/update-status",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/update-status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/version",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/system/version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/latest-log",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/:id/latest-log"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/live-logs",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "sse",
+    "testCase": "route:GET /api/tasks/:id/live-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/log-files",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/:id/log-files"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/log-files/:id",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/:id/log-files/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/log-files/:id/download",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/:id/log-files/:id/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/:id/stats",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/:id/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/cron/templates",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/cron/templates"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/export",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/notification-channels",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/notification-channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tasks/views",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/tasks/views"
+  },
+  {
+    "method": "GET",
+    "path": "/api/users",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/users"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/android-runtime/status",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/android-runtime/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/avatar/:id",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/auth/avatar/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/captcha-config",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/auth/captcha-config"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/check-init",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/auth/check-init"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/user",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/auth/user"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/configs",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/configs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/configs/:id",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/configs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/:id/log-stream",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/:id/log-stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/:id/status",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/:id/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/export",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/mirrors",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/mirrors"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/npm",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/npm"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/pip",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/pip"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/deps/python-runtimes",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/deps/python-runtimes"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/envs",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/envs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/envs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/envs/export",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/envs/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/envs/export-all",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/envs/export-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/envs/groups",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/envs/groups"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/health",
+    "module": "metadata",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:metadata",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/health"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/logs",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/logs/:id",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/logs/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/logs/:id/stream",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "sse",
+    "testCase": "route:GET /api/v1/logs/:id/stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/notifications",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/notifications"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/notifications/types",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/notifications/types"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/open-api/apps",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/open-api/apps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/open-api/apps/:id/logs",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/open-api/apps/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/platform-tokens",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/platform-tokens"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/platform-tokens/platforms",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/platform-tokens/platforms"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/content",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/content"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/download",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/run/:id/logs",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/run/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/tree",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/tree"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/versions",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/versions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/scripts/versions/:id",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/scripts/versions/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/2fa/status",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/2fa/status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/audit-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/audit-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/ip-whitelist",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/ip-whitelist"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/login-logs",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/login-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/login-stats",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/login-stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/security/sessions",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/security/sessions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/sponsors",
+    "module": "sponsors",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:sponsors",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/sponsors"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ssh-keys",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/ssh-keys"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/ssh-keys/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/subscriptions",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/subscriptions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/subscriptions/:id/logs",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/subscriptions/:id/logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/subscriptions/:id/pull-stream",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/subscriptions/:id/pull-stream"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/backup/download",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/backup/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/backup/download/:id",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/backup/download/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/backups",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/backups"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/check-update",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/check-update"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/config-script",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/config-script"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/dashboard",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/dashboard"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/health-check",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/health-check"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/info",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/info"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/machine-code",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/machine-code"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/panel-log",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/panel-log"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/panel-settings",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/panel-settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/public-version",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/public-version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/restore/progress",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/restore/progress"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/stats",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/update-status",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/update-status"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/system/version",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/system/version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/latest-log",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/:id/latest-log"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/live-logs",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "sse",
+    "testCase": "route:GET /api/v1/tasks/:id/live-logs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/log-files",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/:id/log-files"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/log-files/:id",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/:id/log-files/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/log-files/:id/download",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/:id/log-files/:id/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/:id/stats",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/:id/stats"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/cron/templates",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/cron/templates"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/export",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/export"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/notification-channels",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/notification-channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tasks/views",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/tasks/views"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/users",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/users"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/version",
+    "module": "metadata",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:metadata",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/v1/version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/version",
+    "module": "metadata",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:metadata",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /api/version"
+  },
+  {
+    "method": "GET",
+    "path": "/robots.txt",
+    "module": "metadata",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:metadata",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:GET /robots.txt"
+  },
+  {
+    "method": "POST",
+    "path": "/api/android-runtime/install",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/android-runtime/install"
+  },
+  {
+    "method": "POST",
+    "path": "/api/android-runtime/uninstall",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/android-runtime/uninstall"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/avatar",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/auth/avatar"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/init",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/auth/init"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/login",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/auth/login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/auth/logout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/refresh",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/auth/refresh"
+  },
+  {
+    "method": "POST",
+    "path": "/api/configs",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/configs"
+  },
+  {
+    "method": "POST",
+    "path": "/api/deps",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/deps"
+  },
+  {
+    "method": "POST",
+    "path": "/api/deps/batch-delete",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/deps/batch-delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/deps/batch-reinstall",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/deps/batch-reinstall"
+  },
+  {
+    "method": "POST",
+    "path": "/api/envs",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/envs"
+  },
+  {
+    "method": "POST",
+    "path": "/api/envs/export-files",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/envs/export-files"
+  },
+  {
+    "method": "POST",
+    "path": "/api/envs/import",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/envs/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/logs/batch-delete",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/logs/batch-delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notifications",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/notifications"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notifications/:id/test",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/notifications/:id/test"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notifications/send",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/notifications/send"
+  },
+  {
+    "method": "POST",
+    "path": "/api/open-api/apps",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/open-api/apps"
+  },
+  {
+    "method": "POST",
+    "path": "/api/open-api/apps/:id/view-secret",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/open-api/apps/:id/view-secret"
+  },
+  {
+    "method": "POST",
+    "path": "/api/open-api/token",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/open-api/token"
+  },
+  {
+    "method": "POST",
+    "path": "/api/platform-tokens",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/platform-tokens"
+  },
+  {
+    "method": "POST",
+    "path": "/api/platform-tokens/platforms",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/platform-tokens/platforms"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/copy",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/copy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/directory",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/directory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/format",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/format"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/run",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/run-code",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/run-code"
+  },
+  {
+    "method": "POST",
+    "path": "/api/scripts/upload",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/scripts/upload"
+  },
+  {
+    "method": "POST",
+    "path": "/api/security/2fa/setup",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/security/2fa/setup"
+  },
+  {
+    "method": "POST",
+    "path": "/api/security/2fa/verify",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/security/2fa/verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/security/ip-whitelist",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/security/ip-whitelist"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ssh-keys",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/ssh-keys"
+  },
+  {
+    "method": "POST",
+    "path": "/api/subscriptions",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/subscriptions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/backup",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/backup"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/backup/upload",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/backup/upload"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/health-check",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/health-check"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/restart",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/restart"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/restore",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/restore"
+  },
+  {
+    "method": "POST",
+    "path": "/api/system/update",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/system/update"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks/:id/copy",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks/:id/copy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks/batch/run",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks/batch/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks/cron/parse",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks/cron/parse"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks/import",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tasks/views",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/tasks/views"
+  },
+  {
+    "method": "POST",
+    "path": "/api/users",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/users"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/android-runtime/install",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/android-runtime/install"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/android-runtime/uninstall",
+    "module": "android-runtime",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:android-runtime",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/android-runtime/uninstall"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/avatar",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/auth/avatar"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/init",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/auth/init"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/auth/login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/logout",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/auth/logout"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/refresh",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "public",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/auth/refresh"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/configs",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/configs"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/deps",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/deps"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/deps/batch-delete",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/deps/batch-delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/deps/batch-reinstall",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/deps/batch-reinstall"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/envs",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/envs"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/envs/export-files",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/envs/export-files"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/envs/import",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/envs/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/logs/batch-delete",
+    "module": "logs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:logs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/logs/batch-delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/notifications",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/notifications"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/notifications/:id/test",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/notifications/:id/test"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/notifications/send",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/notifications/send"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/open-api/apps",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/open-api/apps"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/open-api/apps/:id/view-secret",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/open-api/apps/:id/view-secret"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/open-api/token",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/open-api/token"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/platform-tokens",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/platform-tokens"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/platform-tokens/platforms",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/platform-tokens/platforms"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/copy",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/copy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/directory",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/directory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/format",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/format"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/run",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/run-code",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/run-code"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/scripts/upload",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/scripts/upload"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/security/2fa/setup",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/security/2fa/setup"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/security/2fa/verify",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/security/2fa/verify"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/security/ip-whitelist",
+    "module": "security",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:security",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/security/ip-whitelist"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/ssh-keys",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/ssh-keys"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/subscriptions",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/subscriptions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/backup",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/backup"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/backup/upload",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/backup/upload"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/health-check",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/health-check"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/restart",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/restart"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/restore",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/restore"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/system/update",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/system/update"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks/:id/copy",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks/:id/copy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks/batch/run",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks/batch/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks/cron/parse",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks/cron/parse"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks/import",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tasks/views",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/tasks/views"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/users",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:POST /api/v1/users"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/auth/password",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/auth/password"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/auth/username",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/auth/username"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/configs/batch",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/configs/batch"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/deps/:id/cancel",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/deps/:id/cancel"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/deps/:id/reinstall",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/deps/:id/reinstall"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/deps/mirrors",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/deps/mirrors"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/deps/python-runtime-default",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/deps/python-runtime-default"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/:id/cancel-top",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/:id/cancel-top"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/:id/disable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/:id/enable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/:id/move-top",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/:id/move-top"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/batch/disable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/batch/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/batch/enable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/batch/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/batch/group",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/batch/group"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/batch/rename",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/batch/rename"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/envs/sort",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/envs/sort"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/notifications/:id",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/notifications/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/notifications/:id/disable",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/notifications/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/notifications/:id/enable",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/notifications/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/open-api/apps/:id",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/open-api/apps/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/open-api/apps/:id/disable",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/open-api/apps/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/open-api/apps/:id/enable",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/open-api/apps/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/open-api/apps/:id/reset-secret",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/open-api/apps/:id/reset-secret"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/platform-tokens/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/platform-tokens/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/platform-tokens/:id/disable",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/platform-tokens/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/platform-tokens/:id/enable",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/platform-tokens/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/scripts/content",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/scripts/content"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/scripts/move",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/scripts/move"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/scripts/rename",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/scripts/rename"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/scripts/run/:id/stop",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/scripts/run/:id/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/scripts/versions/:id/rollback",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/scripts/versions/:id/rollback"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/ssh-keys/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/subscriptions/:id",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/subscriptions/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/subscriptions/:id/disable",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/subscriptions/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/subscriptions/:id/enable",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/subscriptions/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/subscriptions/:id/pull",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/subscriptions/:id/pull"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/subscriptions/:id/pull/stop",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/subscriptions/:id/pull/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/system/config-script",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/system/config-script"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/disable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/enable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/pin",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/pin"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/run",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/run"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/stop",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/:id/unpin",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/:id/unpin"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/batch",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/batch"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/batch/add-labels",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/batch/add-labels"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/batch/disable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/batch/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/batch/enable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/batch/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/views/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/views/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tasks/views/reorder",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/tasks/views/reorder"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/users/:id",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/users/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/users/:id/reset-password",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/users/:id/reset-password"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/auth/password",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/auth/password"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/auth/username",
+    "module": "auth",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:auth",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/auth/username"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/configs/batch",
+    "module": "configs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:configs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/configs/batch"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/deps/:id/cancel",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/deps/:id/cancel"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/deps/:id/reinstall",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/deps/:id/reinstall"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/deps/mirrors",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/deps/mirrors"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/deps/python-runtime-default",
+    "module": "deps",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:deps",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/deps/python-runtime-default"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/:id",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/:id/cancel-top",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/:id/cancel-top"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/:id/disable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/:id/enable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/:id/move-top",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/:id/move-top"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/batch/disable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/batch/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/batch/enable",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/batch/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/batch/group",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/batch/group"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/batch/rename",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/batch/rename"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/envs/sort",
+    "module": "envs",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:envs",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/envs/sort"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/notifications/:id",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/notifications/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/notifications/:id/disable",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/notifications/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/notifications/:id/enable",
+    "module": "notifications",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:notifications",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/notifications/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/open-api/apps/:id",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/open-api/apps/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/open-api/apps/:id/disable",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/open-api/apps/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/open-api/apps/:id/enable",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/open-api/apps/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/open-api/apps/:id/reset-secret",
+    "module": "open-api",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:open-api",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/open-api/apps/:id/reset-secret"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/platform-tokens/:id",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/platform-tokens/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/platform-tokens/:id/disable",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/platform-tokens/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/platform-tokens/:id/enable",
+    "module": "platform-tokens",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:platform-tokens",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/platform-tokens/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/scripts/content",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/scripts/content"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/scripts/move",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/scripts/move"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/scripts/rename",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/scripts/rename"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/scripts/run/:id/stop",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/scripts/run/:id/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/scripts/versions/:id/rollback",
+    "module": "scripts",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:scripts",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/scripts/versions/:id/rollback"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/ssh-keys/:id",
+    "module": "ssh-keys",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:ssh-keys",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/ssh-keys/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/subscriptions/:id",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/subscriptions/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/subscriptions/:id/disable",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/subscriptions/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/subscriptions/:id/enable",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/subscriptions/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/subscriptions/:id/pull",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/subscriptions/:id/pull"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/subscriptions/:id/pull/stop",
+    "module": "subscriptions",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:subscriptions",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/subscriptions/:id/pull/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/system/config-script",
+    "module": "system",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:system",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/system/config-script"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/disable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/enable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/pin",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/pin"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/run",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/run"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/stop",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/stop"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/:id/unpin",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/:id/unpin"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/batch",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/batch"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/batch/add-labels",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/batch/add-labels"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/batch/disable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/batch/disable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/batch/enable",
+    "module": "tasks",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/batch/enable"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/views/:id",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/views/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/tasks/views/reorder",
+    "module": "tasks",
+    "mobileStatus": "supported",
+    "androidEquivalent": "native:tasks",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/tasks/views/reorder"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/users/:id",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/users/:id"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/users/:id/reset-password",
+    "module": "users",
+    "mobileStatus": "planned",
+    "androidEquivalent": "planned:users",
+    "authContract": "jwt",
+    "streamContract": "none",
+    "testCase": "route:PUT /api/v1/users/:id/reset-password"
+  }
+]
