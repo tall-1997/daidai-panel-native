@@ -69,23 +69,17 @@ type filesystemOps struct {
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
-		openFile:  os.OpenFile,
-		readFile:  os.ReadFile,
-		mkdirAll:  os.MkdirAll,
-		rename:    os.Rename,
-		stat:      os.Stat,
-		lstat:     os.Lstat,
-		walkDir:   filepath.WalkDir,
-		remove:    os.Remove,
-		removeAll: os.RemoveAll,
-		availableBytes: func(path string) (uint64, error) {
-			var stat syscall.Statfs_t
-			if err := syscall.Statfs(path, &stat); err != nil {
-				return 0, err
-			}
-			return stat.Bavail * uint64(stat.Bsize), nil
-		},
-		boundary: func(string) error { return nil },
+		openFile:       os.OpenFile,
+		readFile:       os.ReadFile,
+		mkdirAll:       os.MkdirAll,
+		rename:         os.Rename,
+		stat:           os.Stat,
+		lstat:          os.Lstat,
+		walkDir:        filepath.WalkDir,
+		remove:         os.Remove,
+		removeAll:      os.RemoveAll,
+		availableBytes: platformAvailableBytes,
+		boundary:       func(string) error { return nil },
 	}
 }
 
@@ -182,6 +176,9 @@ func (store *generationStore) converge() (string, error) {
 	if err := store.ensureTrustedContainer(); err != nil {
 		return "", err
 	}
+	if err := store.cleanupMetadataTemporaries(); err != nil {
+		return "", err
+	}
 	txn, err := store.readTransaction()
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -261,6 +258,9 @@ func (store *generationStore) converge() (string, error) {
 
 func (store *generationStore) importFlatData() (string, error) {
 	if err := store.ensureTrustedContainer(); err != nil {
+		return "", err
+	}
+	if err := store.cleanupMetadataTemporaries(); err != nil {
 		return "", err
 	}
 	id, err := newGenerationID()
@@ -463,7 +463,7 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 			return err
 		}
 		first := strings.Split(relative, string(filepath.Separator))[0]
-		if flat && (first == generationsDirName || relative == activeGenerationName || relative == recoveryTransactionName) {
+		if flat && (first == generationsDirName || relative == activeGenerationName || relative == recoveryTransactionName || isMetadataTemporaryName(relative)) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -554,6 +554,9 @@ func (store *generationStore) verifyGeneration(id string) error {
 		return err
 	}
 	directory := store.generationPath(id)
+	if err := store.cleanupMetadataTemporariesIn(directory, generationManifestName); err != nil {
+		return err
+	}
 	data, err := store.ops.readFile(filepath.Join(directory, generationManifestName))
 	if err != nil {
 		return err
@@ -628,6 +631,9 @@ func (store *generationStore) sealGeneration(id string, baseline generationBasel
 		return err
 	}
 	directory := store.generationPath(id)
+	if err := store.cleanupMetadataTemporariesIn(directory, generationManifestName); err != nil {
+		return err
+	}
 	directories := []string{directory, filepath.Dir(directory)}
 	manifest := generationManifest{Version: 1, Baseline: baseline, Files: map[string]manifestFile{}}
 	err := store.ops.walkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -724,6 +730,9 @@ func (store *generationStore) needsMigration(id string, baseline generationBasel
 }
 
 func (store *generationStore) preflightMigration(source string) error {
+	if err := store.cleanupMetadataTemporariesIn(source, generationManifestName); err != nil {
+		return err
+	}
 	var estimated uint64
 	if err := store.ops.walkDir(source, func(_ string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -865,15 +874,20 @@ func (store *generationStore) writeAtomic(path string, data []byte, mode fs.File
 	if err := store.validateMetadataTarget(path); err != nil {
 		return err
 	}
+	oldFile, err := openMetadataTarget(path)
+	if err != nil {
+		return err
+	}
+	if oldFile != nil {
+		defer oldFile.Close()
+	}
 	temporary, file, identity, err := store.createAtomicTemporary(path, mode)
 	if err != nil {
 		return err
 	}
-	owned := true
+	defer file.Close()
 	defer func() {
-		if owned {
-			_ = store.removeOwnedTemporary(temporary, identity)
-		}
+		_ = store.removeOwnedTemporary(temporary, identity)
 	}()
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
@@ -887,26 +901,23 @@ func (store *generationStore) writeAtomic(path string, data []byte, mode fs.File
 		_ = file.Close()
 		return err
 	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := store.ops.boundary(renameBoundary); err != nil {
-		return err
-	}
-	if err := store.validateMetadataTarget(path); err != nil {
-		return err
-	}
-	temporaryInfo, err := store.ops.lstat(temporary)
+	publish, rollbackPublish, cleanupPublish, err := platformPrepareAtomicPublish(file, oldFile, temporary, path, mode)
 	if err != nil {
 		return err
 	}
-	if !temporaryInfo.Mode().IsRegular() || !os.SameFile(identity, temporaryInfo) {
-		return errors.New("atomic metadata temporary file identity changed")
-	}
-	if err := store.ops.rename(temporary, path); err != nil {
+	defer cleanupPublish()
+	if err := store.ops.boundary(renameBoundary); err != nil {
 		return err
 	}
-	owned = false
+	if err := store.ops.boundary("publish-before-commit"); err != nil {
+		return err
+	}
+	if err := publish(); err != nil {
+		return err
+	}
+	if err := store.ops.boundary("publish-after-commit"); err != nil {
+		return errors.Join(err, rollbackPublish())
+	}
 	if err := store.syncDirectory(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -935,29 +946,102 @@ func (store *generationStore) validateMetadataTarget(path string) error {
 }
 
 func (store *generationStore) createAtomicTemporary(path string, mode fs.FileMode) (string, *os.File, fs.FileInfo, error) {
-	directory := filepath.Dir(path)
-	base := filepath.Base(path)
-	for attempt := 0; attempt < 16; attempt++ {
-		random := make([]byte, 16)
-		if _, err := rand.Read(random); err != nil {
-			return "", nil, nil, err
+	return platformCreateAtomicTemporary(path, mode)
+}
+
+func randomMetadataPath(directory, prefix string) (string, error) {
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, "."+prefix+hex.EncodeToString(random)), nil
+}
+
+func metadataTemporaryPrefix(base string) string {
+	return "." + base + ".tmp-"
+}
+
+func metadataPublishPrefix(base string) string {
+	return "." + base + ".publish-"
+}
+
+func metadataRecoveryPrefix(base string) string {
+	return "." + base + ".recover-"
+}
+
+func isMetadataTemporaryName(name string) bool {
+	for _, base := range []string{activeGenerationName, recoveryTransactionName, generationManifestName} {
+		for _, prefix := range []string{metadataTemporaryPrefix(base), metadataPublishPrefix(base), metadataRecoveryPrefix(base)} {
+			if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
+				return true
+			}
 		}
-		temporary := filepath.Join(directory, "."+base+".tmp-"+hex.EncodeToString(random))
-		file, err := store.ops.openFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
-		if errors.Is(err, os.ErrExist) {
+	}
+	return false
+}
+
+func (store *generationStore) cleanupMetadataTemporaries() error {
+	if err := store.cleanupMetadataTemporariesIn(store.root, activeGenerationName, recoveryTransactionName); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Join(store.root, generationsDirName))
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if err != nil {
-			return "", nil, nil, err
+		if err := store.cleanupMetadataTemporariesIn(store.generationPath(entry.Name()), generationManifestName); err != nil {
+			return err
 		}
-		identity, err := file.Stat()
-		if err != nil {
-			_ = file.Close()
-			return "", nil, nil, err
-		}
-		return temporary, file, identity, nil
 	}
-	return "", nil, nil, errors.New("create atomic metadata temporary file: exhausted attempts")
+	return nil
+}
+
+func (store *generationStore) cleanupMetadataTemporariesIn(directory string, bases ...string) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		matched := false
+		for _, base := range bases {
+			for _, prefix := range []string{metadataTemporaryPrefix(base), metadataPublishPrefix(base), metadataRecoveryPrefix(base)} {
+				if strings.HasPrefix(entry.Name(), prefix) && len(entry.Name()) > len(prefix) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		info, err := store.ops.lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("suspicious metadata temporary: %s", entry.Name())
+		}
+		links, err := platformFileLinkCount(path, info)
+		if err != nil {
+			return err
+		}
+		if links != 1 {
+			return fmt.Errorf("suspicious metadata temporary link count: %s", entry.Name())
+		}
+		if err := store.ops.remove(path); err != nil {
+			return err
+		}
+		removed = true
+	}
+	if !removed {
+		return nil
+	}
+	return store.syncDirectory(directory)
 }
 
 func (store *generationStore) removeOwnedTemporary(path string, identity fs.FileInfo) error {

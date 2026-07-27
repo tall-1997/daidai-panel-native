@@ -78,6 +78,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
 - Final Task 1.3 metadata fixes verified:
   - Replaced predictable metadata `.tmp` paths with same-directory random exclusive temporary files and symlink-safe target validation.
   - Extended the schema fingerprint with resolved SQLite migration attributes for primary keys, autoincrement, defaults, constraints, and composite primary-key order.
+- Final Task 1.3 atomic-publish review fixes verified:
+  - Bound Linux/Android metadata publication to an open unnamed inode with `O_TMPFILE`, `linkat`, and `renameat2`, including post-publish rollback from an open recovery inode.
+  - Added a strict internal metadata temporary-prefix protocol and startup cleanup that rejects symlinks and multi-link files.
+  - Split free-space, no-follow, link-count, and atomic-publish primitives into Linux/Android, Windows, and fallback build-tag files.
 
 ## Task 1.3 Review Findings Resolved
 

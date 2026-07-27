@@ -601,11 +601,12 @@ func TestAtomicMetadataWriteRejectsReplacedOwnedTemporaryWithoutDeletingAttacker
 		return errors.New("owned temporary file was not found")
 	}
 
-	if err := store.writePointer("generation-safe"); err == nil {
-		t.Fatal("expected replaced temporary file rejection")
+	if err := store.writePointer("generation-safe"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Lstat(filepath.Join(root, activeGenerationName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("attacker path was installed as metadata: %v", err)
+	data, err := os.ReadFile(filepath.Join(root, activeGenerationName))
+	if err != nil || string(data) != "generation-safe\n" {
+		t.Fatalf("open temp inode was not installed: data=%q err=%v", data, err)
 	}
 	info, err := os.Lstat(attackerPath)
 	if err != nil {
@@ -617,6 +618,214 @@ func TestAtomicMetadataWriteRejectsReplacedOwnedTemporaryWithoutDeletingAttacker
 	outside, err := os.ReadFile(external)
 	if err != nil || string(outside) != "outside" {
 		t.Fatalf("external content changed: content=%q err=%v", outside, err)
+	}
+}
+
+func TestAtomicMetadataPublishBindsInstalledInodeToOpenFile(t *testing.T) {
+	for _, targetExists := range []bool{false, true} {
+		name := "target missing"
+		if targetExists {
+			name = "target exists"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureTrustedContainer(); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, activeGenerationName)
+			if targetExists {
+				writeTestFile(t, target, "old-valid\n")
+			}
+			external := filepath.Join(t.TempDir(), "external")
+			writeTestFile(t, external, "outside")
+			var attackerTemp string
+			store.ops.boundary = func(point string) error {
+				if point != "publish-before-commit" {
+					return nil
+				}
+				entries, err := os.ReadDir(root)
+				if err != nil {
+					return err
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), "."+activeGenerationName+".tmp-") {
+						attackerTemp = filepath.Join(root, entry.Name())
+						if err := os.Remove(attackerTemp); err != nil {
+							return err
+						}
+						if err := os.Link(external, attackerTemp); err != nil {
+							return err
+						}
+						if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+							return err
+						}
+						return os.Symlink(external, target)
+					}
+				}
+				return errors.New("metadata temporary file was not found")
+			}
+
+			err := store.writePointer("generation-safe")
+			if err == nil {
+				data, readErr := os.ReadFile(target)
+				if readErr != nil || string(data) != "generation-safe\n" {
+					t.Fatalf("installed metadata is not the open temp inode: data=%q err=%v", data, readErr)
+				}
+			} else {
+				info, statErr := os.Lstat(target)
+				if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+					t.Fatal("attacker symlink remained installed after safe failure")
+				}
+				if targetExists && statErr == nil {
+					data, readErr := os.ReadFile(target)
+					if readErr != nil || string(data) != "old-valid\n" {
+						t.Fatalf("old metadata was not restored: data=%q err=%v", data, readErr)
+					}
+				}
+			}
+			outside, err := os.ReadFile(external)
+			if err != nil || string(outside) != "outside" {
+				t.Fatalf("external content changed: content=%q err=%v", outside, err)
+			}
+			targetInfo, targetErr := os.Lstat(target)
+			externalInfo, externalErr := os.Lstat(external)
+			if targetErr == nil && externalErr == nil && os.SameFile(targetInfo, externalInfo) {
+				t.Fatal("attacker inode was installed as metadata")
+			}
+			if attackerTemp == "" {
+				t.Fatal("replacement injection did not run")
+			}
+		})
+	}
+}
+
+func TestAtomicMetadataPublishFailureRestoresExistingMetadata(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, activeGenerationName)
+	writeTestFile(t, target, "old-valid\n")
+	store.ops.boundary = func(point string) error {
+		if point != "publish-after-commit" {
+			return nil
+		}
+		return errors.New("injected post-publish failure")
+	}
+	if err := store.writePointer("generation-safe"); err == nil {
+		t.Fatal("expected injected publish failure")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "old-valid\n" {
+		t.Fatalf("old metadata was not restored: data=%q err=%v", data, err)
+	}
+}
+
+func TestConvergeCleansMetadataTemporariesBeforeVerifiedValidation(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(oldGeneration, "daidai.db"), "old")
+	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{Schema: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	txn, err := store.prepareMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newGeneration := store.generationPath(txn.NewGeneration)
+	writeTestFile(t, filepath.Join(newGeneration, "daidai.db"), "new")
+	if err := store.sealGeneration(txn.NewGeneration, generationBaseline{Schema: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.commitPointer(txn); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.markReady(txn.NewGeneration); err != nil {
+		t.Fatal(err)
+	}
+	rootTemporary := filepath.Join(root, "."+activeGenerationName+".tmp-crash")
+	generationTemporary := filepath.Join(newGeneration, "."+generationManifestName+".tmp-crash")
+	writeTestFile(t, rootTemporary, "stale")
+	writeTestFile(t, generationTemporary, "stale")
+
+	restarted := newGenerationStore(root, defaultFilesystemOps())
+	active, err := restarted.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != newGeneration {
+		t.Fatalf("active=%q want=%q", active, newGeneration)
+	}
+	data, err := os.ReadFile(filepath.Join(newGeneration, "daidai.db"))
+	if err != nil || string(data) != "new" {
+		t.Fatalf("verified generation data changed: data=%q err=%v", data, err)
+	}
+	for _, path := range []string{rootTemporary, generationTemporary} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("temporary remains at %s: %v", path, err)
+		}
+	}
+}
+
+func TestFirstImportDoesNotCopyMetadataTemporaries(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "daidai.db"), "legacy")
+	for _, name := range []string{
+		"." + activeGenerationName + ".tmp-crash",
+		"." + recoveryTransactionName + ".publish-crash",
+	} {
+		writeTestFile(t, filepath.Join(root, name), "stale")
+	}
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp-") || strings.Contains(entry.Name(), ".publish-") {
+			t.Fatalf("metadata temporary copied into generation: %s", entry.Name())
+		}
+	}
+}
+
+func TestConvergeRejectsSuspiciousMetadataTemporaryWithoutTouchingExternalFile(t *testing.T) {
+	for _, kind := range []string{"symlink", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			external := filepath.Join(t.TempDir(), "external")
+			writeTestFile(t, external, "outside")
+			temporary := filepath.Join(root, "."+activeGenerationName+".tmp-suspicious")
+			var err error
+			if kind == "symlink" {
+				err = os.Symlink(external, temporary)
+			} else {
+				err = os.Link(external, temporary)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if _, err := store.converge(); err == nil {
+				t.Fatal("expected suspicious metadata temporary rejection")
+			}
+			outside, err := os.ReadFile(external)
+			if err != nil || string(outside) != "outside" {
+				t.Fatalf("external content changed: content=%q err=%v", outside, err)
+			}
+			if _, err := os.Lstat(temporary); err != nil {
+				t.Fatalf("suspicious path was removed: %v", err)
+			}
+		})
 	}
 }
 
