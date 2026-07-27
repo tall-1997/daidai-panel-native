@@ -8,35 +8,103 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
+	"sort"
+	"strings"
 
 	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 	"daidai-panel/model"
 	"daidai-panel/service"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 var ensureColumns = database.EnsureColumns
 
 func SchemaFingerprint() string {
-	return schemaFingerprint(allModels())
+	fingerprint, err := schemaFingerprint(allModels(), database.ManualSchemaRevision)
+	if err != nil {
+		panic(fmt.Sprintf("build schema fingerprint: %v", err))
+	}
+	return fingerprint
 }
 
-func schemaFingerprint(models []interface{}) string {
+func schemaFingerprint(models []interface{}, manualRevision string) (string, error) {
+	descriptor, err := schemaDescriptor(models)
+	if err != nil {
+		return "", err
+	}
 	hash := sha256.New()
+	fmt.Fprintf(hash, "manual:%s\n%s", manualRevision, descriptor)
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func schemaDescriptor(models []interface{}) (string, error) {
+	db, err := openSchemaDescriptorDB(schema.NamingStrategy{})
+	if err != nil {
+		return "", err
+	}
+	return schemaDescriptorWithDB(db, models)
+}
+
+func openSchemaDescriptorDB(namingStrategy schema.Namer) (*gorm.DB, error) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DryRun: true, DisableAutomaticPing: true, NamingStrategy: namingStrategy})
+	if err != nil {
+		return nil, fmt.Errorf("open schema descriptor database: %w", err)
+	}
+	return db, nil
+}
+
+func schemaDescriptorWithDB(db *gorm.DB, models []interface{}) (string, error) {
+	lines := make([]string, 0)
 	for _, model := range models {
-		typeOf := reflect.TypeOf(model)
-		for typeOf.Kind() == reflect.Pointer {
-			typeOf = typeOf.Elem()
+		statement := &gorm.Statement{DB: db}
+		if err := statement.Parse(model); err != nil {
+			return "", fmt.Errorf("parse schema model: %w", err)
 		}
-		fmt.Fprintf(hash, "%s.%s|", typeOf.PkgPath(), typeOf.Name())
-		for index := 0; index < typeOf.NumField(); index++ {
-			field := typeOf.Field(index)
-			fmt.Fprintf(hash, "%s:%s:%s|", field.Name, field.Type.String(), string(field.Tag))
+		parsed := statement.Schema
+		lines = append(lines, "table:"+parsed.Table)
+		for _, field := range parsed.Fields {
+			if field.DBName == "" {
+				continue
+			}
+			fullType := db.Migrator().FullDataTypeOf(field)
+			lines = append(lines, fmt.Sprintf("column:%s:%s:%v", field.DBName, fullType.SQL, fullType.Vars))
+		}
+		for _, index := range parsed.ParseIndexes() {
+			parts := []string{"index:" + index.Name, index.Class, index.Type, index.Where, index.Option}
+			for _, field := range index.Fields {
+				parts = append(parts, fmt.Sprintf("%s:%s:%s:%s:%d", field.DBName, field.Expression, field.Sort, field.Collate, field.Length))
+			}
+			lines = append(lines, strings.Join(parts, ":"))
+		}
+		for name, check := range parsed.ParseCheckConstraints() {
+			lines = append(lines, fmt.Sprintf("check:%s:%s:%s", name, check.Field.DBName, check.Constraint))
+		}
+		for name, unique := range parsed.ParseUniqueConstraints() {
+			lines = append(lines, fmt.Sprintf("unique:%s:%s", name, unique.Field.DBName))
+		}
+		for _, relation := range parsed.Relationships.Relations {
+			constraint := relation.ParseConstraint()
+			if constraint == nil {
+				continue
+			}
+			foreignKeys := make([]string, 0, len(constraint.ForeignKeys))
+			references := make([]string, 0, len(constraint.References))
+			for _, field := range constraint.ForeignKeys {
+				foreignKeys = append(foreignKeys, field.DBName)
+			}
+			for _, field := range constraint.References {
+				references = append(references, field.DBName)
+			}
+			lines = append(lines, fmt.Sprintf("foreign:%s:%s:%s:%s:%s:%s", constraint.Name, strings.Join(foreignKeys, ","), constraint.ReferenceSchema.Table, strings.Join(references, ","), constraint.OnUpdate, constraint.OnDelete))
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+	sort.Strings(lines)
+	return strings.Join(lines, "\n"), nil
 }
 
 // ResolveConfigPath 查找 config.yaml，覆盖 Docker / 二进制 / Windows 双击 / cwd 漂移等场景。

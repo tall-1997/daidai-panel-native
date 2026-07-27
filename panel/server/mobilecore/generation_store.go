@@ -161,6 +161,8 @@ func (store *generationStore) converge() (string, error) {
 				if err := store.ops.removeAll(store.generationPath(txn.NewGeneration)); err != nil {
 					return "", err
 				}
+			} else if err := store.pruneGenerations(txn.NewGeneration, txn.OldGeneration); err != nil {
+				return "", err
 			}
 		}
 	}
@@ -312,7 +314,7 @@ func (store *generationStore) activeGeneration() (string, error) {
 }
 
 func (store *generationStore) validateGeneration(id string) error {
-	info, err := store.ops.stat(store.generationPath(id))
+	info, err := store.ops.lstat(store.generationPath(id))
 	if err != nil {
 		return err
 	}

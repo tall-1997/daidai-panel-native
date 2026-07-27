@@ -4,19 +4,9 @@ Updated: 2026-07-27
 Branch: `main`
 Remote: `origin/main`
 
-## Resume Command
-
-```bash
-git status --short --branch
-git stash list
-git stash apply stash^{/wip-modern-full-panel-task-1.3-hardening}
-```
-
-Apply the named stash only when resuming Task 1.3. Review the diff before running tests or committing.
-
 ## Current Position
 
-Milestone 1 is in progress. Tasks 1.0, 1.1, and 1.2 are implemented and committed locally. Task 1.3 has an initial committed implementation plus unverified hardening changes saved as a named stash. Task 1.4 has not started.
+Milestone 1 is in progress. Tasks 1.0 through 1.3 are implemented and committed locally. Task 1.4 has not started.
 
 The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit gate and its commits have not been pushed.
 
@@ -74,6 +64,12 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Cleaned interrupted candidates and orphans before migration space preflight.
   - Propagated rollback, close, reopen, PRAGMA, legacy PID, and legacy index errors.
   - Added clean-stop WAL checkpoint, symlink rejection, and atomic manifest replacement.
+- Second recovery review fixes:
+  - Replaced reflection tags with a stable GORM-resolved schema descriptor covering table naming, SQLite datatypes, indexes, and constraints.
+  - Added an explicit manual schema revision for `EnsureColumns` and manual index migrations.
+  - Propagated startup database close failures as stable recovery-required responses without overwriting live globals.
+  - Rejected generation-root symlinks with `Lstat`.
+  - Made verified-generation pruning idempotent on every startup, including crash recovery after verified transaction persistence.
 
 ## Task 1.3 Review Findings Resolved
 
@@ -87,7 +83,7 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
 
 ## Task 1.3 Verification
 
-- `go test -race ./mobilecore ./database ./appboot` passed.
+- `go test -race ./mobilecore ./database ./appboot -count=1` passed.
 - `go test ./handler ./service -count=1` passed.
 - `go vet ./mobilecore ./router ./handler ./service ./database ./appboot` passed.
 - Task 1.3 is complete; Task 1.4 remains pending.

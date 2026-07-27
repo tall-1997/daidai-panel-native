@@ -25,6 +25,7 @@ import (
 	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type testResult struct {
@@ -697,6 +698,43 @@ func TestStartFailureRestoresGlobalState(t *testing.T) {
 	}
 	if strings.Contains(result.Error, "/tmp") || strings.Contains(result.Error, "database") {
 		t.Fatalf("unsafe detail leaked: %q", result.Error)
+	}
+}
+
+func TestStartFailureCloseErrorReturnsRecoveryRequiredWithoutOverwritingGlobals(t *testing.T) {
+	previousConfig := &config.Config{Server: config.ServerConfig{Mode: "previous"}}
+	previousDB := database.DB
+	config.C = previousConfig
+	currentConfig := &config.Config{Server: config.ServerConfig{Mode: "current"}}
+	currentDB := &gorm.DB{}
+	oldInit := initApp
+	initApp = func(*config.Config, io.Writer, func() error) error {
+		config.C = currentConfig
+		database.DB = currentDB
+		return errors.New("bootstrap failed")
+	}
+	oldClose := closeDatabase
+	closeDatabase = func() error { return errors.New("close failed") }
+	t.Cleanup(func() {
+		initApp = oldInit
+		closeDatabase = oldClose
+		config.C = nil
+		database.DB = previousDB
+	})
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeRecoveryFailed || !result.CleanupRequired {
+		t.Fatalf("result=%+v", result)
+	}
+	if config.C != currentConfig || database.DB != currentDB {
+		t.Fatal("globals were overwritten after database close failure")
+	}
+}
+
+func TestRecoveryFailureAlwaysRequiresCleanup(t *testing.T) {
+	result := decodeResult(t, failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"}))
+	if result.Status != "cleanup_required" || !result.CleanupRequired {
+		t.Fatalf("result=%+v", result)
 	}
 }
 

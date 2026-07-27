@@ -19,6 +19,9 @@ import (
 
 var DB *gorm.DB
 
+// ManualSchemaRevision changes whenever EnsureColumns or manual index migration semantics change.
+const ManualSchemaRevision = "ensure-columns-v2"
+
 var closeSQLDB = func(db *sql.DB) error {
 	return db.Close()
 }

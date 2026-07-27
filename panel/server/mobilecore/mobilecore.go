@@ -98,6 +98,7 @@ var (
 	initApp                 = appboot.InitWithConfigWriterBeforeMigrate
 	setupRoutes             = router.SetupMobileFull
 	listenTCP               = net.Listen
+	closeDatabase           = database.Close
 	checkpointDB            = database.CheckpointWALAndClose
 	openDatabase            = database.InitWithWriter
 	integrityDB             = database.IntegrityCheck
@@ -208,7 +209,9 @@ func StartCore(optionsJSON string) string {
 				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
 			}
 		} else {
-			restoreAfterStartFailure(previous)
+			if restoreErr := restoreAfterStartFailure(previous); restoreErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "cleanup_required", CleanupRequired: true})
+			}
 		}
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
@@ -220,7 +223,9 @@ func StartCore(optionsJSON string) string {
 				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
 			}
 		} else {
-			restoreAfterStartFailure(previous)
+			if restoreErr := restoreAfterStartFailure(previous); restoreErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "cleanup_required", CleanupRequired: true})
+			}
 		}
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
@@ -358,7 +363,10 @@ func StartCore(optionsJSON string) string {
 				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
 			}
 		} else {
-			restoreAfterStartFailure(previous)
+			if restoreErr := restoreAfterStartFailure(previous); restoreErr != nil {
+				lifecycle.mu.Unlock()
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "cleanup_required", CleanupRequired: true})
+			}
 		}
 		lifecycle.mu.Unlock()
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
@@ -617,21 +625,21 @@ func captureGlobals() globalState {
 	}
 }
 
-func restoreAfterStartFailure(previous globalState) {
+func restoreAfterStartFailure(previous globalState) error {
 	if database.DB != nil && database.DB != previous.database {
-		if err := database.Close(); err != nil {
-			logDiagnostic(codeDatabaseClose, "rollback")
+		if err := closeDatabase(); err != nil {
+			return fmt.Errorf("close failed startup database: %w", err)
 		}
 	}
 	restoreGlobals(previous)
+	return nil
 }
 
 func rollbackStartFailure(store *generationStore, txn recoveryTransaction, prepared bool, cfg *config.Config, writer io.Writer, previous globalState) error {
 	if prepared {
 		return rollbackCommittedMigration(store, txn, cfg, writer, previous)
 	}
-	restoreAfterStartFailure(previous)
-	return nil
+	return restoreAfterStartFailure(previous)
 }
 
 func rollbackCommittedMigration(store *generationStore, txn recoveryTransaction, cfg *config.Config, writer io.Writer, previous globalState) error {
@@ -721,6 +729,10 @@ func failure(code, message string, value result) string {
 	value.OK = false
 	value.ErrorCode = code
 	value.Error = message
+	if code == codeRecoveryFailed {
+		value.Status = "cleanup_required"
+		value.CleanupRequired = true
+	}
 	return encode(value)
 }
 

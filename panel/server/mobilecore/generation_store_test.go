@@ -296,6 +296,26 @@ func TestVerifyGenerationRejectsManifestedSymlink(t *testing.T) {
 	}
 }
 
+func TestValidateGenerationRejectsGenerationRootSymlink(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := filepath.Base(active)
+	realGeneration := filepath.Join(root, "real-generation")
+	if err := os.Rename(active, realGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realGeneration, active); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.validateGeneration(id); err == nil {
+		t.Fatal("expected generation root symlink rejection")
+	}
+}
+
 func TestSealGenerationWritesManifestAtomically(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
@@ -546,6 +566,52 @@ func TestVerifiedGenerationPrunesOlderAndOrphanGenerations(t *testing.T) {
 		if entry.Name() == "orphan" {
 			t.Fatal("orphan generation remains")
 		}
+	}
+}
+
+func TestConvergeCompletesPruneAfterVerifiedTransactionCrash(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finalize(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	txn, err := store.prepareMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sealGeneration(txn.NewGeneration, generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.commitPointer(txn); err != nil {
+		t.Fatal(err)
+	}
+	orphan := store.generationPath("orphan-after-verified")
+	writeTestFile(t, filepath.Join(orphan, "junk"), "junk")
+	store.ops.removeAll = func(path string) error {
+		if path == orphan {
+			return errors.New("prune interrupted")
+		}
+		return os.RemoveAll(path)
+	}
+	if err := store.markReady(txn.NewGeneration); err == nil {
+		t.Fatal("expected interrupted prune failure")
+	}
+	assertTransactionPhase(t, root, recoveryPhaseVerified)
+
+	restarted := newGenerationStore(root, defaultFilesystemOps())
+	active, err := restarted.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != restarted.generationPath(txn.NewGeneration) {
+		t.Fatalf("active=%q want=%q", active, restarted.generationPath(txn.NewGeneration))
+	}
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphan remains after restart: %v", err)
 	}
 }
 
