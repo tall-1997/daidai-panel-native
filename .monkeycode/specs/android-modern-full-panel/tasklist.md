@@ -108,7 +108,7 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 
 ### Task 1.3: Add Minimum Migration Recovery
 
-**Status:** Complete (`88613af` initial implementation plus migration recovery hardening)
+**Status:** Complete (`88613af` initial implementation, `1ba7941` hardening, and follow-up recovery review fixes)
 
 **Files:**
 - Create: `panel/server/mobilecore/generation_store.go`

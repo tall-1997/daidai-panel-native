@@ -97,7 +97,7 @@ func TestMigrationFailureRollsBackPointer(t *testing.T) {
 	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
 }
 
-func TestConvergeAfterPointerCommitCrashKeepsCompleteGeneration(t *testing.T) {
+func TestConvergeAfterPointerCommitCrashRollsBackUnreadyGeneration(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
 	oldGeneration, err := store.converge()
@@ -118,13 +118,13 @@ func TestConvergeAfterPointerCommitCrashKeepsCompleteGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active != restarted.generationPath(txn.NewGeneration) {
-		t.Fatalf("active=%q want committed=%q", active, restarted.generationPath(txn.NewGeneration))
+	if active != oldGeneration {
+		t.Fatalf("active=%q want previous=%q", active, oldGeneration)
 	}
-	assertTransactionPhase(t, root, recoveryPhaseVerified)
+	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
 }
 
-func TestConvergeAfterPointerRenameBeforePhaseWriteKeepsNewGeneration(t *testing.T) {
+func TestConvergeAfterPointerRenameBeforePhaseWriteRollsBackUnreadyGeneration(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
 	oldGeneration, err := store.converge()
@@ -145,8 +145,42 @@ func TestConvergeAfterPointerRenameBeforePhaseWriteKeepsNewGeneration(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active != restarted.generationPath(txn.NewGeneration) {
-		t.Fatalf("active=%q want renamed generation=%q", active, restarted.generationPath(txn.NewGeneration))
+	if active != oldGeneration {
+		t.Fatalf("active=%q want previous=%q", active, oldGeneration)
+	}
+	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
+}
+
+func TestFirstGenerationCommittedCrashResumesWithoutMarkingVerified(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(active, ".jwt_secret"), "created-before-crash")
+
+	restarted := newGenerationStore(root, defaultFilesystemOps())
+	resumed, err := restarted.converge()
+	if err != nil {
+		t.Fatalf("resume first generation: %v", err)
+	}
+	if resumed != active {
+		t.Fatalf("resumed=%q want=%q", resumed, active)
+	}
+	assertTransactionPhase(t, root, recoveryPhaseCommitted)
+}
+
+func TestFinalizeGenerationIsOnlyTransitionToVerified(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTransactionPhase(t, root, recoveryPhaseCommitted)
+	if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
 	}
 	assertTransactionPhase(t, root, recoveryPhaseVerified)
 }
@@ -236,6 +270,54 @@ func TestVerifyGenerationRejectsManifestPathEscape(t *testing.T) {
 	}
 	if err := store.verifyGeneration(filepath.Base(active)); err == nil {
 		t.Fatal("expected manifest path escape rejection")
+	}
+}
+
+func TestVerifyGenerationRejectsManifestedSymlink(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(active, "payload"), "safe")
+	if err := store.sealGeneration(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(active, "payload")); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "outside"), "safe")
+	if err := os.Symlink(filepath.Join(root, "outside"), filepath.Join(active, "payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.verifyGeneration(filepath.Base(active)); err == nil {
+		t.Fatal("expected symlink rejection")
+	}
+}
+
+func TestSealGenerationWritesManifestAtomically(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(filepath.Join(active, generationManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(active, "new-file"), "new")
+	store.ops.boundary = failBoundary("manifest-rename")
+	if err := store.sealGeneration(filepath.Base(active), generationBaseline{}); err == nil {
+		t.Fatal("expected manifest rename failure")
+	}
+	after, err := os.ReadFile(filepath.Join(active, generationManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatal("manifest was partially replaced")
 	}
 }
 
@@ -347,7 +429,7 @@ func TestPrepareMigrationPreflightAndCopyENOSPCCleanupCandidateAndTransaction(t 
 				t.Fatal(err)
 			}
 			writeTestFile(t, filepath.Join(active, "daidai.db"), "database payload")
-			if err := store.sealGeneration(filepath.Base(active), generationBaseline{}); err != nil {
+			if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
 				t.Fatal(err)
 			}
 			if failure == "preflight" {
@@ -371,10 +453,60 @@ func TestPrepareMigrationPreflightAndCopyENOSPCCleanupCandidateAndTransaction(t 
 			if len(entries) != 1 || entries[0].Name() != filepath.Base(active) {
 				t.Fatalf("generations after failure=%v", entries)
 			}
-			if _, err := os.Stat(filepath.Join(root, recoveryTransactionName)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("transaction remains after failure: %v", err)
+			wantPhase := recoveryPhaseVerified
+			if failure == "copy" {
+				wantPhase = recoveryPhaseRolledBack
 			}
+			assertTransactionPhase(t, root, wantPhase)
 		})
+	}
+}
+
+func TestPrepareMigrationRemovesOrphansBeforeSpacePreflight(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(root, generationsDirName, "orphan")
+	writeTestFile(t, filepath.Join(orphan, "large"), "junk")
+	store.ops.availableBytes = func(string) (uint64, error) {
+		if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+			return 0, errors.New("orphan remained during preflight")
+		}
+		return 1 << 30, nil
+	}
+	if _, err := store.prepareMigration(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConvergeRemovesInterruptedCandidateImmediately(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	txn, err := store.prepareMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.generationPath(txn.NewGeneration)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.converge(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.generationPath(txn.NewGeneration)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("interrupted candidate remains: %v", err)
 	}
 }
 

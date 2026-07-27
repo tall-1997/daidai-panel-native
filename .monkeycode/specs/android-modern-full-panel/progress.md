@@ -65,6 +65,15 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
 - `88613af` `feat(core): add migration recovery generations`
   - Added generation directories, active pointer, recovery transaction phases, WAL checkpoint, integrity checks, and startup convergence gate.
   - Initial tests passed, followed by recovery hardening completed in the subsequent Task 1.3 commit.
+- `1ba7941` `fix(core): harden migration recovery`
+  - Added migration baseline checks, strict file manifests, retention, startup rollback, and `EnsureColumns` error propagation.
+- Follow-up recovery review fixes:
+  - Reserved `verified` for complete Core readiness after HTTP health probing.
+  - Made first-generation bootstrap crash-resumable without accepting mutable verified data.
+  - Derived schema migration identity from the actual AutoMigrate model structure.
+  - Cleaned interrupted candidates and orphans before migration space preflight.
+  - Propagated rollback, close, reopen, PRAGMA, legacy PID, and legacy index errors.
+  - Added clean-stop WAL checkpoint, symlink rejection, and atomic manifest replacement.
 
 ## Task 1.3 Review Findings Resolved
 
@@ -127,7 +136,7 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
 
 ## Verification State
 
-Verified before the interrupted WIP:
+Verified Task 1.0 through Task 1.3:
 
 - 423 canonical routes generated and current.
 - 60 dangerous routes capability-gated.
@@ -137,6 +146,5 @@ Verified before the interrupted WIP:
 
 Not yet verified:
 
-- Task 1.3 hardening WIP.
 - Milestone 1 complete exit gate.
 - Any Milestone 2-6 implementation.

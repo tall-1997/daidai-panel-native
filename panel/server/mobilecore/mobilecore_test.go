@@ -485,6 +485,14 @@ func TestStartCorePostPointerFailuresRollbackAndReopenOldDatabase(t *testing.T) 
 				return func() { configureRoutes = old }
 			},
 		},
+		{
+			name: "readiness probe",
+			inject: func() func() {
+				old := probeCoreReadiness
+				probeCoreReadiness = func(string, string) error { return errors.New("probe failed") }
+				return func() { probeCoreReadiness = old }
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -578,8 +586,8 @@ func TestStopCoreRejectsInvalidTimeout(t *testing.T) {
 
 func TestDatabaseCloseFailureRequiresCleanupAndCanRetry(t *testing.T) {
 	startForTest(t, t.TempDir())
-	oldClose := closeDatabase
-	closeDatabase = func() error { return errors.New("sensitive close detail") }
+	oldCheckpoint := checkpointDB
+	checkpointDB = func() error { return errors.New("sensitive close detail") }
 	result := decodeResult(t, StopCore(1000))
 	if result.OK || result.Status != "cleanup_required" || !result.CleanupRequired || result.Running {
 		t.Fatalf("unexpected close failure state: %+v", result)
@@ -587,10 +595,71 @@ func TestDatabaseCloseFailureRequiresCleanupAndCanRetry(t *testing.T) {
 	if CoreEndpoint() != "" {
 		t.Fatalf("endpoint exposed during cleanup: %q", CoreEndpoint())
 	}
-	closeDatabase = oldClose
-	t.Cleanup(func() { closeDatabase = oldClose })
+	checkpointDB = oldCheckpoint
+	t.Cleanup(func() { checkpointDB = oldCheckpoint })
 	if retried := decodeResult(t, StopCore(1000)); !retried.OK {
 		t.Fatalf("cleanup retry failed: %+v", retried)
+	}
+}
+
+func TestStopCoreCheckpointsRealSQLiteWALBeforeSeal(t *testing.T) {
+	root := t.TempDir()
+	startForTest(t, root)
+	if err := database.DB.Exec("CREATE TABLE wal_probe (value TEXT)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Exec("INSERT INTO wal_probe(value) VALUES ('durable')").Error; err != nil {
+		t.Fatal(err)
+	}
+	activeDir := config.C.Data.Dir
+	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+		t.Fatalf("stop: %+v", stopped)
+	}
+	if _, err := os.Stat(filepath.Join(activeDir, "daidai.db-wal")); err == nil {
+		t.Fatal("WAL remains after clean stop")
+	}
+}
+
+func TestStartCoreReportsRollbackFailureAndKeepsGateClosed(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(active, "daidai.db"), "")
+	writeTestFile(t, filepath.Join(active, ".jwt_secret"), testLocalToken)
+	if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	oldInit := initApp
+	initApp = func(_ *config.Config, _ io.Writer, gate func() error) error {
+		if err := gate(); err != nil {
+			return err
+		}
+		return errors.New("migration failed")
+	}
+	oldOps := generationFilesystemOps
+	generationFilesystemOps = func() filesystemOps {
+		ops := defaultFilesystemOps()
+		ops.boundary = func(point string) error {
+			if point == "rollback-transaction" {
+				return errors.New("rollback persistence failed")
+			}
+			return nil
+		}
+		return ops
+	}
+	t.Cleanup(func() {
+		initApp = oldInit
+		generationFilesystemOps = oldOps
+	})
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeRecoveryFailed {
+		t.Fatalf("result=%+v", result)
+	}
+	if RecoveryConverged() {
+		t.Fatal("recovery gate opened after rollback failure")
 	}
 }
 
@@ -639,12 +708,22 @@ func TestStartCoreMigrationFailureKeepsOldGenerationAndGateClosed(t *testing.T) 
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, "config.sh"), "stable")
+	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
+	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CheckpointWALAndClose(); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
 		t.Fatal(err)
 	}
 
 	oldInit := initApp
-	initApp = func(_ *config.Config, _ io.Writer, gate func() error) error {
+	initApp = func(cfg *config.Config, writer io.Writer, gate func() error) error {
+		if err := database.InitWithWriter(&cfg.Database, writer); err != nil {
+			return err
+		}
 		if err := gate(); err != nil {
 			return err
 		}
@@ -773,21 +852,26 @@ type failingListener struct {
 }
 
 func (listener *failingListener) Accept() (net.Conn, error) {
+	type acceptResult struct {
+		connection net.Conn
+		err        error
+	}
+	result := make(chan acceptResult, 1)
+	go func() {
+		connection, err := listener.base.Accept()
+		result <- acceptResult{connection: connection, err: err}
+	}()
 	select {
-	case <-listener.accepted:
-		select {
-		case <-listener.fail:
-			return nil, errors.New("sensitive /tmp/accept detail")
-		case <-listener.closed:
-			return nil, net.ErrClosed
+	case <-listener.fail:
+		return nil, errors.New("sensitive /tmp/accept detail")
+	case <-listener.closed:
+		return nil, net.ErrClosed
+	case accepted := <-result:
+		if accepted.err == nil {
+			listener.once.Do(func() { close(listener.accepted) })
 		}
-	default:
+		return accepted.connection, accepted.err
 	}
-	connection, err := listener.base.Accept()
-	if err == nil {
-		listener.once.Do(func() { close(listener.accepted) })
-	}
-	return connection, err
 }
 
 func (listener *failingListener) Close() error {

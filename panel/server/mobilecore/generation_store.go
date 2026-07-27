@@ -59,6 +59,7 @@ type filesystemOps struct {
 	mkdirAll       func(string, fs.FileMode) error
 	rename         func(string, string) error
 	stat           func(string) (fs.FileInfo, error)
+	lstat          func(string) (fs.FileInfo, error)
 	walkDir        func(string, fs.WalkDirFunc) error
 	remove         func(string) error
 	removeAll      func(string) error
@@ -73,6 +74,7 @@ func defaultFilesystemOps() filesystemOps {
 		mkdirAll:  os.MkdirAll,
 		rename:    os.Rename,
 		stat:      os.Stat,
+		lstat:     os.Lstat,
 		walkDir:   filepath.WalkDir,
 		remove:    os.Remove,
 		removeAll: os.RemoveAll,
@@ -112,38 +114,33 @@ func (store *generationStore) converge() (string, error) {
 		switch txn.Phase {
 		case recoveryPhaseBuilding, recoveryPhasePrepared, recoveryPhaseOldSealed:
 			pointerID, pointerErr := store.readPointerID()
-			if pointerErr == nil && pointerID == txn.NewGeneration && store.verifyGeneration(txn.NewGeneration) == nil {
-				txn.Phase = recoveryPhaseVerified
+			if pointerErr == nil && pointerID == txn.NewGeneration && txn.OldGeneration == "" {
+				txn.Phase = recoveryPhaseCommitted
 				if err := store.writeTransaction(txn); err != nil {
 					return "", err
 				}
-				break
+				return store.generationPath(txn.NewGeneration), nil
 			}
 			if txn.OldGeneration != "" {
 				if err := store.writePointer(txn.OldGeneration); err != nil {
 					return "", err
 				}
 			}
+			if err := store.ops.removeAll(store.generationPath(txn.NewGeneration)); err != nil {
+				return "", err
+			}
 			txn.Phase = recoveryPhaseRolledBack
 			if err := store.writeTransaction(txn); err != nil {
 				return "", err
 			}
 		case recoveryPhaseCommitted:
-			if err := store.verifyGeneration(txn.NewGeneration); err != nil {
-				if txn.OldGeneration == "" {
-					return "", fmt.Errorf("committed generation invalid: %w", err)
+			if txn.OldGeneration == "" {
+				if pointerID, pointerErr := store.readPointerID(); pointerErr != nil || pointerID != txn.NewGeneration {
+					return "", errors.New("first generation pointer is unavailable")
 				}
-				if pointerErr := store.writePointer(txn.OldGeneration); pointerErr != nil {
-					return "", pointerErr
-				}
-				txn.Phase = recoveryPhaseRolledBack
-			} else {
-				if err := store.writePointer(txn.NewGeneration); err != nil {
-					return "", err
-				}
-				txn.Phase = recoveryPhaseVerified
+				return store.generationPath(txn.NewGeneration), nil
 			}
-			if err := store.writeTransaction(txn); err != nil {
+			if err := store.rollback(txn); err != nil {
 				return "", err
 			}
 		case recoveryPhaseVerified:
@@ -205,13 +202,6 @@ func (store *generationStore) importFlatData() (string, error) {
 	if err := store.writeTransaction(txn); err != nil {
 		return "", err
 	}
-	if err := store.verifyGeneration(id); err != nil {
-		return "", err
-	}
-	txn.Phase = recoveryPhaseVerified
-	if err := store.writeTransaction(txn); err != nil {
-		return "", err
-	}
 	return store.generationPath(id), nil
 }
 
@@ -228,8 +218,10 @@ func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
 	if err := store.sealGeneration(oldID, baseline); err != nil {
 		return recoveryTransaction{}, err
 	}
+	if err := store.cleanupOrphans(oldID); err != nil {
+		return recoveryTransaction{}, err
+	}
 	if err := store.preflightMigration(active); err != nil {
-		_ = store.ops.remove(filepath.Join(store.root, recoveryTransactionName))
 		return recoveryTransaction{}, err
 	}
 	newID, err := newGenerationID()
@@ -238,22 +230,19 @@ func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
 	}
 	txn := recoveryTransaction{Version: 1, Phase: recoveryPhaseBuilding, OldGeneration: oldID, NewGeneration: newID}
 	if err := store.writeTransaction(txn); err != nil {
-		store.cleanupFailedMigration(newID)
-		return recoveryTransaction{}, err
+		cleanupErr := store.ops.removeAll(store.generationPath(newID))
+		return recoveryTransaction{}, errors.Join(err, cleanupErr)
 	}
 	if err := store.copyDataset(active, store.generationPath(newID), false); err != nil {
-		store.cleanupFailedMigration(newID)
-		return recoveryTransaction{}, err
+		return recoveryTransaction{}, errors.Join(err, store.rollback(txn))
 	}
 	txn.Phase = recoveryPhasePrepared
 	if err := store.writeTransaction(txn); err != nil {
-		store.cleanupFailedMigration(newID)
-		return recoveryTransaction{}, err
+		return recoveryTransaction{}, errors.Join(err, store.rollback(txn))
 	}
 	txn.Phase = recoveryPhaseOldSealed
 	if err := store.writeTransaction(txn); err != nil {
-		store.cleanupFailedMigration(newID)
-		return recoveryTransaction{}, err
+		return recoveryTransaction{}, errors.Join(err, store.rollback(txn))
 	}
 	return txn, nil
 }
@@ -269,15 +258,33 @@ func (store *generationStore) commitPointer(txn recoveryTransaction) error {
 	return store.writeTransaction(txn)
 }
 
-func (store *generationStore) verify(txn recoveryTransaction) error {
-	if err := store.verifyGeneration(txn.NewGeneration); err != nil {
+func (store *generationStore) finalize(id string, baseline generationBaseline) error {
+	if err := store.sealGeneration(id, baseline); err != nil {
+		return err
+	}
+	return store.markReady(id)
+}
+
+func (store *generationStore) markReady(id string) error {
+	txn, err := store.readTransaction()
+	if err != nil {
+		return err
+	}
+	if txn.NewGeneration != id || txn.Phase != recoveryPhaseCommitted {
+		return errors.New("generation is not ready to finalize")
+	}
+	if err := store.verifyGeneration(id); err != nil {
 		return err
 	}
 	txn.Phase = recoveryPhaseVerified
 	if err := store.writeTransaction(txn); err != nil {
 		return err
 	}
-	return store.pruneGenerations(txn.NewGeneration, txn.OldGeneration)
+	return store.pruneGenerations(id, txn.OldGeneration)
+}
+
+func (store *generationStore) verify(txn recoveryTransaction) error {
+	return store.markReady(txn.NewGeneration)
 }
 
 func (store *generationStore) rollback(txn recoveryTransaction) error {
@@ -288,10 +295,9 @@ func (store *generationStore) rollback(txn recoveryTransaction) error {
 		return err
 	}
 	txn.Phase = recoveryPhaseRolledBack
-	if err := store.writeTransaction(txn); err != nil {
-		return err
-	}
-	return store.ops.removeAll(store.generationPath(txn.NewGeneration))
+	transactionErr := store.writeTransactionAt(txn, "rollback-transaction")
+	removeErr := store.ops.removeAll(store.generationPath(txn.NewGeneration))
+	return errors.Join(transactionErr, removeErr)
 }
 
 func (store *generationStore) activeGeneration() (string, error) {
@@ -474,7 +480,7 @@ func (store *generationStore) verifyGeneration(id string) error {
 			return errors.New("generation manifest path is invalid")
 		}
 		path := filepath.Join(directory, filepath.FromSlash(relative))
-		info, err := store.ops.stat(path)
+		info, err := store.ops.lstat(path)
 		if err != nil {
 			return err
 		}
@@ -555,7 +561,7 @@ func (store *generationStore) sealGeneration(id string, baseline generationBasel
 	if err != nil {
 		return err
 	}
-	if err := store.writeSyncedFile(filepath.Join(directory, generationManifestName), data, 0o600); err != nil {
+	if err := store.writeAtomic(filepath.Join(directory, generationManifestName), data, 0o600, "manifest-rename"); err != nil {
 		return err
 	}
 	sort.Slice(directories, func(i, j int) bool {
@@ -579,6 +585,11 @@ func (store *generationStore) generationBaseline(id string) (generationBaseline,
 		return generationBaseline{}, errors.New("generation manifest is invalid")
 	}
 	return manifest.Baseline, nil
+}
+
+func (store *generationStore) isInitialBootstrap(id string) bool {
+	txn, err := store.readTransaction()
+	return err == nil && txn.Phase == recoveryPhaseCommitted && txn.OldGeneration == "" && txn.NewGeneration == id
 }
 
 func (store *generationStore) needsMigration(id string, baseline generationBaseline) (bool, error) {
@@ -622,9 +633,24 @@ func (store *generationStore) preflightMigration(source string) error {
 	return nil
 }
 
-func (store *generationStore) cleanupFailedMigration(id string) {
-	_ = store.ops.removeAll(store.generationPath(id))
-	_ = store.ops.remove(filepath.Join(store.root, recoveryTransactionName))
+func (store *generationStore) cleanupOrphans(activeID string) error {
+	keep := map[string]bool{activeID: true}
+	if txn, err := store.readTransaction(); err == nil && txn.Phase == recoveryPhaseVerified && txn.NewGeneration == activeID && txn.OldGeneration != "" {
+		keep[txn.OldGeneration] = true
+	}
+	entries, err := os.ReadDir(filepath.Join(store.root, generationsDirName))
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if keep[entry.Name()] {
+			continue
+		}
+		if err := store.ops.removeAll(store.generationPath(entry.Name())); err != nil {
+			return err
+		}
+	}
+	return store.syncDirectory(filepath.Join(store.root, generationsDirName))
 }
 
 func (store *generationStore) pruneGenerations(activeID, previousID string) error {
@@ -648,11 +674,15 @@ func (store *generationStore) writePointer(id string) error {
 }
 
 func (store *generationStore) writeTransaction(txn recoveryTransaction) error {
+	return store.writeTransactionAt(txn, "transaction-rename")
+}
+
+func (store *generationStore) writeTransactionAt(txn recoveryTransaction, boundary string) error {
 	data, err := json.Marshal(txn)
 	if err != nil {
 		return err
 	}
-	return store.writeAtomic(filepath.Join(store.root, recoveryTransactionName), data, 0o600, "transaction-rename")
+	return store.writeAtomic(filepath.Join(store.root, recoveryTransactionName), data, 0o600, boundary)
 }
 
 func (store *generationStore) readTransaction() (recoveryTransaction, error) {
@@ -693,6 +723,7 @@ func validManifestPath(path string) bool {
 
 func (store *generationStore) writeAtomic(path string, data []byte, mode fs.FileMode, renameBoundary string) error {
 	temporary := path + ".tmp"
+	defer func() { _ = store.ops.remove(temporary) }()
 	if err := store.writeSyncedFile(temporary, data, mode); err != nil {
 		return err
 	}

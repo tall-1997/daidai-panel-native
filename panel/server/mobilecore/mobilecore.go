@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -45,7 +46,7 @@ const (
 	codeShutdownFailed     = "SHUTDOWN_FAILED"
 	codeDatabaseClose      = "DATABASE_CLOSE_FAILED"
 	codeServeFailed        = "SERVE_FAILED"
-	currentSchemaBaseline  = "mobile-schema-v1"
+	codeRecoveryFailed     = "RECOVERY_FAILED"
 	currentRuntimeBaseline = "bundled-runtime-v0"
 )
 
@@ -97,7 +98,6 @@ var (
 	initApp                 = appboot.InitWithConfigWriterBeforeMigrate
 	setupRoutes             = router.SetupMobileFull
 	listenTCP               = net.Listen
-	closeDatabase           = database.Close
 	checkpointDB            = database.CheckpointWALAndClose
 	openDatabase            = database.InitWithWriter
 	integrityDB             = database.IntegrityCheck
@@ -110,6 +110,8 @@ var (
 		setupRoutes(engine, security, platform)
 		return nil
 	}
+	generationFilesystemOps = defaultFilesystemOps
+	probeCoreReadiness      = probeHealthEndpoint
 )
 
 type lifecycleState struct {
@@ -153,7 +155,7 @@ func StartCore(optionsJSON string) string {
 		logDiagnostic(codeInvalidDataDir, "active-pointer")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	store := newGenerationStore(parsed.DataDir, defaultFilesystemOps())
+	store := newGenerationStore(parsed.DataDir, generationFilesystemOps())
 	activeDataDir, err := store.converge()
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "recovery-converge")
@@ -163,13 +165,13 @@ func StartCore(optionsJSON string) string {
 		logDiagnostic(codeInvalidDataDir, "layout")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	secret, err := loadOrCreateJWTSecret(activeDataDir)
+	activeID := filepath.Base(activeDataDir)
+	secret, err := loadOrCreateJWTSecret(activeDataDir, store.isInitialBootstrap(activeID))
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "secret")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	activeID := filepath.Base(activeDataDir)
-	baseline := generationBaseline{Schema: currentSchemaBaseline, Runtime: currentRuntimeBaseline}
+	baseline := generationBaseline{Schema: appboot.SchemaFingerprint(), Runtime: currentRuntimeBaseline}
 	needsMigration, err := store.needsMigration(activeID, baseline)
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "generation-baseline")
@@ -201,67 +203,80 @@ func StartCore(optionsJSON string) string {
 	if err := initApp(cfg, bootstrapWriter, prepareMigration); err != nil {
 		logDiagnostic(codeBootstrapFailed, "appboot")
 		if prepared {
-			_ = store.rollback(txn)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				logDiagnostic(codeRecoveryFailed, "appboot-rollback")
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+		} else {
+			restoreAfterStartFailure(previous)
 		}
-		restoreAfterStartFailure(previous)
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	if err := integrityDB(); err != nil {
 		logDiagnostic(codeBootstrapFailed, "integrity")
 		if prepared {
-			_ = store.rollback(txn)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				logDiagnostic(codeRecoveryFailed, "integrity-rollback")
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+		} else {
+			restoreAfterStartFailure(previous)
 		}
-		restoreAfterStartFailure(previous)
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	if prepared {
 		if err := checkpointDB(); err != nil {
 			logDiagnostic(codeBootstrapFailed, "migration-checkpoint")
-			_ = store.rollback(txn)
-			restoreAfterStartFailure(previous)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 		if err := store.sealGeneration(txn.NewGeneration, baseline); err != nil {
 			logDiagnostic(codeBootstrapFailed, "generation-seal")
-			_ = store.rollback(txn)
-			restoreAfterStartFailure(previous)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 		if err := store.commitPointer(txn); err != nil {
 			logDiagnostic(codeBootstrapFailed, "pointer")
-			_ = store.rollback(txn)
-			restoreAfterStartFailure(previous)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 		activeID = txn.NewGeneration
-		if err := store.verify(txn); err != nil {
-			logDiagnostic(codeBootstrapFailed, "verify")
-			_ = store.rollback(txn)
-			restoreAfterStartFailure(previous)
-			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-		}
 		if err := openDatabase(&cfg.Database, bootstrapWriter); err != nil {
 			logDiagnostic(codeBootstrapFailed, "database-reopen")
-			rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 		if err := integrityDB(); err != nil {
 			logDiagnostic(codeBootstrapFailed, "reopen-integrity")
-			rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous)
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 	}
 	listener, err := listenTCP("tcp", "127.0.0.1:0")
 	if err != nil {
 		logDiagnostic(codeListenFailed, "listen")
-		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
 		return failure(codeListenFailed, "core listener failed", result{Status: "stopped"})
 	}
 	port, err := resolveListenerPort(listener.Addr())
 	if err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeListenFailed, "address")
-		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
 		return failure(codeListenFailed, "core listener failed", result{Status: "stopped"})
 	}
 	config.C.Server.Port = port
@@ -271,7 +286,9 @@ func StartCore(optionsJSON string) string {
 	if err := configureTrustedProxies(engine, middleware.CurrentTrustedProxyCIDRs()); err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeBootstrapFailed, "trusted-proxy")
-		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	engine.Use(gin.Recovery())
@@ -279,8 +296,40 @@ func StartCore(optionsJSON string) string {
 	if err := configureRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost}, platform); err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeBootstrapFailed, "routes")
-		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if prepared {
+		if err := checkpointDB(); err != nil {
+			_ = listener.Close()
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		if err := store.sealGeneration(activeID, baseline); err != nil {
+			_ = listener.Close()
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		if err := openDatabase(&cfg.Database, bootstrapWriter); err != nil {
+			_ = listener.Close()
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		if err := integrityDB(); err != nil {
+			_ = listener.Close()
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
 	}
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
@@ -297,6 +346,34 @@ func StartCore(optionsJSON string) string {
 		baseline:     baseline,
 	}
 	running.server = &http.Server{Handler: engine, ConnState: running.trackConnection}
+	serveResult := make(chan error, 1)
+	go func() {
+		serveResult <- running.server.Serve(running.listener)
+	}()
+	if err := probeCoreReadiness(running.endpoint, parsed.LocalToken); err != nil {
+		_ = running.server.Close()
+		if prepared {
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				lifecycle.mu.Unlock()
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+		} else {
+			restoreAfterStartFailure(previous)
+		}
+		lifecycle.mu.Unlock()
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if prepared {
+		if err := store.markReady(activeID); err != nil {
+			_ = running.server.Close()
+			if rollbackErr := rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				lifecycle.mu.Unlock()
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			lifecycle.mu.Unlock()
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+	}
 	lifecycle.core = running
 	lifecycle.capabilities = cloneCapabilitySnapshot(parsed.PlatformCapabilities)
 	lifecycle.status = "running"
@@ -306,7 +383,7 @@ func StartCore(optionsJSON string) string {
 	value := lifecycle.statusResultLocked()
 	lifecycle.mu.Unlock()
 
-	go observeServe(running)
+	go observeServe(running, serveResult)
 	return encode(value)
 }
 
@@ -350,7 +427,7 @@ func StopCore(timeoutMillis int64) string {
 		logDiagnostic(codeShutdownFailed, "shutdown")
 		return failure(codeShutdownFailed, "core shutdown failed", value)
 	}
-	if err := closeDatabase(); err != nil {
+	if err := checkpointDB(); err != nil {
 		logDiagnostic(codeDatabaseClose, "close")
 		lifecycle.mu.Lock()
 		lifecycle.status = "cleanup_required"
@@ -399,8 +476,8 @@ func RecoveryConverged() bool {
 	return recoveryReady.Load()
 }
 
-func observeServe(running *core) {
-	err := running.server.Serve(running.listener)
+func observeServe(running *core, serveResult <-chan error) {
+	err := <-serveResult
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		return
 	}
@@ -419,6 +496,25 @@ func observeServe(running *core) {
 	lifecycle.errorText = "core server failed"
 	recoveryReady.Store(false)
 	lifecycle.mu.Unlock()
+}
+
+func probeHealthEndpoint(endpoint, token string) error {
+	request, err := http.NewRequest(http.MethodGet, endpoint+"/api/health", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("X-Daidai-Local-Token", token)
+	request.Header.Set("Origin", endpoint)
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("readiness probe status %d", response.StatusCode)
+	}
+	return nil
 }
 
 func (running *core) trackConnection(connection net.Conn, state http.ConnState) {
@@ -530,29 +626,31 @@ func restoreAfterStartFailure(previous globalState) {
 	restoreGlobals(previous)
 }
 
-func rollbackStartFailure(store *generationStore, txn recoveryTransaction, prepared bool, cfg *config.Config, writer io.Writer, previous globalState) {
+func rollbackStartFailure(store *generationStore, txn recoveryTransaction, prepared bool, cfg *config.Config, writer io.Writer, previous globalState) error {
 	if prepared {
-		rollbackCommittedMigration(store, txn, cfg, writer, previous)
-		return
+		return rollbackCommittedMigration(store, txn, cfg, writer, previous)
 	}
 	restoreAfterStartFailure(previous)
+	return nil
 }
 
-func rollbackCommittedMigration(store *generationStore, txn recoveryTransaction, cfg *config.Config, writer io.Writer, previous globalState) {
+func rollbackCommittedMigration(store *generationStore, txn recoveryTransaction, cfg *config.Config, writer io.Writer, previous globalState) error {
+	var cleanupErr error
 	if database.DB != nil && database.DB != previous.database {
-		_ = database.Close()
+		cleanupErr = database.Close()
 	}
 	if err := store.rollback(txn); err != nil {
 		restoreGlobals(previous)
-		return
+		return errors.Join(cleanupErr, err)
 	}
 	oldDataDir := store.generationPath(txn.OldGeneration)
 	setConfigDataDir(cfg, oldDataDir)
 	if err := openDatabase(&cfg.Database, writer); err != nil {
 		restoreGlobals(previous)
-		return
+		return errors.Join(cleanupErr, err)
 	}
 	config.C = cfg
+	return cleanupErr
 }
 
 func restoreGlobals(previous globalState) {
@@ -635,12 +733,15 @@ func createDataLayout(dataDir string) error {
 	return nil
 }
 
-func loadOrCreateJWTSecret(dataDir string) (string, error) {
+func loadOrCreateJWTSecret(dataDir string, allowCreate bool) (string, error) {
 	path := filepath.Join(dataDir, ".jwt_secret")
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 		return string(data), nil
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
+	}
+	if !allowCreate {
+		return "", errors.New("JWT secret is missing from verified generation")
 	}
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

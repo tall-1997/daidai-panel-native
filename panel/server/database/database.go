@@ -23,6 +23,12 @@ var closeSQLDB = func(db *sql.DB) error {
 	return db.Close()
 }
 
+var (
+	existingColumns    = getExistingColumns
+	migrateLegacyPID   = migrateLegacyTaskPIDColumn
+	dropLegacyEnvIndex = dropEnvVarUniqueIndex
+)
+
 func Init(cfg *config.DatabaseConfig) error {
 	return InitWithWriter(cfg, os.Stdout)
 }
@@ -160,21 +166,29 @@ type columnDef struct {
 	SQLType string
 }
 
-func getExistingColumns(table string) map[string]bool {
+func getExistingColumns(table string) (map[string]bool, error) {
 	cols := make(map[string]bool)
 	type pragmaRow struct {
 		Name string
 	}
 	var rows []pragmaRow
-	DB.Raw(fmt.Sprintf("PRAGMA table_info(%s)", table)).Scan(&rows)
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if err := DB.Raw(fmt.Sprintf("PRAGMA table_info(%s)", table)).Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("inspect table %s columns: %w", table, err)
+	}
 	for _, r := range rows {
 		cols[strings.ToLower(r.Name)] = true
 	}
-	return cols
+	return cols, nil
 }
 
 func ensureTableColumns(table string, columns []columnDef) error {
-	existing := getExistingColumns(table)
+	existing, err := existingColumns(table)
+	if err != nil {
+		return err
+	}
 	if len(existing) == 0 {
 		return nil
 	}
@@ -218,7 +232,9 @@ func EnsureColumns() error {
 	}); err != nil {
 		return err
 	}
-	migrateLegacyTaskPIDColumn()
+	if err := migrateLegacyPID(); err != nil {
+		return err
+	}
 
 	if err := ensureTableColumns("task_logs", []columnDef{
 		{"log_path", "VARCHAR(256)"},
@@ -311,7 +327,9 @@ func EnsureColumns() error {
 		return err
 	}
 
-	dropEnvVarUniqueIndex()
+	if err := dropLegacyEnvIndex(); err != nil {
+		return err
+	}
 
 	log.Printf("column check completed")
 	return nil
@@ -320,36 +338,40 @@ func EnsureColumns() error {
 // migrateLegacyTaskPIDColumn copies values from the old GORM-derived p_id column
 // into pid. The Task.PID field is now explicitly mapped to pid, but older local
 // SQLite databases may still contain p_id from previous AutoMigrate runs.
-func migrateLegacyTaskPIDColumn() {
-	existing := getExistingColumns("tasks")
+func migrateLegacyTaskPIDColumn() error {
+	existing, err := getExistingColumns("tasks")
+	if err != nil {
+		return err
+	}
 	if !existing["p_id"] || !existing["pid"] {
-		return
+		return nil
 	}
 	if err := DB.Exec("UPDATE tasks SET pid = p_id WHERE pid IS NULL AND p_id IS NOT NULL").Error; err != nil {
-		log.Printf("warn: failed to migrate legacy tasks.p_id values to tasks.pid: %v", err)
+		return fmt.Errorf("migrate legacy tasks.p_id: %w", err)
 	}
+	return nil
 }
 
 // dropEnvVarUniqueIndex 迁移：青龙化后 (name, remarks) 不再是业务唯一键，
 // 旧部署里如果残留了 idx_env_vars_name_remarks 唯一索引，需要清理掉，
 // 否则写入端放开后 DB 层仍会拒绝同 (name, remarks) 的新增。幂等操作。
-func dropEnvVarUniqueIndex() {
+func dropEnvVarUniqueIndex() error {
 	if DB == nil {
-		return
+		return errors.New("database is not initialized")
 	}
 	if _, err := DB.DB(); err != nil {
-		return
+		return fmt.Errorf("get sql database: %w", err)
 	}
 	var count int64
 	if err := DB.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_env_vars_name_remarks'").Scan(&count).Error; err != nil {
-		return
+		return fmt.Errorf("inspect legacy env index: %w", err)
 	}
 	if count == 0 {
-		return
+		return nil
 	}
 	if err := DB.Exec(`DROP INDEX IF EXISTS idx_env_vars_name_remarks`).Error; err != nil {
-		log.Printf("warn: failed to drop legacy unique index idx_env_vars_name_remarks: %v", err)
-		return
+		return fmt.Errorf("drop legacy env index: %w", err)
 	}
 	log.Printf("dropped legacy unique index env_vars(name, remarks) to allow qinglong-style multi-account inserts")
+	return nil
 }

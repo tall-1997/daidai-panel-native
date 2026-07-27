@@ -49,3 +49,15 @@ func TestInitWithConfigPropagatesEnsureColumnsFailure(t *testing.T) {
 		t.Fatal("database remained open after EnsureColumns failure")
 	}
 }
+
+func TestSchemaFingerprintChangesWithAutoMigrateModels(t *testing.T) {
+	type addedModel struct {
+		ID    uint
+		Value string `gorm:"size:17"`
+	}
+	base := SchemaFingerprint()
+	changed := schemaFingerprint(append(allModels(), &addedModel{}))
+	if base == changed {
+		t.Fatal("schema fingerprint ignored AutoMigrate model change")
+	}
+}

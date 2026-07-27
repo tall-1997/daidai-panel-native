@@ -1,11 +1,14 @@
 package appboot
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"daidai-panel/config"
 	"daidai-panel/database"
@@ -15,6 +18,26 @@ import (
 )
 
 var ensureColumns = database.EnsureColumns
+
+func SchemaFingerprint() string {
+	return schemaFingerprint(allModels())
+}
+
+func schemaFingerprint(models []interface{}) string {
+	hash := sha256.New()
+	for _, model := range models {
+		typeOf := reflect.TypeOf(model)
+		for typeOf.Kind() == reflect.Pointer {
+			typeOf = typeOf.Elem()
+		}
+		fmt.Fprintf(hash, "%s.%s|", typeOf.PkgPath(), typeOf.Name())
+		for index := 0; index < typeOf.NumField(); index++ {
+			field := typeOf.Field(index)
+			fmt.Fprintf(hash, "%s:%s:%s|", field.Name, field.Type.String(), string(field.Tag))
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
 
 // ResolveConfigPath 查找 config.yaml，覆盖 Docker / 二进制 / Windows 双击 / cwd 漂移等场景。
 // 顺序：

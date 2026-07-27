@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -34,6 +35,47 @@ func TestCheckpointWALAndIntegrityCheck(t *testing.T) {
 	var value string
 	if err := DB.Raw("SELECT value FROM recovery_test").Scan(&value).Error; err != nil || value != "durable" {
 		t.Fatalf("value=%q err=%v", value, err)
+	}
+}
+
+func TestEnsureColumnsPropagatesHelperFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		inject func(error) func()
+	}{
+		{name: "pragma", inject: func(want error) func() {
+			old := existingColumns
+			existingColumns = func(string) (map[string]bool, error) { return nil, want }
+			return func() { existingColumns = old }
+		}},
+		{name: "legacy pid", inject: func(want error) func() {
+			old := migrateLegacyPID
+			migrateLegacyPID = func() error { return want }
+			return func() { migrateLegacyPID = old }
+		}},
+		{name: "drop env index", inject: func(want error) func() {
+			old := dropLegacyEnvIndex
+			dropLegacyEnvIndex = func() error { return want }
+			return func() { dropLegacyEnvIndex = old }
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "helpers.db")
+			if err := Init(&config.DatabaseConfig{Path: path}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = Close() })
+			if err := DB.Exec("CREATE TABLE tasks (pid INTEGER)").Error; err != nil {
+				t.Fatal(err)
+			}
+			want := errors.New(tt.name)
+			restore := tt.inject(want)
+			t.Cleanup(restore)
+			if err := EnsureColumns(); !errors.Is(err, want) {
+				t.Fatalf("error=%v want=%v", err, want)
+			}
+		})
 	}
 }
 
