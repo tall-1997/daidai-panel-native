@@ -70,7 +70,18 @@ jobs:
 
       - name: Run Kotlin tests
         working-directory: app
-        run: gradle -p android testDebugUnitTest
+        run: gradle -p android :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload Kotlin test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-test-reports
+          path: |
+            app/build/app/reports/tests/testDebugUnitTest/
+            app/build/app/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Build installable release APK
         working-directory: app
