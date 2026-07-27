@@ -288,7 +288,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           return;
                         }
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           extractErrorMessage(error, '创建 API 应用失败'),
                           type: AppGlassNoticeType.error,
                         );
@@ -333,13 +333,13 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             _CopyableField(
               label: 'App Key',
               value: appKey,
-              noticeContext: this.context,
+              noticeContext: context,
             ),
             const SizedBox(height: 8),
             _CopyableField(
               label: 'App Secret',
               value: appSecret,
-              noticeContext: this.context,
+              noticeContext: context,
             ),
           ],
         ),
@@ -375,7 +375,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             _CopyableField(
               label: 'App Key',
               value: appKey,
-              noticeContext: this.context,
+              noticeContext: context,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -414,7 +414,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                   } catch (error) {
                     if (!mounted) return;
                     AppGlassNotice.show(
-                      this.context,
+                      context,
                       extractErrorMessage(error, '获取访问 Token 失败'),
                       type: AppGlassNoticeType.error,
                     );
@@ -448,7 +448,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             _CopyableField(
               label: 'Access Token',
               value: token,
-              noticeContext: this.context,
+              noticeContext: context,
             ),
           ],
         ),
@@ -871,7 +871,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         await _load();
                         if (!mounted) return;
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '应用已保存',
                           type: AppGlassNoticeType.success,
                         );
@@ -880,7 +880,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           return;
                         }
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           extractErrorMessage(error, '保存应用失败'),
                           type: AppGlassNoticeType.error,
                         );
@@ -959,7 +959,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                   } catch (error) {
                     if (mounted) {
                       AppGlassNotice.show(
-                        this.context,
+                        context,
                         extractErrorMessage(error, '查看密钥失败'),
                         type: AppGlassNoticeType.error,
                       );

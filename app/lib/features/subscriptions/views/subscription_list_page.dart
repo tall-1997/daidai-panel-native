@@ -731,7 +731,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     }
                                     navigator.pop();
                                     AppGlassNotice.show(
-                                      this.context,
+                                      context,
                                       '订阅已创建',
                                       type: AppGlassNoticeType.success,
                                     );
@@ -740,7 +740,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     return;
                                   }
                                   AppGlassNotice.show(
-                                    this.context,
+                                    context,
                                     _extractRequestErrorMessage(
                                       error,
                                       '创建订阅失败',
@@ -1064,7 +1064,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     }
                                     navigator.pop();
                                     AppGlassNotice.show(
-                                      this.context,
+                                      context,
                                       '订阅已保存',
                                       type: AppGlassNoticeType.success,
                                     );
@@ -1073,7 +1073,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     return;
                                   }
                                   AppGlassNotice.show(
-                                    this.context,
+                                    context,
                                     _extractRequestErrorMessage(
                                       error,
                                       '保存订阅失败',

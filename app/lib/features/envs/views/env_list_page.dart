@@ -792,7 +792,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                         move.targetId,
                                       );
                                 }
-                                if (mounted) {
+                                if (context.mounted) {
                                   AppGlassNotice.show(
                                     context,
                                     '排序已保存',
@@ -800,7 +800,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                   );
                                 }
                               } catch (error) {
-                                if (mounted) {
+                                if (context.mounted) {
                                   AppGlassNotice.show(
                                     context,
                                     extractErrorMessage(error, '保存排序失败'),
@@ -1428,7 +1428,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         }
                         navigator.pop();
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           env.enabled
                               ? '已禁用 ${env.name}'
                               : '已启用 ${env.name}',
@@ -1509,7 +1509,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: valueC.text));
                           AppGlassNotice.show(
-                            this.context,
+                            context,
                             '已复制值',
                             type: AppGlassNoticeType.info,
                           );
@@ -1544,7 +1544,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             }
                             navigator.pop();
                             AppGlassNotice.show(
-                              this.context,
+                              context,
                               '已保存',
                               type: AppGlassNoticeType.success,
                             );
@@ -1553,7 +1553,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               return;
                             }
                             AppGlassNotice.show(
-                              this.context,
+                              context,
                               extractErrorMessage(error, '保存环境变量失败'),
                               type: AppGlassNoticeType.error,
                             );
@@ -1693,7 +1693,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       }
                       navigator.pop();
                       AppGlassNotice.show(
-                        this.context,
+                        context,
                         '环境变量已创建',
                         type: AppGlassNoticeType.success,
                       );
@@ -1702,7 +1702,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         return;
                       }
                       AppGlassNotice.show(
-                        this.context,
+                        context,
                         extractErrorMessage(error, '创建环境变量失败'),
                         type: AppGlassNoticeType.error,
                       );

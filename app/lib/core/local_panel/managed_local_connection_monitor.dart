@@ -107,7 +107,9 @@ class ManagedLocalConnectionMonitor {
     int? expectedGeneration,
   }) async {
     if (_remoteTransition ||
-        (expectedGeneration != null && expectedGeneration != _generation)) return;
+        (expectedGeneration != null && expectedGeneration != _generation)) {
+      return;
+    }
     final generation = ++_generation;
     _panel = panel;
     _localToken = localToken;

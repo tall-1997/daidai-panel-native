@@ -699,7 +699,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
           AppGlassDialogAction(label: '确认恢复', variant: AppLiquidGlassButtonVariant.danger, onPressed: () {
               if (needsPassword && passwordController.text.trim().isEmpty) {
                 AppGlassNotice.show(
-                  this.context,
+                  context,
                   '请输入备份密码',
                   type: AppGlassNoticeType.warning,
                 );

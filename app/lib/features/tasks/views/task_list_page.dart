@@ -1427,7 +1427,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                           );
                       if (mounted) {
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '已将 ${tasksToMove.length} 个任务添加到 "$targetGroup"',
                           type: AppGlassNoticeType.success,
                         );
@@ -1435,7 +1435,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     } catch (e) {
                       if (mounted) {
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '添加任务到分组失败',
                           type: AppGlassNoticeType.error,
                         );
@@ -1538,7 +1538,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                           );
                       if (mounted) {
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '已创建分组 "$groupName" 并添加 ${tasksToMove.length} 个任务',
                           type: AppGlassNoticeType.success,
                         );
@@ -1546,7 +1546,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     } catch (e) {
                       if (mounted) {
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '创建分组失败',
                           type: AppGlassNoticeType.error,
                         );
@@ -2035,7 +2035,7 @@ class _TaskLogFileList extends StatelessWidget {
       child: ListView.separated(
         shrinkWrap: true,
         itemCount: files.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           final file = files[index];
           final canOpen = file.logId != null;

@@ -1047,7 +1047,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 final newName = controller.text.trim();
                 if (newName.isEmpty) {
                   AppGlassNotice.show(
-                    this.context,
+                    context,
                     '名称不能为空',
                     type: AppGlassNoticeType.warning,
                   );
@@ -1070,7 +1070,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     return;
                   }
                   AppGlassNotice.show(
-                    this.context,
+                    context,
                     _extractRequestError(error, '重命名失败'),
                     type: AppGlassNoticeType.error,
                   );
@@ -2522,7 +2522,7 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
       }
       Navigator.pop(context);
       AppGlassNotice.show(
-        this.context,
+        context,
         '已回滚到 v${version.version}',
         type: AppGlassNoticeType.success,
       );
@@ -2531,7 +2531,7 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
         return;
       }
       AppGlassNotice.show(
-        this.context,
+        context,
         _extractRequestError(error, '回滚失败'),
         type: AppGlassNoticeType.error,
       );
@@ -2872,7 +2872,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
         return;
       }
       AppGlassNotice.show(
-        this.context,
+        context,
         extractScriptSaveErrorMessage(error, '停止调试失败'),
         type: AppGlassNoticeType.error,
       );
@@ -2910,7 +2910,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
       );
       if (!mounted) return;
       AppGlassNotice.show(
-        this.context,
+        context,
         '运行记录已清除',
         type: AppGlassNoticeType.success,
       );
@@ -2918,7 +2918,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
     } catch (error) {
       if (!mounted) return;
       AppGlassNotice.show(
-        this.context,
+        context,
         extractScriptSaveErrorMessage(error, '清除运行记录失败'),
         type: AppGlassNoticeType.error,
       );

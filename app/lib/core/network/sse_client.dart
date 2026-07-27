@@ -129,7 +129,9 @@ class SseClient {
         if (!autoReconnect ||
             _closed ||
             generation != _generation ||
-            reconnectScheduled) return;
+            reconnectScheduled) {
+          return;
+        }
         reconnectScheduled = true;
         onReconnecting?.call();
         _disposeConnection();

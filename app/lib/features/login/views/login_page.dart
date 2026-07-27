@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/auth/auth_service.dart';
-import '../../../core/local_panel/local_panel_models.dart';
 import '../../../core/local_panel/method_channel_local_panel_host.dart';
 import '../../../core/local_panel/local_panel_session_resolver.dart';
 import '../../../core/local_panel/managed_local_connection_monitor.dart';
@@ -759,7 +758,6 @@ class _IconInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return SizedBox(
       height: 52,
       child: AppLiquidGlassSurface(

@@ -17,7 +17,7 @@ final userListProvider = StateNotifierProvider<UserListNotifier, UserListState>(
   },
 );
 
-class _User {
+class UserListItem {
   final int id;
   final String username;
   final String role;
@@ -25,7 +25,7 @@ class _User {
   final DateTime? lastLoginAt;
   final DateTime createdAt;
 
-  const _User({
+  const UserListItem({
     required this.id,
     required this.username,
     required this.role,
@@ -34,8 +34,8 @@ class _User {
     required this.createdAt,
   });
 
-  factory _User.fromJson(Map<String, dynamic> json) {
-    return _User(
+  factory UserListItem.fromJson(Map<String, dynamic> json) {
+    return UserListItem(
       id: (json['id'] as num?)?.toInt() ?? 0,
       username: json['username']?.toString() ?? '',
       role: json['role']?.toString() ?? 'viewer',
@@ -66,12 +66,12 @@ class _User {
 }
 
 class UserListState {
-  final List<_User> items;
+  final List<UserListItem> items;
   final bool loading;
 
   const UserListState({this.items = const [], this.loading = false});
 
-  UserListState copyWith({List<_User>? items, bool? loading}) {
+  UserListState copyWith({List<UserListItem>? items, bool? loading}) {
     return UserListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
@@ -87,11 +87,11 @@ class UserListNotifier extends StateNotifier<UserListState> {
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.users);
       final data = extractData(resp.data);
-      List<_User> items = [];
+      List<UserListItem> items = [];
       if (data is List) {
         items = data
             .whereType<Map<String, dynamic>>()
-            .map((e) => _User.fromJson(e))
+            .map((e) => UserListItem.fromJson(e))
             .toList();
       }
       state = state.copyWith(items: items, loading: false);
@@ -241,7 +241,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  Future<void> _showRolePicker(_User user) async {
+  Future<void> _showRolePicker(UserListItem user) async {
     String role = user.role;
     final changed = await showDialog<String>(
       context: context,
@@ -380,7 +380,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                         }
                         navigator.pop();
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           '用户已创建',
                           type: AppGlassNoticeType.success,
                         );
@@ -389,7 +389,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                           return;
                         }
                         AppGlassNotice.show(
-                          this.context,
+                          context,
                           extractErrorMessage(error, '创建用户失败'),
                           type: AppGlassNoticeType.error,
                         );
@@ -417,7 +417,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  void _showResetPasswordDialog(_User user) {
+  void _showResetPasswordDialog(UserListItem user) {
     final passwordC = TextEditingController();
     showDialog(
       context: context,
@@ -474,7 +474,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  Future<void> _confirmDelete(_User user) async {
+  Future<void> _confirmDelete(UserListItem user) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -512,12 +512,12 @@ class _UserListPageState extends ConsumerState<UserListPage> {
 }
 
 class _UserCard extends ConsumerWidget {
-  final _User user;
+  final UserListItem user;
   final bool isLight;
   final String? currentUsername;
-  final void Function(_User) showResetPw;
-  final Future<void> Function(_User) showRolePicker;
-  final Future<void> Function(_User) showDelete;
+  final void Function(UserListItem) showResetPw;
+  final Future<void> Function(UserListItem) showRolePicker;
+  final Future<void> Function(UserListItem) showDelete;
 
   const _UserCard({
     required this.user,
