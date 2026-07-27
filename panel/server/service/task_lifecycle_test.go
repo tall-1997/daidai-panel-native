@@ -12,7 +12,9 @@ import (
 
 func TestRecoverAbandonedActiveTasksClearsStaleRunningTask(t *testing.T) {
 	testutil.SetupTestEnv(t)
-	database.EnsureColumns()
+	if err := database.EnsureColumns(); err != nil {
+		t.Fatalf("ensure columns: %v", err)
+	}
 
 	now := time.Now().Add(-2 * time.Minute)
 	failedStatus := model.LogStatusRunning
@@ -77,7 +79,9 @@ func TestRecoverAbandonedActiveTasksClearsStaleRunningTask(t *testing.T) {
 
 func TestMarkActiveTasksInterruptedUsesSchedulerRegistration(t *testing.T) {
 	testutil.SetupTestEnv(t)
-	database.EnsureColumns()
+	if err := database.EnsureColumns(); err != nil {
+		t.Fatalf("ensure columns: %v", err)
+	}
 
 	previousScheduler := globalScheduler
 	globalScheduler = NewSchedulerV2(SchedulerConfig{WorkerCount: 1, QueueSize: 10, RateInterval: time.Hour}, nil)

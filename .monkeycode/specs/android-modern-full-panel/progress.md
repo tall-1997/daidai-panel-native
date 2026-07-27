@@ -60,65 +60,38 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Dangerous handlers remain blocked until their adapters pass later milestones.
   - `go test -race ./router ./mobilecore` passed.
 
-### Task 1.3: Initial Recovery Implementation
+### Task 1.3: Minimum Migration Recovery
 
 - `88613af` `feat(core): add migration recovery generations`
   - Added generation directories, active pointer, recovery transaction phases, WAL checkpoint, integrity checks, and startup convergence gate.
-  - Initial tests passed, followed by review findings that require hardening before Task 1.3 can be marked complete.
+  - Initial tests passed, followed by recovery hardening completed in the subsequent Task 1.3 commit.
 
-## Task 1.3 Review Findings Still Being Fixed
+## Task 1.3 Review Findings Resolved
 
-1. Generation creation must occur only for actual Schema/runtime migration, not every start.
-2. Disk-space preflight, failed-candidate cleanup, orphan cleanup, and retention of only active plus previous healthy generation are required.
-3. Failures after pointer commit but before full Core readiness must rollback to the previous healthy generation.
-4. A Serve failure must set `RecoveryConverged` to false.
-5. Generation validation must verify every required file size and SHA-256, including missing or tampered files.
-6. Mutable active data needs a deterministic seal/update strategy before the next startup validation.
-7. `database.EnsureColumns` must return errors; every failed `ALTER TABLE` must propagate through appboot and trigger migration rollback.
+1. Generation creation now occurs only when the schema or runtime baseline changes.
+2. Migration performs disk-space preflight, removes failed candidates and orphans, and retains only active plus previous healthy generations.
+3. Failures after pointer commit and before full Core readiness rollback and reopen the previous healthy generation.
+4. Serve failure closes the recovery gate by setting `RecoveryConverged` to false.
+5. Generation validation checks required files, regular-file type, size, SHA-256, missing files, and unexpected persistent files.
+6. Clean shutdown checkpoints and deterministically seals mutable active data; crash recovery falls back to the previous healthy generation when the active seal no longer matches.
+7. `database.EnsureColumns` returns every failed `ALTER TABLE` error through appboot so migration rollback can run.
 
-## Saved Unverified Changes
+## Task 1.3 Verification
 
-The named stash `wip-modern-full-panel-task-1.3-hardening` contains changes to:
-
-- `panel/server/appboot/appboot.go`
-- `panel/server/appboot/appboot_recovery_test.go`
-- `panel/server/database/database.go`
-- `panel/server/database/recovery_test.go`
-- `panel/server/database/task_success_exit_codes_migration_test.go`
-- `panel/server/mobilecore/generation_store.go`
-- `panel/server/mobilecore/generation_store_test.go`
-- `panel/server/mobilecore/mobilecore.go`
-- `panel/server/mobilecore/mobilecore_test.go`
-- `panel/server/service/task_lifecycle_test.go`
-
-These changes were interrupted before verification. Treat them as WIP, inspect them, and continue TDD. Do not claim Task 1.3 complete until review findings and the exit commands pass.
+- `go test -race ./mobilecore ./database ./appboot` passed.
+- `go test ./handler ./service -count=1` passed.
+- `go vet ./mobilecore ./router ./handler ./service ./database ./appboot` passed.
+- Task 1.3 is complete; Task 1.4 remains pending.
 
 ## Next Actions
 
-1. Apply the named Task 1.3 stash.
-2. Inspect the WIP diff and run its focused RED/GREEN tests.
-3. Complete all seven Task 1.3 review findings.
-4. Run:
-
-```bash
-cd panel/server
-go test -race ./mobilecore ./database ./appboot
-go test ./handler ./service -count=1
-go vet ./mobilecore ./router ./handler ./service ./database ./appboot
-cd ../..
-go run scripts/generate-route-contract.go -check
-```
-
-5. Request a fresh Task 1.3 code review.
-6. Commit Task 1.3 hardening only after the review is clean.
-7. Implement Task 1.4 worker lifecycle.
-8. Run the Milestone 1 exit gate, push all Milestone 1 commits to `main` as `tall-1997`, and wait for CI before starting Milestone 2.
+1. Implement Task 1.4 worker lifecycle.
+2. Run the Milestone 1 exit gate, push all Milestone 1 commits to `main` as `tall-1997`, and wait for CI before starting Milestone 2.
 
 ## Remaining Milestones
 
 ### Milestone 1
 
-- Finish Task 1.3 migration recovery hardening.
 - Implement Task 1.4 lifecycle-managed Scheduler, Subscription Scheduler, Backup Scheduler, and Log Cleanup.
 - Pass the Milestone 1 exit gate and push.
 

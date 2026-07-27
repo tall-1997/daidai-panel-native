@@ -31,20 +31,22 @@ import (
 )
 
 const (
-	codeAlreadyRunning    = "ALREADY_RUNNING"
-	codeInvalidOptions    = "INVALID_OPTIONS"
-	codeInvalidDataDir    = "INVALID_DATA_DIR"
-	codeInvalidBindHost   = "INVALID_BIND_HOST"
-	codeInvalidPort       = "INVALID_PORT"
-	codeInvalidLocalToken = "INVALID_LOCAL_TOKEN"
-	codeBootstrapFailed   = "BOOTSTRAP_FAILED"
-	codeListenFailed      = "LISTEN_FAILED"
-	codeInvalidTimeout    = "INVALID_TIMEOUT"
-	codeNotRunning        = "NOT_RUNNING"
-	codeShutdownTimeout   = "SHUTDOWN_TIMEOUT"
-	codeShutdownFailed    = "SHUTDOWN_FAILED"
-	codeDatabaseClose     = "DATABASE_CLOSE_FAILED"
-	codeServeFailed       = "SERVE_FAILED"
+	codeAlreadyRunning     = "ALREADY_RUNNING"
+	codeInvalidOptions     = "INVALID_OPTIONS"
+	codeInvalidDataDir     = "INVALID_DATA_DIR"
+	codeInvalidBindHost    = "INVALID_BIND_HOST"
+	codeInvalidPort        = "INVALID_PORT"
+	codeInvalidLocalToken  = "INVALID_LOCAL_TOKEN"
+	codeBootstrapFailed    = "BOOTSTRAP_FAILED"
+	codeListenFailed       = "LISTEN_FAILED"
+	codeInvalidTimeout     = "INVALID_TIMEOUT"
+	codeNotRunning         = "NOT_RUNNING"
+	codeShutdownTimeout    = "SHUTDOWN_TIMEOUT"
+	codeShutdownFailed     = "SHUTDOWN_FAILED"
+	codeDatabaseClose      = "DATABASE_CLOSE_FAILED"
+	codeServeFailed        = "SERVE_FAILED"
+	currentSchemaBaseline  = "mobile-schema-v1"
+	currentRuntimeBaseline = "bundled-runtime-v0"
 )
 
 type options struct {
@@ -86,17 +88,28 @@ type core struct {
 	conns        map[net.Conn]struct{}
 	connWait     chan struct{}
 	capabilities router.CapabilitySnapshot
+	store        *generationStore
+	generationID string
+	baseline     generationBaseline
 }
 
 var (
-	initApp                = appboot.InitWithConfigWriterBeforeMigrate
-	setupRoutes            = router.SetupMobileFull
-	listenTCP              = net.Listen
-	closeDatabase          = database.Close
-	checkpointDB           = database.CheckpointWALAndClose
-	openDatabase           = database.InitWithWriter
-	integrityDB            = database.IntegrityCheck
-	checkpointFlatDatabase = database.CheckpointWALPath
+	initApp                 = appboot.InitWithConfigWriterBeforeMigrate
+	setupRoutes             = router.SetupMobileFull
+	listenTCP               = net.Listen
+	closeDatabase           = database.Close
+	checkpointDB            = database.CheckpointWALAndClose
+	openDatabase            = database.InitWithWriter
+	integrityDB             = database.IntegrityCheck
+	checkpointFlatDatabase  = database.CheckpointWALPath
+	resolveListenerPort     = listenerPort
+	configureTrustedProxies = func(engine *gin.Engine, proxies []string) error {
+		return engine.SetTrustedProxies(proxies)
+	}
+	configureRoutes = func(engine *gin.Engine, security router.ManagementSecurity, platform router.MobilePlatform) error {
+		setupRoutes(engine, security, platform)
+		return nil
+	}
 )
 
 type lifecycleState struct {
@@ -155,6 +168,13 @@ func StartCore(optionsJSON string) string {
 		logDiagnostic(codeInvalidDataDir, "secret")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
+	activeID := filepath.Base(activeDataDir)
+	baseline := generationBaseline{Schema: currentSchemaBaseline, Runtime: currentRuntimeBaseline}
+	needsMigration, err := store.needsMigration(activeID, baseline)
+	if err != nil {
+		logDiagnostic(codeInvalidDataDir, "generation-baseline")
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+	}
 
 	previous := captureGlobals()
 	cfg := mobileConfig(parsed, activeDataDir, secret)
@@ -162,6 +182,9 @@ func StartCore(optionsJSON string) string {
 	var txn recoveryTransaction
 	prepared := false
 	prepareMigration := func() error {
+		if !needsMigration {
+			return nil
+		}
 		if err := checkpointDB(); err != nil {
 			return err
 		}
@@ -185,72 +208,80 @@ func StartCore(optionsJSON string) string {
 	}
 	if err := integrityDB(); err != nil {
 		logDiagnostic(codeBootstrapFailed, "integrity")
-		_ = store.rollback(txn)
+		if prepared {
+			_ = store.rollback(txn)
+		}
 		restoreAfterStartFailure(previous)
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
-	if err := checkpointDB(); err != nil {
-		logDiagnostic(codeBootstrapFailed, "migration-checkpoint")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
-	if err := store.sealGeneration(txn.NewGeneration); err != nil {
-		logDiagnostic(codeBootstrapFailed, "generation-seal")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
-	if err := store.commitPointer(txn); err != nil {
-		logDiagnostic(codeBootstrapFailed, "pointer")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
-	if err := openDatabase(&cfg.Database, bootstrapWriter); err != nil {
-		logDiagnostic(codeBootstrapFailed, "database-reopen")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
-	if err := integrityDB(); err != nil {
-		logDiagnostic(codeBootstrapFailed, "reopen-integrity")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
-	if err := store.verify(txn); err != nil {
-		logDiagnostic(codeBootstrapFailed, "verify")
-		_ = store.rollback(txn)
-		restoreAfterStartFailure(previous)
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	if prepared {
+		if err := checkpointDB(); err != nil {
+			logDiagnostic(codeBootstrapFailed, "migration-checkpoint")
+			_ = store.rollback(txn)
+			restoreAfterStartFailure(previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		if err := store.sealGeneration(txn.NewGeneration, baseline); err != nil {
+			logDiagnostic(codeBootstrapFailed, "generation-seal")
+			_ = store.rollback(txn)
+			restoreAfterStartFailure(previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		if err := store.commitPointer(txn); err != nil {
+			logDiagnostic(codeBootstrapFailed, "pointer")
+			_ = store.rollback(txn)
+			restoreAfterStartFailure(previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		activeID = txn.NewGeneration
+		if err := store.verify(txn); err != nil {
+			logDiagnostic(codeBootstrapFailed, "verify")
+			_ = store.rollback(txn)
+			restoreAfterStartFailure(previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		if err := openDatabase(&cfg.Database, bootstrapWriter); err != nil {
+			logDiagnostic(codeBootstrapFailed, "database-reopen")
+			rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		if err := integrityDB(); err != nil {
+			logDiagnostic(codeBootstrapFailed, "reopen-integrity")
+			rollbackCommittedMigration(store, txn, cfg, bootstrapWriter, previous)
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
 	}
 	listener, err := listenTCP("tcp", "127.0.0.1:0")
 	if err != nil {
 		logDiagnostic(codeListenFailed, "listen")
-		restoreAfterStartFailure(previous)
+		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
 		return failure(codeListenFailed, "core listener failed", result{Status: "stopped"})
 	}
-	port, err := listenerPort(listener.Addr())
+	port, err := resolveListenerPort(listener.Addr())
 	if err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeListenFailed, "address")
-		restoreAfterStartFailure(previous)
+		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
 		return failure(codeListenFailed, "core listener failed", result{Status: "stopped"})
 	}
 	config.C.Server.Port = port
 	actualHost := listener.Addr().String()
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
-	if err := engine.SetTrustedProxies(middleware.CurrentTrustedProxyCIDRs()); err != nil {
+	if err := configureTrustedProxies(engine, middleware.CurrentTrustedProxyCIDRs()); err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeBootstrapFailed, "trusted-proxy")
-		restoreAfterStartFailure(previous)
+		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	engine.Use(gin.Recovery())
 	platform := router.NewMobilePlatform(parsed.PlatformCapabilities)
-	setupRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost}, platform)
+	if err := configureRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost}, platform); err != nil {
+		_ = listener.Close()
+		logDiagnostic(codeBootstrapFailed, "routes")
+		rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
 	running := &core{
@@ -261,6 +292,9 @@ func StartCore(optionsJSON string) string {
 		conns:        make(map[net.Conn]struct{}),
 		connWait:     make(chan struct{}),
 		capabilities: cloneCapabilitySnapshot(parsed.PlatformCapabilities),
+		store:        store,
+		generationID: activeID,
+		baseline:     baseline,
 	}
 	running.server = &http.Server{Handler: engine, ConnState: running.trackConnection}
 	lifecycle.core = running
@@ -326,6 +360,16 @@ func StopCore(timeoutMillis int64) string {
 		lifecycle.mu.Unlock()
 		return failure(codeDatabaseClose, "core database close failed", value)
 	}
+	if err := running.store.sealGeneration(running.generationID, running.baseline); err != nil {
+		logDiagnostic(codeDatabaseClose, "generation-seal")
+		lifecycle.mu.Lock()
+		lifecycle.status = "cleanup_required"
+		lifecycle.errorCode = codeDatabaseClose
+		lifecycle.errorText = "core database close failed"
+		value := lifecycle.statusResultLocked()
+		lifecycle.mu.Unlock()
+		return failure(codeDatabaseClose, "core database close failed", value)
+	}
 	restoreGlobals(running.previous)
 	lifecycle.mu.Lock()
 	lifecycle.core = nil
@@ -373,6 +417,7 @@ func observeServe(running *core) {
 	lifecycle.status = "failed"
 	lifecycle.errorCode = codeServeFailed
 	lifecycle.errorText = "core server failed"
+	recoveryReady.Store(false)
 	lifecycle.mu.Unlock()
 }
 
@@ -483,6 +528,31 @@ func restoreAfterStartFailure(previous globalState) {
 		}
 	}
 	restoreGlobals(previous)
+}
+
+func rollbackStartFailure(store *generationStore, txn recoveryTransaction, prepared bool, cfg *config.Config, writer io.Writer, previous globalState) {
+	if prepared {
+		rollbackCommittedMigration(store, txn, cfg, writer, previous)
+		return
+	}
+	restoreAfterStartFailure(previous)
+}
+
+func rollbackCommittedMigration(store *generationStore, txn recoveryTransaction, cfg *config.Config, writer io.Writer, previous globalState) {
+	if database.DB != nil && database.DB != previous.database {
+		_ = database.Close()
+	}
+	if err := store.rollback(txn); err != nil {
+		restoreGlobals(previous)
+		return
+	}
+	oldDataDir := store.generationPath(txn.OldGeneration)
+	setConfigDataDir(cfg, oldDataDir)
+	if err := openDatabase(&cfg.Database, writer); err != nil {
+		restoreGlobals(previous)
+		return
+	}
+	config.C = cfg
 }
 
 func restoreGlobals(previous globalState) {

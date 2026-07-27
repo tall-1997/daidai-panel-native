@@ -63,3 +63,18 @@ func TestCheckpointWALPathFlushesLegacyDatabase(t *testing.T) {
 		t.Fatalf("value=%q err=%v", value, err)
 	}
 }
+
+func TestEnsureColumnsReturnsAlterFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ensure-columns.db")
+	if err := Init(&config.DatabaseConfig{Path: path}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = Close() })
+	if err := DB.Exec("CREATE VIEW tasks AS SELECT 1 AS pid").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureColumns(); err == nil {
+		t.Fatal("expected ALTER TABLE failure")
+	}
+}

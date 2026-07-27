@@ -14,6 +14,8 @@ import (
 	"daidai-panel/service"
 )
 
+var ensureColumns = database.EnsureColumns
+
 // ResolveConfigPath 查找 config.yaml，覆盖 Docker / 二进制 / Windows 双击 / cwd 漂移等场景。
 // 顺序：
 //  1. DAIDAI_CONFIG 环境变量
@@ -98,7 +100,10 @@ func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool, gat
 		_ = database.Close()
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	database.EnsureColumns()
+	if err := ensureColumns(); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("ensure database columns: %w", err)
+	}
 
 	legacyPythonVenvMigration := service.MigrateLegacyManagedPythonVenvInfo()
 

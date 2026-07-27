@@ -173,26 +173,27 @@ func getExistingColumns(table string) map[string]bool {
 	return cols
 }
 
-func ensureTableColumns(table string, columns []columnDef) {
+func ensureTableColumns(table string, columns []columnDef) error {
 	existing := getExistingColumns(table)
 	if len(existing) == 0 {
-		return
+		return nil
 	}
 	for _, col := range columns {
 		lookupName := strings.ToLower(strings.Trim(col.Name, "\""))
 		if !existing[lookupName] {
 			sql := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col.Name, col.SQLType)
 			if err := DB.Exec(sql).Error; err != nil {
-				log.Printf("warn: failed to add column %s.%s: %v", table, col.Name, err)
+				return fmt.Errorf("add column %s.%s: %w", table, col.Name, err)
 			} else {
 				log.Printf("added missing column: %s.%s", table, col.Name)
 			}
 		}
 	}
+	return nil
 }
 
-func EnsureColumns() {
-	ensureTableColumns("tasks", []columnDef{
+func EnsureColumns() error {
+	if err := ensureTableColumns("tasks", []columnDef{
 		{"pid", "INTEGER"},
 		{"log_path", "VARCHAR(256)"},
 		{"last_running_time", "REAL"},
@@ -214,23 +215,29 @@ func EnsureColumns() {
 		{"sort_order", "INTEGER DEFAULT 0"},
 		{"is_pinned", "BOOLEAN DEFAULT 0"},
 		{"python_version", "VARCHAR(16) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 	migrateLegacyTaskPIDColumn()
 
-	ensureTableColumns("task_logs", []columnDef{
+	if err := ensureTableColumns("task_logs", []columnDef{
 		{"log_path", "VARCHAR(256)"},
 		{"duration", "REAL"},
 		{"started_at", "DATETIME"},
 		{"ended_at", "DATETIME"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("env_vars", []columnDef{
+	if err := ensureTableColumns("env_vars", []columnDef{
 		{"position", "REAL DEFAULT 10000.0"},
 		{"sort_order", "INTEGER DEFAULT 0"},
 		{"\"group\"", "VARCHAR(512) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("subscriptions", []columnDef{
+	if err := ensureTableColumns("subscriptions", []columnDef{
 		{"save_dir", "VARCHAR(512) DEFAULT ''"},
 		{"ssh_key_id", "INTEGER"},
 		{"auth_type", "VARCHAR(16) DEFAULT ''"},
@@ -242,53 +249,72 @@ func EnsureColumns() {
 		{"blacklist", "VARCHAR(512) DEFAULT ''"},
 		{"depend_on", "VARCHAR(512) DEFAULT ''"},
 		{"hook_script", "TEXT DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("notify_channels", []columnDef{
+	if err := ensureTableColumns("notify_channels", []columnDef{
 		{"today_send_count", "INTEGER DEFAULT 0"},
 		{"today_send_date", "VARCHAR(10) DEFAULT ''"},
 		{"last_test_at", "DATETIME"},
 		{"last_test_status", "VARCHAR(16) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("open_apps", []columnDef{
+	if err := ensureTableColumns("open_apps", []columnDef{
 		{"rate_limit", "INTEGER DEFAULT 0"},
 		{"call_count", "INTEGER DEFAULT 0"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("api_call_logs", []columnDef{
+	if err := ensureTableColumns("api_call_logs", []columnDef{
 		{"app_name", "VARCHAR(128)"},
 		{"duration", "REAL DEFAULT 0"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("login_logs", []columnDef{
+	if err := ensureTableColumns("login_logs", []columnDef{
 		{"method", "VARCHAR(32) DEFAULT '密码登录'"},
 		{"client_name", "VARCHAR(255) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("user_sessions", []columnDef{
+	if err := ensureTableColumns("user_sessions", []columnDef{
 		{"refresh_jti", "VARCHAR(36)"},
 		{"refresh_expires_at", "DATETIME"},
 		{"client_type", "VARCHAR(16) DEFAULT 'web'"},
 		{"client_name", "VARCHAR(255) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("task_views", []columnDef{
+	if err := ensureTableColumns("task_views", []columnDef{
 		{"hidden", "BOOLEAN DEFAULT 0"},
 		{"sort_order", "INTEGER DEFAULT 0"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("dependencies", []columnDef{
+	if err := ensureTableColumns("dependencies", []columnDef{
 		{"python_version", "VARCHAR(16) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
-	ensureTableColumns("users", []columnDef{
+	if err := ensureTableColumns("users", []columnDef{
 		{"avatar_url", "VARCHAR(512) DEFAULT ''"},
-	})
+	}); err != nil {
+		return err
+	}
 
 	dropEnvVarUniqueIndex()
 
 	log.Printf("column check completed")
+	return nil
 }
 
 // migrateLegacyTaskPIDColumn copies values from the old GORM-derived p_id column

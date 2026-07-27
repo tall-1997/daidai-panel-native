@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -37,28 +38,51 @@ type recoveryTransaction struct {
 }
 
 type generationManifest struct {
-	Version int               `json:"version"`
-	Files   map[string]string `json:"files"`
+	Version  int                     `json:"version"`
+	Baseline generationBaseline      `json:"baseline"`
+	Files    map[string]manifestFile `json:"files"`
+}
+
+type generationBaseline struct {
+	Schema  string `json:"schema"`
+	Runtime string `json:"runtime"`
+}
+
+type manifestFile struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type filesystemOps struct {
-	openFile func(string, int, fs.FileMode) (*os.File, error)
-	readFile func(string) ([]byte, error)
-	mkdirAll func(string, fs.FileMode) error
-	rename   func(string, string) error
-	stat     func(string) (fs.FileInfo, error)
-	walkDir  func(string, fs.WalkDirFunc) error
-	boundary func(string) error
+	openFile       func(string, int, fs.FileMode) (*os.File, error)
+	readFile       func(string) ([]byte, error)
+	mkdirAll       func(string, fs.FileMode) error
+	rename         func(string, string) error
+	stat           func(string) (fs.FileInfo, error)
+	walkDir        func(string, fs.WalkDirFunc) error
+	remove         func(string) error
+	removeAll      func(string) error
+	availableBytes func(string) (uint64, error)
+	boundary       func(string) error
 }
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
-		openFile: os.OpenFile,
-		readFile: os.ReadFile,
-		mkdirAll: os.MkdirAll,
-		rename:   os.Rename,
-		stat:     os.Stat,
-		walkDir:  filepath.WalkDir,
+		openFile:  os.OpenFile,
+		readFile:  os.ReadFile,
+		mkdirAll:  os.MkdirAll,
+		rename:    os.Rename,
+		stat:      os.Stat,
+		walkDir:   filepath.WalkDir,
+		remove:    os.Remove,
+		removeAll: os.RemoveAll,
+		availableBytes: func(path string) (uint64, error) {
+			var stat syscall.Statfs_t
+			if err := syscall.Statfs(path, &stat); err != nil {
+				return 0, err
+			}
+			return stat.Bavail * uint64(stat.Bsize), nil
+		},
 		boundary: func(string) error { return nil },
 	}
 }
@@ -122,6 +146,25 @@ func (store *generationStore) converge() (string, error) {
 			if err := store.writeTransaction(txn); err != nil {
 				return "", err
 			}
+		case recoveryPhaseVerified:
+			if err := store.verifyGeneration(txn.NewGeneration); err != nil {
+				if txn.OldGeneration == "" {
+					return "", fmt.Errorf("verified generation invalid: %w", err)
+				}
+				if oldErr := store.verifyGeneration(txn.OldGeneration); oldErr != nil {
+					return "", fmt.Errorf("active and previous generations invalid: %w", err)
+				}
+				if err := store.writePointer(txn.OldGeneration); err != nil {
+					return "", err
+				}
+				txn.Phase = recoveryPhaseRolledBack
+				if err := store.writeTransaction(txn); err != nil {
+					return "", err
+				}
+				if err := store.ops.removeAll(store.generationPath(txn.NewGeneration)); err != nil {
+					return "", err
+				}
+			}
 		}
 	}
 
@@ -173,28 +216,43 @@ func (store *generationStore) importFlatData() (string, error) {
 }
 
 func (store *generationStore) prepareMigration() (recoveryTransaction, error) {
-	active, err := store.activeGeneration()
+	oldID, err := store.readPointerID()
 	if err != nil {
 		return recoveryTransaction{}, err
 	}
-	oldID := filepath.Base(active)
+	active := store.generationPath(oldID)
+	baseline, err := store.generationBaseline(oldID)
+	if err != nil {
+		return recoveryTransaction{}, err
+	}
+	if err := store.sealGeneration(oldID, baseline); err != nil {
+		return recoveryTransaction{}, err
+	}
+	if err := store.preflightMigration(active); err != nil {
+		_ = store.ops.remove(filepath.Join(store.root, recoveryTransactionName))
+		return recoveryTransaction{}, err
+	}
 	newID, err := newGenerationID()
 	if err != nil {
 		return recoveryTransaction{}, err
 	}
 	txn := recoveryTransaction{Version: 1, Phase: recoveryPhaseBuilding, OldGeneration: oldID, NewGeneration: newID}
 	if err := store.writeTransaction(txn); err != nil {
+		store.cleanupFailedMigration(newID)
 		return recoveryTransaction{}, err
 	}
 	if err := store.copyDataset(active, store.generationPath(newID), false); err != nil {
+		store.cleanupFailedMigration(newID)
 		return recoveryTransaction{}, err
 	}
 	txn.Phase = recoveryPhasePrepared
 	if err := store.writeTransaction(txn); err != nil {
+		store.cleanupFailedMigration(newID)
 		return recoveryTransaction{}, err
 	}
 	txn.Phase = recoveryPhaseOldSealed
 	if err := store.writeTransaction(txn); err != nil {
+		store.cleanupFailedMigration(newID)
 		return recoveryTransaction{}, err
 	}
 	return txn, nil
@@ -216,7 +274,10 @@ func (store *generationStore) verify(txn recoveryTransaction) error {
 		return err
 	}
 	txn.Phase = recoveryPhaseVerified
-	return store.writeTransaction(txn)
+	if err := store.writeTransaction(txn); err != nil {
+		return err
+	}
+	return store.pruneGenerations(txn.NewGeneration, txn.OldGeneration)
 }
 
 func (store *generationStore) rollback(txn recoveryTransaction) error {
@@ -227,7 +288,10 @@ func (store *generationStore) rollback(txn recoveryTransaction) error {
 		return err
 	}
 	txn.Phase = recoveryPhaseRolledBack
-	return store.writeTransaction(txn)
+	if err := store.writeTransaction(txn); err != nil {
+		return err
+	}
+	return store.ops.removeAll(store.generationPath(txn.NewGeneration))
 }
 
 func (store *generationStore) activeGeneration() (string, error) {
@@ -249,15 +313,7 @@ func (store *generationStore) validateGeneration(id string) error {
 	if !info.IsDir() {
 		return errors.New("active generation is not a directory")
 	}
-	data, err := store.ops.readFile(filepath.Join(store.generationPath(id), generationManifestName))
-	if err != nil {
-		return err
-	}
-	var manifest generationManifest
-	if err := json.Unmarshal(data, &manifest); err != nil || manifest.Version != 1 {
-		return errors.New("generation manifest is invalid")
-	}
-	return nil
+	return store.verifyGeneration(id)
 }
 
 func (store *generationStore) readPointerID() (string, error) {
@@ -277,7 +333,7 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 		return err
 	}
 	directories := []string{destination, filepath.Dir(destination)}
-	manifest := generationManifest{Version: 1, Files: map[string]string{}}
+	manifest := generationManifest{Version: 1, Files: map[string]manifestFile{}}
 	err := store.ops.walkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -315,7 +371,7 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 		if err != nil {
 			return err
 		}
-		manifest.Files[filepath.ToSlash(relative)] = digest
+		manifest.Files[filepath.ToSlash(relative)] = manifestFile{Size: info.Size(), SHA256: digest}
 		return nil
 	})
 	if err != nil {
@@ -383,27 +439,71 @@ func (store *generationStore) verifyGeneration(id string) error {
 	if err := json.Unmarshal(data, &manifest); err != nil || manifest.Version != 1 {
 		return errors.New("generation manifest is invalid")
 	}
+	if manifest.Baseline.Schema != "" {
+		if _, ok := manifest.Files["daidai.db"]; !ok {
+			return errors.New("generation manifest is missing required database")
+		}
+	}
+	seen := make(map[string]bool, len(manifest.Files))
+	err = store.ops.walkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(directory, path)
+		if err != nil || relative == "." || entry.IsDir() {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if relative == generationManifestName {
+			return nil
+		}
+		if isSQLiteSidecar(relative) {
+			return nil
+		}
+		if _, ok := manifest.Files[relative]; !ok {
+			return fmt.Errorf("generation contains unmanifested file: %s", relative)
+		}
+		seen[relative] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	for relative, want := range manifest.Files {
 		if !validManifestPath(relative) {
 			return errors.New("generation manifest path is invalid")
 		}
 		path := filepath.Join(directory, filepath.FromSlash(relative))
+		info, err := store.ops.stat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() != want.Size {
+			return fmt.Errorf("generation file size mismatch: %s", relative)
+		}
 		data, err := store.ops.readFile(path)
 		if err != nil {
 			return err
 		}
 		got := sha256.Sum256(data)
-		if hex.EncodeToString(got[:]) != want {
+		if hex.EncodeToString(got[:]) != want.SHA256 {
 			return fmt.Errorf("generation file checksum mismatch: %s", relative)
+		}
+		if !seen[relative] {
+			return fmt.Errorf("generation file missing: %s", relative)
 		}
 	}
 	return nil
 }
 
-func (store *generationStore) sealGeneration(id string) error {
+func isSQLiteSidecar(relative string) bool {
+	return relative == "daidai.db-wal" || relative == "daidai.db-shm"
+}
+
+func (store *generationStore) sealGeneration(id string, baseline generationBaseline) error {
 	directory := store.generationPath(id)
 	directories := []string{directory, filepath.Dir(directory)}
-	manifest := generationManifest{Version: 1, Files: map[string]string{}}
+	manifest := generationManifest{Version: 1, Baseline: baseline, Files: map[string]manifestFile{}}
 	err := store.ops.walkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -445,7 +545,7 @@ func (store *generationStore) sealGeneration(id string) error {
 		if closeErr != nil {
 			return closeErr
 		}
-		manifest.Files[filepath.ToSlash(relative)] = hex.EncodeToString(hash.Sum(nil))
+		manifest.Files[filepath.ToSlash(relative)] = manifestFile{Size: info.Size(), SHA256: hex.EncodeToString(hash.Sum(nil))}
 		return nil
 	})
 	if err != nil {
@@ -467,6 +567,80 @@ func (store *generationStore) sealGeneration(id string) error {
 		}
 	}
 	return nil
+}
+
+func (store *generationStore) generationBaseline(id string) (generationBaseline, error) {
+	data, err := store.ops.readFile(filepath.Join(store.generationPath(id), generationManifestName))
+	if err != nil {
+		return generationBaseline{}, err
+	}
+	var manifest generationManifest
+	if err := json.Unmarshal(data, &manifest); err != nil || manifest.Version != 1 {
+		return generationBaseline{}, errors.New("generation manifest is invalid")
+	}
+	return manifest.Baseline, nil
+}
+
+func (store *generationStore) needsMigration(id string, baseline generationBaseline) (bool, error) {
+	stored, err := store.generationBaseline(id)
+	if err != nil {
+		return false, err
+	}
+	return stored != baseline, nil
+}
+
+func (store *generationStore) preflightMigration(source string) error {
+	var estimated uint64
+	if err := store.ops.walkDir(source, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() == generationManifestName {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		estimated += uint64(info.Size())
+		return nil
+	}); err != nil {
+		return err
+	}
+	available, err := store.ops.availableBytes(filepath.Join(store.root, generationsDirName))
+	if err != nil {
+		return err
+	}
+	margin := estimated / 10
+	const minimumMargin = uint64(16 << 20)
+	if margin < minimumMargin {
+		margin = minimumMargin
+	}
+	if available < estimated+margin {
+		return syscall.ENOSPC
+	}
+	return nil
+}
+
+func (store *generationStore) cleanupFailedMigration(id string) {
+	_ = store.ops.removeAll(store.generationPath(id))
+	_ = store.ops.remove(filepath.Join(store.root, recoveryTransactionName))
+}
+
+func (store *generationStore) pruneGenerations(activeID, previousID string) error {
+	entries, err := os.ReadDir(filepath.Join(store.root, generationsDirName))
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == activeID || entry.Name() == previousID {
+			continue
+		}
+		if err := store.ops.removeAll(store.generationPath(entry.Name())); err != nil {
+			return err
+		}
+	}
+	return store.syncDirectory(filepath.Join(store.root, generationsDirName))
 }
 
 func (store *generationStore) writePointer(id string) error {

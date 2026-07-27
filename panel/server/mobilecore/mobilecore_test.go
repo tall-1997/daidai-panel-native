@@ -426,6 +426,102 @@ func TestStartCoreRestartsSameMutableGenerationRoot(t *testing.T) {
 	}
 }
 
+func TestStartCoreOneHundredOrdinaryRestartsReuseActiveGeneration(t *testing.T) {
+	root := t.TempDir()
+	for attempt := 0; attempt < 100; attempt++ {
+		started := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+		if !started.OK {
+			t.Fatalf("start %d: %+v", attempt, started)
+		}
+		if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+			t.Fatalf("stop %d: %+v", attempt, stopped)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, generationsDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > 2 {
+		t.Fatalf("ordinary restarts created %d generations", len(entries))
+	}
+}
+
+func TestStartCorePostPointerFailuresRollbackAndReopenOldDatabase(t *testing.T) {
+	tests := []struct {
+		name   string
+		inject func() func()
+	}{
+		{
+			name: "listener",
+			inject: func() func() {
+				old := listenTCP
+				listenTCP = func(string, string) (net.Listener, error) { return nil, errors.New("listener failed") }
+				return func() { listenTCP = old }
+			},
+		},
+		{
+			name: "address",
+			inject: func() func() {
+				old := resolveListenerPort
+				resolveListenerPort = func(net.Addr) (int, error) { return 0, errors.New("address failed") }
+				return func() { resolveListenerPort = old }
+			},
+		},
+		{
+			name: "trusted proxy",
+			inject: func() func() {
+				old := configureTrustedProxies
+				configureTrustedProxies = func(*gin.Engine, []string) error { return errors.New("proxy failed") }
+				return func() { configureTrustedProxies = old }
+			},
+		},
+		{
+			name: "router",
+			inject: func() func() {
+				old := configureRoutes
+				configureRoutes = func(*gin.Engine, router.ManagementSecurity, router.MobilePlatform) error {
+					return errors.New("router failed")
+				}
+				return func() { configureRoutes = old }
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			oldGeneration, err := store.converge()
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, filepath.Join(oldGeneration, "daidai.db"), "")
+			if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+				t.Fatal(err)
+			}
+			restore := tt.inject()
+			t.Cleanup(restore)
+
+			result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+			if result.OK {
+				t.Fatalf("unexpected success: %+v", result)
+			}
+			active, err := store.activeGeneration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if active != oldGeneration {
+				t.Fatalf("active=%q want=%q", active, oldGeneration)
+			}
+			if database.DB == nil || config.C == nil || config.C.Data.Dir != oldGeneration {
+				t.Fatal("old database was not reopened after rollback")
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestStartCoreDatabaseReopenFailureRollsBackPointer(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
@@ -543,6 +639,9 @@ func TestStartCoreMigrationFailureKeepsOldGenerationAndGateClosed(t *testing.T) 
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, "config.sh"), "stable")
+	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
 
 	oldInit := initApp
 	initApp = func(_ *config.Config, _ io.Writer, gate func() error) error {
@@ -764,6 +863,9 @@ func TestServeFailureIsObservableAndSafeDuringStop(t *testing.T) {
 			}
 			if database.DB == nil {
 				t.Fatal("serve failure closed database before StopCore")
+			}
+			if RecoveryConverged() {
+				t.Fatal("recovery gate remained open after Serve failure")
 			}
 			var value int64
 			if err := database.DB.Raw("SELECT 1").Scan(&value).Error; err != nil || value != 1 {

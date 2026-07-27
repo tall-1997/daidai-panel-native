@@ -33,3 +33,19 @@ func TestInitWithConfigRunsRecoveryGateBeforeAutoMigrate(t *testing.T) {
 		t.Fatal("database remained open after recovery gate failure")
 	}
 }
+
+func TestInitWithConfigPropagatesEnsureColumnsFailure(t *testing.T) {
+	oldEnsure := ensureColumns
+	want := errors.New("alter failed")
+	ensureColumns = func() error { return want }
+	t.Cleanup(func() { ensureColumns = oldEnsure })
+	cfg := &config.Config{Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "daidai.db")}}
+
+	err := InitWithConfigWriter(cfg, io.Discard)
+	if !errors.Is(err, want) {
+		t.Fatalf("error=%v want ensure columns failure", err)
+	}
+	if database.DB != nil {
+		t.Fatal("database remained open after EnsureColumns failure")
+	}
+}
