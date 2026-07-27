@@ -32,8 +32,8 @@ func TestRouteContractCollectsCompleteAndMobileFixtures(t *testing.T) {
 	if !mobileKeys["GET /api/v1/auth/check-init"] {
 		t.Error("mobile Setup fixture is missing its registered auth route")
 	}
-	if mobileKeys["PUT /api/v1/tasks/:id/run"] {
-		t.Error("current mobile Setup fixture unexpectedly advertises task execution")
+	if !mobileKeys["PUT /api/v1/tasks/:id/run"] {
+		t.Error("mobile profile is missing capability-covered task execution")
 	}
 }
 
@@ -72,6 +72,9 @@ func TestRouteContractClassifiesEveryServerRoute(t *testing.T) {
 		}
 		if contract.MobileStatus == "supported" && !routeKeys(mobile)[key] {
 			t.Errorf("route %s is marked supported without a mobile fixture route", key)
+		}
+		if contract.MobileStatus == "planned" {
+			t.Errorf("route %s remains planned in Milestone 1", key)
 		}
 	}
 	for key := range serverKeys {

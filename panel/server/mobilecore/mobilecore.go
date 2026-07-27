@@ -47,22 +47,24 @@ const (
 )
 
 type options struct {
-	DataDir    string `json:"dataDir"`
-	BindHost   string `json:"bindHost"`
-	Port       int    `json:"port"`
-	LocalToken string `json:"localToken"`
+	DataDir              string                    `json:"dataDir"`
+	BindHost             string                    `json:"bindHost"`
+	Port                 int                       `json:"port"`
+	LocalToken           string                    `json:"localToken"`
+	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
 type result struct {
-	OK                 bool   `json:"ok"`
-	ID                 int64  `json:"id,omitempty"`
-	Running            bool   `json:"running"`
-	Status             string `json:"status"`
-	Endpoint           string `json:"endpoint,omitempty"`
-	ErrorCode          string `json:"errorCode,omitempty"`
-	Error              string `json:"error,omitempty"`
-	CleanupRequired    bool   `json:"cleanupRequired"`
-	ProcessRequirement string `json:"processRequirement,omitempty"`
+	OK                   bool                      `json:"ok"`
+	ID                   int64                     `json:"id,omitempty"`
+	Running              bool                      `json:"running"`
+	Status               string                    `json:"status"`
+	Endpoint             string                    `json:"endpoint,omitempty"`
+	ErrorCode            string                    `json:"errorCode,omitempty"`
+	Error                string                    `json:"error,omitempty"`
+	CleanupRequired      bool                      `json:"cleanupRequired"`
+	ProcessRequirement   string                    `json:"processRequirement,omitempty"`
+	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
 type globalState struct {
@@ -74,31 +76,33 @@ type globalState struct {
 }
 
 type core struct {
-	id       int64
-	endpoint string
-	server   *http.Server
-	listener net.Listener
-	previous globalState
-	connMu   sync.Mutex
-	conns    map[net.Conn]struct{}
-	connWait chan struct{}
+	id           int64
+	endpoint     string
+	server       *http.Server
+	listener     net.Listener
+	previous     globalState
+	connMu       sync.Mutex
+	conns        map[net.Conn]struct{}
+	connWait     chan struct{}
+	capabilities router.CapabilitySnapshot
 }
 
 var (
 	initApp       = appboot.InitWithConfigWriter
-	setupRoutes   = router.SetupManagement
+	setupRoutes   = router.SetupMobileFull
 	listenTCP     = net.Listen
 	closeDatabase = database.Close
 )
 
 type lifecycleState struct {
-	mu        sync.Mutex
-	operation sync.Mutex
-	nextID    int64
-	core      *core
-	status    string
-	errorCode string
-	errorText string
+	mu           sync.Mutex
+	operation    sync.Mutex
+	nextID       int64
+	core         *core
+	capabilities router.CapabilitySnapshot
+	status       string
+	errorCode    string
+	errorText    string
 }
 
 var lifecycle lifecycleState
@@ -163,19 +167,22 @@ func StartCore(optionsJSON string) string {
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	engine.Use(gin.Recovery())
-	setupRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost})
+	platform := router.NewMobilePlatform(parsed.PlatformCapabilities)
+	setupRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost}, platform)
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
 	running := &core{
-		id:       lifecycle.nextID,
-		endpoint: "http://" + actualHost,
-		listener: listener,
-		previous: previous,
-		conns:    make(map[net.Conn]struct{}),
-		connWait: make(chan struct{}),
+		id:           lifecycle.nextID,
+		endpoint:     "http://" + actualHost,
+		listener:     listener,
+		previous:     previous,
+		conns:        make(map[net.Conn]struct{}),
+		connWait:     make(chan struct{}),
+		capabilities: cloneCapabilitySnapshot(parsed.PlatformCapabilities),
 	}
 	running.server = &http.Server{Handler: engine, ConnState: running.trackConnection}
 	lifecycle.core = running
+	lifecycle.capabilities = cloneCapabilitySnapshot(parsed.PlatformCapabilities)
 	lifecycle.status = "running"
 	lifecycle.errorCode = ""
 	lifecycle.errorText = ""
@@ -241,8 +248,9 @@ func StopCore(timeoutMillis int64) string {
 	lifecycle.status = "stopped"
 	lifecycle.errorCode = ""
 	lifecycle.errorText = ""
+	value := lifecycle.statusResultLocked()
 	lifecycle.mu.Unlock()
-	return encode(result{OK: true, Status: "stopped"})
+	return encode(value)
 }
 
 func CoreStatus() string {
@@ -310,7 +318,7 @@ func (running *core) waitForConnections(ctx context.Context) error {
 }
 
 func parseOptions(raw string) (options, string, string, string) {
-	parsed := options{BindHost: "127.0.0.1"}
+	parsed := options{BindHost: "127.0.0.1", PlatformCapabilities: router.CapabilitySnapshot{Version: 1}}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return parsed, codeInvalidOptions, "invalid options JSON", "json"
 	}
@@ -330,6 +338,17 @@ func parseOptions(raw string) (options, string, string, string) {
 	}
 	if len([]byte(parsed.LocalToken)) < 32 {
 		return parsed, codeInvalidLocalToken, "localToken must be at least 32 bytes", "local-token"
+	}
+	if parsed.PlatformCapabilities.Version != 1 {
+		return parsed, codeInvalidOptions, "platformCapabilities.version must be 1", "capability-version"
+	}
+	if parsed.PlatformCapabilities.Capabilities == nil {
+		parsed.PlatformCapabilities.Capabilities = map[string]router.CapabilityState{}
+	}
+	for _, state := range parsed.PlatformCapabilities.Capabilities {
+		if state.State != router.CapabilityDisabled && state.State != router.CapabilityEnabled {
+			return parsed, codeInvalidOptions, "platform capability state is invalid", "capability-state"
+		}
 	}
 	return parsed, "", "", ""
 }
@@ -411,12 +430,27 @@ func (state *lifecycleState) statusResultLocked() result {
 		ProcessRequirement: `android:process=":panel"`,
 	}
 	if state.core != nil {
+		value.PlatformCapabilities = cloneCapabilitySnapshot(state.core.capabilities)
 		value.ID = state.core.id
 		if status == "running" {
 			value.Endpoint = state.core.endpoint
 		}
 	}
+	if value.PlatformCapabilities.Version == 0 {
+		value.PlatformCapabilities = cloneCapabilitySnapshot(state.capabilities)
+	}
+	if value.PlatformCapabilities.Version == 0 {
+		value.PlatformCapabilities = router.CapabilitySnapshot{Version: 1, Capabilities: map[string]router.CapabilityState{}}
+	}
 	return value
+}
+
+func cloneCapabilitySnapshot(snapshot router.CapabilitySnapshot) router.CapabilitySnapshot {
+	cloned := router.CapabilitySnapshot{Version: snapshot.Version, Capabilities: make(map[string]router.CapabilityState, len(snapshot.Capabilities))}
+	for id, state := range snapshot.Capabilities {
+		cloned.Capabilities[id] = state
+	}
+	return cloned
 }
 
 func failure(code, message string, value result) string {

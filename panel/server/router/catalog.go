@@ -35,7 +35,7 @@ func CanonicalServerRoutes() []gin.RouteInfo {
 func CanonicalMobileRoutes() []gin.RouteInfo {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	SetupManagement(engine, ManagementSecurity{LocalToken: "route-contract", Host: "127.0.0.1"})
+	SetupMobileFull(engine, ManagementSecurity{LocalToken: "route-contract", Host: "127.0.0.1"}, NewMobilePlatform(CapabilitySnapshot{Version: 1}))
 	return canonicalRoutes(engine.Routes())
 }
 
@@ -65,11 +65,16 @@ func BuildRouteContracts(server, mobile []gin.RouteInfo) []RouteContract {
 	contracts := make([]RouteContract, 0, len(server))
 	for _, route := range server {
 		module := routeModule(route.Path)
-		status := "planned"
-		androidEquivalent := "planned:" + module
+		status := "supported"
+		androidEquivalent := "native:" + module
 		if _, ok := mobileKeys[routeKey(route)]; ok {
-			status = "supported"
-			androidEquivalent = "native:" + module
+			if capability := mobileRouteCapability(route.Method, route.Path); capability != "" {
+				status = "android_equivalent"
+				androidEquivalent = "capability:" + capability
+			}
+		} else {
+			status = "planned"
+			androidEquivalent = "planned:" + module
 		}
 		contracts = append(contracts, RouteContract{
 			Method:            route.Method,

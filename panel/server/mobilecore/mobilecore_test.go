@@ -28,15 +28,16 @@ import (
 )
 
 type testResult struct {
-	OK                 bool   `json:"ok"`
-	ID                 int64  `json:"id"`
-	Running            bool   `json:"running"`
-	Status             string `json:"status"`
-	Endpoint           string `json:"endpoint"`
-	Error              string `json:"error"`
-	ErrorCode          string `json:"errorCode"`
-	CleanupRequired    bool   `json:"cleanupRequired"`
-	ProcessRequirement string `json:"processRequirement"`
+	OK                   bool                      `json:"ok"`
+	ID                   int64                     `json:"id"`
+	Running              bool                      `json:"running"`
+	Status               string                    `json:"status"`
+	Endpoint             string                    `json:"endpoint"`
+	Error                string                    `json:"error"`
+	ErrorCode            string                    `json:"errorCode"`
+	CleanupRequired      bool                      `json:"cleanupRequired"`
+	ProcessRequirement   string                    `json:"processRequirement"`
+	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
 const testLocalToken = "0123456789abcdef0123456789abcdef"
@@ -154,7 +155,59 @@ func TestLocalTokenNeverAppearsInResultOrLog(t *testing.T) {
 	}
 }
 
-func TestManagementCoreExcludesExecutionRoutesAndInitializesAdmin(t *testing.T) {
+func TestStartCorePublishesImmutableCapabilitySnapshot(t *testing.T) {
+	options, err := json.Marshal(map[string]any{
+		"dataDir":    t.TempDir(),
+		"localToken": testLocalToken,
+		"platformCapabilities": map[string]any{
+			"version": 1,
+			"capabilities": map[string]any{
+				router.CapabilityTaskExecution: map[string]any{
+					"state":      router.CapabilityEnabled,
+					"adapterId":  "android.process-supervisor",
+					"reasonCode": "READY",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := decodeResult(t, StartCore(string(options)))
+	t.Cleanup(func() { _ = StopCore(1000) })
+	if !started.OK || started.PlatformCapabilities.Version != 1 {
+		t.Fatalf("unexpected start result: %+v", started)
+	}
+	state := started.PlatformCapabilities.Capabilities[router.CapabilityTaskExecution]
+	if state.State != router.CapabilityEnabled || state.AdapterID != "android.process-supervisor" {
+		t.Fatalf("unexpected capability snapshot: %+v", started.PlatformCapabilities)
+	}
+	if strings.Contains(CoreStatus(), testLocalToken) {
+		t.Fatal("local token leaked through capability status")
+	}
+	started.PlatformCapabilities.Capabilities[router.CapabilityTaskExecution] = router.CapabilityState{State: router.CapabilityDisabled}
+	status := decodeResult(t, CoreStatus())
+	if status.PlatformCapabilities.Capabilities[router.CapabilityTaskExecution].State != router.CapabilityEnabled {
+		t.Fatal("caller mutation changed core-owned capability snapshot")
+	}
+	if stopped := decodeResult(t, StopCore(1000)); stopped.PlatformCapabilities.Capabilities[router.CapabilityTaskExecution].State != router.CapabilityEnabled {
+		t.Fatal("stop status omitted the core capability snapshot")
+	}
+}
+
+func TestStartCoreRejectsInvalidCapabilityVersionAndState(t *testing.T) {
+	for _, capabilities := range []string{
+		`{"version":2}`,
+		`{"version":1,"capabilities":{"task_execution":{"state":"unknown"}}}`,
+	} {
+		result := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`","platformCapabilities":`+capabilities+`}`))
+		if result.OK || result.ErrorCode != codeInvalidOptions {
+			t.Fatalf("unexpected capability validation result: %+v", result)
+		}
+	}
+}
+
+func TestMobileCoreCapabilityGuardsExecutionRoutesAndInitializesAdmin(t *testing.T) {
 	started := startForTest(t, t.TempDir())
 	client := localClient()
 
@@ -165,10 +218,9 @@ func TestManagementCoreExcludesExecutionRoutesAndInitializesAdmin(t *testing.T) 
 		{method: http.MethodPut, path: "/api/tasks/1/run"},
 		{method: http.MethodPut, path: "/api/tasks/1/stop"},
 		{method: http.MethodPost, path: "/api/tasks/batch/run"},
-		{method: http.MethodPut, path: "/api/tasks/batch"},
-		{method: http.MethodPost, path: "/api/scripts/debug"},
-		{method: http.MethodPost, path: "/api/dependencies/install"},
-		{method: http.MethodPost, path: "/api/subscriptions/1/sync"},
+		{method: http.MethodPost, path: "/api/scripts/run"},
+		{method: http.MethodPost, path: "/api/deps"},
+		{method: http.MethodPut, path: "/api/subscriptions/1/pull"},
 		{method: http.MethodPost, path: "/api/system/restart"},
 	} {
 		req, err := http.NewRequest(request.method, started.Endpoint+request.path, nil)
@@ -179,9 +231,13 @@ func TestManagementCoreExcludesExecutionRoutesAndInitializesAdmin(t *testing.T) 
 		if err != nil {
 			t.Fatalf("%s %s: %v", request.method, request.path, err)
 		}
+		payload, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.StatusCode != http.StatusNotFound {
-			t.Fatalf("%s %s status=%d want=404", request.method, request.path, response.StatusCode)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusConflict || !bytes.Contains(payload, []byte(`"errorCode":"PLATFORM_CAPABILITY"`)) {
+			t.Fatalf("%s %s status=%d want=409 PLATFORM_CAPABILITY body=%s", request.method, request.path, response.StatusCode, payload)
 		}
 	}
 
@@ -400,8 +456,8 @@ func TestStopTimeoutKeepsDatabaseAvailableAndCanRetry(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	oldSetup := setupRoutes
-	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity) {
-		oldSetup(engine, security)
+	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity, platform router.MobilePlatform) {
+		oldSetup(engine, security, platform)
 		engine.GET("/test/block", func(c *gin.Context) {
 			close(entered)
 			<-release
@@ -521,8 +577,8 @@ func TestServeFailureIsObservableAndSafeDuringStop(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	oldSetup := setupRoutes
-	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity) {
-		oldSetup(engine, security)
+	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity, platform router.MobilePlatform) {
+		oldSetup(engine, security, platform)
 		engine.GET("/test/serve-failure-block", func(c *gin.Context) {
 			close(entered)
 			<-release
@@ -665,8 +721,8 @@ func TestStopRestoresTimezoneEnvironmentAndGinMode(t *testing.T) {
 func TestHTTPClientTimeout(t *testing.T) {
 	var once sync.Once
 	oldSetup := setupRoutes
-	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity) {
-		oldSetup(engine, security)
+	setupRoutes = func(engine *gin.Engine, security router.ManagementSecurity, platform router.MobilePlatform) {
+		oldSetup(engine, security, platform)
 		engine.GET("/test/wait", func(c *gin.Context) {
 			once.Do(func() {})
 			<-c.Request.Context().Done()
