@@ -16,8 +16,17 @@ func platformCreateRecoveryFile(string, fs.FileMode) (*os.File, error) {
 func platformReadRegularFile(string) ([]byte, error) {
 	return nil, errors.New("durable recovery reads are unavailable")
 }
+func platformOpenRegularFile(string) (*os.File, error) {
+	return nil, errors.New("durable recovery handles are unavailable")
+}
 func platformPublishData(string, string, fs.FileMode) error {
 	return errors.New("durable recovery publish is unavailable")
+}
+func platformExchangeMetadata(string, string) error {
+	return errors.New("durable metadata exchange is unavailable")
+}
+func platformRemoveMetadata(string, string, metadataState) error {
+	return errors.New("durable metadata removal is unavailable")
 }
 func platformProbeRecoveryMetadata(string) error {
 	return errors.New("durable recovery metadata is unavailable")

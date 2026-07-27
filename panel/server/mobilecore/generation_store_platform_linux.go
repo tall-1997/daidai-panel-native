@@ -36,7 +36,7 @@ func platformCreateRecoveryFile(path string, mode fs.FileMode) (*os.File, error)
 }
 
 func platformReadRegularFile(path string) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	file, err := platformOpenRegularFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +50,24 @@ func platformReadRegularFile(path string) ([]byte, error) {
 		return nil, errors.New("recovery file has unsafe links")
 	}
 	return io.ReadAll(file)
+}
+
+func platformOpenRegularFile(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, errors.New("recovery file is not regular")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		file.Close()
+		return nil, errors.New("recovery file has unsafe links")
+	}
+	return file, nil
 }
 
 func platformPublishData(source, target string, mode fs.FileMode) error {
@@ -69,6 +87,16 @@ func platformPublishData(source, target string, mode fs.FileMode) error {
 	return platformSyncDirectory(filepath.Dir(target))
 }
 
+func platformExchangeMetadata(target, exchange string) error {
+	if err := unix.Renameat2(unix.AT_FDCWD, target, unix.AT_FDCWD, exchange, unix.RENAME_EXCHANGE); err != nil {
+		return err
+	}
+	if err := platformSyncDirectory(filepath.Dir(target)); err != nil {
+		return err
+	}
+	return platformSyncDirectory(filepath.Dir(exchange))
+}
+
 func platformProbeRecoveryMetadata(root string) error {
 	fd, err := unix.Open(root, unix.O_TMPFILE|unix.O_RDWR, 0o600)
 	if err != nil {
@@ -76,20 +104,50 @@ func platformProbeRecoveryMetadata(root string) error {
 	}
 	file := os.NewFile(uintptr(fd), root)
 	defer file.Close()
-	first, err := linkOpenFile(file, root, "recovery-probe-")
-	if err != nil {
-		return err
+	missing := filepath.Join(root, ".recovery-probe-missing", "slot")
+	if err := unix.Linkat(int(file.Fd()), "", unix.AT_FDCWD, missing, unix.AT_EMPTY_PATH); !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("linkat capability probe: %w", err)
 	}
-	defer os.Remove(first)
-	second, err := randomMetadataPath(root, "recovery-probe-target-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(second)
-	if err := unix.Renameat2(unix.AT_FDCWD, first, unix.AT_FDCWD, second, unix.RENAME_NOREPLACE); err != nil {
-		return err
+	if err := unix.Renameat2(unix.AT_FDCWD, missing, unix.AT_FDCWD, missing+"-target", unix.RENAME_NOREPLACE); !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("renameat2 capability probe: %w", err)
 	}
 	return platformSyncDirectory(root)
+}
+
+func platformRemoveMetadata(target, quarantine string, expected metadataState) error {
+	file, err := platformOpenRegularFile(target)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	identity, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if err := unix.Renameat2(unix.AT_FDCWD, target, unix.AT_FDCWD, quarantine, unix.RENAME_NOREPLACE); err != nil {
+		return err
+	}
+	actual, err := os.Lstat(quarantine)
+	if err != nil || !os.SameFile(identity, actual) {
+		_ = os.Rename(quarantine, target)
+		return errors.New("metadata removal identity changed")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = os.Rename(quarantine, target)
+		return err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil || stateForData(data) != expected {
+		_ = os.Rename(quarantine, target)
+		return errors.New("metadata removal state changed")
+	}
+	if err := os.Remove(quarantine); err != nil {
+		return err
+	}
+	if err := platformSyncDirectory(filepath.Dir(target)); err != nil {
+		return err
+	}
+	return platformSyncDirectory(filepath.Dir(quarantine))
 }
 
 func platformFileLinkCount(_ string, info fs.FileInfo) (uint64, error) {

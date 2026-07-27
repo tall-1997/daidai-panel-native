@@ -193,7 +193,7 @@ func TestMetadataJournalNextCrashConvergenceAndConflicts(t *testing.T) {
 	}
 	target := filepath.Join(root, activeGenerationName)
 	writeTestFile(t, target, "old\n")
-	opID := "operation-next-test"
+	opID := "1785180000000000000-aabbccddeeff0011"
 	opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, opID)
 	if err := os.Mkdir(opDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -223,8 +223,22 @@ func TestMetadataJournalNextCrashConvergenceAndConflicts(t *testing.T) {
 	committed.Checksum, _ = metadataJournalChecksum(committed)
 	data, _ = json.Marshal(committed)
 	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName+".next"), string(data))
+	writeTestFile(t, target, "new\n")
+	if err := store.convergeMetadataJournals(); err != nil {
+		t.Fatalf("monotonic next was not selected: %v", err)
+	}
+
+	if err := os.Mkdir(opDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), string(data))
+	rolled := committed
+	rolled.State = metadataJournalRolledBack
+	rolled.Checksum, _ = metadataJournalChecksum(rolled)
+	rolledData, _ := json.Marshal(rolled)
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName+".next"), string(rolledData))
 	if err := store.convergeMetadataJournals(); err == nil {
-		t.Fatal("expected journal/next state conflict safety close")
+		t.Fatal("expected COMMITTED/ROLLED_BACK branch conflict safety close")
 	}
 }
 
@@ -250,6 +264,119 @@ func TestMetadataJournalStrictValidation(t *testing.T) {
 		if _, err := store.readMetadataJournal(opDir); err == nil {
 			t.Fatalf("accepted invalid journal: %s", raw)
 		}
+	}
+	opID := "1785180000000000000-aabbccddeeff0011"
+	j := metadataJournal{Version: 1, OperationID: opID, Target: activeGenerationName, Old: metadataState{}, New: stateForData([]byte("new")), State: metadataJournalPrepared, Staging: recoveryMetadataExchangeName}
+	j.Checksum, _ = metadataJournalChecksum(j)
+	canonical, _ := json.Marshal(j)
+	for _, raw := range []string{
+		strings.Replace(string(canonical), `"state":"PREPARED"`, `"state":"PREPARED","state":"PREPARED"`, 1),
+		" " + string(canonical),
+	} {
+		opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, opID)
+		_ = os.RemoveAll(opDir)
+		if err := os.Mkdir(opDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), raw)
+		if _, err := store.readMetadataJournal(opDir); err == nil {
+			t.Fatalf("accepted noncanonical journal: %s", raw)
+		}
+	}
+}
+
+func TestOperationDirectoryAuthorityCrashLayouts(t *testing.T) {
+	for _, slots := range [][]string{{}, {recoveryMetadataNewName}, {recoveryMetadataNewName, "publish-state"}, {recoveryMetadataNewName, "publish-state", recoveryMetadataOldName}} {
+		t.Run(strings.Join(slots, "+"), func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "1785180000000000000-aabbccddeeff0011")
+			if err := os.Mkdir(opDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, slot := range slots {
+				writeTestFile(t, filepath.Join(opDir, slot), slot)
+			}
+			if err := store.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(opDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("pre-authority op remains: %v", err)
+			}
+		})
+	}
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "1785180000000000000-aabbccddeeff0011")
+	if err := os.Mkdir(opDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(opDir, "unknown"), "x")
+	if err := store.convergeMetadataJournals(); err == nil {
+		t.Fatal("unknown pre-authority object was deleted")
+	}
+}
+
+func TestPreparedExchangeMatrixConvergesToOld(t *testing.T) {
+	tests := []struct {
+		name             string
+		oldPresent       bool
+		target, exchange string
+	}{
+		{"target-new-exchange-old", true, "new", "old"},
+		{"target-old-exchange-new", true, "old", "new"},
+		{"target-old-no-exchange", true, "old", ""},
+		{"old-absent-target-new", false, "new", ""},
+		{"old-absent-target-absent", false, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			opID := "1785180000000000000-aabbccddeeff0011"
+			opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, opID)
+			if err := os.Mkdir(opDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			oldState := metadataState{}
+			if tt.oldPresent {
+				oldState = stateForData([]byte("old"))
+				writeTestFile(t, filepath.Join(opDir, recoveryMetadataOldName), "old")
+			}
+			writeTestFile(t, filepath.Join(opDir, recoveryMetadataNewName), "new")
+			writeTestFile(t, filepath.Join(opDir, "publish-state"), "new")
+			journal := metadataJournal{Version: 1, OperationID: opID, Target: activeGenerationName, Old: oldState, New: stateForData([]byte("new")), State: metadataJournalPrepared, Staging: recoveryMetadataExchangeName}
+			journal.Checksum, _ = metadataJournalChecksum(journal)
+			data, _ := json.Marshal(journal)
+			writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), string(data))
+			target := filepath.Join(root, activeGenerationName)
+			if tt.target != "" {
+				writeTestFile(t, target, tt.target)
+			}
+			if tt.exchange != "" {
+				writeTestFile(t, filepath.Join(opDir, recoveryMetadataExchangeName), tt.exchange)
+			}
+			if err := store.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(target)
+			if tt.oldPresent {
+				if err != nil || string(got) != "old" {
+					t.Fatalf("target=%q err=%v", got, err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("absent old restored target: %v", err)
+			}
+		})
 	}
 }
 

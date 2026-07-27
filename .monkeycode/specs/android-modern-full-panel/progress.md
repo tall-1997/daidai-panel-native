@@ -90,6 +90,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Made `journal.json.next` a recoverable protocol object with strict dual-candidate validation and monotonic state selection.
   - Registered a fixed `exchange-state` slot before publication, preserved deletion authority until payload cleanup was durable, and used handle-bound reads/restores.
   - Moved capability probing before data-directory creation, synchronized generation deletion parents, and propagated Windows handle-close failures.
+- Ownership authority crash-window fixes verified:
+  - Classified journal-less operation directories as pre-authority cleanup, terminal retirement, or unsafe unknown layouts.
+  - Added canonical duplicate-free journal JSON, monotonic dual-candidate selection, fixed exchange-slot PREPARED convergence, and handle-bound old-absent rollback.
+  - Made the platform probe name-free, kept cleanup authority until payload and journal deletion were durable, and preserved exact reserved-namespace import behavior.
 
 ## Task 1.3 Review Findings Resolved
 

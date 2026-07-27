@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -935,14 +936,25 @@ func (store *generationStore) writeAtomic(path string, data []byte, mode fs.File
 	if err := store.writeSyncedFileExclusive(newPath, data, mode); err != nil {
 		return err
 	}
+	if err := platformSyncDirectory(opDir); err != nil {
+		return err
+	}
 	newState := stateForData(data)
 	publishPath := filepath.Join(opDir, "publish-state")
 	if err := store.writeSyncedFileExclusive(publishPath, data, mode); err != nil {
 		return err
 	}
+	if err := platformSyncDirectory(opDir); err != nil {
+		return err
+	}
 	oldState, err := store.captureMetadataState(path, filepath.Join(opDir, recoveryMetadataOldName), mode)
 	if err != nil {
 		return err
+	}
+	if oldState.Present {
+		if err := platformSyncDirectory(opDir); err != nil {
+			return err
+		}
 	}
 	journal := metadataJournal{Version: 1, OperationID: operationID, Target: canonical, Old: oldState, New: newState, State: metadataJournalPrepared, Staging: recoveryMetadataExchangeName}
 	if err := store.writeMetadataJournal(opDir, journal); err != nil {
@@ -951,7 +963,7 @@ func (store *generationStore) writeAtomic(path string, data []byte, mode fs.File
 	if err := store.ops.boundary("journal-prepared"); err != nil {
 		return err
 	}
-	file, err := os.Open(publishPath)
+	file, err := platformOpenRegularFile(publishPath)
 	if err != nil {
 		return err
 	}
@@ -1171,6 +1183,9 @@ func (store *generationStore) readMetadataJournalFile(opDir, name string) (metad
 	if err != nil {
 		return metadataJournal{}, err
 	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return metadataJournal{}, err
+	}
 	var journal metadataJournal
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -1190,7 +1205,57 @@ func (store *generationStore) readMetadataJournalFile(opDir, name string) (metad
 	if !validMetadataState(journal.Old) || !validMetadataState(journal.New) || !journal.New.Present || journal.Staging != recoveryMetadataExchangeName || journal.State != metadataJournalPrepared && journal.State != metadataJournalCommitted && journal.State != metadataJournalRolledBack {
 		return metadataJournal{}, errors.New("metadata journal semantic state is invalid")
 	}
+	canonical, err := json.Marshal(journal)
+	if err != nil || !bytes.Equal(data, canonical) {
+		return metadataJournal{}, errors.New("metadata journal is not canonical JSON")
+	}
 	return journal, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func() error
+	walk = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := map[string]bool{}
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok || seen[key] {
+					return errors.New("metadata journal has duplicate JSON key")
+				}
+				seen[key] = true
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		default:
+			return errors.New("metadata journal JSON delimiter is invalid")
+		}
+	}
+	return walk()
 }
 
 func validMetadataState(state metadataState) bool {
@@ -1304,8 +1369,17 @@ func (store *generationStore) convergeMetadataJournals() error {
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("unsafe recovery metadata operation")
 		}
+		if !validOperationID(entry.Name()) {
+			return errors.New("invalid recovery operation ID")
+		}
 		journal, err := store.readMetadataJournal(opDir)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || bothJournalsMissing(opDir) {
+				if err := store.retireUnauthorisedOperation(opDir); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 		nextPath := filepath.Join(opDir, recoveryMetadataJournalName+".next")
@@ -1322,7 +1396,7 @@ func (store *generationStore) convergeMetadataJournals() error {
 		target := filepath.Join(store.root, filepath.FromSlash(journal.Target))
 		switch journal.State {
 		case metadataJournalPrepared:
-			if err := store.restoreJournalOld(opDir, target, journal); err != nil {
+			if err := store.convergePreparedMetadata(opDir, target, journal); err != nil {
 				return err
 			}
 			journal.State = metadataJournalRolledBack
@@ -1345,6 +1419,107 @@ func (store *generationStore) convergeMetadataJournals() error {
 		}
 	}
 	return nil
+}
+
+func validOperationID(id string) bool {
+	parts := strings.Split(id, "-")
+	if len(parts) != 2 || len(parts[1]) != 16 {
+		return false
+	}
+	if _, err := strconv.ParseInt(parts[0], 10, 64); err != nil {
+		return false
+	}
+	_, err := hex.DecodeString(parts[1])
+	return err == nil
+}
+
+func bothJournalsMissing(opDir string) bool {
+	for _, name := range []string{recoveryMetadataJournalName, recoveryMetadataJournalName + ".next"} {
+		if _, err := os.Lstat(filepath.Join(opDir, name)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
+func (store *generationStore) retireUnauthorisedOperation(opDir string) error {
+	entries, err := os.ReadDir(opDir)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{recoveryMetadataOldName: true, recoveryMetadataNewName: true, "publish-state": true}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			return fmt.Errorf("unknown pre-authority object: %s", entry.Name())
+		}
+		if _, err := platformReadRegularFile(filepath.Join(opDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	for _, entry := range entries {
+		if err := os.Remove(filepath.Join(opDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	if err := platformSyncDirectory(opDir); err != nil {
+		return err
+	}
+	if err := os.Remove(opDir); err != nil {
+		return err
+	}
+	return platformSyncDirectory(filepath.Dir(opDir))
+}
+
+func (store *generationStore) convergePreparedMetadata(opDir, target string, journal metadataJournal) error {
+	targetState, err := store.metadataStateAt(target)
+	if err != nil {
+		return err
+	}
+	exchange := filepath.Join(opDir, recoveryMetadataExchangeName)
+	exchangeState, err := store.metadataStateAt(exchange)
+	if err != nil {
+		return err
+	}
+	old, newState := journal.Old, journal.New
+	valid := func(state metadataState, choices ...metadataState) bool {
+		for _, choice := range choices {
+			if state == choice {
+				return true
+			}
+		}
+		return false
+	}
+	absent := metadataState{}
+	if !valid(targetState, old, newState, absent) || !valid(exchangeState, old, newState, absent) {
+		return errors.New("prepared metadata matrix is unsafe")
+	}
+	if targetState == old && (exchangeState == newState || exchangeState == absent) {
+		return nil
+	}
+	if !old.Present && targetState == absent && exchangeState == absent {
+		return nil
+	}
+	if old.Present && targetState == newState && exchangeState == old {
+		if err := platformExchangeMetadata(target, exchange); err != nil {
+			return err
+		}
+		return store.verifyMetadataState(target, old)
+	}
+	if !old.Present && targetState == newState && exchangeState == absent {
+		return platformRemoveMetadata(target, exchange, newState)
+	}
+	return errors.New("prepared metadata matrix conflicts")
+}
+
+func (store *generationStore) metadataStateAt(path string) (metadataState, error) {
+	data, err := platformReadRegularFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return metadataState{}, nil
+	}
+	if err != nil {
+		return metadataState{}, err
+	}
+	return stateForData(data), nil
 }
 
 func (store *generationStore) restoreJournalOld(opDir, target string, journal metadataJournal) error {
