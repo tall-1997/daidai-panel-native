@@ -14,10 +14,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func atomicOpenFlags() int {
-	return os.O_CREATE | os.O_EXCL | os.O_RDWR | unix.O_NOFOLLOW
-}
-
 func platformAvailableBytes(path string) (uint64, error) {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(path, &stat); err != nil {
@@ -37,6 +33,40 @@ func platformSyncDirectory(path string) error {
 
 func platformCreateRecoveryFile(path string, mode fs.FileMode) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|unix.O_NOFOLLOW, mode)
+}
+
+func platformReadRegularFile(path string) ([]byte, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("recovery file is not regular")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return nil, errors.New("recovery file has unsafe links")
+	}
+	return io.ReadAll(file)
+}
+
+func platformPublishData(source, target string, mode fs.FileMode) error {
+	file, err := os.OpenFile(source, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	publish, _, cleanup, err := platformPrepareAtomicPublish(file, nil, source, target, mode)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := publish(); err != nil {
+		return err
+	}
+	return platformSyncDirectory(filepath.Dir(target))
 }
 
 func platformProbeRecoveryMetadata(root string) error {
@@ -90,52 +120,7 @@ func openMetadataTarget(path string) (*os.File, error) {
 	return file, nil
 }
 
-func platformCreateAtomicTemporary(path string, mode fs.FileMode) (string, *os.File, fs.FileInfo, error) {
-	directory := filepath.Dir(path)
-	fd, err := unix.Open(directory, unix.O_TMPFILE|unix.O_RDWR, uint32(mode.Perm()))
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("create unnamed metadata temporary: %w", err)
-	}
-	file := os.NewFile(uintptr(fd), directory)
-	temporary, journal, err := createMetadataJournal(directory, filepath.Base(path)+".tmp-", mode)
-	if err != nil {
-		file.Close()
-		return "", nil, nil, err
-	}
-	identity, err := journal.Stat()
-	closeErr := journal.Close()
-	if err != nil {
-		file.Close()
-		_ = os.Remove(temporary)
-		return "", nil, nil, err
-	}
-	if closeErr != nil {
-		file.Close()
-		_ = os.Remove(temporary)
-		return "", nil, nil, closeErr
-	}
-	return temporary, file, identity, nil
-}
-
-func createMetadataJournal(directory, prefix string, mode fs.FileMode) (string, *os.File, error) {
-	for attempt := 0; attempt < 16; attempt++ {
-		path, err := randomMetadataPath(directory, prefix)
-		if err != nil {
-			return "", nil, err
-		}
-		file, err := os.OpenFile(path, atomicOpenFlags(), mode)
-		if errors.Is(err, os.ErrExist) {
-			continue
-		}
-		if err != nil {
-			return "", nil, err
-		}
-		return path, file, nil
-	}
-	return "", nil, errors.New("create metadata journal: exhausted attempts")
-}
-
-func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func(), error) {
+func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func() error, error) {
 	directory := filepath.Dir(target)
 	operationDirectory := filepath.Dir(temporary)
 	publishFile, err := copyToUnnamedFile(file, operationDirectory, mode)
@@ -150,14 +135,16 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 			return nil, nil, nil, err
 		}
 	}
-	cleanup := func() {
-		_ = publishFile.Close()
+	cleanup := func() error {
+		err := publishFile.Close()
 		if recoveryFile != nil {
-			_ = recoveryFile.Close()
+			err = errors.Join(err, recoveryFile.Close())
 		}
+		return err
 	}
 	publish := func() error {
-		staging, err := linkOpenFile(publishFile, operationDirectory, "publish-")
+		staging := filepath.Join(operationDirectory, recoveryMetadataExchangeName)
+		err := linkOpenFileAt(publishFile, staging)
 		if err != nil {
 			return errors.Join(err, restorePinnedMetadata(recoveryFile, target, directory))
 		}
@@ -188,6 +175,14 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 		return restorePinnedMetadata(recoveryFile, target, operationDirectory)
 	}
 	return publish, rollback, cleanup, nil
+}
+
+func linkOpenFileAt(file *os.File, name string) error {
+	err := unix.Linkat(int(file.Fd()), "", unix.AT_FDCWD, name, unix.AT_EMPTY_PATH)
+	if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
+		err = unix.Linkat(unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", file.Fd()), unix.AT_FDCWD, name, unix.AT_SYMLINK_FOLLOW)
+	}
+	return err
 }
 
 func copyToUnnamedFile(source *os.File, directory string, mode fs.FileMode) (*os.File, error) {

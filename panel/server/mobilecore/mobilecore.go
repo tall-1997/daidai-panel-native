@@ -170,12 +170,23 @@ func StartCore(optionsJSON string) (response string) {
 		logDiagnostic(codeInvalidDataDir, "data-root")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	if err := os.MkdirAll(parsed.DataDir, 0o700); err != nil {
-		logDiagnostic(codeInvalidDataDir, "data-root-create")
+	probePath := parsed.DataDir
+	for {
+		if _, err := os.Stat(probePath); err == nil {
+			break
+		}
+		parent := filepath.Dir(probePath)
+		if parent == probePath {
+			break
+		}
+		probePath = parent
+	}
+	if err := probeRecoveryMetadataPlatform(probePath); err != nil {
+		logDiagnostic(codeInvalidDataDir, "recovery-platform")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	if err := probeRecoveryMetadataPlatform(parsed.DataDir); err != nil {
-		logDiagnostic(codeInvalidDataDir, "recovery-platform")
+	if err := os.MkdirAll(parsed.DataDir, 0o700); err != nil {
+		logDiagnostic(codeInvalidDataDir, "data-root-create")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
 	if _, err := os.Stat(filepath.Join(parsed.DataDir, activeGenerationName)); errors.Is(err, os.ErrNotExist) {

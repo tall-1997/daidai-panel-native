@@ -977,6 +977,26 @@ func TestStartCoreProbesRecoveryCapabilityBeforeLegacyCheckpoint(t *testing.T) {
 	}
 }
 
+func TestStartCoreProbeFailureDoesNotCreateMissingDataDir(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	dataDir := filepath.Join(t.TempDir(), "missing", "data")
+	oldProbe := probeRecoveryMetadataPlatform
+	probeRecoveryMetadataPlatform = func(path string) error {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("probe path must exist: %v", err)
+		}
+		return errors.New("unsupported")
+	}
+	t.Cleanup(func() { probeRecoveryMetadataPlatform = oldProbe })
+	result := decodeResult(t, StartCore(`{"dataDir":"`+dataDir+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK {
+		t.Fatalf("result=%+v", result)
+	}
+	if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probe failure created dataDir: %v", err)
+	}
+}
+
 func TestStopTimeoutKeepsDatabaseAvailableAndCanRetry(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

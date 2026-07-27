@@ -86,6 +86,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Moved all owned recovery artifacts into the marked `.recovery-meta/ops/<operation-id>` namespace while preserving legacy prefix-shaped business files.
   - Added checksummed PREPARED, COMMITTED, and ROLLED_BACK ownership journals with startup convergence and target allowlisting.
   - Added platform capability probing before legacy checkpoint, platform-owned directory durability, schema descriptor format v2, and durable rollback-before-candidate-delete ordering.
+- Ownership journal audit fixes verified:
+  - Made `journal.json.next` a recoverable protocol object with strict dual-candidate validation and monotonic state selection.
+  - Registered a fixed `exchange-state` slot before publication, preserved deletion authority until payload cleanup was durable, and used handle-bound reads/restores.
+  - Moved capability probing before data-directory creation, synchronized generation deletion parents, and propagated Windows handle-close failures.
 
 ## Task 1.3 Review Findings Resolved
 

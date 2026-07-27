@@ -182,6 +182,77 @@ func TestMetadataJournalCrashConvergence(t *testing.T) {
 	}
 }
 
+func TestMetadataJournalNextCrashConvergenceAndConflicts(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, activeGenerationName)
+	writeTestFile(t, target, "old\n")
+	opID := "operation-next-test"
+	opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, opID)
+	if err := os.Mkdir(opDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataOldName), "old\n")
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataNewName), "new\n")
+	prepared := metadataJournal{Version: 1, OperationID: opID, Target: activeGenerationName, Old: stateForData([]byte("old\n")), New: stateForData([]byte("new\n")), State: metadataJournalPrepared, Staging: recoveryMetadataExchangeName}
+	prepared.Checksum, _ = metadataJournalChecksum(prepared)
+	data, _ := json.Marshal(prepared)
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName+".next"), string(data))
+	if err := store.convergeMetadataJournals(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "old\n" {
+		t.Fatalf("prepared next did not restore old: %q %v", got, err)
+	}
+
+	if err := os.Mkdir(opDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prepared.Checksum, _ = metadataJournalChecksum(prepared)
+	data, _ = json.Marshal(prepared)
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), string(data))
+	committed := prepared
+	committed.State = metadataJournalCommitted
+	committed.Checksum, _ = metadataJournalChecksum(committed)
+	data, _ = json.Marshal(committed)
+	writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName+".next"), string(data))
+	if err := store.convergeMetadataJournals(); err == nil {
+		t.Fatal("expected journal/next state conflict safety close")
+	}
+}
+
+func TestMetadataJournalStrictValidation(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		`{"version":1,"operationId":"op","target":"active-generation","old":{},"new":{},"state":"PREPARED","checksum":"bad","unknown":true}`,
+		`{"version":1,"operationId":"op","target":"active-generation","old":{"present":false,"size":1,"sha256":""},"new":{"present":true,"size":-1,"sha256":"00"},"state":"PREPARED","checksum":"bad"}`,
+	} {
+		opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "op")
+		_ = os.RemoveAll(opDir)
+		if err := os.Mkdir(opDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), raw)
+		if _, err := store.readMetadataJournal(opDir); err == nil {
+			t.Fatalf("accepted invalid journal: %s", raw)
+		}
+	}
+}
+
 func TestPrepareFailureNeverChangesActiveGeneration(t *testing.T) {
 	for _, failure := range []string{"copy-before-write", "copy-after-write", "file-fsync", "directory-fsync"} {
 		t.Run(failure, func(t *testing.T) {

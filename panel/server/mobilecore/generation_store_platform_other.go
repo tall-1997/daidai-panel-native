@@ -8,11 +8,16 @@ import (
 	"os"
 )
 
-func atomicOpenFlags() int                          { return os.O_CREATE | os.O_EXCL | os.O_RDWR }
 func platformAvailableBytes(string) (uint64, error) { return ^uint64(0), nil }
 func platformSyncDirectory(string) error            { return errors.New("durable directory sync is unavailable") }
 func platformCreateRecoveryFile(string, fs.FileMode) (*os.File, error) {
 	return nil, errors.New("durable recovery files are unavailable")
+}
+func platformReadRegularFile(string) ([]byte, error) {
+	return nil, errors.New("durable recovery reads are unavailable")
+}
+func platformPublishData(string, string, fs.FileMode) error {
+	return errors.New("durable recovery publish is unavailable")
 }
 func platformProbeRecoveryMetadata(string) error {
 	return errors.New("durable recovery metadata is unavailable")
@@ -25,9 +30,6 @@ func openMetadataTarget(path string) (*os.File, error) {
 	}
 	return file, err
 }
-func platformCreateAtomicTemporary(path string, mode fs.FileMode) (string, *os.File, fs.FileInfo, error) {
-	return "", nil, nil, errors.New("atomic metadata temporary files are unsupported on this platform")
-}
-func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func(), error) {
+func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func() error, error) {
 	return nil, nil, nil, errors.New("atomic metadata publish is unsupported on this platform")
 }

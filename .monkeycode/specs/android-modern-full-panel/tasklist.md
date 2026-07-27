@@ -108,7 +108,7 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 
 ### Task 1.3: Add Minimum Migration Recovery
 
-**Status:** Complete (`88613af`, `1ba7941`, `de1ac6e`, `e09d2ce`, and final journal-based recovery metadata architecture)
+**Status:** Complete (`88613af`, `1ba7941`, `de1ac6e`, `e09d2ce`, final journal architecture, and ownership journal audit fixes)
 
 **Files:**
 - Create: `panel/server/mobilecore/generation_store.go`

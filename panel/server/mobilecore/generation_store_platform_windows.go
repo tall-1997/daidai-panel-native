@@ -12,10 +12,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func atomicOpenFlags() int {
-	return os.O_CREATE | os.O_EXCL | os.O_RDWR
-}
-
 func platformAvailableBytes(path string) (uint64, error) {
 	pathPointer, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -36,6 +32,11 @@ func platformCreateRecoveryFile(path string, mode fs.FileMode) (*os.File, error)
 	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 }
 
+func platformReadRegularFile(path string) ([]byte, error) { return os.ReadFile(path) }
+func platformPublishData(string, string, fs.FileMode) error {
+	return errors.New("durable recovery publish is unavailable on Windows")
+}
+
 func platformProbeRecoveryMetadata(string) error {
 	return errors.New("durable recovery metadata is unavailable on Windows")
 }
@@ -49,9 +50,12 @@ func platformFileLinkCount(path string, _ fs.FileInfo) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer windows.CloseHandle(handle)
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		_ = windows.CloseHandle(handle)
+		return 0, err
+	}
+	if err := windows.CloseHandle(handle); err != nil {
 		return 0, err
 	}
 	return uint64(info.NumberOfLinks), nil
@@ -81,35 +85,7 @@ func openMetadataTarget(path string) (*os.File, error) {
 	return file, nil
 }
 
-func platformCreateAtomicTemporary(path string, mode fs.FileMode) (string, *os.File, fs.FileInfo, error) {
-	for attempt := 0; attempt < 16; attempt++ {
-		temporary, err := randomMetadataPath(filepath.Dir(path), filepath.Base(path)+".tmp-")
-		if err != nil {
-			return "", nil, nil, err
-		}
-		pointer, err := windows.UTF16PtrFromString(temporary)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		handle, err := windows.CreateFile(pointer, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
-		if errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
-			continue
-		}
-		if err != nil {
-			return "", nil, nil, err
-		}
-		file := os.NewFile(uintptr(handle), temporary)
-		identity, err := file.Stat()
-		if err != nil {
-			file.Close()
-			return "", nil, nil, err
-		}
-		return temporary, file, identity, nil
-	}
-	return "", nil, nil, errors.New("create atomic metadata temporary file: exhausted attempts")
-}
-
-func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func(), error) {
+func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func() error, error) {
 	directoryPointer, err := windows.UTF16PtrFromString(filepath.Dir(target))
 	if err != nil {
 		return nil, nil, nil, err
@@ -144,9 +120,7 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 		}
 		return renameHandle(windows.Handle(oldFile.Fd()))
 	}
-	return publish, rollback, func() {
-		_ = windows.CloseHandle(directoryHandle)
-	}, nil
+	return publish, rollback, func() error { return windows.CloseHandle(directoryHandle) }, nil
 }
 
 type windowsFileRenameInformation struct {
