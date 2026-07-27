@@ -957,6 +957,26 @@ func TestStartCoreRejectsSymlinkedDataDirComponentBeforeLegacyCheckpoint(t *test
 	}
 }
 
+func TestStartCoreProbesRecoveryCapabilityBeforeLegacyCheckpoint(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	oldProbe := probeRecoveryMetadataPlatform
+	probeRecoveryMetadataPlatform = func(string) error { return errors.New("unsupported recovery metadata") }
+	oldCheckpoint := checkpointFlatDatabase
+	checkpointCalls := 0
+	checkpointFlatDatabase = func(string) error { checkpointCalls++; return nil }
+	t.Cleanup(func() {
+		probeRecoveryMetadataPlatform = oldProbe
+		checkpointFlatDatabase = oldCheckpoint
+	})
+	result := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeInvalidDataDir {
+		t.Fatalf("result=%+v", result)
+	}
+	if checkpointCalls != 0 {
+		t.Fatalf("legacy checkpoint ran before recovery capability probe: %d", checkpointCalls)
+	}
+}
+
 func TestStopTimeoutKeepsDatabaseAvailableAndCanRetry(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

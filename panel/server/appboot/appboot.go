@@ -3,6 +3,7 @@ package appboot
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -68,21 +69,29 @@ func openSchemaDescriptorDB(namingStrategy schema.Namer) (*gorm.DB, error) {
 }
 
 func schemaDescriptorWithDB(db *gorm.DB, models []interface{}) (string, error) {
-	lines := make([]string, 0)
+	type schemaEntry struct {
+		Table   string `json:"table"`
+		Kind    string `json:"kind"`
+		Payload string `json:"payload"`
+	}
+	entries := make([]schemaEntry, 0)
+	add := func(table, kind, payload string) {
+		entries = append(entries, schemaEntry{Table: table, Kind: kind, Payload: payload})
+	}
 	for _, model := range models {
 		statement := &gorm.Statement{DB: db}
 		if err := statement.Parse(model); err != nil {
 			return "", fmt.Errorf("parse schema model: %w", err)
 		}
 		parsed := statement.Schema
-		lines = append(lines, "table:"+parsed.Table)
+		add(parsed.Table, "table", parsed.Table)
 		for _, field := range parsed.Fields {
 			if field.DBName == "" {
 				continue
 			}
 			fullType := db.Migrator().FullDataTypeOf(field)
-			lines = append(lines, fmt.Sprintf("column:%s:%s:%v", field.DBName, fullType.SQL, fullType.Vars))
-			lines = append(lines, fmt.Sprintf(
+			add(parsed.Table, "column", fmt.Sprintf("%s:%s:%v", field.DBName, fullType.SQL, fullType.Vars))
+			add(parsed.Table, "field", fmt.Sprintf(
 				"field:%s:data=%s:gormData=%s:primary=%t:autoIncrement=%t:autoIncrementIncrement=%d:hasDefault=%t:default=%s:notNull=%t:unique=%t:uniqueIndex=%s:comment=%s:size=%d:precision=%d:scale=%d:ignoreMigration=%t",
 				field.DBName, field.DataType, field.GORMDataType, field.PrimaryKey, field.AutoIncrement,
 				field.AutoIncrementIncrement, field.HasDefaultValue, field.DefaultValue, field.NotNull,
@@ -94,19 +103,19 @@ func schemaDescriptorWithDB(db *gorm.DB, models []interface{}) (string, error) {
 		for position, field := range parsed.PrimaryFields {
 			primaryFields = append(primaryFields, fmt.Sprintf("%d:%s:%s", position, field.DBName, field.TagSettings["PRIORITY"]))
 		}
-		lines = append(lines, "primary:"+strings.Join(primaryFields, ","))
+		add(parsed.Table, "primary", strings.Join(primaryFields, ","))
 		for _, index := range parsed.ParseIndexes() {
 			parts := []string{"index:" + index.Name, index.Class, index.Type, index.Where, index.Option}
 			for _, field := range index.Fields {
 				parts = append(parts, fmt.Sprintf("%s:%s:%s:%s:%d", field.DBName, field.Expression, field.Sort, field.Collate, field.Length))
 			}
-			lines = append(lines, strings.Join(parts, ":"))
+			add(parsed.Table, "index", strings.Join(parts, ":"))
 		}
 		for name, check := range parsed.ParseCheckConstraints() {
-			lines = append(lines, fmt.Sprintf("check:%s:%s:%s", name, check.Field.DBName, check.Constraint))
+			add(parsed.Table, "check", fmt.Sprintf("%s:%s:%s", name, check.Field.DBName, check.Constraint))
 		}
 		for name, unique := range parsed.ParseUniqueConstraints() {
-			lines = append(lines, fmt.Sprintf("unique:%s:%s", name, unique.Field.DBName))
+			add(parsed.Table, "unique", fmt.Sprintf("%s:%s", name, unique.Field.DBName))
 		}
 		for _, relation := range parsed.Relationships.Relations {
 			constraint := relation.ParseConstraint()
@@ -121,11 +130,19 @@ func schemaDescriptorWithDB(db *gorm.DB, models []interface{}) (string, error) {
 			for _, field := range constraint.References {
 				references = append(references, field.DBName)
 			}
-			lines = append(lines, fmt.Sprintf("foreign:%s:%s:%s:%s:%s:%s", constraint.Name, strings.Join(foreignKeys, ","), constraint.ReferenceSchema.Table, strings.Join(references, ","), constraint.OnUpdate, constraint.OnDelete))
+			add(parsed.Table, "foreign", fmt.Sprintf("owner=%s:name=%s:keys=%s:reference=%s:references=%s:update=%s:delete=%s", parsed.Table, constraint.Name, strings.Join(foreignKeys, ","), constraint.ReferenceSchema.Table, strings.Join(references, ","), constraint.OnUpdate, constraint.OnDelete))
 		}
 	}
+	lines := make([]string, 0, len(entries)+1)
+	for _, entry := range entries {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, string(data))
+	}
 	sort.Strings(lines)
-	return strings.Join(lines, "\n"), nil
+	return "schema-descriptor-v2\n" + strings.Join(lines, "\n"), nil
 }
 
 // ResolveConfigPath 查找 config.yaml，覆盖 Docker / 二进制 / Windows 双击 / cwd 漂移等场景。

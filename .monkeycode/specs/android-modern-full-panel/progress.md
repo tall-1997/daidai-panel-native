@@ -82,6 +82,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Bound Linux/Android metadata publication to an open unnamed inode with `O_TMPFILE`, `linkat`, and `renameat2`, including post-publish rollback from an open recovery inode.
   - Added a strict internal metadata temporary-prefix protocol and startup cleanup that rejects symlinks and multi-link files.
   - Split free-space, no-follow, link-count, and atomic-publish primitives into Linux/Android, Windows, and fallback build-tag files.
+- Final Task 1.3 recovery metadata architecture verified:
+  - Moved all owned recovery artifacts into the marked `.recovery-meta/ops/<operation-id>` namespace while preserving legacy prefix-shaped business files.
+  - Added checksummed PREPARED, COMMITTED, and ROLLED_BACK ownership journals with startup convergence and target allowlisting.
+  - Added platform capability probing before legacy checkpoint, platform-owned directory durability, schema descriptor format v2, and durable rollback-before-candidate-delete ordering.
 
 ## Task 1.3 Review Findings Resolved
 

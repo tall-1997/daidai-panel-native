@@ -28,6 +28,18 @@ func platformAvailableBytes(path string) (uint64, error) {
 	return available, nil
 }
 
+func platformSyncDirectory(string) error {
+	return errors.New("durable directory sync is unavailable on Windows")
+}
+
+func platformCreateRecoveryFile(path string, mode fs.FileMode) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+}
+
+func platformProbeRecoveryMetadata(string) error {
+	return errors.New("durable recovery metadata is unavailable on Windows")
+}
+
 func platformFileLinkCount(path string, _ fs.FileInfo) (uint64, error) {
 	pathPointer, err := windows.UTF16PtrFromString(path)
 	if err != nil {

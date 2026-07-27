@@ -8,8 +8,15 @@ import (
 	"os"
 )
 
-func atomicOpenFlags() int                                      { return os.O_CREATE | os.O_EXCL | os.O_RDWR }
-func platformAvailableBytes(string) (uint64, error)             { return ^uint64(0), nil }
+func atomicOpenFlags() int                          { return os.O_CREATE | os.O_EXCL | os.O_RDWR }
+func platformAvailableBytes(string) (uint64, error) { return ^uint64(0), nil }
+func platformSyncDirectory(string) error            { return errors.New("durable directory sync is unavailable") }
+func platformCreateRecoveryFile(string, fs.FileMode) (*os.File, error) {
+	return nil, errors.New("durable recovery files are unavailable")
+}
+func platformProbeRecoveryMetadata(string) error {
+	return errors.New("durable recovery metadata is unavailable")
+}
 func platformFileLinkCount(string, fs.FileInfo) (uint64, error) { return 1, nil }
 func openMetadataTarget(path string) (*os.File, error) {
 	file, err := os.Open(path)

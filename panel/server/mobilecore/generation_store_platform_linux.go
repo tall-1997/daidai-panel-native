@@ -26,6 +26,42 @@ func platformAvailableBytes(path string) (uint64, error) {
 	return stat.Bavail * uint64(stat.Bsize), nil
 }
 
+func platformSyncDirectory(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	return unix.Fsync(fd)
+}
+
+func platformCreateRecoveryFile(path string, mode fs.FileMode) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|unix.O_NOFOLLOW, mode)
+}
+
+func platformProbeRecoveryMetadata(root string) error {
+	fd, err := unix.Open(root, unix.O_TMPFILE|unix.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("recovery metadata O_TMPFILE unavailable: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), root)
+	defer file.Close()
+	first, err := linkOpenFile(file, root, "recovery-probe-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(first)
+	second, err := randomMetadataPath(root, "recovery-probe-target-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(second)
+	if err := unix.Renameat2(unix.AT_FDCWD, first, unix.AT_FDCWD, second, unix.RENAME_NOREPLACE); err != nil {
+		return err
+	}
+	return platformSyncDirectory(root)
+}
+
 func platformFileLinkCount(_ string, info fs.FileInfo) (uint64, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -101,22 +137,27 @@ func createMetadataJournal(directory, prefix string, mode fs.FileMode) (string, 
 
 func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target string, mode fs.FileMode) (func() error, func() error, func(), error) {
 	directory := filepath.Dir(target)
-	publishFile := file
+	operationDirectory := filepath.Dir(temporary)
+	publishFile, err := copyToUnnamedFile(file, operationDirectory, mode)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	var recoveryFile *os.File
 	if oldFile != nil {
-		var err error
 		recoveryFile, err = copyToUnnamedFile(oldFile, directory, mode)
 		if err != nil {
+			publishFile.Close()
 			return nil, nil, nil, err
 		}
 	}
 	cleanup := func() {
+		_ = publishFile.Close()
 		if recoveryFile != nil {
 			_ = recoveryFile.Close()
 		}
 	}
 	publish := func() error {
-		staging, err := linkOpenFile(publishFile, directory, filepath.Base(target)+".publish-")
+		staging, err := linkOpenFile(publishFile, operationDirectory, "publish-")
 		if err != nil {
 			return errors.Join(err, restorePinnedMetadata(recoveryFile, target, directory))
 		}
@@ -144,7 +185,7 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 		return errors.Join(errors.New("atomic metadata publish did not converge"), restorePinnedMetadata(recoveryFile, target, directory))
 	}
 	rollback := func() error {
-		return restorePinnedMetadata(recoveryFile, target, directory)
+		return restorePinnedMetadata(recoveryFile, target, operationDirectory)
 	}
 	return publish, rollback, cleanup, nil
 }

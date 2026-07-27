@@ -59,6 +59,20 @@ type fingerprintCompositeKeyBA struct {
 	B uint `gorm:"primaryKey;priority:1"`
 }
 
+type fingerprintMovedFieldTableA struct {
+	Value string `gorm:"index:idx_moved;check:moved_not_empty,value <> ''"`
+}
+type fingerprintMovedFieldTableB struct{ Value string }
+type fingerprintMovedFieldTableAAfter struct{ Value string }
+type fingerprintMovedFieldTableBAfter struct {
+	Value string `gorm:"index:idx_moved;check:moved_not_empty,value <> ''"`
+}
+
+func (fingerprintMovedFieldTableA) TableName() string      { return "move_a" }
+func (fingerprintMovedFieldTableB) TableName() string      { return "move_b" }
+func (fingerprintMovedFieldTableAAfter) TableName() string { return "move_a" }
+func (fingerprintMovedFieldTableBAfter) TableName() string { return "move_b" }
+
 func (fingerprintPlainKey) TableName() string         { return "fingerprint_key" }
 func (fingerprintPrimaryKey) TableName() string       { return "fingerprint_key" }
 func (fingerprintAutoIncrementKey) TableName() string { return "fingerprint_key" }
@@ -126,10 +140,11 @@ func TestSchemaDescriptorUsesResolvedTableDatatypeIndexesAndConstraints(t *testi
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"table:fingerprint_custom_table",
+		`"table":"fingerprint_custom_table"`,
 		"FINGERPRINT_CUSTOM",
-		"index:idx_fingerprint_value",
-		"check:value_not_empty",
+		"idx_fingerprint_value",
+		`"kind":"check"`,
+		"value_not_empty",
 	} {
 		if !strings.Contains(descriptor, want) {
 			t.Fatalf("descriptor missing %q: %s", want, descriptor)
@@ -164,7 +179,7 @@ func TestSchemaDescriptorUsesConfiguredNamingStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(descriptor, "table:mobile_fingerprint_naming_model") {
+	if !strings.Contains(descriptor, `"table":"mobile_fingerprint_naming_model"`) {
 		t.Fatalf("descriptor ignored naming strategy: %s", descriptor)
 	}
 }
@@ -202,6 +217,27 @@ func TestSchemaFingerprintIncludesResolvedPrimaryKeyAttributes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSchemaFingerprintV2ChangesWhenSchemaEntryMovesAcrossTables(t *testing.T) {
+	before, err := schemaFingerprint([]interface{}{&fingerprintMovedFieldTableA{}, &fingerprintMovedFieldTableB{}}, "stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := schemaFingerprint([]interface{}{&fingerprintMovedFieldTableAAfter{}, &fingerprintMovedFieldTableBAfter{}}, "stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("schema fingerprint ignored cross-table field/index/check movement")
+	}
+	descriptor, err := schemaDescriptor([]interface{}{&fingerprintMovedFieldTableA{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(descriptor, "schema-descriptor-v2\n") || !strings.Contains(descriptor, `"table":"move_a"`) {
+		t.Fatalf("descriptor is not structured format v2: %s", descriptor)
 	}
 }
 

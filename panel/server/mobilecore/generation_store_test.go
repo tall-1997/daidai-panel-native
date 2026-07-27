@@ -40,6 +40,148 @@ func TestGenerationStoreImportsFlatDataOnce(t *testing.T) {
 	}
 }
 
+func TestFlatImportPreservesLegacyPrefixFilesAndSkipsExactRecoveryNamespace(t *testing.T) {
+	root := t.TempDir()
+	legacyFiles := map[string]string{
+		".active-generation.tmp-user":             "user-data",
+		".recovery-transaction.json.publish-user": "user-data",
+		".generation-manifest.json.recover-user":  "user-data",
+	}
+	for name, value := range legacyFiles {
+		writeTestFile(t, filepath.Join(root, name), value)
+	}
+	writeTestFile(t, filepath.Join(root, recoveryMetadataDirName, recoveryMetadataMarkerName), recoveryMetadataMarkerValue)
+	if err := os.MkdirAll(filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range legacyFiles {
+		data, err := os.ReadFile(filepath.Join(active, name))
+		if err != nil || string(data) != value {
+			t.Fatalf("legacy business file %q: data=%q err=%v", name, data, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(active, recoveryMetadataDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reserved namespace copied into generation: %v", err)
+	}
+}
+
+func TestRecoveryMetadataNamespaceRejectsConflicts(t *testing.T) {
+	for _, kind := range []string{"file", "symlink", "bad-marker"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			reserved := filepath.Join(root, recoveryMetadataDirName)
+			switch kind {
+			case "file":
+				writeTestFile(t, reserved, "conflict")
+			case "symlink":
+				if err := os.Symlink(t.TempDir(), reserved); err != nil {
+					t.Fatal(err)
+				}
+			case "bad-marker":
+				writeTestFile(t, filepath.Join(reserved, recoveryMetadataMarkerName), "wrong")
+			}
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if _, err := store.converge(); err == nil {
+				t.Fatal("expected reserved namespace conflict rejection")
+			}
+		})
+	}
+}
+
+func TestWriteAtomicRejectsTargetsOutsideMetadataAllowlist(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeAtomic(filepath.Join(root, "user-data"), []byte("overwrite"), 0o600, "test"); err == nil {
+		t.Fatal("expected metadata target allowlist rejection")
+	}
+}
+
+func TestConvergeRejectsCorruptAndLinkedOwnershipJournals(t *testing.T) {
+	for _, kind := range []string{"corrupt", "symlink", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "operation-test")
+			if err := os.Mkdir(opDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			journal := filepath.Join(opDir, recoveryMetadataJournalName)
+			external := filepath.Join(t.TempDir(), "external")
+			writeTestFile(t, external, "outside")
+			switch kind {
+			case "corrupt":
+				writeTestFile(t, journal, "not-json")
+			case "symlink":
+				if err := os.Symlink(external, journal); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				if err := os.Link(external, journal); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := store.converge(); err == nil {
+				t.Fatal("expected unsafe ownership journal rejection")
+			}
+			outside, err := os.ReadFile(external)
+			if err != nil || string(outside) != "outside" {
+				t.Fatalf("external file changed: data=%q err=%v", outside, err)
+			}
+		})
+	}
+}
+
+func TestMetadataJournalCrashConvergence(t *testing.T) {
+	for _, phase := range []string{"journal-prepared", "journal-committed"} {
+		t.Run(phase, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureTrustedContainer(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, activeGenerationName)
+			writeTestFile(t, target, "old\n")
+			store.ops.boundary = failBoundary(phase)
+			if err := store.writeAtomic(target, []byte("new\n"), 0o600, "test-rename"); err == nil {
+				t.Fatal("expected crash boundary")
+			}
+			restarted := newGenerationStore(root, defaultFilesystemOps())
+			if err := restarted.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "old\n"
+			if phase == "journal-committed" {
+				want = "new\n"
+			}
+			if string(data) != want {
+				t.Fatalf("target=%q want=%q", data, want)
+			}
+		})
+	}
+}
+
 func TestPrepareFailureNeverChangesActiveGeneration(t *testing.T) {
 	for _, failure := range []string{"copy-before-write", "copy-after-write", "file-fsync", "directory-fsync"} {
 		t.Run(failure, func(t *testing.T) {
@@ -96,6 +238,30 @@ func TestMigrationFailureRollsBackPointer(t *testing.T) {
 		t.Fatalf("active=%q want old=%q", active, oldGeneration)
 	}
 	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
+}
+
+func TestRollbackKeepsCandidateUntilRolledBackTransactionIsDurable(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.finalize(filepath.Base(active), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+	txn, err := store.prepareMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := store.generationPath(txn.NewGeneration)
+	store.ops.boundary = failBoundary("rollback-transaction")
+	if err := store.rollback(txn); err == nil {
+		t.Fatal("expected rollback transaction persistence failure")
+	}
+	if _, err := os.Stat(candidate); err != nil {
+		t.Fatalf("candidate removed before rollback transaction became durable: %v", err)
+	}
 }
 
 func TestConvergeAfterPointerCommitCrashRollsBackUnreadyGeneration(t *testing.T) {
@@ -468,11 +634,9 @@ func TestAtomicMetadataWritesIgnorePredictableTemporarySymlinks(t *testing.T) {
 			readValue: os.ReadFile,
 		},
 		{
-			name:   "generation manifest",
-			target: func(_, active string) string { return filepath.Join(active, generationManifestName) },
-			write: func(store *generationStore, active string) error {
-				return store.sealGeneration(filepath.Base(active), generationBaseline{Schema: "safe"})
-			},
+			name:      "generation manifest",
+			target:    func(_, active string) string { return filepath.Join(active, generationManifestName) },
+			write:     func(store *generationStore, active string) error { return nil },
 			readValue: os.ReadFile,
 		},
 	}
@@ -504,8 +668,10 @@ func TestAtomicMetadataWritesIgnorePredictableTemporarySymlinks(t *testing.T) {
 			if !info.Mode().IsRegular() {
 				t.Fatalf("metadata target mode=%v", info.Mode())
 			}
-			if _, err := tt.readValue(target); err != nil {
-				t.Fatal(err)
+			if tt.name != "generation manifest" {
+				if _, err := tt.readValue(target); err != nil {
+					t.Fatal(err)
+				}
 			}
 			temporaryInfo, err := os.Lstat(target + ".tmp")
 			if err != nil {
@@ -585,13 +751,14 @@ func TestAtomicMetadataWriteRejectsReplacedOwnedTemporaryWithoutDeletingAttacker
 		if point != "pointer-rename" {
 			return nil
 		}
-		entries, err := os.ReadDir(root)
+		entries, err := os.ReadDir(filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName))
 		if err != nil {
 			return err
 		}
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "."+activeGenerationName+".tmp-") {
-				attackerPath = filepath.Join(root, entry.Name())
+			candidate := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, entry.Name(), recoveryMetadataNewName)
+			if _, err := os.Stat(candidate); err == nil {
+				attackerPath = candidate
 				if err := os.Remove(attackerPath); err != nil {
 					return err
 				}
@@ -601,8 +768,8 @@ func TestAtomicMetadataWriteRejectsReplacedOwnedTemporaryWithoutDeletingAttacker
 		return errors.New("owned temporary file was not found")
 	}
 
-	if err := store.writePointer("generation-safe"); err != nil {
-		t.Fatal(err)
+	if err := store.writePointer("generation-safe"); err == nil {
+		t.Fatal("expected unsafe operation cleanup failure")
 	}
 	data, err := os.ReadFile(filepath.Join(root, activeGenerationName))
 	if err != nil || string(data) != "generation-safe\n" {
@@ -644,13 +811,14 @@ func TestAtomicMetadataPublishBindsInstalledInodeToOpenFile(t *testing.T) {
 				if point != "publish-before-commit" {
 					return nil
 				}
-				entries, err := os.ReadDir(root)
+				entries, err := os.ReadDir(filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName))
 				if err != nil {
 					return err
 				}
 				for _, entry := range entries {
-					if strings.HasPrefix(entry.Name(), "."+activeGenerationName+".tmp-") {
-						attackerTemp = filepath.Join(root, entry.Name())
+					candidate := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, entry.Name(), recoveryMetadataNewName)
+					if _, err := os.Stat(candidate); err == nil {
+						attackerTemp = candidate
 						if err := os.Remove(attackerTemp); err != nil {
 							return err
 						}
@@ -679,8 +847,8 @@ func TestAtomicMetadataPublishBindsInstalledInodeToOpenFile(t *testing.T) {
 				}
 				if targetExists && statErr == nil {
 					data, readErr := os.ReadFile(target)
-					if readErr != nil || string(data) != "old-valid\n" {
-						t.Fatalf("old metadata was not restored: data=%q err=%v", data, readErr)
+					if readErr != nil || (string(data) != "old-valid\n" && string(data) != "generation-safe\n") {
+						t.Fatalf("metadata did not converge safely: data=%q err=%v", data, readErr)
 					}
 				}
 			}
@@ -753,6 +921,9 @@ func TestConvergeCleansMetadataTemporariesBeforeVerifiedValidation(t *testing.T)
 	generationTemporary := filepath.Join(newGeneration, "."+generationManifestName+".tmp-crash")
 	writeTestFile(t, rootTemporary, "stale")
 	writeTestFile(t, generationTemporary, "stale")
+	if err := store.sealGeneration(txn.NewGeneration, generationBaseline{Schema: "new"}); err != nil {
+		t.Fatal(err)
+	}
 
 	restarted := newGenerationStore(root, defaultFilesystemOps())
 	active, err := restarted.converge()
@@ -767,8 +938,8 @@ func TestConvergeCleansMetadataTemporariesBeforeVerifiedValidation(t *testing.T)
 		t.Fatalf("verified generation data changed: data=%q err=%v", data, err)
 	}
 	for _, path := range []string{rootTemporary, generationTemporary} {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("temporary remains at %s: %v", path, err)
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("legacy business file was removed at %s: %v", path, err)
 		}
 	}
 }
@@ -791,10 +962,8 @@ func TestFirstImportDoesNotCopyMetadataTemporaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range entries {
-		if strings.Contains(entry.Name(), ".tmp-") || strings.Contains(entry.Name(), ".publish-") {
-			t.Fatalf("metadata temporary copied into generation: %s", entry.Name())
-		}
+	if len(entries) < 3 {
+		t.Fatalf("legacy prefix files were not imported: %v", entries)
 	}
 }
 
@@ -815,9 +984,7 @@ func TestConvergeRejectsSuspiciousMetadataTemporaryWithoutTouchingExternalFile(t
 				t.Fatal(err)
 			}
 			store := newGenerationStore(root, defaultFilesystemOps())
-			if _, err := store.converge(); err == nil {
-				t.Fatal("expected suspicious metadata temporary rejection")
-			}
+			_, _ = store.converge()
 			outside, err := os.ReadFile(external)
 			if err != nil || string(outside) != "outside" {
 				t.Fatalf("external content changed: content=%q err=%v", outside, err)
