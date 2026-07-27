@@ -27,8 +27,6 @@
 
 **Status:** Complete (`6d920ce`, `71b90a1`)
 
-**Status:** Complete (`6d920ce`, `71b90a1`)
-
 **Files:**
 - Test and fix existing failures in `panel/server/handler` and `panel/server/service` before Full Core behavior changes.
 
@@ -40,8 +38,6 @@
 4. Re-run the combined command until it reports zero failures.
 
 ### Task 1.1: Generate Canonical Route Inventory
-
-**Status:** Complete (`b15afb2`, `7311baf`, `b23cfde`)
 
 **Status:** Complete (`b15afb2`, `7311baf`, `b23cfde`)
 
