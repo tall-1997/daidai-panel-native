@@ -716,7 +716,7 @@ func extractRequireESMPackageName(output string) string {
 }
 
 func normalizeNodeRequireSpecifier(spec string) string {
-	spec = strings.TrimSpace(filepath.ToSlash(spec))
+	spec = strings.TrimSpace(strings.ReplaceAll(spec, "\\", "/"))
 	if spec == "" ||
 		strings.HasPrefix(spec, ".") ||
 		strings.HasPrefix(spec, "/") ||

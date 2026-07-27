@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -466,14 +467,18 @@ func TestShouldRequireDockerPanelUpdateIgnoresDockerEnvVarsOutsideContainer(t *t
 func TestBuildPanelUpdatePlanForReleaseFallsBackToBinaryWhenDockerEnvVarsLeak(t *testing.T) {
 	t.Setenv("IMAGE_NAME", "linzixuanzz/daidai-panel:latest")
 	t.Setenv("CONTAINER_NAME", "daidai-panel")
+	assetName, _, err := resolveBinaryReleaseTarget(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatalf("resolve binary release target: %v", err)
+	}
 
 	release := &panelReleaseInfo{
 		TagName: "v2.2.19",
 		Name:    "v2.2.19",
 		Assets: []panelReleaseAsset{
 			{
-				Name:               "daidai-windows-amd64.zip",
-				BrowserDownloadURL: "https://example.com/daidai-windows-amd64.zip",
+				Name:               assetName,
+				BrowserDownloadURL: "https://example.com/" + assetName,
 			},
 		},
 	}
@@ -485,7 +490,7 @@ func TestBuildPanelUpdatePlanForReleaseFallsBackToBinaryWhenDockerEnvVarsLeak(t 
 	if plan.DeploymentType != panelUpdateDeploymentBinary {
 		t.Fatalf("expected binary fallback plan, got %#v", plan)
 	}
-	if plan.AssetName != "daidai-windows-amd64.zip" {
-		t.Fatalf("expected windows binary asset fallback, got %#v", plan)
+	if plan.AssetName != assetName {
+		t.Fatalf("expected %s binary asset fallback, got %#v", assetName, plan)
 	}
 }
