@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"daidai-panel/appboot"
@@ -88,10 +89,14 @@ type core struct {
 }
 
 var (
-	initApp       = appboot.InitWithConfigWriter
-	setupRoutes   = router.SetupMobileFull
-	listenTCP     = net.Listen
-	closeDatabase = database.Close
+	initApp                = appboot.InitWithConfigWriterBeforeMigrate
+	setupRoutes            = router.SetupMobileFull
+	listenTCP              = net.Listen
+	closeDatabase          = database.Close
+	checkpointDB           = database.CheckpointWALAndClose
+	openDatabase           = database.InitWithWriter
+	integrityDB            = database.IntegrityCheck
+	checkpointFlatDatabase = database.CheckpointWALPath
 )
 
 type lifecycleState struct {
@@ -106,6 +111,7 @@ type lifecycleState struct {
 }
 
 var lifecycle lifecycleState
+var recoveryReady atomic.Bool
 
 func StartCore(optionsJSON string) string {
 	lifecycle.operation.Lock()
@@ -124,25 +130,101 @@ func StartCore(optionsJSON string) string {
 		logDiagnostic(code, diagnostic)
 		return failure(code, message, result{Status: "stopped"})
 	}
-	if err := createDataLayout(parsed.DataDir); err != nil {
+	recoveryReady.Store(false)
+	if _, err := os.Stat(filepath.Join(parsed.DataDir, activeGenerationName)); errors.Is(err, os.ErrNotExist) {
+		if err := checkpointFlatDatabase(filepath.Join(parsed.DataDir, "daidai.db")); err != nil {
+			logDiagnostic(codeInvalidDataDir, "flat-checkpoint")
+			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		}
+	} else if err != nil {
+		logDiagnostic(codeInvalidDataDir, "active-pointer")
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+	}
+	store := newGenerationStore(parsed.DataDir, defaultFilesystemOps())
+	activeDataDir, err := store.converge()
+	if err != nil {
+		logDiagnostic(codeInvalidDataDir, "recovery-converge")
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+	}
+	if err := createDataLayout(activeDataDir); err != nil {
 		logDiagnostic(codeInvalidDataDir, "layout")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
-	secret, err := loadOrCreateJWTSecret(parsed.DataDir)
+	secret, err := loadOrCreateJWTSecret(activeDataDir)
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "secret")
 		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 	}
 
 	previous := captureGlobals()
-	cfg := mobileConfig(parsed, secret)
-	bootstrapWriter := newPrivatePathRedactor(log.Writer(), cfg.Data.Dir, cfg.Database.Path, cfg.Data.ScriptsDir, cfg.Data.LogDir)
-	if err := initApp(cfg, bootstrapWriter); err != nil {
+	cfg := mobileConfig(parsed, activeDataDir, secret)
+	bootstrapWriter := newPrivatePathRedactor(log.Writer(), parsed.DataDir, cfg.Data.Dir, cfg.Database.Path, cfg.Data.ScriptsDir, cfg.Data.LogDir)
+	var txn recoveryTransaction
+	prepared := false
+	prepareMigration := func() error {
+		if err := checkpointDB(); err != nil {
+			return err
+		}
+		var err error
+		txn, err = store.prepareMigration()
+		if err != nil {
+			return err
+		}
+		prepared = true
+		candidate := store.generationPath(txn.NewGeneration)
+		setConfigDataDir(cfg, candidate)
+		return openDatabase(&cfg.Database, bootstrapWriter)
+	}
+	if err := initApp(cfg, bootstrapWriter, prepareMigration); err != nil {
 		logDiagnostic(codeBootstrapFailed, "appboot")
+		if prepared {
+			_ = store.rollback(txn)
+		}
 		restoreAfterStartFailure(previous)
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
-
+	if err := integrityDB(); err != nil {
+		logDiagnostic(codeBootstrapFailed, "integrity")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := checkpointDB(); err != nil {
+		logDiagnostic(codeBootstrapFailed, "migration-checkpoint")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := store.sealGeneration(txn.NewGeneration); err != nil {
+		logDiagnostic(codeBootstrapFailed, "generation-seal")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := store.commitPointer(txn); err != nil {
+		logDiagnostic(codeBootstrapFailed, "pointer")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := openDatabase(&cfg.Database, bootstrapWriter); err != nil {
+		logDiagnostic(codeBootstrapFailed, "database-reopen")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := integrityDB(); err != nil {
+		logDiagnostic(codeBootstrapFailed, "reopen-integrity")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	if err := store.verify(txn); err != nil {
+		logDiagnostic(codeBootstrapFailed, "verify")
+		_ = store.rollback(txn)
+		restoreAfterStartFailure(previous)
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
 	listener, err := listenTCP("tcp", "127.0.0.1:0")
 	if err != nil {
 		logDiagnostic(codeListenFailed, "listen")
@@ -186,6 +268,7 @@ func StartCore(optionsJSON string) string {
 	lifecycle.status = "running"
 	lifecycle.errorCode = ""
 	lifecycle.errorText = ""
+	recoveryReady.Store(true)
 	value := lifecycle.statusResultLocked()
 	lifecycle.mu.Unlock()
 
@@ -209,6 +292,7 @@ func StopCore(timeoutMillis int64) string {
 	}
 	running := lifecycle.core
 	lifecycle.status = "stopping"
+	recoveryReady.Store(false)
 	lifecycle.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMillis)*time.Millisecond)
@@ -264,6 +348,11 @@ func CoreEndpoint() string {
 		return ""
 	}
 	return lifecycle.core.endpoint
+}
+
+// RecoveryConverged gates business workers until recovery and migration commit.
+func RecoveryConverged() bool {
+	return recoveryReady.Load()
 }
 
 func observeServe(running *core) {
@@ -353,21 +442,28 @@ func parseOptions(raw string) (options, string, string, string) {
 	return parsed, "", "", ""
 }
 
-func mobileConfig(parsed options, secret string) *config.Config {
+func mobileConfig(parsed options, dataDir, secret string) *config.Config {
 	return &config.Config{
 		Server:   config.ServerConfig{Mode: gin.ReleaseMode},
-		Database: config.DatabaseConfig{Path: filepath.Join(parsed.DataDir, "daidai.db")},
+		Database: config.DatabaseConfig{Path: filepath.Join(dataDir, "daidai.db")},
 		JWT: config.JWTConfig{
 			Secret:             secret,
 			AccessTokenExpire:  480 * time.Hour,
 			RefreshTokenExpire: 1440 * time.Hour,
 		},
 		Data: config.DataConfig{
-			Dir:        parsed.DataDir,
-			ScriptsDir: filepath.Join(parsed.DataDir, "scripts"),
-			LogDir:     filepath.Join(parsed.DataDir, "logs"),
+			Dir:        dataDir,
+			ScriptsDir: filepath.Join(dataDir, "scripts"),
+			LogDir:     filepath.Join(dataDir, "logs"),
 		},
 	}
+}
+
+func setConfigDataDir(cfg *config.Config, dataDir string) {
+	cfg.Database.Path = filepath.Join(dataDir, "daidai.db")
+	cfg.Data.Dir = dataDir
+	cfg.Data.ScriptsDir = filepath.Join(dataDir, "scripts")
+	cfg.Data.LogDir = filepath.Join(dataDir, "logs")
 }
 
 func captureGlobals() globalState {

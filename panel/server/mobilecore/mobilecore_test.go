@@ -51,7 +51,7 @@ func (transport localTransport) RoundTrip(request *http.Request) (*http.Response
 }
 
 func localClient() *http.Client {
-	return &http.Client{Transport: localTransport{base: http.DefaultTransport}, Timeout: time.Second}
+	return &http.Client{Transport: localTransport{base: http.DefaultTransport}, Timeout: 5 * time.Second}
 }
 
 func decodeResult(t *testing.T, raw string) testResult {
@@ -77,7 +77,7 @@ func startForTest(t *testing.T, dataDir string) testResult {
 		t.Fatalf("start core: %s", result.Error)
 	}
 	t.Cleanup(func() {
-		_ = StopCore(1000)
+		_ = StopCore(5000)
 	})
 	return result
 }
@@ -103,13 +103,17 @@ func TestStartCoreBootstrapsUpstreamApplication(t *testing.T) {
 		t.Fatalf("config port=%s endpoint port=%s", got, portText)
 	}
 
+	activeDataDir := config.C.Data.Dir
+	if filepath.Dir(activeDataDir) != filepath.Join(dataDir, generationsDirName) {
+		t.Fatalf("data dir=%q is not an active generation", activeDataDir)
+	}
 	for _, dir := range []string{"scripts", "logs"} {
-		if info, err := os.Stat(filepath.Join(dataDir, dir)); err != nil || !info.IsDir() {
+		if info, err := os.Stat(filepath.Join(activeDataDir, dir)); err != nil || !info.IsDir() {
 			t.Fatalf("expected %s directory: %v", dir, err)
 		}
 	}
 	for _, file := range []string{"daidai.db", ".jwt_secret"} {
-		if info, err := os.Stat(filepath.Join(dataDir, file)); err != nil || info.IsDir() {
+		if info, err := os.Stat(filepath.Join(activeDataDir, file)); err != nil || info.IsDir() {
 			t.Fatalf("expected %s file: %v", file, err)
 		}
 	}
@@ -331,8 +335,8 @@ func TestBootstrapLogsRedactPrivatePaths(t *testing.T) {
 	output := logs.String()
 	for _, privatePath := range []string{
 		dataDir,
-		filepath.Join(dataDir, "daidai.db"),
-		filepath.Join(dataDir, "scripts"),
+		config.C.Database.Path,
+		config.C.Data.ScriptsDir,
 	} {
 		if strings.Contains(output, privatePath) {
 			t.Fatalf("private path %q leaked in bootstrap logs: %q", privatePath, output)
@@ -390,11 +394,72 @@ func TestStopCoreAllowsRestart(t *testing.T) {
 	if config.C != previousConfig || database.DB != previousDB || !reflect.DeepEqual(middleware.CurrentTrustedProxyCIDRs(), wantProxies) {
 		t.Fatal("global state was not restored after normal stop")
 	}
+	if RecoveryConverged() {
+		t.Fatal("recovery gate remains open after stop")
+	}
 
 	second := startForTest(t, t.TempDir())
 	if second.ID == first.ID {
 		t.Fatalf("restart reused lifecycle id %d", second.ID)
 	}
+}
+
+func TestStartCoreRestartsSameMutableGenerationRoot(t *testing.T) {
+	root := t.TempDir()
+	first := startForTest(t, root)
+	if err := database.DB.Exec("CREATE TABLE restart_probe (value TEXT)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Exec("INSERT INTO restart_probe(value) VALUES (?)", "preserved").Error; err != nil {
+		t.Fatal(err)
+	}
+	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+		t.Fatalf("stop first core: %+v", stopped)
+	}
+	second := startForTest(t, root)
+	if second.ID == first.ID {
+		t.Fatal("restart reused lifecycle id")
+	}
+	var value string
+	if err := database.DB.Raw("SELECT value FROM restart_probe").Scan(&value).Error; err != nil || value != "preserved" {
+		t.Fatalf("value=%q err=%v", value, err)
+	}
+}
+
+func TestStartCoreDatabaseReopenFailureRollsBackPointer(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldOpen := openDatabase
+	openCalls := 0
+	openDatabase = func(cfg *config.DatabaseConfig, writer io.Writer) error {
+		openCalls++
+		if openCalls == 2 {
+			return errors.New("injected reopen failure")
+		}
+		return oldOpen(cfg, writer)
+	}
+	t.Cleanup(func() { openDatabase = oldOpen })
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeBootstrapFailed {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	active, err := store.activeGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != oldGeneration {
+		t.Fatalf("active=%q want old=%q", active, oldGeneration)
+	}
+	if RecoveryConverged() {
+		t.Fatal("recovery gate opened after database reopen failure")
+	}
+	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
 }
 
 func TestStartCoreRejectsFixedPort(t *testing.T) {
@@ -443,7 +508,7 @@ func TestStartFailureRestoresGlobalState(t *testing.T) {
 	}
 	wantProxies := middleware.CurrentTrustedProxyCIDRs()
 	oldInit := initApp
-	initApp = func(cfg *config.Config, _ io.Writer) error {
+	initApp = func(cfg *config.Config, _ io.Writer, gate func() error) error {
 		config.C = cfg
 		database.DB = nil
 		if err := middleware.ConfigureTrustedProxyCIDRs(""); err != nil {
@@ -467,6 +532,64 @@ func TestStartFailureRestoresGlobalState(t *testing.T) {
 	}
 	if strings.Contains(result.Error, "/tmp") || strings.Contains(result.Error, "database") {
 		t.Fatalf("unsafe detail leaked: %q", result.Error)
+	}
+}
+
+func TestStartCoreMigrationFailureKeepsOldGenerationAndGateClosed(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(oldGeneration, "config.sh"), "stable")
+
+	oldInit := initApp
+	initApp = func(_ *config.Config, _ io.Writer, gate func() error) error {
+		if err := gate(); err != nil {
+			return err
+		}
+		return errors.New("injected migration failure")
+	}
+	t.Cleanup(func() { initApp = oldInit })
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeBootstrapFailed {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	active, err := store.activeGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active != oldGeneration {
+		t.Fatalf("active=%q want=%q", active, oldGeneration)
+	}
+	if RecoveryConverged() {
+		t.Fatal("recovery gate opened after migration failure")
+	}
+	assertTransactionPhase(t, root, recoveryPhaseRolledBack)
+}
+
+func TestStartCoreCheckpointsLegacyFlatDatabaseBeforeImport(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "daidai.db"), "legacy")
+	oldCheckpoint := checkpointFlatDatabase
+	checkpointed := false
+	checkpointFlatDatabase = func(path string) error {
+		if path != filepath.Join(root, "daidai.db") {
+			t.Fatalf("checkpoint path=%q", path)
+		}
+		if _, err := os.Stat(filepath.Join(root, activeGenerationName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("active pointer existed before flat checkpoint: %v", err)
+		}
+		checkpointed = true
+		return errors.New("stop after checkpoint observation")
+	}
+	t.Cleanup(func() { checkpointFlatDatabase = oldCheckpoint })
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || !checkpointed {
+		t.Fatalf("unexpected result=%+v checkpointed=%v", result, checkpointed)
 	}
 }
 

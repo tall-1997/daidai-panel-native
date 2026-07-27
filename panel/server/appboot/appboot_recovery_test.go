@@ -1,0 +1,35 @@
+package appboot
+
+import (
+	"errors"
+	"io"
+	"path/filepath"
+	"testing"
+
+	"daidai-panel/config"
+	"daidai-panel/database"
+)
+
+func TestInitWithConfigRunsRecoveryGateBeforeAutoMigrate(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "daidai.db")
+	cfg := &config.Config{Database: config.DatabaseConfig{Path: dbPath}}
+	gateErr := errors.New("snapshot failed")
+	called := false
+
+	err := InitWithConfigWriterBeforeMigrate(cfg, io.Discard, func() error {
+		called = true
+		if database.DB == nil {
+			t.Fatal("recovery gate ran before database opened")
+		}
+		return gateErr
+	})
+	if !called {
+		t.Fatal("recovery gate was not called")
+	}
+	if !errors.Is(err, gateErr) {
+		t.Fatalf("error = %v, want recovery gate error", err)
+	}
+	if database.DB != nil {
+		t.Fatal("database remained open after recovery gate failure")
+	}
+}

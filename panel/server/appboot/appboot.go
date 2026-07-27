@@ -58,10 +58,16 @@ func InitWithConfig(cfg *config.Config) error {
 }
 
 func InitWithConfigWriter(cfg *config.Config, writer io.Writer) error {
-	return initWithConfig(cfg, writer, true)
+	return InitWithConfigWriterBeforeMigrate(cfg, writer, nil)
 }
 
-func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool) error {
+// InitWithConfigWriterBeforeMigrate runs gate after opening SQLite and before
+// any schema or startup data mutation.
+func InitWithConfigWriterBeforeMigrate(cfg *config.Config, writer io.Writer, gate func() error) error {
+	return initWithConfig(cfg, writer, true, gate)
+}
+
+func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool, gates ...func() error) error {
 	if cfg == nil {
 		return fmt.Errorf("配置为空")
 	}
@@ -81,6 +87,12 @@ func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool) err
 	}
 	if initDatabaseErr != nil {
 		return fmt.Errorf("initialize database: %w", initDatabaseErr)
+	}
+	if len(gates) > 0 && gates[0] != nil {
+		if err := gates[0](); err != nil {
+			_ = database.Close()
+			return fmt.Errorf("prepare migration recovery: %w", err)
+		}
 	}
 	if err := database.AutoMigrate(allModels()...); err != nil {
 		_ = database.Close()

@@ -104,6 +104,8 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 
 ### Task 1.3: Add Minimum Migration Recovery
 
+**Status:** Complete
+
 **Files:**
 - Create: `panel/server/mobilecore/generation_store.go`
 - Create: `panel/server/mobilecore/generation_store_test.go`

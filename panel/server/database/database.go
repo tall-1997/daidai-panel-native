@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -100,6 +101,57 @@ func Close() error {
 		return fmt.Errorf("close database: %w", err)
 	}
 	DB = nil
+	return nil
+}
+
+// CheckpointWALAndClose flushes the WAL into the database before a filesystem snapshot.
+func CheckpointWALAndClose() error {
+	if DB == nil {
+		return nil
+	}
+	if err := DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		return fmt.Errorf("checkpoint database WAL: %w", err)
+	}
+	return Close()
+}
+
+// CheckpointWALPath flushes a legacy flat SQLite database before first import.
+func CheckpointWALPath(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat database for checkpoint: %w", err)
+	}
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		return fmt.Errorf("open database for checkpoint: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("get checkpoint database: %w", err)
+	}
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		_ = sqlDB.Close()
+		return fmt.Errorf("checkpoint database WAL: %w", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("close checkpoint database: %w", err)
+	}
+	return nil
+}
+
+// IntegrityCheck verifies the complete SQLite database after migration.
+func IntegrityCheck() error {
+	if DB == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	var result string
+	if err := DB.Raw("PRAGMA integrity_check").Scan(&result).Error; err != nil {
+		return fmt.Errorf("check database integrity: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("database integrity check failed")
+	}
 	return nil
 }
 
