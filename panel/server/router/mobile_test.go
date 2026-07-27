@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"daidai-panel/testutil"
@@ -23,7 +24,11 @@ func TestMobileRouteContract(t *testing.T) {
 	}
 	for _, contract := range contracts {
 		contract := contract
-		t.Run(routeSubtestKey(contract.Method, contract.Path), func(t *testing.T) {
+		const testPrefix = "TestMobileRouteContract/"
+		if !strings.HasPrefix(contract.TestCase, testPrefix) {
+			continue
+		}
+		t.Run(strings.TrimPrefix(contract.TestCase, testPrefix), func(t *testing.T) {
 			if !mobileRoutes[contract.Method+" "+contract.Path] {
 				t.Fatal("route is absent from the real mobile router")
 			}

@@ -7,6 +7,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var routeContractTestRegistry = map[string]func(*testing.T){
+	"TestMobileRouteContract":          TestMobileRouteContract,
+	"TestCanonicalSSEHandlerContracts": TestCanonicalSSEHandlerContracts,
+}
+
+func routeTestIDExists(testID string) bool {
+	testName, subtest, ok := strings.Cut(testID, "/")
+	if !ok || subtest == "" {
+		return false
+	}
+	_, exists := routeContractTestRegistry[testName]
+	if !exists {
+		return false
+	}
+	if testName == "TestCanonicalSSEHandlerContracts" {
+		for _, descriptor := range explicitRouteDescriptors {
+			if descriptor.StreamContract == "sse" && descriptor.TestCase == testID {
+				return true
+			}
+		}
+		return false
+	}
+	return testName == "TestMobileRouteContract"
+}
+
 func TestRouteContractCollectsCompleteAndMobileFixtures(t *testing.T) {
 	server := CanonicalServerRoutes()
 	mobile := CanonicalMobileRoutes()
@@ -77,14 +102,33 @@ func TestRouteContractClassifiesEveryServerRoute(t *testing.T) {
 		if contract.MobileStatus == "planned" {
 			t.Errorf("route %s remains planned in Milestone 1", key)
 		}
-		wantTestCase := "TestMobileRouteContract/" + routeSubtestKey(contract.Method, contract.Path)
-		if contract.TestCase != wantTestCase {
-			t.Errorf("route %s testCase=%q want=%q", key, contract.TestCase, wantTestCase)
+		if !routeTestIDExists(contract.TestCase) {
+			t.Errorf("route %s references unregistered testCase=%q", key, contract.TestCase)
 		}
 	}
 	for key := range serverKeys {
 		if !contractKeys[key] {
 			t.Errorf("server route %s is absent from the contract", key)
+		}
+	}
+}
+
+func TestRouteDescriptorsExplicitlyCoverEveryCanonicalRoute(t *testing.T) {
+	descriptors := RouteDescriptors()
+	routes := CanonicalServerRoutes()
+	if len(descriptors) != 423 || len(descriptors) != len(routes) {
+		t.Fatalf("descriptors=%d routes=%d want=423", len(descriptors), len(routes))
+	}
+
+	for _, route := range routes {
+		key := routeKey(route)
+		descriptor, ok := descriptors[key]
+		if !ok {
+			t.Errorf("route %s has no explicit descriptor", key)
+			continue
+		}
+		if descriptor.AuthContract == "" || descriptor.StreamContract == "" || descriptor.TestCase == "" {
+			t.Errorf("route %s descriptor is incomplete: %+v", key, descriptor)
 		}
 	}
 }

@@ -732,7 +732,7 @@
       "androidEquivalent": "native:deps",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_deps_id_log-stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_deps_id_log-stream"
     },
     {
       "method": "GET",
@@ -882,7 +882,7 @@
       "androidEquivalent": "native:logs",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_logs_id_stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_logs_id_stream"
     },
     {
       "method": "GET",
@@ -1132,7 +1132,7 @@
       "androidEquivalent": "capability:subscription_pull",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_subscriptions_id_pull-stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_subscriptions_id_pull-stream"
     },
     {
       "method": "GET",
@@ -1502,7 +1502,7 @@
       "androidEquivalent": "native:deps",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_v1_deps_id_log-stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_v1_deps_id_log-stream"
     },
     {
       "method": "GET",
@@ -1652,7 +1652,7 @@
       "androidEquivalent": "native:logs",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_v1_logs_id_stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_v1_logs_id_stream"
     },
     {
       "method": "GET",
@@ -1902,7 +1902,7 @@
       "androidEquivalent": "capability:subscription_pull",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/get_api_v1_subscriptions_id_pull-stream"
+      "testCase": "TestCanonicalSSEHandlerContracts/get_api_v1_subscriptions_id_pull-stream"
     },
     {
       "method": "GET",
@@ -2222,7 +2222,7 @@
       "androidEquivalent": "capability:runtime_mutation",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/post_api_android-runtime_install"
+      "testCase": "TestCanonicalSSEHandlerContracts/post_api_android-runtime_install"
     },
     {
       "method": "POST",
@@ -2692,7 +2692,7 @@
       "androidEquivalent": "capability:runtime_mutation",
       "authContract": "jwt",
       "streamContract": "sse",
-      "testCase": "TestMobileRouteContract/post_api_v1_android-runtime_install"
+      "testCase": "TestCanonicalSSEHandlerContracts/post_api_v1_android-runtime_install"
     },
     {
       "method": "POST",

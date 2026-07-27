@@ -93,6 +93,7 @@ func BuildRouteContracts(server, mobile []gin.RouteInfo) []RouteContract {
 		if !ok {
 			panic("route metadata missing for " + routeKey(route))
 		}
+		descriptor := explicitRouteDescriptors[routeKey(route)]
 		contracts = append(contracts, RouteContract{
 			Method:            route.Method,
 			Path:              route.Path,
@@ -101,7 +102,7 @@ func BuildRouteContracts(server, mobile []gin.RouteInfo) []RouteContract {
 			AndroidEquivalent: androidEquivalent,
 			AuthContract:      metadata.AuthContract,
 			StreamContract:    metadata.StreamContract,
-			TestCase:          "TestMobileRouteContract/" + routeSubtestKey(route.Method, route.Path),
+			TestCase:          descriptor.TestCase,
 		})
 	}
 	return contracts

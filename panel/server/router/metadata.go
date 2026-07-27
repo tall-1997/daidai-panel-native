@@ -15,31 +15,17 @@ type RouteMetadata struct {
 	HandlerContract string
 }
 
+type RouteDescriptor struct {
+	AuthContract   string
+	StreamContract string
+	TestCase       string
+}
+
 type CapabilityRoute struct {
 	Method     string
 	Path       string
 	Capability string
 }
-
-var publicRouteOverrides = routeMetadataOverrides([]string{
-	"GET /auth/check-init",
-	"POST /auth/init",
-	"POST /auth/login",
-	"POST /auth/refresh",
-	"GET /auth/captcha-config",
-	"GET /auth/avatar/:id",
-	"POST /open-api/token",
-	"GET /system/public-version",
-	"GET /system/panel-settings",
-	"GET /sponsors",
-}, RouteMetadata{AuthContract: "public", StreamContract: "none"})
-
-var streamRouteOverrides = routeMetadataOverrides([]string{
-	"GET /logs/:id/stream",
-	"GET /deps/:id/log-stream",
-	"GET /subscriptions/:id/pull-stream",
-	"POST /android-runtime/install",
-}, RouteMetadata{AuthContract: "jwt", StreamContract: "sse", HandlerContract: "event-stream"})
 
 var capabilityRouteDefinitions = []CapabilityRoute{
 	{http.MethodPut, "/tasks/:id/run", CapabilityTaskExecution},
@@ -77,23 +63,26 @@ var capabilityRouteDefinitions = []CapabilityRoute{
 func MetadataForRoute(method, routePath string) (RouteMetadata, bool) {
 	method = strings.ToUpper(strings.TrimSpace(method))
 	routePath = normalizeRoutePath(routePath)
-	if routePath == "/robots.txt" || routePath == "/api/health" || routePath == "/api/version" ||
-		routePath == "/api/v1/health" || routePath == "/api/v1/version" {
-		return RouteMetadata{AuthContract: "public", StreamContract: "none"}, true
-	}
-
-	relativePath, ok := apiRelativePath(routePath)
-	if !ok || !isExplicitGenericRouteGroup(relativePath) {
+	descriptor, ok := explicitRouteDescriptors[method+" "+routePath]
+	if !ok {
 		return RouteMetadata{}, false
 	}
-	key := method + " " + relativePath
-	if metadata, exists := streamRouteOverrides[key]; exists {
-		return metadata, true
+	metadata := RouteMetadata{
+		AuthContract:   descriptor.AuthContract,
+		StreamContract: descriptor.StreamContract,
 	}
-	if metadata, exists := publicRouteOverrides[key]; exists {
-		return metadata, true
+	if descriptor.StreamContract == "sse" {
+		metadata.HandlerContract = "event-stream"
 	}
-	return RouteMetadata{AuthContract: "jwt", StreamContract: "none"}, true
+	return metadata, true
+}
+
+func RouteDescriptors() map[string]RouteDescriptor {
+	descriptors := make(map[string]RouteDescriptor, len(explicitRouteDescriptors))
+	for key, descriptor := range explicitRouteDescriptors {
+		descriptors[key] = descriptor
+	}
+	return descriptors
 }
 
 func MobileCapabilityRoutes() []CapabilityRoute {
@@ -115,40 +104,6 @@ func mobileRouteCapability(method, routePath string) string {
 		}
 	}
 	return ""
-}
-
-func routeMetadataOverrides(routes []string, metadata RouteMetadata) map[string]RouteMetadata {
-	overrides := make(map[string]RouteMetadata, len(routes))
-	for _, route := range routes {
-		overrides[route] = metadata
-	}
-	return overrides
-}
-
-func apiRelativePath(routePath string) (string, bool) {
-	for _, prefix := range []string{"/api/v1", "/api"} {
-		if routePath == prefix {
-			return "/", true
-		}
-		if strings.HasPrefix(routePath, prefix+"/") {
-			return strings.TrimPrefix(routePath, prefix), true
-		}
-	}
-	return "", false
-}
-
-func isExplicitGenericRouteGroup(relativePath string) bool {
-	for _, group := range []string{
-		"/auth", "/tasks", "/logs", "/scripts", "/envs", "/subscriptions",
-		"/notifications", "/ssh-keys", "/users", "/security", "/system",
-		"/open-api", "/deps", "/configs", "/platform-tokens", "/sponsors",
-		"/android-runtime",
-	} {
-		if relativePath == group || strings.HasPrefix(relativePath, group+"/") {
-			return true
-		}
-	}
-	return false
 }
 
 func routeSubtestKey(method, routePath string) string {
