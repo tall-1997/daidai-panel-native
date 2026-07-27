@@ -75,6 +75,9 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Preserved committed candidate state when candidate database close fails.
   - Persisted recovery-required lifecycle state, blocked repeated starts, and exposed cleanup retry through `StopCore`.
   - Propagated startup default-config, Python migration, runtime-policy, and dependency-dedupe database errors through appboot.
+- Final Task 1.3 metadata fixes verified:
+  - Replaced predictable metadata `.tmp` paths with same-directory random exclusive temporary files and symlink-safe target validation.
+  - Extended the schema fingerprint with resolved SQLite migration attributes for primary keys, autoincrement, defaults, constraints, and composite primary-key order.
 
 ## Task 1.3 Review Findings Resolved
 

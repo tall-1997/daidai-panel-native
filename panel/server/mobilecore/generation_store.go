@@ -638,7 +638,7 @@ func (store *generationStore) sealGeneration(id string, baseline generationBasel
 		if err != nil || relative == "." {
 			return err
 		}
-		if relative == generationManifestName {
+		if relative == generationManifestName || relative == generationManifestName+".tmp" {
 			return nil
 		}
 		info, err := entry.Info()
@@ -862,18 +862,116 @@ func validManifestPath(path string) bool {
 }
 
 func (store *generationStore) writeAtomic(path string, data []byte, mode fs.FileMode, renameBoundary string) error {
-	temporary := path + ".tmp"
-	defer func() { _ = store.ops.remove(temporary) }()
-	if err := store.writeSyncedFile(temporary, data, mode); err != nil {
+	if err := store.validateMetadataTarget(path); err != nil {
+		return err
+	}
+	temporary, file, identity, err := store.createAtomicTemporary(path, mode)
+	if err != nil {
+		return err
+	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = store.removeOwnedTemporary(temporary, identity)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := store.ops.boundary("file-fsync"); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
 		return err
 	}
 	if err := store.ops.boundary(renameBoundary); err != nil {
 		return err
 	}
+	if err := store.validateMetadataTarget(path); err != nil {
+		return err
+	}
+	temporaryInfo, err := store.ops.lstat(temporary)
+	if err != nil {
+		return err
+	}
+	if !temporaryInfo.Mode().IsRegular() || !os.SameFile(identity, temporaryInfo) {
+		return errors.New("atomic metadata temporary file identity changed")
+	}
 	if err := store.ops.rename(temporary, path); err != nil {
 		return err
 	}
-	return store.syncDirectory(filepath.Dir(path))
+	owned = false
+	if err := store.syncDirectory(filepath.Dir(path)); err != nil {
+		return err
+	}
+	info, err := store.ops.lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("atomic metadata target is not a regular file")
+	}
+	return nil
+}
+
+func (store *generationStore) validateMetadataTarget(path string) error {
+	info, err := store.ops.lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("atomic metadata target is not a regular file")
+	}
+	return nil
+}
+
+func (store *generationStore) createAtomicTemporary(path string, mode fs.FileMode) (string, *os.File, fs.FileInfo, error) {
+	directory := filepath.Dir(path)
+	base := filepath.Base(path)
+	for attempt := 0; attempt < 16; attempt++ {
+		random := make([]byte, 16)
+		if _, err := rand.Read(random); err != nil {
+			return "", nil, nil, err
+		}
+		temporary := filepath.Join(directory, "."+base+".tmp-"+hex.EncodeToString(random))
+		file, err := store.ops.openFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, mode)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", nil, nil, err
+		}
+		identity, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
+			return "", nil, nil, err
+		}
+		return temporary, file, identity, nil
+	}
+	return "", nil, nil, errors.New("create atomic metadata temporary file: exhausted attempts")
+}
+
+func (store *generationStore) removeOwnedTemporary(path string, identity fs.FileInfo) error {
+	current, err := store.ops.lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(identity, current) {
+		return nil
+	}
+	return store.ops.remove(path)
 }
 
 func (store *generationStore) writeSyncedFile(path string, data []byte, mode fs.FileMode) error {

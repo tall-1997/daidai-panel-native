@@ -82,7 +82,19 @@ func schemaDescriptorWithDB(db *gorm.DB, models []interface{}) (string, error) {
 			}
 			fullType := db.Migrator().FullDataTypeOf(field)
 			lines = append(lines, fmt.Sprintf("column:%s:%s:%v", field.DBName, fullType.SQL, fullType.Vars))
+			lines = append(lines, fmt.Sprintf(
+				"field:%s:data=%s:gormData=%s:primary=%t:autoIncrement=%t:autoIncrementIncrement=%d:hasDefault=%t:default=%s:notNull=%t:unique=%t:uniqueIndex=%s:comment=%s:size=%d:precision=%d:scale=%d:ignoreMigration=%t",
+				field.DBName, field.DataType, field.GORMDataType, field.PrimaryKey, field.AutoIncrement,
+				field.AutoIncrementIncrement, field.HasDefaultValue, field.DefaultValue, field.NotNull,
+				field.Unique, field.UniqueIndex, field.Comment, field.Size, field.Precision, field.Scale,
+				field.IgnoreMigration,
+			))
 		}
+		primaryFields := make([]string, 0, len(parsed.PrimaryFields))
+		for position, field := range parsed.PrimaryFields {
+			primaryFields = append(primaryFields, fmt.Sprintf("%d:%s:%s", position, field.DBName, field.TagSettings["PRIORITY"]))
+		}
+		lines = append(lines, "primary:"+strings.Join(primaryFields, ","))
 		for _, index := range parsed.ParseIndexes() {
 			parts := []string{"index:" + index.Name, index.Class, index.Type, index.Where, index.Option}
 			for _, field := range index.Fields {

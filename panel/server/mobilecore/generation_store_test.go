@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -431,6 +432,191 @@ func TestSealGenerationWritesManifestAtomically(t *testing.T) {
 	}
 	if string(after) != string(original) {
 		t.Fatal("manifest was partially replaced")
+	}
+	entries, err := os.ReadDir(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "."+generationManifestName+".tmp-") {
+			t.Fatalf("owned temporary file remains after failure: %s", entry.Name())
+		}
+	}
+}
+
+func TestAtomicMetadataWritesIgnorePredictableTemporarySymlinks(t *testing.T) {
+	tests := []struct {
+		name      string
+		target    func(root, active string) string
+		write     func(*generationStore, string) error
+		readValue func(string) ([]byte, error)
+	}{
+		{
+			name:   "active pointer",
+			target: func(root, _ string) string { return filepath.Join(root, activeGenerationName) },
+			write:  func(store *generationStore, _ string) error { return store.writePointer("generation-safe") },
+			readValue: func(path string) ([]byte, error) {
+				return os.ReadFile(path)
+			},
+		},
+		{
+			name:   "recovery transaction",
+			target: func(root, _ string) string { return filepath.Join(root, recoveryTransactionName) },
+			write: func(store *generationStore, _ string) error {
+				return store.writeTransaction(recoveryTransaction{Version: 1, Phase: recoveryPhaseBuilding, NewGeneration: "generation-safe"})
+			},
+			readValue: os.ReadFile,
+		},
+		{
+			name:   "generation manifest",
+			target: func(_, active string) string { return filepath.Join(active, generationManifestName) },
+			write: func(store *generationStore, active string) error {
+				return store.sealGeneration(filepath.Base(active), generationBaseline{Schema: "safe"})
+			},
+			readValue: os.ReadFile,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			active, err := store.converge()
+			if err != nil {
+				t.Fatal(err)
+			}
+			external := filepath.Join(t.TempDir(), "external")
+			writeTestFile(t, external, "outside")
+			target := tt.target(root, active)
+			if err := os.Symlink(external, target+".tmp"); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.write(store, active); err != nil {
+				t.Fatal(err)
+			}
+			outside, err := os.ReadFile(external)
+			if err != nil || string(outside) != "outside" {
+				t.Fatalf("external content changed: content=%q err=%v", outside, err)
+			}
+			info, err := os.Lstat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.Mode().IsRegular() {
+				t.Fatalf("metadata target mode=%v", info.Mode())
+			}
+			if _, err := tt.readValue(target); err != nil {
+				t.Fatal(err)
+			}
+			temporaryInfo, err := os.Lstat(target + ".tmp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if temporaryInfo.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("attacker temporary path was replaced: mode=%v", temporaryInfo.Mode())
+			}
+		})
+	}
+}
+
+func TestAtomicMetadataWritesRejectSymlinkedTargets(t *testing.T) {
+	tests := []struct {
+		name   string
+		target func(root, active string) string
+		write  func(*generationStore, string) error
+	}{
+		{
+			name:   "active pointer",
+			target: func(root, _ string) string { return filepath.Join(root, activeGenerationName) },
+			write:  func(store *generationStore, _ string) error { return store.writePointer("generation-safe") },
+		},
+		{
+			name:   "recovery transaction",
+			target: func(root, _ string) string { return filepath.Join(root, recoveryTransactionName) },
+			write: func(store *generationStore, _ string) error {
+				return store.writeTransaction(recoveryTransaction{Version: 1, Phase: recoveryPhaseBuilding, NewGeneration: "generation-safe"})
+			},
+		},
+		{
+			name:   "generation manifest",
+			target: func(_, active string) string { return filepath.Join(active, generationManifestName) },
+			write: func(store *generationStore, active string) error {
+				return store.sealGeneration(filepath.Base(active), generationBaseline{Schema: "safe"})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			active, err := store.converge()
+			if err != nil {
+				t.Fatal(err)
+			}
+			external := filepath.Join(t.TempDir(), "external")
+			writeTestFile(t, external, "outside")
+			target := tt.target(root, active)
+			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(external, target); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.write(store, active); err == nil {
+				t.Fatal("expected symlinked metadata target rejection")
+			}
+			outside, err := os.ReadFile(external)
+			if err != nil || string(outside) != "outside" {
+				t.Fatalf("external content changed: content=%q err=%v", outside, err)
+			}
+		})
+	}
+}
+
+func TestAtomicMetadataWriteRejectsReplacedOwnedTemporaryWithoutDeletingAttackerPath(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureTrustedContainer(); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "external")
+	writeTestFile(t, external, "outside")
+	var attackerPath string
+	store.ops.boundary = func(point string) error {
+		if point != "pointer-rename" {
+			return nil
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "."+activeGenerationName+".tmp-") {
+				attackerPath = filepath.Join(root, entry.Name())
+				if err := os.Remove(attackerPath); err != nil {
+					return err
+				}
+				return os.Symlink(external, attackerPath)
+			}
+		}
+		return errors.New("owned temporary file was not found")
+	}
+
+	if err := store.writePointer("generation-safe"); err == nil {
+		t.Fatal("expected replaced temporary file rejection")
+	}
+	if _, err := os.Lstat(filepath.Join(root, activeGenerationName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("attacker path was installed as metadata: %v", err)
+	}
+	info, err := os.Lstat(attackerPath)
+	if err != nil {
+		t.Fatalf("attacker path was deleted: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("attacker path mode=%v", info.Mode())
+	}
+	outside, err := os.ReadFile(external)
+	if err != nil || string(outside) != "outside" {
+		t.Fatalf("external content changed: content=%q err=%v", outside, err)
 	}
 }
 

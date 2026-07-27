@@ -37,6 +37,34 @@ type fingerprintNamingModel struct {
 	ID uint
 }
 
+type fingerprintPlainKey struct {
+	Key uint `gorm:"column:key"`
+}
+
+type fingerprintPrimaryKey struct {
+	Key uint `gorm:"column:key;primaryKey"`
+}
+
+type fingerprintAutoIncrementKey struct {
+	Key uint `gorm:"column:key;primaryKey;autoIncrement:false"`
+}
+
+type fingerprintCompositeKeyAB struct {
+	A uint `gorm:"primaryKey;priority:1"`
+	B uint `gorm:"primaryKey;priority:2"`
+}
+
+type fingerprintCompositeKeyBA struct {
+	A uint `gorm:"primaryKey;priority:2"`
+	B uint `gorm:"primaryKey;priority:1"`
+}
+
+func (fingerprintPlainKey) TableName() string         { return "fingerprint_key" }
+func (fingerprintPrimaryKey) TableName() string       { return "fingerprint_key" }
+func (fingerprintAutoIncrementKey) TableName() string { return "fingerprint_key" }
+func (fingerprintCompositeKeyAB) TableName() string   { return "fingerprint_composite_key" }
+func (fingerprintCompositeKeyBA) TableName() string   { return "fingerprint_composite_key" }
+
 func TestInitWithConfigRunsRecoveryGateBeforeAutoMigrate(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "daidai.db")
 	cfg := &config.Config{Database: config.DatabaseConfig{Path: dbPath}}
@@ -138,6 +166,42 @@ func TestSchemaDescriptorUsesConfiguredNamingStrategy(t *testing.T) {
 	}
 	if !strings.Contains(descriptor, "table:mobile_fingerprint_naming_model") {
 		t.Fatalf("descriptor ignored naming strategy: %s", descriptor)
+	}
+}
+
+func TestSchemaFingerprintIncludesResolvedPrimaryKeyAttributes(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  interface{}
+		second interface{}
+	}{
+		{name: "primary key", first: &fingerprintPlainKey{}, second: &fingerprintPrimaryKey{}},
+		{name: "auto increment", first: &fingerprintPrimaryKey{}, second: &fingerprintAutoIncrementKey{}},
+		{name: "composite primary key order", first: &fingerprintCompositeKeyAB{}, second: &fingerprintCompositeKeyBA{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first, err := schemaFingerprint([]interface{}{tt.first}, "stable")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := schemaFingerprint([]interface{}{tt.second}, "stable")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == second {
+				t.Fatalf("schema fingerprint ignored %s change", tt.name)
+			}
+			for iteration := 0; iteration < 50; iteration++ {
+				repeated, err := schemaFingerprint([]interface{}{tt.second}, "stable")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if repeated != second {
+					t.Fatalf("schema fingerprint changed at iteration %d", iteration)
+				}
+			}
+		})
 	}
 }
 
