@@ -38,6 +38,7 @@ const (
 	recoveryMetadataOldName      = "old-state"
 	recoveryMetadataNewName      = "new-state"
 	recoveryMetadataExchangeName = "exchange-state"
+	recoveryProbeDirName         = ".recovery-probe"
 	metadataJournalPrepared      = "PREPARED"
 	metadataJournalCommitted     = "COMMITTED"
 	metadataJournalRolledBack    = "ROLLED_BACK"
@@ -98,6 +99,7 @@ type filesystemOps struct {
 }
 
 var probeRecoveryMetadataPlatform = platformProbeRecoveryMetadata
+var recoveryPublishBoundary = func(string) error { return nil }
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
@@ -512,7 +514,7 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 			return err
 		}
 		first := strings.Split(relative, string(filepath.Separator))[0]
-		if flat && (first == generationsDirName || first == recoveryMetadataDirName || relative == activeGenerationName || relative == recoveryTransactionName) {
+		if flat && (first == generationsDirName || first == recoveryMetadataDirName || first == recoveryProbeDirName || relative == activeGenerationName || relative == recoveryTransactionName) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -1326,12 +1328,21 @@ func (store *generationStore) removeOperation(opDir string) error {
 			return fmt.Errorf("unsafe recovery operation links: %s", entry.Name())
 		}
 	}
+	if err := store.ops.boundary("cleanup-before-payload-remove"); err != nil {
+		return err
+	}
 	for _, name := range []string{recoveryMetadataOldName, recoveryMetadataNewName, "publish-state", recoveryMetadataExchangeName} {
 		if err := os.Remove(filepath.Join(opDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	if err := platformSyncDirectory(opDir); err != nil {
+		return err
+	}
+	if err := store.ops.boundary("cleanup-after-payload-sync"); err != nil {
+		return err
+	}
+	if err := store.ops.boundary("cleanup-before-journal-remove"); err != nil {
 		return err
 	}
 	journalRemoved := false
@@ -1348,10 +1359,19 @@ func (store *generationStore) removeOperation(opDir string) error {
 	if err := platformSyncDirectory(opDir); err != nil {
 		return err
 	}
+	if err := store.ops.boundary("cleanup-after-journal-sync"); err != nil {
+		return err
+	}
+	if err := store.ops.boundary("cleanup-before-op-remove"); err != nil {
+		return err
+	}
 	if err := os.Remove(opDir); err != nil {
 		return err
 	}
-	return platformSyncDirectory(filepath.Dir(opDir))
+	if err := platformSyncDirectory(filepath.Dir(opDir)); err != nil {
+		return err
+	}
+	return store.ops.boundary("cleanup-after-ops-sync")
 }
 
 func (store *generationStore) convergeMetadataJournals() error {
@@ -1500,7 +1520,10 @@ func (store *generationStore) convergePreparedMetadata(opDir, target string, jou
 		return nil
 	}
 	if old.Present && targetState == newState && exchangeState == old {
-		if err := platformExchangeMetadata(target, exchange); err != nil {
+		if err := store.ops.boundary("rollback-exchange-before-rename"); err != nil {
+			return err
+		}
+		if err := platformExchangeMetadata(target, exchange, newState, old); err != nil {
 			return err
 		}
 		return store.verifyMetadataState(target, old)

@@ -94,6 +94,14 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Classified journal-less operation directories as pre-authority cleanup, terminal retirement, or unsafe unknown layouts.
   - Added canonical duplicate-free journal JSON, monotonic dual-candidate selection, fixed exchange-slot PREPARED convergence, and handle-bound old-absent rollback.
   - Made the platform probe name-free, kept cleanup authority until payload and journal deletion were durable, and preserved exact reserved-namespace import behavior.
+- Final probe, exchange, and cleanup audit fixes verified:
+  - Exercised the complete production probe sequence on the target filesystem with two unnamed inodes, linkat, NOREPLACE, EXCHANGE, content verification, cleanup, and parent durability.
+  - Persisted the fixed exchange slot before publication, synchronized both directories before verification, and bound PREPARED rollback to validated inode identities.
+  - Added restartable cleanup fault boundaries covering payload, journal, operation-directory removal, and every associated durability phase.
+- Final production-primitive review fixes verified:
+  - Made the capability probe execute two O_TMPFILE inodes, linkat, NOREPLACE, EXCHANGE, content/identity checks, cleanup, and parent fsync inside an exact recoverable probe namespace.
+  - Synchronized the operation slot immediately after linking and both target/operation parents after publication before validation or COMMITTED.
+  - Bound PREPARED exchange rollback to opened inode identities before and after rename, and covered every cleanup durability boundary with second-start convergence tests.
 
 ## Task 1.3 Review Findings Resolved
 

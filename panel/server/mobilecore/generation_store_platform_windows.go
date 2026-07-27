@@ -37,7 +37,7 @@ func platformOpenRegularFile(path string) (*os.File, error) { return os.Open(pat
 func platformPublishData(string, string, fs.FileMode) error {
 	return errors.New("durable recovery publish is unavailable on Windows")
 }
-func platformExchangeMetadata(string, string) error {
+func platformExchangeMetadata(string, string, metadataState, metadataState) error {
 	return errors.New("durable metadata exchange is unavailable on Windows")
 }
 func platformRemoveMetadata(string, string, metadataState) error {

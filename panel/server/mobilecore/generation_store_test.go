@@ -380,6 +380,124 @@ func TestPreparedExchangeMatrixConvergesToOld(t *testing.T) {
 	}
 }
 
+func TestPreparedExchangeRejectsPathReplacementAfterHandleValidation(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "1785180000000000000-aabbccddeeff0011")
+	if err := os.Mkdir(opDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, activeGenerationName)
+	exchange := filepath.Join(opDir, recoveryMetadataExchangeName)
+	writeTestFile(t, target, "new")
+	writeTestFile(t, exchange, "old")
+	external := filepath.Join(t.TempDir(), "external")
+	writeTestFile(t, external, "outside")
+	store.ops.boundary = func(point string) error {
+		if point == "rollback-exchange-before-rename" {
+			if err := os.Remove(exchange); err != nil {
+				return err
+			}
+			return os.Link(external, exchange)
+		}
+		return nil
+	}
+	j := metadataJournal{Old: stateForData([]byte("old")), New: stateForData([]byte("new"))}
+	if err := store.convergePreparedMetadata(opDir, target, j); err == nil {
+		t.Fatal("expected replacement rejection")
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != "new" {
+		t.Fatalf("current target changed: %q", data)
+	}
+	out, _ := os.ReadFile(external)
+	if string(out) != "outside" {
+		t.Fatalf("external changed: %q", out)
+	}
+}
+
+func TestOperationCleanupFailuresConvergeOnRetry(t *testing.T) {
+	points := []string{"cleanup-before-payload-remove", "cleanup-after-payload-sync", "cleanup-before-journal-remove", "cleanup-after-journal-sync", "cleanup-before-op-remove", "cleanup-after-ops-sync"}
+	for _, point := range points {
+		t.Run(point, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			opID := "1785180000000000000-aabbccddeeff0011"
+			opDir := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, opID)
+			if err := os.Mkdir(opDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, filepath.Join(opDir, recoveryMetadataNewName), "new")
+			target := filepath.Join(root, activeGenerationName)
+			writeTestFile(t, target, "new")
+			j := metadataJournal{Version: 1, OperationID: opID, Target: activeGenerationName, New: stateForData([]byte("new")), State: metadataJournalCommitted, Staging: recoveryMetadataExchangeName}
+			j.Checksum, _ = metadataJournalChecksum(j)
+			raw, _ := json.Marshal(j)
+			writeTestFile(t, filepath.Join(opDir, recoveryMetadataJournalName), string(raw))
+			fired := false
+			store.ops.boundary = func(got string) error {
+				if got == point && !fired {
+					fired = true
+					return errors.New("crash")
+				}
+				return nil
+			}
+			if err := store.convergeMetadataJournals(); err == nil {
+				t.Fatalf("boundary %s not reached", point)
+			}
+			restarted := newGenerationStore(root, defaultFilesystemOps())
+			if err := restarted.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(opDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("op remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestExistingTargetPublishSyncFailuresRollback(t *testing.T) {
+	for _, point := range []string{"publish-after-link-sync", "publish-after-target-sync", "publish-after-operation-sync"} {
+		t.Run(point, func(t *testing.T) {
+			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureTrustedContainer(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, activeGenerationName)
+			writeTestFile(t, target, "old\n")
+			old := recoveryPublishBoundary
+			recoveryPublishBoundary = func(got string) error {
+				if got == point {
+					return errors.New("sync crash")
+				}
+				return nil
+			}
+			defer func() { recoveryPublishBoundary = old }()
+			if err := store.writeAtomic(target, []byte("new\n"), 0o600, "test"); err == nil {
+				t.Fatal("expected sync failure")
+			}
+			data, err := os.ReadFile(target)
+			if err != nil || string(data) != "old\n" {
+				t.Fatalf("rollback failed: %q %v", data, err)
+			}
+			recoveryPublishBoundary = old
+			if err := store.convergeMetadataJournals(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestPrepareFailureNeverChangesActiveGeneration(t *testing.T) {
 	for _, failure := range []string{"copy-before-write", "copy-after-write", "file-fsync", "directory-fsync"} {
 		t.Run(failure, func(t *testing.T) {

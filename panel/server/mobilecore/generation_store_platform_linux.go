@@ -87,9 +87,43 @@ func platformPublishData(source, target string, mode fs.FileMode) error {
 	return platformSyncDirectory(filepath.Dir(target))
 }
 
-func platformExchangeMetadata(target, exchange string) error {
+func platformExchangeMetadata(target, exchange string, targetState, exchangeState metadataState) error {
+	targetFile, err := platformOpenRegularFile(target)
+	if err != nil {
+		return err
+	}
+	defer targetFile.Close()
+	exchangeFile, err := platformOpenRegularFile(exchange)
+	if err != nil {
+		return err
+	}
+	defer exchangeFile.Close()
+	targetIdentity, _ := targetFile.Stat()
+	exchangeIdentity, _ := exchangeFile.Stat()
+	if data, err := io.ReadAll(targetFile); err != nil || stateForData(data) != targetState {
+		return errors.New("target changed before exchange")
+	}
+	if data, err := io.ReadAll(exchangeFile); err != nil || stateForData(data) != exchangeState {
+		return errors.New("exchange changed before rename")
+	}
+	currentTarget, err := os.Lstat(target)
+	if err != nil || !os.SameFile(targetIdentity, currentTarget) {
+		return errors.New("target path identity changed")
+	}
+	currentExchange, err := os.Lstat(exchange)
+	if err != nil || !os.SameFile(exchangeIdentity, currentExchange) {
+		return errors.New("exchange path identity changed")
+	}
 	if err := unix.Renameat2(unix.AT_FDCWD, target, unix.AT_FDCWD, exchange, unix.RENAME_EXCHANGE); err != nil {
 		return err
+	}
+	newTarget, err := os.Lstat(target)
+	if err != nil || !os.SameFile(exchangeIdentity, newTarget) {
+		return errors.New("target identity mismatch after exchange")
+	}
+	newExchange, err := os.Lstat(exchange)
+	if err != nil || !os.SameFile(targetIdentity, newExchange) {
+		return errors.New("exchange identity mismatch after exchange")
 	}
 	if err := platformSyncDirectory(filepath.Dir(target)); err != nil {
 		return err
@@ -98,20 +132,116 @@ func platformExchangeMetadata(target, exchange string) error {
 }
 
 func platformProbeRecoveryMetadata(root string) error {
-	fd, err := unix.Open(root, unix.O_TMPFILE|unix.O_RDWR, 0o600)
+	probeDir := filepath.Join(root, recoveryProbeDirName)
+	if info, err := os.Lstat(probeDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("unsafe recovery probe namespace")
+		}
+		entries, err := os.ReadDir(probeDir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != "first" && entry.Name() != "second" && entry.Name() != "target" {
+				return errors.New("unknown recovery probe object")
+			}
+			info, err := os.Lstat(filepath.Join(probeDir, entry.Name()))
+			if err != nil || !info.Mode().IsRegular() {
+				return errors.New("unsafe recovery probe object")
+			}
+			if err := os.Remove(filepath.Join(probeDir, entry.Name())); err != nil {
+				return err
+			}
+		}
+		if err := platformSyncDirectory(probeDir); err != nil {
+			return err
+		}
+		if err := os.Remove(probeDir); err != nil {
+			return err
+		}
+		if err := platformSyncDirectory(root); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Mkdir(probeDir, 0o700); err != nil {
+		return err
+	}
+	if err := platformSyncDirectory(root); err != nil {
+		return err
+	}
+	newTmp := func(content string) (*os.File, error) {
+		fd, err := unix.Open(root, unix.O_TMPFILE|unix.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		f := os.NewFile(uintptr(fd), root)
+		if _, err = f.Write([]byte(content)); err == nil {
+			err = f.Sync()
+		}
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		return f, nil
+	}
+	firstFile, err := newTmp("first")
 	if err != nil {
-		return fmt.Errorf("recovery metadata O_TMPFILE unavailable: %w", err)
+		return fmt.Errorf("recovery probe first O_TMPFILE: %w", err)
 	}
-	file := os.NewFile(uintptr(fd), root)
-	defer file.Close()
-	missing := filepath.Join(root, ".recovery-probe-missing", "slot")
-	if err := unix.Linkat(int(file.Fd()), "", unix.AT_FDCWD, missing, unix.AT_EMPTY_PATH); !errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("linkat capability probe: %w", err)
+	defer firstFile.Close()
+	secondFile, err := newTmp("second")
+	if err != nil {
+		return fmt.Errorf("recovery probe second O_TMPFILE: %w", err)
 	}
-	if err := unix.Renameat2(unix.AT_FDCWD, missing, unix.AT_FDCWD, missing+"-target", unix.RENAME_NOREPLACE); !errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("renameat2 capability probe: %w", err)
+	defer secondFile.Close()
+	first := filepath.Join(probeDir, "first")
+	second := filepath.Join(probeDir, "second")
+	target := filepath.Join(probeDir, "target")
+	cleanup := func() error {
+		var result error
+		for _, p := range []string{first, second, target} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+				result = errors.Join(result, err)
+			}
+		}
+		result = errors.Join(result, platformSyncDirectory(probeDir))
+		if err := os.Remove(probeDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+		return errors.Join(result, platformSyncDirectory(root))
 	}
-	return platformSyncDirectory(root)
+	if err := linkOpenFileAt(firstFile, first); err != nil {
+		return fmt.Errorf("recovery probe first linkat: %w", err)
+	}
+	if err := linkOpenFileAt(secondFile, second); err != nil {
+		_ = cleanup()
+		return fmt.Errorf("recovery probe second linkat: %w", err)
+	}
+	if err := platformSyncDirectory(probeDir); err != nil {
+		_ = cleanup()
+		return err
+	}
+	if err := unix.Renameat2(unix.AT_FDCWD, first, unix.AT_FDCWD, target, unix.RENAME_NOREPLACE); err != nil {
+		_ = cleanup()
+		return fmt.Errorf("recovery probe noreplace: %w", err)
+	}
+	if err := unix.Renameat2(unix.AT_FDCWD, target, unix.AT_FDCWD, second, unix.RENAME_EXCHANGE); err != nil {
+		_ = cleanup()
+		return fmt.Errorf("recovery probe exchange: %w", err)
+	}
+	if err := platformSyncDirectory(probeDir); err != nil {
+		_ = cleanup()
+		return err
+	}
+	a, _ := os.ReadFile(target)
+	b, _ := os.ReadFile(second)
+	if string(a) != "second" || string(b) != "first" {
+		_ = cleanup()
+		return errors.New("recovery probe content mismatch")
+	}
+	return cleanup()
 }
 
 func platformRemoveMetadata(target, quarantine string, expected metadataState) error {
@@ -206,10 +336,28 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 		if err != nil {
 			return errors.Join(err, restorePinnedMetadata(recoveryFile, target, directory))
 		}
+		if err := platformSyncDirectory(operationDirectory); err != nil {
+			return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+		}
+		if err := recoveryPublishBoundary("publish-after-link-sync"); err != nil {
+			return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+		}
 		defer os.Remove(staging)
 		for attempt := 0; attempt < 4; attempt++ {
 			err = unix.Renameat2(unix.AT_FDCWD, staging, unix.AT_FDCWD, target, unix.RENAME_NOREPLACE)
 			if err == nil {
+				if err := platformSyncDirectory(directory); err != nil {
+					return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+				}
+				if err := recoveryPublishBoundary("publish-after-target-sync"); err != nil {
+					return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+				}
+				if err := platformSyncDirectory(operationDirectory); err != nil {
+					return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+				}
+				if err := recoveryPublishBoundary("publish-after-operation-sync"); err != nil {
+					return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+				}
 				return verifyPublishedFile(publishFile, target)
 			}
 			if !errors.Is(err, unix.EEXIST) {
@@ -221,6 +369,18 @@ func platformPrepareAtomicPublish(file, oldFile *os.File, temporary, target stri
 			}
 			if err != nil {
 				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, directory))
+			}
+			if err := platformSyncDirectory(directory); err != nil {
+				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+			}
+			if err := recoveryPublishBoundary("publish-after-target-sync"); err != nil {
+				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+			}
+			if err := platformSyncDirectory(operationDirectory); err != nil {
+				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
+			}
+			if err := recoveryPublishBoundary("publish-after-operation-sync"); err != nil {
+				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, operationDirectory))
 			}
 			if err := verifyPublishedFile(publishFile, target); err != nil {
 				return errors.Join(err, restorePinnedMetadata(recoveryFile, target, directory))
