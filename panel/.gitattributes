@@ -1,0 +1,10 @@
+# 默认文本文件由 Git 自动识别，避免不同系统 checkout 后换行混乱
+* text=auto
+
+# Windows 发布包里用户会直接双击这些脚本，必须保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Linux/Magisk/容器脚本必须保持 LF，避免 /bin/sh/bash 解析异常
+*.sh text eol=lf

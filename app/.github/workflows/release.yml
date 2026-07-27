@@ -1,0 +1,405 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "手动构建 Android APK 的模式"
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  manual-build-android:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLUTTER_VERSION: 3.41.5
+      BUILD_MODE: ${{ github.event.inputs.build_mode || 'debug' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build embedded mobile core
+        uses: ./.github/actions/setup-mobile-core
+
+      - name: Decode release keystore
+        if: env.BUILD_MODE == 'release'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/daidai-release.jks
+            cat > android/key.properties <<EOF
+          storeFile=daidai-release.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+          else
+            echo "::warning::缺少完整的 Android 签名 Secret，本次 release 构建将无法使用自定义签名。"
+          fi
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Build Android APK
+        run: |
+          VERSION_RAW="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r')"
+          BUILD_NAME="${VERSION_RAW%%+*}"
+
+          if [[ "$BUILD_MODE" == "release" ]]; then
+            flutter build apk --release
+            APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          else
+            flutter build apk --debug
+            APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          fi
+
+          mkdir -p release
+          cp "$APK_PATH" "release/Dumb-Panel-APP-v${BUILD_NAME}-${BUILD_MODE}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ env.BUILD_MODE }}-apk
+          path: release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  prepare:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build_name: ${{ steps.version.outputs.build_name }}
+      build_number: ${{ steps.version.outputs.build_number }}
+      release_notes_file: ${{ steps.release_notes.outputs.file }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve version from pubspec
+        id: version
+        shell: bash
+        run: |
+          RAW_VERSION="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | tr -d '\r')"
+          BUILD_NAME="${RAW_VERSION%%+*}"
+          BUILD_NUMBER="${RAW_VERSION##*+}"
+          TAG_NAME="${GITHUB_REF_NAME#v}"
+
+          if [[ -z "$RAW_VERSION" || -z "$BUILD_NAME" || -z "$BUILD_NUMBER" ]]; then
+            echo "::error::无法从 pubspec.yaml 解析版本号"
+            exit 1
+          fi
+
+          if [[ "$BUILD_NAME" != "$TAG_NAME" ]]; then
+            echo "::error::Tag 版本 ${TAG_NAME} 与 pubspec.yaml 中的 ${BUILD_NAME} 不一致"
+            exit 1
+          fi
+
+          echo "build_name=$BUILD_NAME" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release notes
+        id: release_notes
+        shell: bash
+        run: |
+          candidates=(
+            "docs/release-notes/${GITHUB_REF_NAME}.md"
+            "docs/release-notes/${{ steps.version.outputs.build_name }}.md"
+          )
+
+          for candidate in "${candidates[@]}"; do
+            if [[ -f "$candidate" ]]; then
+              echo "file=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "::error::缺少更新日志文件，请先创建 docs/release-notes/${GITHUB_REF_NAME}.md"
+          exit 1
+
+  build-android:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: prepare
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLUTTER_VERSION: 3.41.5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build embedded mobile core
+        uses: ./.github/actions/setup-mobile-core
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/daidai-release.jks
+            cat > android/key.properties <<EOF
+          storeFile=daidai-release.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+          else
+            echo "Android release signing secrets are incomplete, build will proceed without a custom release keystore."
+          fi
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Build Android APK
+        run: |
+          flutter build apk --release \
+            --build-name "${{ needs.prepare.outputs.build_name }}" \
+            --build-number "${{ needs.prepare.outputs.build_number }}"
+
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "release/Dumb-Panel-APP-v${{ needs.prepare.outputs.build_name }}-android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-package
+          path: release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  build-ios:
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    needs: prepare
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLUTTER_VERSION: 3.41.5
+      BUILD_NAME: ${{ needs.prepare.outputs.build_name }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+      EXPORT_METHOD: development
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve signing mode
+        id: signing
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          if [[ -n "$IOS_CERTIFICATE_P12_BASE64" && -n "$IOS_CERTIFICATE_PASSWORD" && -n "$IOS_PROVISIONING_PROFILE_BASE64" && -n "$IOS_TEAM_ID" ]]; then
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          ruby --version
+          pod --version
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Ensure iOS scaffolding exists
+        run: |
+          if [[ ! -f ios/Podfile ]]; then
+            flutter create --platforms=ios .
+          fi
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Import signing assets
+        if: steps.signing.outputs.mode == 'signed'
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/ios_certificate.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          echo -n "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          mkdir -p "$PROFILE_DIR"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" "$PROFILE_DIR/$PROFILE_UUID.mobileprovision"
+
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          team_id = os.environ["IOS_TEAM_ID"]
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          text = project.read_text(encoding="utf-8")
+          if f"DEVELOPMENT_TEAM = {team_id};" not in text:
+              text = text.replace(
+                  "CODE_SIGN_STYLE = Automatic;",
+                  f"CODE_SIGN_STYLE = Automatic;\n\t\t\t\tDEVELOPMENT_TEAM = {team_id};",
+              )
+              project.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Build unsigned IPA
+        if: steps.signing.outputs.mode != 'signed'
+        run: |
+          flutter build ios --release --config-only --no-codesign
+
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination generic/platform=iOS \
+            -archivePath "$PWD/build/ios/archive/Runner.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            archive
+
+          APP_PATH="$PWD/build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          mkdir -p build/ios/ipa/Payload
+          cp -R "$APP_PATH" build/ios/ipa/Payload/Runner.app
+          (
+            cd build/ios/ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload "Dumb-Panel-APP-v${BUILD_NAME}-unsigned.ipa"
+          )
+          rm -rf build/ios/ipa/Payload
+
+      - name: Build signed IPA
+        if: steps.signing.outputs.mode == 'signed'
+        run: |
+          flutter build ipa --release \
+            --export-method "$EXPORT_METHOD" \
+            --build-name "$BUILD_NAME" \
+            --build-number "$BUILD_NUMBER"
+
+          IPA_PATH="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' | head -n 1)"
+          if [[ -z "$IPA_PATH" ]]; then
+            echo "::error::未找到已导出的 IPA"
+            exit 1
+          fi
+          mv "$IPA_PATH" "build/ios/ipa/Dumb-Panel-APP-v${BUILD_NAME}.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-package
+          path: build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    needs:
+      - prepare
+      - build-android
+      - build-ios
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-package
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-package
+          path: release
+
+      - name: Create Or Update Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          NOTES_FILE="${{ needs.prepare.outputs.release_notes_file }}"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file "$NOTES_FILE"
+            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file "$NOTES_FILE"
+          fi

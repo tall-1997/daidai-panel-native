@@ -1,0 +1,32 @@
+#!/sbin/sh
+#################
+# Magisk Module Installer Stub
+# 由 Magisk 官方提供的安装引导，会自动加载模块内 customize.sh。
+#################
+
+umask 022
+
+# 标记当前是模块 zip 安装流程
+OUTFD=$2
+ZIPFILE=$3
+
+mount /data 2>/dev/null
+
+# 定位 Magisk busybox
+for MAGISKBIN in /data/adb/magisk /sbin/.magisk/busybox /data/adb/ksu/bin /data/adb/ap/bin; do
+  if [ -f "$MAGISKBIN/busybox" ]; then
+    BBDIR=$MAGISKBIN
+    break
+  fi
+done
+
+if [ -z "$BBDIR" ]; then
+  echo "! 找不到 Magisk/KernelSU/APatch 的 busybox，请确认 root 管理器已正确安装"
+  exit 1
+fi
+
+# 交给官方 util_functions 处理
+. /data/adb/magisk/util_functions.sh 2>/dev/null || . $BBDIR/util_functions.sh 2>/dev/null
+
+install_module
+exit 0

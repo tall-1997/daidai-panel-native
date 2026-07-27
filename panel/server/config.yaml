@@ -1,0 +1,21 @@
+server:
+  port: 5701
+  mode: release
+
+database:
+  path: ./data/daidai.db
+
+jwt:
+  secret: ""
+  access_token_expire: 480h
+  refresh_token_expire: 1440h
+
+data:
+  dir: ./data
+  scripts_dir: ./data/scripts
+  log_dir: ./data/logs
+
+cors:
+  origins:
+    - http://localhost:5173
+    - http://localhost:5700

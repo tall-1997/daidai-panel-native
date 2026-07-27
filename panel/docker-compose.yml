@@ -1,0 +1,41 @@
+name: daidai-panel
+
+services:
+  daidai-panel:
+    image: linzixuanzz/daidai-panel:latest
+    container_name: daidai-panel
+    restart: unless-stopped
+    ports:
+      - "5700:5700" # 宿主机端口:容器内 Nginx 端口
+    volumes:
+      - ./Dumb-Panel:/app/Dumb-Panel
+    environment:
+      - TZ=Asia/Shanghai
+      - CONTAINER_NAME=daidai-panel
+      - IMAGE_NAME=linzixuanzz/daidai-panel:latest
+      - PANEL_UPDATE_MANAGER=watchtower
+      # === 飞牛 OS / 群晖 / 绿联等 NAS 可选环境变量 ===========================
+      # 让容器以宿主机用户身份运行，使 SMB/NFS 共享的目录权限一致。
+      # 不设则默认 root（与历史行为兼容）。运行 `id` 查看你的 UID/GID。
+      # - PUID=1000
+      # - PGID=1000
+      #
+      # 公网域名/反代域名访问面板时需要把 origin 加入 CORS 白名单。
+      # 私有/局域网 IP 已自动放行，无需配置。多个用逗号分隔。
+      # - CORS_ORIGINS=https://panel.your-domain.com,https://nas.your-domain.com
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: nickfedor/watchtower:latest
+    container_name: daidai-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    command:
+      - --label-enable
+      - --cleanup
+      - --interval
+      - "3600"

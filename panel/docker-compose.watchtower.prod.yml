@@ -1,0 +1,60 @@
+name: daidai-panel-prod
+
+services:
+  daidai-panel:
+    image: ${DAIDAI_PANEL_IMAGE:-linzixuanzz/daidai-panel:latest}
+    container_name: ${DAIDAI_PANEL_CONTAINER_NAME:-daidai-panel}
+    restart: unless-stopped
+    ports:
+      - "${PANEL_HTTP_PORT:-5700}:5700"
+    volumes:
+      - ${PANEL_DATA_DIR:-./Dumb-Panel}:/app/Dumb-Panel
+    environment:
+      TZ: ${PANEL_TZ:-Asia/Shanghai}
+      CONTAINER_NAME: ${DAIDAI_PANEL_CONTAINER_NAME:-daidai-panel}
+      IMAGE_NAME: ${DAIDAI_PANEL_IMAGE:-linzixuanzz/daidai-panel:latest}
+      PANEL_UPDATE_MANAGER: watchtower
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-}
+      WATCHTOWER_HTTP_API_URL: ${WATCHTOWER_HTTP_API_URL:-http://daidai-watchtower:8080}
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5700/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  watchtower:
+    image: nickfedor/watchtower:latest
+    container_name: ${WATCHTOWER_CONTAINER_NAME:-daidai-watchtower}
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    environment:
+      TZ: ${WATCHTOWER_TZ:-Asia/Shanghai}
+      PANEL_UPDATE_MANAGER: watchtower
+      WATCHTOWER_NOTIFICATIONS: shoutrrr
+      WATCHTOWER_NOTIFICATION_URL: ${WATCHTOWER_NOTIFICATION_URL:-logger://watchtower}
+      WATCHTOWER_NOTIFICATIONS_LEVEL: ${WATCHTOWER_NOTIFICATIONS_LEVEL:-info}
+      WATCHTOWER_NOTIFICATION_REPORT: "true"
+      WATCHTOWER_NOTIFICATION_TITLE_TAG: ${WATCHTOWER_NOTIFICATION_TITLE_TAG:-[Daidai Panel]}
+      WATCHTOWER_NOTIFICATIONS_HOSTNAME: ${WATCHTOWER_NOTIFICATIONS_HOSTNAME:-}
+      WATCHTOWER_NOTIFICATION_LOG_STDOUT: "true"
+      WATCHTOWER_LABEL_TAKE_PRECEDENCE: "true"
+      WATCHTOWER_HTTP_API_PERIODIC_POLLS: "true"
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-}
+      WATCHTOWER_HTTP_API_URL: ${WATCHTOWER_HTTP_API_URL:-http://daidai-watchtower:8080}
+    command:
+      - --label-enable
+      - --schedule
+      - ${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+      - --rolling-restart
+      - --cleanup
+      - --stop-timeout
+      - ${WATCHTOWER_TIMEOUT:-30s}
+      - --http-api-update
+      - --no-startup-message

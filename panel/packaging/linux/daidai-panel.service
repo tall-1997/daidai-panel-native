@@ -1,0 +1,69 @@
+[Unit]
+Description=Daidai Panel
+Documentation=https://github.com/linzixuanzz/daidai-panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# === 部署路径 ============================================================
+# 将下列两项改成实际路径。WorkingDirectory 通常是面板二进制所在目录。
+WorkingDirectory=/opt/daidai-panel
+ExecStart=/opt/daidai-panel/daidai-server
+
+# === 运行用户（推荐） ====================================================
+# 建议先创建一个非 root 系统用户运行面板：
+#   sudo useradd -r -s /sbin/nologin -d /opt/daidai-panel daidai
+#   sudo chown -R daidai:daidai /opt/daidai-panel
+# 然后取消注释下面两行。
+# User=daidai
+# Group=daidai
+
+# === 环境变量 ============================================================
+# 时区（默认按宿主机；NAS/服务器多数希望显式中国时区）
+Environment=TZ=Asia/Shanghai
+
+# pip 冲突变量清理（双保险）
+# 二进制部署在飞牛 OS / 群晖等环境时，systemd 可能继承全局 /etc/environment
+# 中预设的 PIP_HOME、PIP_PREFIX 等。这些变量会与面板内部 pip 调用的安装目标
+# 冲突，出现 "Cannot set --home and --prefix together" 报错。
+# 代码侧已有 SanitizePipEnv 兜底，这里再清一遍避免 systemd-cat / journalctl 看到误导信息。
+Environment=PIP_PREFIX=
+Environment=PIP_HOME=
+Environment=PIP_TARGET=
+Environment=PIP_ROOT=
+Environment=PIP_USER=
+Environment=PIP_INSTALL_OPTION=
+Environment=PYTHONUSERBASE=
+
+# 反向代理 trusted proxy CIDR，多个用逗号分隔（如 127.0.0.1/32,10.0.0.0/8）。
+# 留空表示默认只信任 loopback；NAS 反代场景按需配置。
+# Environment=DAIDAI_TRUSTED_PROXY_CIDRS=127.0.0.1/32,192.168.0.0/16
+
+# 端口（可选，默认 5700）
+# Environment=SERVER_PORT=5700
+
+# === 进程管理 ============================================================
+Restart=on-failure
+RestartSec=3s
+# 关闭超时：留足时间让 SSE 长连接、备份任务自然结束
+TimeoutStopSec=30s
+
+# 日志：journalctl -u daidai-panel
+StandardOutput=journal
+StandardError=journal
+
+# === 安全收紧（可选） ====================================================
+# 限制可写目录，仅暴露面板自己的数据目录。如果你启用了 User=daidai，
+# 路径会按该用户权限。
+# ReadWritePaths=/opt/daidai-panel
+# ProtectSystem=full
+# NoNewPrivileges=true
+
+# === 资源限制（可选） ====================================================
+# 备份/订阅拉取在大仓库下文件描述符可能用得多
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

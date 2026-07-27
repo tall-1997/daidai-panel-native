@@ -1,0 +1,68 @@
+name: daidai_app
+description: "呆呆面板 Flutter 客户端 - 轻量级定时任务管理"
+publish_to: 'none'
+version: 0.0.1+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # 状态管理
+  flutter_riverpod: ^2.6.1
+
+  # 网络请求
+  dio: ^5.7.0
+  http: ^1.2.2
+
+  # 路由
+  go_router: ^14.8.1
+
+  # 安全存储
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.3.5
+  local_auth: ^2.3.0
+  crypto: ^3.0.6
+
+  # 图表
+  fl_chart: ^0.70.2
+
+  # 工具
+  intl: ^0.19.0
+  logger: ^2.5.0
+  device_info_plus: ^11.2.2
+  file_picker: ^8.1.7
+  package_info_plus: ^8.3.1
+  path_provider: ^2.1.5
+  webview_flutter: ^4.10.0
+
+  # 本地通知
+  flutter_local_notifications: ^18.0.1
+
+  # 液态玻璃 UI
+  liquid_glass_easy: ^3.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon.png"
+  adaptive_icon_background: "#6CB4EE"
+  adaptive_icon_foreground: "assets/icon.png"
+  web:
+    generate: true
+    image_path: "assets/icon.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon.png

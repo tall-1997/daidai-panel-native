@@ -1,0 +1,6 @@
+/* Env page optimization hotfix; source-level equivalent of deployment patch. */
+body {
+  transform: scale(0.9999);
+  transform-origin: left top;
+  width: 100.01%;
+}

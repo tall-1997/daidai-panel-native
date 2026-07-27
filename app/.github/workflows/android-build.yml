@@ -1,0 +1,95 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "构建模式"
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLUTTER_VERSION: 3.41.5
+      BUILD_MODE: ${{ github.event.inputs.build_mode || 'debug' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build embedded mobile core
+        uses: ./.github/actions/setup-mobile-core
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Decode Android release keystore
+        if: env.BUILD_MODE == 'release'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/daidai-release.jks
+            cat > android/key.properties <<EOF
+          storeFile=daidai-release.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+          else
+            echo "::warning::缺少完整的 Android 签名 Secret，本次 release 构建将无法使用自定义签名。"
+          fi
+
+      - name: Build Android APK
+        run: |
+          if [[ "$BUILD_MODE" == "release" ]]; then
+            flutter build apk --release
+            APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+            TARGET_NAME="Dumb-Panel-APP-${BUILD_MODE}.apk"
+          else
+            flutter build apk --debug
+            APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+            TARGET_NAME="Dumb-Panel-APP-${BUILD_MODE}.apk"
+          fi
+
+          mkdir -p release
+          cp "$APK_PATH" "release/$TARGET_NAME"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ env.BUILD_MODE }}-apk
+          path: release/*.apk
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,126 @@
+name: Android Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v0.0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.41.5
+  GO_VERSION: 1.25.0
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Test embedded Go core
+        working-directory: panel/server
+        run: go test -race ./mobilecore ./database
+
+      - name: Build embedded Core AAR
+        working-directory: app
+        env:
+          PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
+        run: bash scripts/build-mobile-core-aar.sh
+
+      - name: Resolve Flutter packages
+        working-directory: app
+        run: flutter pub get
+
+      - name: Run Flutter tests
+        working-directory: app
+        run: flutter test
+
+      - name: Analyze Flutter source
+        working-directory: app
+        run: flutter analyze
+
+      - name: Run Kotlin tests
+        working-directory: app
+        run: gradle -p android testDebugUnitTest
+
+      - name: Build installable release APK
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Verify APK
+        run: |
+          test -s app/build/app/outputs/flutter-apk/app-release.apk
+          cp app/build/app/outputs/flutter-apk/app-release.apk daidai-panel-native-0.0.1-arm64.apk
+          sha256sum daidai-panel-native-0.0.1-arm64.apk > daidai-panel-native-0.0.1-arm64.apk.sha256
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daidai-panel-native-0.0.1-arm64
+          path: |
+            daidai-panel-native-0.0.1-arm64.apk
+            daidai-panel-native-0.0.1-arm64.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: github.ref == 'refs/tags/v0.0.1'
+    needs: verify-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: daidai-panel-native-0.0.1-arm64
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          # 呆呆面板本机版 0.0.1
+
+          - Android ARM64 技术预览版。
+          - App 内嵌 Go 面板 Core，使用动态回环端口。
+          - 支持本地管理员初始化、认证和任务管理 API。
+          - 使用安装级 token、严格 Host 与 Origin 校验。
+          - 使用 Android `:panel` 专用进程隔离 Core 生命周期。
+
+          当前版本为技术预览版。仓库未配置正式签名 Secret 时，APK 使用开发签名构建。
+          EOF
+          gh release create v0.0.1 \
+            daidai-panel-native-0.0.1-arm64.apk \
+            daidai-panel-native-0.0.1-arm64.apk.sha256 \
+            --title "呆呆面板本机版 0.0.1" \
+            --notes-file release-notes.md

@@ -1,0 +1,90 @@
+name: Mobile Core Source Check
+
+on:
+  push:
+    branches:
+      - 260727-feat-local-core-m1
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      panel_ref:
+        description: daidai-panel-native commit or ref (default is reviewed commit)
+        required: true
+        default: c1f5d227bbd6c10b0ddab98156bb46a3bae1dd43
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.41.5
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v5
+
+      - name: Record selected panel source ref
+        env:
+          PANEL_REF: ${{ inputs.panel_ref || 'c1f5d227bbd6c10b0ddab98156bb46a3bae1dd43' }}
+        run: printf 'panel_ref=%s\n' "$PANEL_REF" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+
+      - name: Build embedded mobile core
+        uses: ./.github/actions/setup-mobile-core
+        with:
+          panel-ref: ${{ inputs.panel_ref || 'c1f5d227bbd6c10b0ddab98156bb46a3bae1dd43' }}
+
+      - name: Verify generated Java API
+        run: |
+          mkdir -p /tmp/mobilecore-aar
+          unzip -q android/app/libs/mobilecore.aar classes.jar -d /tmp/mobilecore-aar
+          jar tf /tmp/mobilecore-aar/classes.jar | grep -Fx 'mobilecore/mobilecore/Mobilecore.class'
+          javap -classpath /tmp/mobilecore-aar/classes.jar mobilecore.mobilecore.Mobilecore | tee /tmp/mobilecore-api.txt
+          grep -F 'public static java.lang.String startCore(java.lang.String);' /tmp/mobilecore-api.txt
+          grep -F 'public static java.lang.String stopCore(long);' /tmp/mobilecore-api.txt
+          grep -F 'public static java.lang.String coreStatus();' /tmp/mobilecore-api.txt
+          grep -F 'public static java.lang.String coreEndpoint();' /tmp/mobilecore-api.txt
+
+      - name: Resolve Flutter packages
+        run: flutter pub get
+
+      - name: Compile Android app with embedded core
+        run: flutter build apk --debug
+
+      - name: Run Dart tests
+        run: flutter test
+
+      - name: Analyze Dart source
+        run: flutter analyze
+
+      - name: Run Kotlin tests
+        run: gradle -p android testDebugUnitTest
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-core-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

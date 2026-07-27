@@ -1,0 +1,179 @@
+name: iOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_mode:
+        description: "unsigned 只做编译验证；signed 导出可安装 IPA"
+        required: true
+        default: unsigned
+        type: choice
+        options:
+          - unsigned
+          - signed
+      export_method:
+        description: "signed 模式下的导出方式"
+        required: true
+        default: development
+        type: choice
+        options:
+          - development
+          - ad-hoc
+          - enterprise
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLUTTER_VERSION: 3.41.5
+      BUILD_MODE: ${{ github.event.inputs.package_mode || 'unsigned' }}
+      EXPORT_METHOD: ${{ github.event.inputs.export_method || 'development' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          ruby --version
+          pod --version
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Ensure iOS scaffolding exists
+        run: |
+          if [[ ! -f ios/Podfile ]]; then
+            echo "ios/Podfile 不存在，自动补全 iOS 平台脚手架"
+            flutter create --platforms=ios .
+          fi
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Import signing assets
+        if: env.BUILD_MODE == 'signed'
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          for required_var in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [[ -z "${!required_var}" ]]; then
+              echo "::error::缺少 GitHub Secret: ${required_var}"
+              exit 1
+            fi
+          done
+
+          CERT_PATH="$RUNNER_TEMP/ios_certificate.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          echo -n "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          mkdir -p "$PROFILE_DIR"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" "$PROFILE_DIR/$PROFILE_UUID.mobileprovision"
+
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          team_id = os.environ["IOS_TEAM_ID"]
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          text = project.read_text(encoding="utf-8")
+          if f"DEVELOPMENT_TEAM = {team_id};" not in text:
+              text = text.replace(
+                  "CODE_SIGN_STYLE = Automatic;",
+                  f"CODE_SIGN_STYLE = Automatic;\n\t\t\t\tDEVELOPMENT_TEAM = {team_id};",
+              )
+              project.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Build unsigned iOS app
+        if: env.BUILD_MODE == 'unsigned'
+        run: |
+          flutter build ios --release --config-only --no-codesign
+
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination generic/platform=iOS \
+            -archivePath "$PWD/build/ios/archive/Runner.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            archive
+
+          APP_PATH="$PWD/build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          mkdir -p build/ios/ipa/Payload
+          cp -R "$APP_PATH" build/ios/ipa/Payload/Runner.app
+          (
+            cd build/ios/ipa
+            ditto -c -k --sequesterRsrc --keepParent Payload Runner-unsigned.ipa
+          )
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            build/ios/iphoneos/Runner.app.zip
+
+      - name: Build signed IPA
+        if: env.BUILD_MODE == 'signed'
+        run: |
+          flutter build ipa --release --export-method "$EXPORT_METHOD"
+
+      - name: Upload unsigned artifact
+        if: env.BUILD_MODE == 'unsigned'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-runner-app
+          path: |
+            build/ios/ipa/Runner-unsigned.ipa
+            build/ios/iphoneos/Runner.app.zip
+            build/ios/iphoneos/Runner.app.dSYM
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload signed IPA artifact
+        if: env.BUILD_MODE == 'signed'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-signed-ipa
+          path: |
+            build/ios/ipa/*.ipa
+            build/ios/archive/*.xcarchive
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,310 @@
+name: Build Android & iOS
+
+on:
+  push:
+    branches: [ main, master, flutter-app ]
+    tags: [ 'v*-flutter' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  quality:
+    name: Analyze and Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
+
+  build-android:
+    name: Build Android
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build embedded mobile core
+        uses: ./.github/actions/setup-mobile-core
+      
+      - name: Install dependencies
+        run: flutter pub get
+      
+      - name: Build APK
+        run: flutter build apk --release
+      
+      - name: Get version
+        id: version
+        run: |
+          RAW_VERSION=$(grep '^version:' pubspec.yaml | head -1 | awk '{print $2}')
+          VERSION="${RAW_VERSION%%+*}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BUILD_NUMBER=${RAW_VERSION##*+}" >> $GITHUB_OUTPUT
+      
+      - name: Rename APK
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk daidai-flutter-v${{ steps.version.outputs.VERSION }}-android.apk
+
+      - name: Generate Android delta update assets
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          BUILD_NUMBER: ${{ steps.version.outputs.BUILD_NUMBER }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          DEBIAN_FRONTEND=noninteractive sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y bsdiff
+
+          APK_NAME="daidai-flutter-v${VERSION}-android.apk"
+          APK_PATH="$PWD/${APK_NAME}"
+          FULL_SIZE=$(stat -c%s "$APK_PATH")
+          FULL_MD5=$(md5sum "$APK_PATH" | cut -d ' ' -f1)
+          FULL_SHA256=$(sha256sum "$APK_PATH" | cut -d ' ' -f1)
+          RELEASE_BASE="https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
+          PATCH_JSON='[]'
+
+          PREV_TAG=$(gh release list --repo "$REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 10 --json tagName --jq ".[].tagName" | grep -v "^v${VERSION}$" | head -1 || true)
+          if [[ -n "$PREV_TAG" ]]; then
+            mkdir -p previous
+            gh release download "$PREV_TAG" --repo "$REPOSITORY" --pattern "*-android.apk" --dir previous
+            OLD_APK=$(find previous -maxdepth 1 -type f -name "*-android.apk" | head -1 || true)
+            if [[ -n "$OLD_APK" ]]; then
+              FROM_VERSION="${PREV_TAG#v}"
+              PATCH_NAME="daidai-flutter-v${FROM_VERSION}-to-v${VERSION}.patch"
+              bsdiff "$OLD_APK" "$APK_PATH" "$PATCH_NAME"
+              bspatch "$OLD_APK" reconstructed.apk "$PATCH_NAME"
+              cmp --silent "$APK_PATH" reconstructed.apk
+
+              PATCH_SIZE=$(stat -c%s "$PATCH_NAME")
+              if (( PATCH_SIZE < FULL_SIZE )); then
+                OLD_MD5=$(md5sum "$OLD_APK" | cut -d ' ' -f1)
+                OLD_SHA256=$(sha256sum "$OLD_APK" | cut -d ' ' -f1)
+                PATCH_MD5=$(md5sum "$PATCH_NAME" | cut -d ' ' -f1)
+                PATCH_SHA256=$(sha256sum "$PATCH_NAME" | cut -d ' ' -f1)
+                PATCH_JSON=$(jq -n \
+                  --arg fromVersion "$FROM_VERSION" \
+                  --arg oldApkMd5 "$OLD_MD5" \
+                  --arg oldApkSha256 "$OLD_SHA256" \
+                  --arg url "${RELEASE_BASE}/${PATCH_NAME}" \
+                  --arg name "$PATCH_NAME" \
+                  --argjson size "$PATCH_SIZE" \
+                  --arg md5 "$PATCH_MD5" \
+                  --arg sha256 "$PATCH_SHA256" \
+                  '[{fromVersion:$fromVersion,fromVersionCode:0,oldApkMd5:$oldApkMd5,oldApkSha256:$oldApkSha256,url:$url,name:$name,size:$size,md5:$md5,sha256:$sha256}]')
+              else
+                mv "$PATCH_NAME" /tmp/oversized-android-update.patch
+              fi
+            fi
+          fi
+
+          jq -n \
+            --arg packageName "com.daidai.daidai_app" \
+            --arg version "$VERSION" \
+            --argjson versionCode "$BUILD_NUMBER" \
+            --arg fullUrl "${RELEASE_BASE}/${APK_NAME}" \
+            --arg fullName "$APK_NAME" \
+            --argjson fullSize "$FULL_SIZE" \
+            --arg fullMd5 "$FULL_MD5" \
+            --arg fullSha256 "$FULL_SHA256" \
+            --argjson patches "$PATCH_JSON" \
+            '{schemaVersion:1,packageName:$packageName,version:$version,versionCode:$versionCode,releaseNotes:"",full:{url:$fullUrl,name:$fullName,size:$fullSize,md5:$fullMd5,sha256:$fullSha256},patches:$patches}' \
+            > android-update.json
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            daidai-flutter-v${{ steps.version.outputs.VERSION }}-android.apk
+            android-update.json
+            *.patch
+          if-no-files-found: error
+
+  build-ios:
+    name: Build iOS
+    needs: quality
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      
+      - name: Install dependencies
+        run: flutter pub get
+      
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+        env:
+          DEVELOPMENT_TEAM: ""
+          CODE_SIGN_IDENTITY: ""
+          CODE_SIGNING_REQUIRED: "NO"
+          CODE_SIGNING_ALLOWED: "NO"
+      
+      - name: Get version
+        id: version
+        run: |
+          RAW_VERSION=$(grep '^version:' pubspec.yaml | head -1 | awk '{print $2}')
+          VERSION="${RAW_VERSION%%+*}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Create IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r daidai-flutter-v${{ steps.version.outputs.VERSION }}-ios.ipa Payload/
+      
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: daidai-flutter-v${{ steps.version.outputs.VERSION }}-ios.ipa
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: release-files
+      
+      - name: Download iOS IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa
+          path: release-files
+      
+      - name: Get version
+        id: version
+        run: |
+          RAW_VERSION=$(grep '^version:' pubspec.yaml | head -1 | awk '{print $2}')
+          VERSION="${RAW_VERSION%%+*}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          # 确定 release tag：如果是 tag push 就用 ref_name，否则用版本号
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "RELEASE_TAG=v${VERSION}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          RELEASE_TAG="${{ steps.version.outputs.RELEASE_TAG }}"
+          # 检查是否有预定义的 release notes 文件
+          if [ -f "docs/release-notes/${RELEASE_TAG}.md" ]; then
+            echo "file=docs/release-notes/${RELEASE_TAG}.md" >> "$GITHUB_OUTPUT"
+          else
+            # 自动生成 release notes
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            
+            if [ -n "$PREV_TAG" ]; then
+              CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+            else
+              CHANGES=$(git log --pretty=format:"- %s" --no-merges -10)
+            fi
+            
+            cat > /tmp/release_notes.md << EOF
+          ## ${{ steps.version.outputs.RELEASE_TAG }} 中文更新说明
+          
+          ### 本版变更
+          $CHANGES
+          
+          ### 下载说明
+          - Android：下载本 Release 中的 APK 文件安装。
+          - iOS：下载本 Release 中的 IPA 文件，通过 AltStore、Sideloadly 等方式安装。
+
+          ### 开源引用
+          - 原始客户端：[Dumb-Panel-APP](https://github.com/linzixuanzz/Dumb-Panel-APP)
+          - 后端服务：[daidai-panel](https://github.com/linzixuanzz/daidai-panel)
+          - 当前依赖及许可证：[第三方开源声明](https://github.com/${{ github.repository }}/blob/main/docs/THIRD_PARTY_NOTICES.md)
+          EOF
+            echo "file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+          fi
+      
+      - name: List release files
+        run: |
+          ls -la release-files/
+      
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES_FILE="${{ steps.release_notes.outputs.file }}"
+          RELEASE_TAG="${{ steps.version.outputs.RELEASE_TAG }}"
+          
+          # 检查 release 是否已存在
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # 已存在的 Release 保留人工维护的说明，只更新构建产物。
+            gh release upload "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              release-files/* \
+              --clobber
+          else
+            # 创建新的 release
+            gh release create "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "v${{ steps.version.outputs.VERSION }}" \
+              --notes-file "$NOTES_FILE" \
+              release-files/*
+          fi

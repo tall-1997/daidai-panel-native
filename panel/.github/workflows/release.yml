@@ -1,0 +1,458 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Build Frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Resolve release notes
+        id: release_notes
+        shell: bash
+        run: |
+          RELEASE_TITLE="${GITHUB_REF_NAME}"
+          candidates=(
+            "docs/release-notes/${GITHUB_REF_NAME}.md"
+            "docs/release-notes/${{ steps.version.outputs.VERSION }}.md"
+          )
+
+          for candidate in "${candidates[@]}"; do
+            if [[ -f "$candidate" ]]; then
+              summary="$(grep -oPm1 '(?<=<!--\s*release-title:\s).*?(?=\s*-->)' "$candidate" || true)"
+              if [[ -n "$summary" ]]; then
+                RELEASE_TITLE="${GITHUB_REF_NAME}：${summary}"
+              fi
+              echo "file=$candidate" >> "$GITHUB_OUTPUT"
+              echo "title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "::error::缺少更新日志文件，请先创建 docs/release-notes/${GITHUB_REF_NAME}.md"
+          exit 1
+
+      - name: Build Linux amd64
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o daidai-linux-amd64 .
+
+      - name: Build Linux arm64
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o daidai-linux-arm64 .
+
+      - name: Build Linux 386
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: '386'
+        run: go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o daidai-linux-386 .
+
+      - name: Build Linux armv7
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: arm
+          GOARM: '7'
+        run: go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o daidai-linux-armv7 .
+
+      - name: Build Windows amd64
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o daidai-server.exe .
+          go build -ldflags="-s -w -X daidai-panel/handler.Version=${{ steps.version.outputs.VERSION }}" -o ddp.exe ./cmd/ddp
+
+      - name: Package
+        run: |
+          mkdir -p release
+          cp server/config.yaml release/ 2>/dev/null || true
+          cp -r web/dist release/web
+
+          cp server/daidai-linux-amd64 release/
+          cd release && tar -czvf ../daidai-linux-amd64.tar.gz daidai-linux-amd64 config.yaml web/
+          rm daidai-linux-amd64
+
+          cp ../server/daidai-linux-arm64 .
+          tar -czvf ../daidai-linux-arm64.tar.gz daidai-linux-arm64 config.yaml web/
+          rm daidai-linux-arm64
+
+          cp ../server/daidai-linux-386 .
+          tar -czvf ../daidai-linux-386.tar.gz daidai-linux-386 config.yaml web/
+          rm daidai-linux-386
+
+          cp ../server/daidai-linux-armv7 .
+          tar -czvf ../daidai-linux-armv7.tar.gz daidai-linux-armv7 config.yaml web/
+          cd ..
+
+          # Windows 单机版：二进制 + 独立 config.yaml + start.bat + README，
+          # 同梱前端 dist，整个解压即用；Go 后端通过 server.web_dir 直接托管前端。
+          win_staging="release-windows/daidai-panel-windows-amd64"
+          mkdir -p "$win_staging/web"
+          cp server/daidai-server.exe "$win_staging/"
+          cp server/ddp.exe "$win_staging/"
+          cp -r web/dist/. "$win_staging/web/"
+          cp packaging/windows/config.yaml "$win_staging/config.yaml"
+          cp packaging/windows/start.bat "$win_staging/start.bat"
+          # GitHub Actions 在 Linux 上打 Windows zip，这里双保险把批处理脚本转成 CRLF。
+          python3 - "$win_staging/start.bat" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+          path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+          PY
+          cp packaging/windows/README.txt "$win_staging/README.txt"
+          (cd release-windows && zip -rq ../daidai-windows-amd64.zip daidai-panel-windows-amd64)
+
+      - name: Create Or Update Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          NOTES_FILE="${{ steps.release_notes.outputs.file }}"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${{ steps.release_notes.outputs.title }}" \
+              --notes-file "$NOTES_FILE"
+            gh release upload "${GITHUB_REF_NAME}" \
+              daidai-linux-amd64.tar.gz \
+              daidai-linux-arm64.tar.gz \
+              daidai-linux-386.tar.gz \
+              daidai-linux-armv7.tar.gz \
+              daidai-windows-amd64.zip \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              daidai-linux-amd64.tar.gz \
+              daidai-linux-arm64.tar.gz \
+              daidai-linux-386.tar.gz \
+              daidai-linux-armv7.tar.gz \
+              daidai-windows-amd64.zip \
+              --title "${{ steps.release_notes.outputs.title }}" \
+              --notes-file "$NOTES_FILE"
+          fi
+
+  magisk-module:
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build Frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compute versionCode
+        id: vercode
+        shell: bash
+        run: |
+          # 把 "2.0.6" -> "20006" 这样的 versionCode，方便 Magisk 比较
+          V="${{ steps.version.outputs.VERSION }}"
+          IFS='.' read -r MAJ MIN PATCH <<< "$V"
+          MAJ=${MAJ:-0}; MIN=${MIN:-0}; PATCH=${PATCH:-0}
+          CODE=$(( MAJ * 10000 + MIN * 100 + PATCH ))
+          echo "VERSIONCODE=${CODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Magisk Module (universal arm64 + amd64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          # 直接复用 Magisk/build.sh —— 保证本地打包与 CI 产物结构一致
+          # 该脚本会同时编译 arm64 / amd64 后端、拷贝 system/bin/rurima、apk/、
+          # 同步 version 与 versionCode、打包 ZIP 到 dist/ 目录。
+          bash Magisk/build.sh "$VERSION" all
+
+          OUT="daidai-panel-magisk-v${VERSION}.zip"
+          cp -f "dist/${OUT}" "${OUT}"
+
+          ls -lh "${OUT}"
+          echo "ZIPFILE=${OUT}" >> "$GITHUB_ENV"
+
+      - name: Sync update.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSIONCODE="${{ steps.vercode.outputs.VERSIONCODE }}"
+          REPO="${GITHUB_REPOSITORY}"
+
+          # 优先使用仓库内的 release notes，若缺失则回退到 GitHub Release 页
+          CHANGELOG_URL="https://raw.githubusercontent.com/${REPO}/main/docs/release-notes/v${VERSION}.md"
+          if [ ! -f "docs/release-notes/v${VERSION}.md" ]; then
+            CHANGELOG_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
+          fi
+
+          cat > Magisk/update.json <<EOF
+          {
+            "version": "v${VERSION}",
+            "versionCode": ${VERSIONCODE},
+            "zipUrl": "https://github.com/${REPO}/releases/download/v${VERSION}/daidai-panel-magisk-v${VERSION}.zip",
+            "changelog": "${CHANGELOG_URL}"
+          }
+          EOF
+          echo "-- update.json --"
+          cat Magisk/update.json
+
+      - name: Upload Magisk Module to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${ZIPFILE}" \
+            Magisk/update.json \
+            --clobber
+          echo "Magisk 模块与 update.json 已上传到 Release ${GITHUB_REF_NAME}"
+
+  docker-alpine:
+    runs-on: ubuntu-latest
+    needs: release
+    name: Docker Alpine (${{ matrix.tag_channel }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag_channel: latest
+            python_mode: single
+            python_version: '3.12'
+            version_suffix: ''
+            platforms: linux/amd64,linux/arm64,linux/386,linux/arm/v7
+          - tag_channel: latest3.10
+            python_mode: single
+            python_version: '3.10'
+            version_suffix: '-3.10'
+            platforms: linux/amd64,linux/arm64
+          - tag_channel: latest3.11
+            python_mode: single
+            python_version: '3.11'
+            version_suffix: '-3.11'
+            platforms: linux/amd64,linux/arm64
+          - tag_channel: latestall
+            python_mode: all
+            python_version: '3.12'
+            version_suffix: '-all'
+            platforms: linux/amd64,linux/arm64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Docker tags
+        id: docker_tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "tags<<EOF"
+            echo "linzixuanzz/daidai-panel:${{ matrix.tag_channel }}"
+            echo "linzixuanzz/daidai-panel:${{ steps.version.outputs.VERSION }}${{ matrix.version_suffix }}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Pre-pull BuildKit image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull moby/buildkit:buildx-stable-1; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          docker pull moby/buildkit:buildx-stable-1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Docker Hub login
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          # Alpine latest keeps 32-bit platforms; 3.10 / 3.11 / all only publish amd64 / arm64 with standalone Python assets.
+          platforms: ${{ matrix.platforms }}
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
+            PYTHON_RUNTIME_MODE=${{ matrix.python_mode }}
+            PYTHON_RUNTIME_VERSION=${{ matrix.python_version }}
+          # GHA cache 导出偶发 504 时，会出现“镜像其实已经 push 成功，但 job 最终仍失败”的假红。
+          # 这里改成 registry + inline cache，牺牲一点缓存效率，换取发布链稳定性。
+          cache-from: type=registry,ref=linzixuanzz/daidai-panel:${{ matrix.tag_channel }}
+          cache-to: type=inline
+          tags: ${{ steps.docker_tags.outputs.tags }}
+
+  docker-debian:
+    runs-on: ubuntu-latest
+    needs: docker-alpine
+    name: Docker Debian (${{ matrix.tag_channel }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag_channel: debian
+            python_mode: single
+            python_version: '3.12'
+            version_suffix: '-debian'
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+          - tag_channel: debian3.10
+            python_mode: single
+            python_version: '3.10'
+            version_suffix: '-debian3.10'
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+          - tag_channel: debian3.11
+            python_mode: single
+            python_version: '3.11'
+            version_suffix: '-debian3.11'
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+          - tag_channel: debianall
+            python_mode: all
+            python_version: '3.12'
+            version_suffix: '-debianall'
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Docker tags
+        id: docker_tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "tags<<EOF"
+            echo "linzixuanzz/daidai-panel:${{ matrix.tag_channel }}"
+            echo "linzixuanzz/daidai-panel:${{ steps.version.outputs.VERSION }}${{ matrix.version_suffix }}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Pre-pull BuildKit image
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull moby/buildkit:buildx-stable-1; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          docker pull moby/buildkit:buildx-stable-1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Docker Hub login
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Build and push Debian multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.debian
+          # Debian runtime uses node:20.19.0-bookworm-slim, which has no linux/386 manifest.
+          platforms: ${{ matrix.platforms }}
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
+            PYTHON_RUNTIME_MODE=${{ matrix.python_mode }}
+            PYTHON_RUNTIME_VERSION=${{ matrix.python_version }}
+          cache-from: type=registry,ref=linzixuanzz/daidai-panel:${{ matrix.tag_channel }}
+          cache-to: type=inline
+          tags: ${{ steps.docker_tags.outputs.tags }}
