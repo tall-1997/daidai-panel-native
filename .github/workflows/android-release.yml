@@ -133,5 +133,6 @@ jobs:
           gh release create v0.0.1 \
             daidai-panel-native-0.0.1-arm64.apk \
             daidai-panel-native-0.0.1-arm64.apk.sha256 \
+            --repo "${{ github.repository }}" \
             --title "呆呆面板本机版 0.0.1" \
             --notes-file release-notes.md
