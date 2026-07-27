@@ -25,6 +25,8 @@
 
 ### Task 1.0: Restore a Green Baseline
 
+**Status:** Complete (`6d920ce`, `71b90a1`)
+
 **Files:**
 - Test and fix existing failures in `panel/server/handler` and `panel/server/service` before Full Core behavior changes.
 
@@ -36,6 +38,8 @@
 4. Re-run the combined command until it reports zero failures.
 
 ### Task 1.1: Generate Canonical Route Inventory
+
+**Status:** Complete (`b15afb2`, `7311baf`, `b23cfde`)
 
 **Files:**
 - Create: `panel/server/router/catalog.go`
@@ -72,7 +76,7 @@ func DiffRoutes(server, mobile []gin.RouteInfo) RouteDiff
 
 ### Task 1.2: Register Full Mobile Route Profile
 
-**Status:** Complete
+**Status:** Complete (`1aafcb8`, `7311baf`)
 
 **Files:**
 - Modify: `panel/server/router/router.go`
@@ -104,7 +108,7 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 
 ### Task 1.3: Add Minimum Migration Recovery
 
-**Status:** Complete
+**Status:** In Progress (`88613af` initial implementation; hardening changes saved in named stash)
 
 **Files:**
 - Create: `panel/server/mobilecore/generation_store.go`
@@ -117,6 +121,8 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 **TDD:** inject failures before and after file write, fsync, pointer rename, and database reopen; verify one valid generation remains, migration starts only after a recoverable snapshot exists, and workers remain locked until recovery converges.
 
 ### Task 1.4: Lifecycle-Manage Core Workers
+
+**Status:** Pending
 
 **Files:**
 - Create: `panel/server/mobilecore/runtime_container.go`
