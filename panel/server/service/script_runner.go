@@ -554,17 +554,21 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		return nil, nil, err
 	}
 
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
-	cmd.Stderr = cmd.Stdout
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stdoutWriter
 
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		cleanup()
 		return nil, nil, fmt.Errorf("failed to start process: %w", err)
 	}
+	_ = stdoutWriter.Close()
 
 	process := cmd.Process
 	if len(onProcessStart) > 0 && onProcessStart[0] != nil {
@@ -603,6 +607,7 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
+		defer stdout.Close()
 		var chunkBuf strings.Builder
 		for {
 			text, err := reader.ReadString('\n')
@@ -650,41 +655,44 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		defer timer.Stop()
 	}
 
-	waitCh := make(chan error, 1)
+	type commandWaitResult struct {
+		waitErr error
+		readErr error
+	}
+	waitCh := make(chan commandWaitResult, 1)
 	go func() {
 		waitErr := cmd.Wait()
+		readErr := <-done
 		cleanup()
-		waitCh <- waitErr
+		waitCh <- commandWaitResult{waitErr: waitErr, readErr: readErr}
 	}()
 
 	var returnCode int
 	select {
-	case err := <-waitCh:
-		readErr := <-done
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
+	case waitResult := <-waitCh:
+		if waitResult.waitErr != nil {
+			if exitErr, ok := waitResult.waitErr.(*exec.ExitError); ok {
 				returnCode = exitErr.ExitCode()
 			} else {
 				returnCode = 1
 			}
 		}
-		if readErr != nil && readErr != io.EOF && totalSize < maxLogSize && !truncated {
-			if !isBenignProcessPipeReadError(readErr) {
-				emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", readErr.Error()))
+		if waitResult.readErr != nil && waitResult.readErr != io.EOF && totalSize < maxLogSize && !truncated {
+			if !isBenignProcessPipeReadError(waitResult.readErr) {
+				emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", waitResult.readErr.Error()))
 			}
 		}
 	case <-timerC:
 		KillProcessGroup(cmd.Process)
-		readErr := <-done
-		<-waitCh
+		waitResult := <-waitCh
 		returnCode = -1
 		msg := fmt.Sprintf("\n[任务超时，已在 %d 秒后终止]", timeout)
 		outputBuilder.WriteString(msg)
 		if onOutput != nil {
 			onOutput(msg)
 		}
-		if readErr != nil && readErr != io.EOF && totalSize < maxLogSize && !truncated && !isBenignProcessPipeReadError(readErr) {
-			emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", readErr.Error()))
+		if waitResult.readErr != nil && waitResult.readErr != io.EOF && totalSize < maxLogSize && !truncated && !isBenignProcessPipeReadError(waitResult.readErr) {
+			emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", waitResult.readErr.Error()))
 		}
 	}
 
