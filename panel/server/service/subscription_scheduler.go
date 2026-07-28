@@ -22,12 +22,22 @@ type SubscriptionScheduler struct {
 
 var (
 	globalSubscriptionScheduler *SubscriptionScheduler
+	subscriptionSchedulerMu     sync.Mutex
+	subscriptionSchedulerOn     bool
 	subscriptionPullStateMu     sync.Mutex
 	subscriptionPullRunning     = make(map[uint]bool)
 	subscriptionPullCancels     = make(map[uint]context.CancelFunc)
 )
 
-func InitSubscriptionScheduler() {
+func StartSubscriptionScheduler(ctx context.Context) error {
+	_ = ctx
+	subscriptionSchedulerMu.Lock()
+	defer subscriptionSchedulerMu.Unlock()
+
+	if subscriptionSchedulerOn {
+		return nil
+	}
+
 	s := &SubscriptionScheduler{
 		cron:     cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
 		entryMap: make(map[uint]cron.EntryID),
@@ -37,23 +47,54 @@ func InitSubscriptionScheduler() {
 	database.DB.Where("enabled = ? AND schedule != ''", true).Find(&subs)
 	for i := range subs {
 		if err := s.AddOrUpdateJob(&subs[i]); err != nil {
-			log.Printf("failed to add subscription job %d: %v", subs[i].ID, err)
+			return fmt.Errorf("failed to add subscription job %d: %w", subs[i].ID, err)
 		}
 	}
 
 	s.cron.Start()
 	globalSubscriptionScheduler = s
+	subscriptionSchedulerOn = true
 	log.Printf("subscription scheduler initialized with %d jobs", len(subs))
+	return nil
+}
+
+func StopSubscriptionScheduler(ctx context.Context) error {
+	subscriptionSchedulerMu.Lock()
+	defer subscriptionSchedulerMu.Unlock()
+
+	if !subscriptionSchedulerOn {
+		return nil
+	}
+
+	if globalSubscriptionScheduler != nil {
+		stopCtx := globalSubscriptionScheduler.cron.Stop()
+		if ctx == nil {
+			<-stopCtx.Done()
+		} else {
+			select {
+			case <-stopCtx.Done():
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	globalSubscriptionScheduler = nil
+	subscriptionSchedulerOn = false
+	log.Println("subscription scheduler stopped")
+	return nil
+}
+
+func InitSubscriptionScheduler() {
+	if err := StartSubscriptionScheduler(context.Background()); err != nil {
+		log.Printf("subscription scheduler start failed: %v", err)
+	}
 }
 
 func ShutdownSubscriptionScheduler() {
-	if globalSubscriptionScheduler == nil {
-		return
+	if err := StopSubscriptionScheduler(context.Background()); err != nil {
+		log.Printf("subscription scheduler stop failed: %v", err)
 	}
-
-	ctx := globalSubscriptionScheduler.cron.Stop()
-	<-ctx.Done()
-	log.Println("subscription scheduler stopped")
 }
 
 func GetSubscriptionScheduler() *SubscriptionScheduler {

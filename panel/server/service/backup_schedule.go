@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strconv"
@@ -32,24 +33,66 @@ type BackupScheduler struct {
 }
 
 var globalBackupScheduler *BackupScheduler
+var backupSchedulerMu sync.Mutex
+var backupSchedulerOn bool
 
-func InitBackupScheduler() {
+func StartBackupScheduler(ctx context.Context) error {
+	_ = ctx
+	backupSchedulerMu.Lock()
+	defer backupSchedulerMu.Unlock()
+
+	if backupSchedulerOn {
+		return nil
+	}
+
 	scheduler := &BackupScheduler{
 		cron: cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
 	}
 	scheduler.cron.Start()
 	globalBackupScheduler = scheduler
+	backupSchedulerOn = true
 	scheduler.Reload()
 	log.Println("backup scheduler initialized")
+	return nil
+}
+
+func StopBackupScheduler(ctx context.Context) error {
+	backupSchedulerMu.Lock()
+	defer backupSchedulerMu.Unlock()
+
+	if !backupSchedulerOn {
+		return nil
+	}
+
+	if globalBackupScheduler != nil {
+		stopCtx := globalBackupScheduler.cron.Stop()
+		if ctx == nil {
+			<-stopCtx.Done()
+		} else {
+			select {
+			case <-stopCtx.Done():
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	globalBackupScheduler = nil
+	backupSchedulerOn = false
+	log.Println("backup scheduler stopped")
+	return nil
+}
+
+func InitBackupScheduler() {
+	if err := StartBackupScheduler(context.Background()); err != nil {
+		log.Printf("backup scheduler start failed: %v", err)
+	}
 }
 
 func ShutdownBackupScheduler() {
-	if globalBackupScheduler == nil {
-		return
+	if err := StopBackupScheduler(context.Background()); err != nil {
+		log.Printf("backup scheduler stop failed: %v", err)
 	}
-	ctx := globalBackupScheduler.cron.Stop()
-	<-ctx.Done()
-	log.Println("backup scheduler stopped")
 }
 
 func GetBackupScheduler() *BackupScheduler {

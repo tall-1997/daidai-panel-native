@@ -1,16 +1,38 @@
 # Android Modern Full Panel Progress
 
-Updated: 2026-07-27
+Updated: 2026-07-28
 Branch: `main`
 Remote: `origin/main`
 
 ## Current Position
 
-Milestone 1 is in progress. Tasks 1.0 through 1.3 are implemented and committed locally. Task 1.4 has not started.
+Milestone 1 is in progress. Tasks 1.0 through 1.4 are implemented and committed locally.
 
 The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit gate and its commits have not been pushed.
 
 ## Completed Work
+
+### Task 1.4: Lifecycle-Manage Core Workers
+
+- Added `panel/server/mobilecore/runtime_container.go` and `panel/server/mobilecore/runtime_container_test.go`.
+  - Introduced `RuntimeContainer` with ordered start, reverse stop, rollback on partial startup failure, idempotent start/stop, and health snapshot.
+  - Wired container-managed startup sequence as Scheduler -> Subscription Scheduler -> Backup Scheduler -> Log Cleanup.
+- Updated `panel/server/mobilecore/mobilecore.go`.
+  - `StartCore` now starts runtime workers only after recovery convergence path reaches HTTP readiness.
+  - Runtime startup failure keeps Core in stopped state and preserves Task 1.3 recovery semantics.
+  - `StopCore` now stops runtime workers in reverse order before HTTP shutdown and continues cleanup while preserving observable shutdown diagnostics.
+- Refactored worker lifecycles in service layer to restartable handles:
+  - `panel/server/service/scheduler_manager.go`
+  - `panel/server/service/subscription_scheduler.go`
+  - `panel/server/service/backup_schedule.go`
+  - `panel/server/service/log_cleanup.go`
+  - Added context-aware start/stop APIs and retained existing compatibility wrappers.
+- Added and expanded tests for ordered start/reverse stop/partial rollback/restart/idempotent/active interruption paths.
+- Verification completed:
+  - `go test -race ./mobilecore ./service ./router -count=1`
+  - `go test ./handler ./service -count=1`
+  - `go vet ./mobilecore ./router ./handler ./service ./database ./appboot`
+  - `go run scripts/generate-route-contract.go -check`
 
 ### Specification
 

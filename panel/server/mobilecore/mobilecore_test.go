@@ -1308,3 +1308,102 @@ func TestStartCoreRejectsNonLoopbackHost(t *testing.T) {
 		t.Fatal("core running after rejected options")
 	}
 }
+
+func TestStartCoreRuntimeContainerFailureKeepsStoppedState(t *testing.T) {
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{{
+			name: "scheduler",
+			start: func(context.Context) error {
+				return errors.New("runtime start fail")
+			},
+			stop: func(context.Context) error { return nil },
+		}})
+	}
+	t.Cleanup(func() { newRuntimeContainer = original })
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.Running || result.Status != "stopped" || result.ErrorCode != codeBootstrapFailed {
+		t.Fatalf("unexpected runtime failure result: %+v", result)
+	}
+	status := decodeResult(t, CoreStatus())
+	if status.Running || status.Status == "running" {
+		t.Fatalf("core state leaked into running after runtime failure: %+v", status)
+	}
+}
+
+func TestStartCoreRuntimeContainerStartStopOrderAndIdempotent(t *testing.T) {
+	trace := make([]string, 0, 16)
+	mu := sync.Mutex{}
+	push := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		trace = append(trace, event)
+	}
+
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{
+			{name: "scheduler", start: func(context.Context) error { push("start:scheduler"); return nil }, stop: func(context.Context) error { push("stop:scheduler"); return nil }},
+			{name: "subscription", start: func(context.Context) error { push("start:subscription"); return nil }, stop: func(context.Context) error { push("stop:subscription"); return nil }},
+			{name: "backup", start: func(context.Context) error { push("start:backup"); return nil }, stop: func(context.Context) error { push("stop:backup"); return nil }},
+			{name: "log_cleanup", start: func(context.Context) error { push("start:log_cleanup"); return nil }, stop: func(context.Context) error { push("stop:log_cleanup"); return nil }},
+		})
+	}
+	t.Cleanup(func() { newRuntimeContainer = original })
+
+	started := startForTest(t, t.TempDir())
+	if !started.OK || started.Status != "running" {
+		t.Fatalf("start failed: %+v", started)
+	}
+	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+		t.Fatalf("stop failed: %+v", stopped)
+	}
+
+	want := []string{
+		"start:scheduler",
+		"start:subscription",
+		"start:backup",
+		"start:log_cleanup",
+		"stop:log_cleanup",
+		"stop:backup",
+		"stop:subscription",
+		"stop:scheduler",
+	}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("trace=%v want=%v", trace, want)
+	}
+
+	trace = trace[:0]
+	startedAgain := startForTest(t, t.TempDir())
+	if !startedAgain.OK {
+		t.Fatalf("restart failed: %+v", startedAgain)
+	}
+	if stoppedAgain := decodeResult(t, StopCore(5000)); !stoppedAgain.OK {
+		t.Fatalf("restart stop failed: %+v", stoppedAgain)
+	}
+	if len(trace) != len(want) {
+		t.Fatalf("restart trace size=%d want=%d", len(trace), len(want))
+	}
+}
+
+func TestStopCoreReportsRuntimeStopFailureAndStillConverges(t *testing.T) {
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{{
+			name:  "scheduler",
+			start: func(context.Context) error { return nil },
+			stop:  func(context.Context) error { return errors.New("runtime stop failure") },
+		}})
+	}
+	t.Cleanup(func() { newRuntimeContainer = original })
+
+	startForTest(t, t.TempDir())
+	stopped := decodeResult(t, StopCore(5000))
+	if !stopped.OK || stopped.Status != "stopped" {
+		t.Fatalf("stop result: %+v", stopped)
+	}
+	if status := decodeResult(t, CoreStatus()); status.Running {
+		t.Fatalf("core remained running after stop with runtime failure: %+v", status)
+	}
+}

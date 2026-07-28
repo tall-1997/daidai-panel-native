@@ -84,6 +84,7 @@ type core struct {
 	endpoint     string
 	server       *http.Server
 	listener     net.Listener
+	runtime      RuntimeContainer
 	previous     globalState
 	connMu       sync.Mutex
 	conns        map[net.Conn]struct{}
@@ -113,6 +114,7 @@ var (
 	}
 	generationFilesystemOps = defaultFilesystemOps
 	probeCoreReadiness      = probeHealthEndpoint
+	newRuntimeContainer     = newServiceRuntimeContainer
 )
 
 type lifecycleState struct {
@@ -377,10 +379,12 @@ func StartCore(optionsJSON string) (response string) {
 	}
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
+	runtime := newRuntimeContainer()
 	running := &core{
 		id:           lifecycle.nextID,
 		endpoint:     "http://" + actualHost,
 		listener:     listener,
+		runtime:      runtime,
 		previous:     previous,
 		conns:        make(map[net.Conn]struct{}),
 		connWait:     make(chan struct{}),
@@ -410,8 +414,31 @@ func StartCore(optionsJSON string) (response string) {
 		lifecycle.mu.Unlock()
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
+	runtimeCtx, runtimeCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
+	runtimeErr := running.runtime.Start(runtimeCtx)
+	runtimeCancel()
+	if runtimeErr != nil {
+		_ = running.server.Close()
+		if prepared {
+			if rollbackErr := rollbackMigration(); rollbackErr != nil {
+				lifecycle.mu.Unlock()
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+		} else {
+			if restoreErr := restoreAfterStartFailure(previous); restoreErr != nil {
+				lifecycle.mu.Unlock()
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "cleanup_required", CleanupRequired: true})
+			}
+		}
+		lifecycle.mu.Unlock()
+		logDiagnostic(codeBootstrapFailed, "runtime-start")
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
 	if prepared {
 		if err := store.markReady(activeID); err != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
+			_ = running.runtime.Stop(shutdownCtx)
+			shutdownCancel()
 			_ = running.server.Close()
 			if rollbackErr := rollbackMigration(); rollbackErr != nil {
 				lifecycle.mu.Unlock()
@@ -469,6 +496,12 @@ func StopCore(timeoutMillis int64) string {
 	lifecycle.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMillis)*time.Millisecond)
+	if running.runtime != nil {
+		runtimeErr := running.runtime.Stop(ctx)
+		if runtimeErr != nil {
+			logDiagnostic(codeShutdownFailed, "runtime-stop")
+		}
+	}
 	err := running.server.Shutdown(ctx)
 	if err == nil {
 		err = running.waitForConnections(ctx)
@@ -557,6 +590,13 @@ func observeServe(running *core, serveResult <-chan error) {
 	lifecycle.errorCode = codeServeFailed
 	lifecycle.errorText = "core server failed"
 	recoveryReady.Store(false)
+	if running.runtime != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
+		if err := running.runtime.Stop(ctx); err != nil {
+			logDiagnostic(codeShutdownFailed, "runtime-stop-observe")
+		}
+		cancel()
+	}
 	lifecycle.mu.Unlock()
 }
 

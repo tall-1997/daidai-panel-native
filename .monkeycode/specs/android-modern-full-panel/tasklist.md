@@ -122,7 +122,7 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 
 ### Task 1.4: Lifecycle-Manage Core Workers
 
-**Status:** Pending
+**Status:** Complete
 
 **Files:**
 - Create: `panel/server/mobilecore/runtime_container.go`
