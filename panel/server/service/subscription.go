@@ -254,7 +254,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 
 		emit(fmt.Sprintf("[检测到已有仓库] %s 已存在 Git 仓库，接下来会同步远端并覆盖更新本地文件", saveDir))
 		emit(fmt.Sprintf("[同步远端地址] 正在校正订阅地址 -> %s", authCfg.DisplayURL))
-		output, err := syncGitRemoteWithCallback(ctx, destDir, authCfg.RemoteURL, env, emit)
+		output, err := syncGitRemoteWithCallback(ctx, destDir, authCfg.DisplayURL, env, emit)
 		fullOutput.WriteString(output)
 		if err != nil {
 			return fullOutput.String(), err
@@ -364,7 +364,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			}
 
 			emit(fmt.Sprintf("[同步远端地址] 正在校正订阅地址 -> %s", authCfg.DisplayURL))
-			output, err = syncGitRemoteWithCallback(ctx, destDir, authCfg.RemoteURL, env, emit)
+			output, err = syncGitRemoteWithCallback(ctx, destDir, authCfg.DisplayURL, env, emit)
 			fullOutput.WriteString(output)
 			if err != nil {
 				return fullOutput.String(), err
@@ -666,6 +666,10 @@ func pullSingleFileWithCallback(ctx context.Context, sub *model.Subscription, _ 
 }
 
 func syncGitRemoteWithCallback(ctx context.Context, repoDir, remoteURL string, env []string, emit PullCallback) (string, error) {
+	remoteURL, err := cleanGitRemoteURL(remoteURL)
+	if err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, "git", "remote")
 	cmd.Dir = repoDir
 	cmd.Env = env

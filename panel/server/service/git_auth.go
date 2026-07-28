@@ -27,7 +27,12 @@ func buildGitAuthConfigWithContext(ctx context.Context, baseEnv []string, remote
 	env := ApplyGitSSHRuntimePolicy(AppendProxyEnv(baseEnv))
 	cleanup := func() {}
 	remoteURL = strings.TrimSpace(remoteURL)
-	displayURL := remoteURL
+	cleanURL, err := cleanGitRemoteURL(remoteURL)
+	if err != nil {
+		return gitAuthConfig{}, err
+	}
+	remoteURL = cleanURL
+	displayURL := cleanURL
 	authType := ""
 	if sub != nil {
 		authType = sub.EffectiveAuthType()
@@ -62,11 +67,12 @@ func buildGitAuthConfigWithContext(ctx context.Context, baseEnv []string, remote
 		if !isHTTPGitRemoteURL(remoteURL) {
 			return gitAuthConfig{}, fmt.Errorf("Token 鉴权仅支持 HTTP/HTTPS 仓库地址，请改用 HTTPS 地址")
 		}
-		embedded, err := injectGitTokenIntoURL(remoteURL, sub.AuthUsername, token)
+		credentialPath, err := writeTempGitCredentialStore(remoteURL, sub.AuthUsername, token)
 		if err != nil {
 			return gitAuthConfig{}, err
 		}
-		remoteURL = embedded
+		cleanup = func() { _ = os.Remove(credentialPath) }
+		env = appendOrReplaceEnv(env, "GIT_CONFIG_VALUE_3", "store --file "+credentialPath)
 	}
 
 	return gitAuthConfig{
@@ -161,7 +167,19 @@ func isHTTPGitRemoteURL(remoteURL string) bool {
 	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
-func injectGitTokenIntoURL(remoteURL, username, token string) (string, error) {
+func cleanGitRemoteURL(remoteURL string) (string, error) {
+	if !isHTTPGitRemoteURL(remoteURL) {
+		return remoteURL, nil
+	}
+	parsed, err := url.Parse(remoteURL)
+	if err != nil {
+		return "", fmt.Errorf("解析仓库 URL 失败: %w", err)
+	}
+	parsed.User = nil
+	return parsed.String(), nil
+}
+
+func writeTempGitCredentialStore(remoteURL, username, token string) (string, error) {
 	parsed, err := url.Parse(remoteURL)
 	if err != nil {
 		return "", fmt.Errorf("解析仓库 URL 失败: %w", err)
@@ -174,5 +192,26 @@ func injectGitTokenIntoURL(remoteURL, username, token string) (string, error) {
 		username = "x-access-token"
 	}
 	parsed.User = url.UserPassword(username, strings.TrimSpace(token))
-	return parsed.String(), nil
+
+	tmpFile, err := os.CreateTemp("", "git_credentials_*")
+	if err != nil {
+		return "", fmt.Errorf("创建 Git 凭据临时文件失败: %w", err)
+	}
+	path := tmpFile.Name()
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("设置 Git 凭据临时文件权限失败: %w", err)
+	}
+
+	if _, err := tmpFile.WriteString(parsed.String() + "\n"); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("写入 Git 凭据临时文件失败: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("关闭 Git 凭据临时文件失败: %w", err)
+	}
+	return path, nil
 }
