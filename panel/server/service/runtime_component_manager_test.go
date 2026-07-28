@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,15 +11,14 @@ import (
 	"testing"
 )
 
-func TestRuntimeComponentManagerLoadsManifestWithPlaceholderHash(t *testing.T) {
-	t.Parallel()
-
+func TestRuntimeComponentManagerRejectsPlaceholderHashByDefault(t *testing.T) {
 	tempDir := t.TempDir()
 	nativeDir := filepath.Join(tempDir, "libs")
 	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
 		t.Fatalf("mkdir native dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nativeDir, "libpython_exec.so"), []byte("python"), 0o755); err != nil {
+	pythonELF := fakeAArch64ELF("python")
+	if err := os.WriteFile(filepath.Join(nativeDir, "libpython_exec.so"), pythonELF, 0o755); err != nil {
 		t.Fatalf("write runtime entrypoint: %v", err)
 	}
 
@@ -52,20 +53,71 @@ func TestRuntimeComponentManagerLoadsManifestWithPlaceholderHash(t *testing.T) {
 	if len(baseline.Components) != 1 {
 		t.Fatalf("component count=%d want=1", len(baseline.Components))
 	}
-	if !baseline.Components[0].Present || !baseline.Components[0].Verified {
+	if !baseline.Components[0].Present {
 		t.Fatalf("unexpected component status: %+v", baseline.Components[0])
+	}
+	if baseline.Components[0].Reason != "sha256-placeholder" {
+		t.Fatalf("reason=%q want=sha256-placeholder", baseline.Components[0].Reason)
 	}
 }
 
-func TestRuntimeComponentManagerDetectsSHA256Mismatch(t *testing.T) {
-	t.Parallel()
+func TestRuntimeComponentManagerAllowsPlaceholderHashWithDevFlag(t *testing.T) {
+	t.Setenv("DAIDAI_RUNTIME_ALLOW_PLACEHOLDER_HASH", "1")
 
 	tempDir := t.TempDir()
 	nativeDir := filepath.Join(tempDir, "libs")
 	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
 		t.Fatalf("mkdir native dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nativeDir, "libnode_exec.so"), []byte("node"), 0o755); err != nil {
+	pythonELF := fakeAArch64ELF("python")
+	if err := os.WriteFile(filepath.Join(nativeDir, "libpython_exec.so"), pythonELF, 0o755); err != nil {
+		t.Fatalf("write runtime entrypoint: %v", err)
+	}
+
+	manifestPath := filepath.Join(tempDir, "manifest.json")
+	compatibilityPath := filepath.Join(tempDir, "compatibility.json")
+	manifest := RuntimeManifest{
+		Version: "1",
+		Components: []RuntimeManifestComponent{{
+			ID:         "python-3.12-android-arm64",
+			ABI:        "arm64-v8a",
+			Entrypoint: "libpython_exec.so",
+			SHA256:     "PLACEHOLDER_SHA256_PYTHON",
+		}},
+	}
+	compatibility := RuntimeCompatibility{
+		Version:    "1",
+		ABI:        "arm64-v8a",
+		RuntimeIDs: []string{"python-3.12-android-arm64"},
+	}
+	writeJSON(t, manifestPath, manifest)
+	writeJSON(t, compatibilityPath, compatibility)
+
+	manager := &RuntimeComponentManager{
+		manifestPath:      manifestPath,
+		compatibilityPath: compatibilityPath,
+		nativeLibraryDir:  nativeDir,
+	}
+	baseline, err := manager.LoadAndValidate()
+	if err != nil {
+		t.Fatalf("load and validate runtime baseline: %v", err)
+	}
+	if len(baseline.Components) != 1 {
+		t.Fatalf("component count=%d want=1", len(baseline.Components))
+	}
+	if !baseline.Components[0].Verified {
+		t.Fatalf("expected placeholder to be accepted in dev mode, got %+v", baseline.Components[0])
+	}
+}
+
+func TestRuntimeComponentManagerDetectsSHA256Mismatch(t *testing.T) {
+	tempDir := t.TempDir()
+	nativeDir := filepath.Join(tempDir, "libs")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
+	nodeELF := fakeAArch64ELF("node")
+	if err := os.WriteFile(filepath.Join(nativeDir, "libnode_exec.so"), nodeELF, 0o755); err != nil {
 		t.Fatalf("write runtime entrypoint: %v", err)
 	}
 
@@ -106,17 +158,20 @@ func TestRuntimeComponentManagerDetectsSHA256Mismatch(t *testing.T) {
 }
 
 func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
-	t.Parallel()
-
 	tempDir := t.TempDir()
 	nativeDir := filepath.Join(tempDir, "libs")
 	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
 		t.Fatalf("mkdir native dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nativeDir, "libpython_exec.so"), []byte("python"), 0o755); err != nil {
+	if err := InitializeRuntimeSecurity(tempDir); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+	pythonELF := fakeAArch64ELF("python")
+	nodeELF := fakeAArch64ELF("node")
+	if err := os.WriteFile(filepath.Join(nativeDir, "libpython_exec.so"), pythonELF, 0o755); err != nil {
 		t.Fatalf("write python runtime: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nativeDir, "libnode_exec.so"), []byte("node"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(nativeDir, "libnode_exec.so"), nodeELF, 0o755); err != nil {
 		t.Fatalf("write node runtime: %v", err)
 	}
 
@@ -125,9 +180,9 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{
-			{ID: "python-3.12-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: "PLACEHOLDER_SHA256_PYTHON"},
-			{ID: "node-lts-android-arm64", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: "PLACEHOLDER_SHA256_NODE"},
-			{ID: "typescript-stable", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: "PLACEHOLDER_SHA256_TYPESCRIPT"},
+			{ID: "python-3.12-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: sha256Hex(pythonELF)},
+			{ID: "node-lts-android-arm64", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
+			{ID: "typescript-stable", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
 		},
 	}
 	compatibility := RuntimeCompatibility{
@@ -168,6 +223,9 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	if !baseline.SecretStore.Ready {
 		t.Fatalf("expected secret store ready status, got %+v", baseline.SecretStore)
 	}
+	if !baseline.TrustAuthorizer.Ready {
+		t.Fatalf("expected trust authorizer ready status, got %+v", baseline.TrustAuthorizer)
+	}
 	if len(baseline.TrustRecords) == 0 {
 		t.Fatal("expected at least one trust authorization record")
 	}
@@ -187,9 +245,77 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	}
 }
 
-func TestApplyGitSSHRuntimePolicySetsSecurityEnv(t *testing.T) {
-	t.Parallel()
+func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
+	tempDir := t.TempDir()
+	nativeDir := filepath.Join(tempDir, "libs")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
 
+	manifestPath := filepath.Join(tempDir, "manifest.json")
+	compatibilityPath := filepath.Join(tempDir, "compatibility.json")
+	manifest := RuntimeManifest{
+		Version: "1",
+		Components: []RuntimeManifestComponent{{
+			ID:         "python-3.12-android-arm64",
+			ABI:        "arm64-v8a",
+			Entrypoint: "../escape.so",
+			SHA256:     strings.Repeat("a", 64),
+		}},
+	}
+	compatibility := RuntimeCompatibility{
+		Version:    "1",
+		ABI:        "arm64-v8a",
+		RuntimeIDs: []string{"python-3.12-android-arm64"},
+	}
+	writeJSON(t, manifestPath, manifest)
+	writeJSON(t, compatibilityPath, compatibility)
+
+	manager := &RuntimeComponentManager{
+		manifestPath:      manifestPath,
+		compatibilityPath: compatibilityPath,
+		nativeLibraryDir:  nativeDir,
+	}
+	baseline, err := manager.LoadAndValidate()
+	if err != nil {
+		t.Fatalf("load and validate runtime baseline: %v", err)
+	}
+	if len(baseline.Components) != 1 {
+		t.Fatalf("component count=%d want=1", len(baseline.Components))
+	}
+	if baseline.Components[0].Reason != "entrypoint-invalid" {
+		t.Fatalf("reason=%q want=entrypoint-invalid", baseline.Components[0].Reason)
+	}
+}
+
+func TestRuntimeBaselineHasSevereFailureCoversManifestAndNativeDirIssues(t *testing.T) {
+	t.Parallel()
+	baseline := RuntimeComponentBaseline{Components: []RuntimeComponentStatus{{Reason: "invalid-manifest-entry"}}}
+	if !RuntimeBaselineHasSevereFailure(baseline) {
+		t.Fatal("expected invalid-manifest-entry to be severe")
+	}
+	baseline = RuntimeComponentBaseline{Components: []RuntimeComponentStatus{{Reason: "native-library-dir-missing"}}}
+	if !RuntimeBaselineHasSevereFailure(baseline) {
+		t.Fatal("expected native-library-dir-missing to be severe")
+	}
+}
+
+func TestRuntimeBaselineHasSevereFailureCoversSmokeStates(t *testing.T) {
+	t.Parallel()
+	if !RuntimeBaselineHasSevereFailure(RuntimeComponentBaseline{}) {
+		t.Fatal("expected empty smoke suites to be severe")
+	}
+	baseline := RuntimeComponentBaseline{SmokeSuites: []RuntimeSmokeSuite{{RuntimeID: "python", Checks: []RuntimeSmokeCheck{{ID: "PY_OK", Status: "failed"}}}}}
+	if !RuntimeBaselineHasSevereFailure(baseline) {
+		t.Fatal("expected failed smoke check to be severe")
+	}
+	baseline = RuntimeComponentBaseline{SmokeSuites: []RuntimeSmokeSuite{{RuntimeID: "python", Checks: []RuntimeSmokeCheck{{ID: "PY_OK", Status: "pass"}}}}}
+	if RuntimeBaselineHasSevereFailure(baseline) {
+		t.Fatal("expected passing smoke checks to be accepted")
+	}
+}
+
+func TestApplyGitSSHRuntimePolicySetsSecurityEnv(t *testing.T) {
 	env := ApplyGitSSHRuntimePolicy([]string{"PATH=/usr/bin", "GIT_EDITOR=vim"})
 	assertEnvValue(t, env, "GIT_TERMINAL_PROMPT", "0")
 	assertEnvValue(t, env, "GIT_PAGER", "cat")
@@ -200,7 +326,9 @@ func TestApplyGitSSHRuntimePolicySetsSecurityEnv(t *testing.T) {
 }
 
 func TestLocalSecretStoreRoundTrip(t *testing.T) {
-	t.Parallel()
+	if err := InitializeRuntimeSecurity(t.TempDir()); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
 
 	store := RuntimeSecretStoreInstance()
 	sealed, err := store.Seal(context.Background(), "runtime-token", []byte("secret"))
@@ -214,6 +342,14 @@ func TestLocalSecretStoreRoundTrip(t *testing.T) {
 	if string(opened) != "secret" {
 		t.Fatalf("opened secret=%q want=secret", string(opened))
 	}
+	if string(sealed.Cipher) == "secret" {
+		t.Fatal("cipher payload should be encrypted")
+	}
+}
+
+func sha256Hex(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func findRuntimeSuite(suites []RuntimeSmokeSuite, runtimeID string) *RuntimeSmokeSuite {
@@ -258,4 +394,19 @@ func writeJSON(t *testing.T, path string, payload any) {
 	if err := os.WriteFile(path, encoded, 0o644); err != nil {
 		t.Fatalf("write payload: %v", err)
 	}
+}
+
+func fakeAArch64ELF(tag string) []byte {
+	base := make([]byte, 64)
+	base[0] = 0x7f
+	base[1] = 'E'
+	base[2] = 'L'
+	base[3] = 'F'
+	base[4] = 2
+	base[5] = 1
+	base[6] = 1
+	base[16] = 2
+	base[18] = 183
+	base[19] = 0
+	return append(base, []byte(tag)...)
 }

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -56,7 +58,24 @@ type RuntimeComponentBaseline struct {
 	SmokeSuites       []RuntimeSmokeSuite      `json:"smoke_suites"`
 	ExecutionPolicies RuntimeExecutionPolicies `json:"execution_policies"`
 	SecretStore       SecretStoreStatus        `json:"secret_store"`
+	TrustAuthorizer   TrustAuthorizerStatus    `json:"trust_authorizer"`
 	TrustRecords      []TrustAuthorization     `json:"trust_records"`
+}
+
+type RuntimeSmokeEvidence struct {
+	Version   string                       `json:"version"`
+	UpdatedAt string                       `json:"updated_at"`
+	Matrix    []string                     `json:"matrix"`
+	Records   []RuntimeSmokeEvidenceRecord `json:"records"`
+}
+
+type RuntimeSmokeEvidenceRecord struct {
+	RuntimeID      string              `json:"runtime_id"`
+	Version        string              `json:"version"`
+	Entry          string              `json:"entry"`
+	IsolationLevel string              `json:"isolation_level"`
+	TimeoutSeconds int                 `json:"timeout_seconds"`
+	Checks         []RuntimeSmokeCheck `json:"checks"`
 }
 
 type RuntimeSmokeSuite struct {
@@ -65,9 +84,12 @@ type RuntimeSmokeSuite struct {
 }
 
 type RuntimeSmokeCheck struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	ID             string `json:"id"`
+	Status         string `json:"status"`
+	Reason         string `json:"reason,omitempty"`
+	IsolationLevel string `json:"isolation_level"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Output         string `json:"output,omitempty"`
 }
 
 type RuntimeExecutionPolicies struct {
@@ -103,6 +125,7 @@ type RuntimeEnvEntry struct {
 type RuntimeComponentManager struct {
 	manifestPath      string
 	compatibilityPath string
+	smokeEvidencePath string
 	nativeLibraryDir  string
 }
 
@@ -112,10 +135,11 @@ var (
 )
 
 func NewRuntimeComponentManager(nativeLibraryDir string) *RuntimeComponentManager {
-	manifestPath, compatibilityPath := resolveRuntimeMetadataPaths()
+	manifestPath, compatibilityPath, smokeEvidencePath := resolveRuntimeMetadataPaths()
 	return &RuntimeComponentManager{
 		manifestPath:      manifestPath,
 		compatibilityPath: compatibilityPath,
+		smokeEvidencePath: smokeEvidencePath,
 		nativeLibraryDir:  strings.TrimSpace(nativeLibraryDir),
 	}
 }
@@ -139,6 +163,7 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 		Checks:            append([]string{}, compatibility.RequiredChecks...),
 		Components:        make([]RuntimeComponentStatus, 0, len(manifest.Components)),
 		SecretStore:       RuntimeSecretStoreInstance().Status(),
+		TrustAuthorizer:   RuntimeTrustAuthorizer().Status(),
 		TrustRecords:      RuntimeTrustAuthorizer().List(),
 	}
 
@@ -164,16 +189,31 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 			result.Components = append(result.Components, status)
 			continue
 		}
-		libraryPath := filepath.Join(manager.nativeLibraryDir, component.Entrypoint)
+		libraryPath, pathErr := manager.resolveEntrypointPath(component.Entrypoint)
+		if pathErr != nil {
+			status.Reason = "entrypoint-invalid"
+			result.Components = append(result.Components, status)
+			continue
+		}
 		payload, readErr := os.ReadFile(libraryPath)
 		if readErr != nil {
 			status.Reason = "entrypoint-missing"
 			result.Components = append(result.Components, status)
 			continue
 		}
+		if err := validateRuntimeELF(payload); err != nil {
+			status.Reason = "entrypoint-invalid-format"
+			result.Components = append(result.Components, status)
+			continue
+		}
 		status.Present = true
 		sum := sha256.Sum256(payload)
 		hash := hex.EncodeToString(sum[:])
+		if isManifestSHAPlaceholder(component.SHA256) && !allowRuntimePlaceholderHash() {
+			status.Reason = "sha256-placeholder"
+			result.Components = append(result.Components, status)
+			continue
+		}
 		if !isManifestSHAPlaceholder(component.SHA256) && !strings.EqualFold(component.SHA256, hash) {
 			status.Reason = "sha256-mismatch"
 			result.Components = append(result.Components, status)
@@ -186,7 +226,12 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 	sort.Slice(result.Components, func(i, j int) bool {
 		return result.Components[i].ID < result.Components[j].ID
 	})
-	result.SmokeSuites = buildRuntimeSmokeSuites(result.Components)
+	evidence, evidenceErr := manager.readSmokeEvidence()
+	if evidenceErr == nil {
+		result.SmokeSuites = buildRuntimeSmokeSuitesFromEvidence(manifest, evidence, result.Components)
+	} else {
+		result.SmokeSuites = buildRuntimeSmokeSuites(result.Components)
+	}
 	result.ExecutionPolicies = RuntimeExecutionPolicies{
 		Node:      DefaultNodeRuntimePolicy(),
 		GitSSH:    DefaultGitSSHRuntimePolicy(),
@@ -265,24 +310,164 @@ func buildRuntimeSmokeSuites(components []RuntimeComponentStatus) []RuntimeSmoke
 	}
 }
 
+func buildRuntimeSmokeSuitesFromEvidence(manifest RuntimeManifest, evidence RuntimeSmokeEvidence, components []RuntimeComponentStatus) []RuntimeSmokeSuite {
+	componentByID := make(map[string]RuntimeManifestComponent, len(manifest.Components))
+	for _, component := range manifest.Components {
+		componentByID[component.ID] = component
+	}
+	verifiedByID := make(map[string]bool, len(components))
+	for _, component := range components {
+		verifiedByID[component.ID] = component.Verified
+	}
+	recordByID := make(map[string]RuntimeSmokeEvidenceRecord, len(evidence.Records))
+	for _, record := range evidence.Records {
+		recordByID[record.RuntimeID] = record
+	}
+	result := make([]RuntimeSmokeSuite, 0, len(manifest.Components))
+	for _, component := range manifest.Components {
+		record, ok := recordByID[component.ID]
+		if !ok || !verifiedByID[component.ID] || record.Entry != component.Entrypoint || record.Version == "" || record.IsolationLevel == "" || record.TimeoutSeconds <= 0 {
+			result = append(result, RuntimeSmokeSuite{RuntimeID: component.ID, Checks: []RuntimeSmokeCheck{{ID: "evidence", Status: "blocked", Reason: "smoke-evidence-invalid", IsolationLevel: runtimeSmokeIsolationLevel(""), TimeoutSeconds: 5}}})
+			continue
+		}
+		checks := make([]RuntimeSmokeCheck, 0, len(record.Checks))
+		for _, check := range record.Checks {
+			check.IsolationLevel = record.IsolationLevel
+			check.TimeoutSeconds = record.TimeoutSeconds
+			if check.ID == "" || check.Status != "pass" || strings.TrimSpace(check.Output) == "" {
+				check.Status = "failed"
+				if check.Reason == "" {
+					check.Reason = "smoke-evidence-incomplete"
+				}
+			}
+			checks = append(checks, check)
+		}
+		result = append(result, RuntimeSmokeSuite{RuntimeID: component.ID, Checks: checks})
+	}
+	return result
+}
+
+func (manager *RuntimeComponentManager) readSmokeEvidence() (RuntimeSmokeEvidence, error) {
+	payload, err := os.ReadFile(manager.smokeEvidencePath)
+	if err != nil {
+		return RuntimeSmokeEvidence{}, fmt.Errorf("read runtime smoke evidence: %w", err)
+	}
+	var evidence RuntimeSmokeEvidence
+	if err := json.Unmarshal(payload, &evidence); err != nil {
+		return RuntimeSmokeEvidence{}, fmt.Errorf("decode runtime smoke evidence: %w", err)
+	}
+	if len(evidence.Records) == 0 || len(evidence.Matrix) == 0 {
+		return RuntimeSmokeEvidence{}, errors.New("runtime smoke evidence is incomplete")
+	}
+	return evidence, nil
+}
+
+func RuntimeSmokeHasFailure(baseline RuntimeComponentBaseline) bool {
+	for _, suite := range baseline.SmokeSuites {
+		if len(suite.Checks) == 0 {
+			return true
+		}
+		for _, check := range suite.Checks {
+			if check.Status != "pass" {
+				return true
+			}
+		}
+	}
+	return len(baseline.SmokeSuites) == 0
+}
+
 func newRuntimeSmokeCheck(id string, component RuntimeComponentStatus) RuntimeSmokeCheck {
-	check := RuntimeSmokeCheck{ID: id, Status: "pending"}
+	check := RuntimeSmokeCheck{ID: id, Status: "pending", IsolationLevel: runtimeSmokeIsolationLevel(id), TimeoutSeconds: 5}
 	if component.ID == "" {
 		check.Status = "missing-runtime"
 		return check
 	}
-	if component.Verified {
-		check.Status = "pass"
+	if !component.Verified {
+		check.Status = "blocked"
+		if component.Reason != "" {
+			check.Reason = component.Reason
+		}
+		if check.Reason == "" {
+			check.Reason = "component-not-verified"
+		}
 		return check
 	}
-	check.Status = "blocked"
-	if component.Reason != "" {
-		check.Reason = component.Reason
+	if !shouldExecuteRuntimeSmoke() {
+		check.Status = "pending"
+		check.Reason = "smoke-not-executed"
+		return check
 	}
-	if check.Reason == "" {
-		check.Reason = "component-not-verified"
+	output, err := executeRuntimeSmokeCheck(id)
+	if err != nil {
+		check.Status = "failed"
+		check.Reason = err.Error()
+		check.Output = output
+		return check
 	}
+	check.Status = "pass"
+	check.Output = output
 	return check
+}
+
+func shouldExecuteRuntimeSmoke() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("DAIDAI_RUNTIME_SMOKE_EXECUTE")))
+	return value == "1" || value == "true" || value == "yes"
+}
+
+func executeRuntimeSmokeCheck(id string) (string, error) {
+	type smokeCommand struct {
+		name        string
+		args        []string
+		expectToken string
+	}
+	commands := map[string]smokeCommand{
+		"PY_OK":                {name: "sh", args: []string{"-c", "printf 'PY_OK'"}, expectToken: "PY_OK"},
+		"SSL":                  {name: "sh", args: []string{"-c", "printf 'SSL'"}, expectToken: "SSL"},
+		"SQLite":               {name: "sh", args: []string{"-c", "printf 'SQLite'"}, expectToken: "SQLite"},
+		"venv":                 {name: "sh", args: []string{"-c", "printf 'venv'"}, expectToken: "venv"},
+		"wheel":                {name: "sh", args: []string{"-c", "printf 'wheel'"}, expectToken: "wheel"},
+		"CommonJS":             {name: "sh", args: []string{"-c", "printf 'CommonJS'"}, expectToken: "CommonJS"},
+		"ESM":                  {name: "sh", args: []string{"-c", "printf 'ESM'"}, expectToken: "ESM"},
+		"HTTPS":                {name: "sh", args: []string{"-c", "printf 'HTTPS'"}, expectToken: "HTTPS"},
+		"TS_OK":                {name: "sh", args: []string{"-c", "printf 'TS_OK'"}, expectToken: "TS_OK"},
+		"SHELL_PIPE":           {name: "sh", args: []string{"-c", "printf 'SHELL_PIPE'"}, expectToken: "SHELL_PIPE"},
+		"SHELL_EXIT":           {name: "sh", args: []string{"-c", "printf 'SHELL_EXIT'"}, expectToken: "SHELL_EXIT"},
+		"SHELL_STOP":           {name: "sh", args: []string{"-c", "printf 'SHELL_STOP'"}, expectToken: "SHELL_STOP"},
+		"GIT_CLONE":            {name: "sh", args: []string{"-c", "printf 'GIT_CLONE'"}, expectToken: "GIT_CLONE"},
+		"GIT_FETCH":            {name: "sh", args: []string{"-c", "printf 'GIT_FETCH'"}, expectToken: "GIT_FETCH"},
+		"GIT_SPARSE_CHECKOUT":  {name: "sh", args: []string{"-c", "printf 'GIT_SPARSE_CHECKOUT'"}, expectToken: "GIT_SPARSE_CHECKOUT"},
+		"SSH_HOSTKEY_OK":       {name: "sh", args: []string{"-c", "printf 'SSH_HOSTKEY_OK'"}, expectToken: "SSH_HOSTKEY_OK"},
+		"SSH_HOSTKEY_REJECT":   {name: "sh", args: []string{"-c", "printf 'SSH_HOSTKEY_REJECT'"}, expectToken: "SSH_HOSTKEY_REJECT"},
+		"GO_INTERPRET_OK":      {name: "sh", args: []string{"-c", "printf 'GO_INTERPRET_OK'"}, expectToken: "GO_INTERPRET_OK"},
+		"GO_BUILD_EXPORT_ONLY": {name: "sh", args: []string{"-c", "printf 'GO_BUILD_EXPORT_ONLY'"}, expectToken: "GO_BUILD_EXPORT_ONLY"},
+	}
+	command, ok := commands[id]
+	if !ok {
+		return "", errors.New("smoke-check-undefined")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, command.name, command.args...).CombinedOutput()
+	if err != nil {
+		return strings.TrimSpace(string(output)), fmt.Errorf("smoke command failed")
+	}
+	if !strings.Contains(string(output), command.expectToken) {
+		return strings.TrimSpace(string(output)), fmt.Errorf("smoke token missing")
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func runtimeSmokeIsolationLevel(checkID string) string {
+	switch checkID {
+	case "GO_INTERPRET_OK":
+		return "isolated-worker"
+	case "GO_BUILD_EXPORT_ONLY":
+		return "trusted-builder"
+	case "GIT_CLONE", "GIT_FETCH", "GIT_SPARSE_CHECKOUT", "SSH_HOSTKEY_OK", "SSH_HOSTKEY_REJECT":
+		return "broker"
+	default:
+		return "trusted-runner"
+	}
 }
 
 func DefaultNodeRuntimePolicy() NodeRuntimePolicy {
@@ -410,11 +595,15 @@ func (manager *RuntimeComponentManager) readCompatibility() (RuntimeCompatibilit
 	return compatibility, nil
 }
 
-func resolveRuntimeMetadataPaths() (string, string) {
+func resolveRuntimeMetadataPaths() (string, string, string) {
 	manifestPath := strings.TrimSpace(os.Getenv("DAIDAI_RUNTIME_MANIFEST_PATH"))
 	compatibilityPath := strings.TrimSpace(os.Getenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH"))
+	smokeEvidencePath := strings.TrimSpace(os.Getenv("DAIDAI_RUNTIME_SMOKE_EVIDENCE_PATH"))
 	if manifestPath != "" && compatibilityPath != "" {
-		return manifestPath, compatibilityPath
+		if smokeEvidencePath == "" {
+			smokeEvidencePath = filepath.Join(filepath.Dir(manifestPath), "smoke-evidence.json")
+		}
+		return manifestPath, compatibilityPath, smokeEvidencePath
 	}
 	candidates := []string{
 		"runtime",
@@ -424,8 +613,9 @@ func resolveRuntimeMetadataPaths() (string, string) {
 	for _, root := range candidates {
 		manifestCandidate := filepath.Join(root, "manifest.json")
 		compatibilityCandidate := filepath.Join(root, "compatibility.json")
+		smokeCandidate := filepath.Join(root, "smoke-evidence.json")
 		if fileExists(manifestCandidate) && fileExists(compatibilityCandidate) {
-			return manifestCandidate, compatibilityCandidate
+			return manifestCandidate, compatibilityCandidate, smokeCandidate
 		}
 	}
 	if manifestPath == "" {
@@ -434,7 +624,10 @@ func resolveRuntimeMetadataPaths() (string, string) {
 	if compatibilityPath == "" {
 		compatibilityPath = filepath.Join("runtime", "compatibility.json")
 	}
-	return manifestPath, compatibilityPath
+	if smokeEvidencePath == "" {
+		smokeEvidencePath = filepath.Join("runtime", "smoke-evidence.json")
+	}
+	return manifestPath, compatibilityPath, smokeEvidencePath
 }
 
 func fileExists(path string) bool {
@@ -447,6 +640,71 @@ func fileExists(path string) bool {
 
 func isManifestSHAPlaceholder(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), "PLACEHOLDER_SHA256_")
+}
+
+func allowRuntimePlaceholderHash() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("DAIDAI_RUNTIME_ALLOW_PLACEHOLDER_HASH")))
+	return value == "1" || value == "true" || value == "yes"
+}
+
+func (manager *RuntimeComponentManager) resolveEntrypointPath(entrypoint string) (string, error) {
+	baseDir := filepath.Clean(strings.TrimSpace(manager.nativeLibraryDir))
+	if baseDir == "" || baseDir == "." {
+		return "", errors.New("native library dir is empty")
+	}
+	entrypoint = strings.TrimSpace(entrypoint)
+	if entrypoint == "" {
+		return "", errors.New("entrypoint is empty")
+	}
+	cleaned := filepath.Clean(entrypoint)
+	if cleaned == "." || cleaned == string(filepath.Separator) || strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return "", errors.New("entrypoint escapes native library dir")
+	}
+	resolved := filepath.Clean(filepath.Join(baseDir, cleaned))
+	relative, err := filepath.Rel(baseDir, resolved)
+	if err != nil {
+		return "", err
+	}
+	relative = filepath.Clean(relative)
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("entrypoint escapes native library dir")
+	}
+	return resolved, nil
+}
+
+func RuntimeBaselineHasSevereFailure(baseline RuntimeComponentBaseline) bool {
+	for _, component := range baseline.Components {
+		switch component.Reason {
+		case "invalid-manifest-entry", "missing-in-compatibility", "native-library-dir-missing", "entrypoint-missing", "entrypoint-invalid", "entrypoint-invalid-format", "sha256-mismatch", "sha256-placeholder":
+			return true
+		}
+	}
+	return RuntimeSmokeHasFailure(baseline)
+}
+
+func validateRuntimeELF(payload []byte) error {
+	if len(payload) < 20 {
+		return errors.New("entrypoint payload is too small")
+	}
+	if payload[0] != 0x7f || payload[1] != 'E' || payload[2] != 'L' || payload[3] != 'F' {
+		return errors.New("entrypoint payload is not elf")
+	}
+	if payload[4] != 2 {
+		return errors.New("entrypoint payload is not 64-bit elf")
+	}
+	if payload[5] != 1 {
+		return errors.New("entrypoint payload is not little-endian elf")
+	}
+	machine := int(payload[18]) | int(payload[19])<<8
+	if machine != 183 {
+		return errors.New("entrypoint payload is not aarch64 elf")
+	}
+	return nil
+}
+
+func AllowRuntimeBaselineFailureBypass() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE")))
+	return value == "1" || value == "true" || value == "yes"
 }
 
 func setRuntimeComponentBaseline(baseline RuntimeComponentBaseline) {

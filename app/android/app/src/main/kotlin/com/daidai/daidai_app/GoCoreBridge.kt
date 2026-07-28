@@ -17,6 +17,7 @@ object GoCoreBridge {
             .put("port", 0)
             .put("localToken", localToken)
             .put("nativeLibraryDir", context.applicationInfo.nativeLibraryDir)
+            .put("androidKeystoreMasterKey", AndroidRuntimeSecretBridge.runtimeMasterKey(context))
             .toString()
         val raw = invokeString(GoCoreReflectionContract.START_CORE, arrayOf(String::class.java), arrayOf(options))
         return mapResultWithEndpoint(raw, localToken)

@@ -23,19 +23,21 @@ func GitClone(url, branch, destDir string, sshKeyPath string) (string, error) {
 	}
 	args = append(args, url, destDir)
 
-	cmd := exec.Command("git", args...)
-	cmd.Dir = config.C.Data.ScriptsDir
-
 	authCfg, err := buildGitAuthConfig(os.Environ(), url, &model.Subscription{
 		URL:      url,
-		SSHKeyID: nil,
+		AuthType: gitAuthTypeForSSHKeyPath(sshKeyPath),
 	}, sshKeyPath)
 	if err != nil {
 		return "", err
 	}
 	defer authCfg.CleanupFunc()
-	cmd.Env = authCfg.Env
 
+	if strings.TrimSpace(authCfg.RemoteURL) != "" {
+		args[len(args)-2] = authCfg.RemoteURL
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = config.C.Data.ScriptsDir
+	cmd.Env = authCfg.Env
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
@@ -43,8 +45,9 @@ func GitClone(url, branch, destDir string, sshKeyPath string) (string, error) {
 func GitPull(repoDir string, sshKeyPath string) (string, error) {
 	cmd := exec.Command("git", "pull")
 	cmd.Dir = repoDir
+	remoteURL := resolveRepoRemoteURL(repoDir)
 
-	authCfg, err := buildGitAuthConfig(os.Environ(), "", &model.Subscription{}, sshKeyPath)
+	authCfg, err := buildGitAuthConfig(os.Environ(), remoteURL, &model.Subscription{URL: remoteURL, AuthType: gitAuthTypeForSSHKeyPath(sshKeyPath)}, sshKeyPath)
 	if err != nil {
 		return "", err
 	}
@@ -55,9 +58,23 @@ func GitPull(repoDir string, sshKeyPath string) (string, error) {
 	return string(output), err
 }
 
+func gitAuthTypeForSSHKeyPath(sshKeyPath string) string {
+	if strings.TrimSpace(sshKeyPath) != "" {
+		return model.SubAuthTypeSSH
+	}
+	return ""
+}
+
 func GitReset(repoDir string) (string, error) {
 	cmd := exec.Command("git", "reset", "--hard")
 	cmd.Dir = repoDir
+	remoteURL := resolveRepoRemoteURL(repoDir)
+	authCfg, err := buildGitAuthConfig(os.Environ(), remoteURL, &model.Subscription{URL: remoteURL}, "")
+	if err != nil {
+		return "", err
+	}
+	defer authCfg.CleanupFunc()
+	cmd.Env = authCfg.Env
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -66,8 +83,19 @@ func GitReset(repoDir string) (string, error) {
 
 	cmd2 := exec.Command("git", "clean", "-fd")
 	cmd2.Dir = repoDir
+	cmd2.Env = authCfg.Env
 	output2, err2 := cmd2.CombinedOutput()
 	return string(output) + "\n" + string(output2), err2
+}
+
+func resolveRepoRemoteURL(repoDir string) string {
+	cmd := exec.Command("git", "config", "--get", "remote.origin.url")
+	cmd.Dir = repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func IsGitRepo(dir string) bool {

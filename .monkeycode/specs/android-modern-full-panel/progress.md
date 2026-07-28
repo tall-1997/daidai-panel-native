@@ -6,9 +6,9 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 2 is in progress. Task 2.1 baseline scaffolding is already present, and Tasks 2.2 through 2.6 are now implemented as server-side runtime/security baseline structures for unified Milestone 2 verification.
+Milestone 2 review remediation is complete. All Critical/Important findings from the Milestone 2 review are fixed and validated with the unified verification suite.
 
-The local branch remains ahead of `origin/main` with Milestone 2 scaffolding updates pending final milestone-level unified tests.
+The local branch now contains Milestone 2 runtime/security hardening updates ready to push to `origin/main`.
 
 ## Completed Work
 
@@ -174,7 +174,11 @@ The local branch remains ahead of `origin/main` with Milestone 2 scaffolding upd
 - Node.js and TypeScript smoke-state structure is complete with `CommonJS`/`ESM`/`HTTPS`/`TS_OK`, and npm lifecycle scripts are default-disabled through runtime policy.
 - Shell, Git, and SSH smoke-state structure is complete with default policy wiring for hooks/pager/editor/external filters/credential helper suppression.
 - Yaegi and Go Builder runtime declarations and smoke placeholders are complete, with explicit Go Builder export-only policy markers.
-- Secret Store minimal abstraction plus local placeholder implementation and trust authorization record model (`source`/`version`/`sha256`/`capability`) are complete and connected to runtime baseline status.
+- Secret Store now uses local AES-GCM encryption-at-rest with random nonce and 32-byte master key from env or restricted dataDir file (`0600`).
+- Trust authorization now persists to `dataDir/.runtime_trust_authorizations.json` (`0600`) with reload-on-init and observable readiness/error state.
+- Runtime baseline now enforces entrypoint path boundary checks, placeholder digest default-reject policy, and severe-failure startup gate with explicit dev bypass switch.
+- Git runtime policy hardening is unified through `buildGitAuthConfig` + `ApplyGitSSHRuntimePolicy` on clone/pull/reset paths.
+- Runtime ELF verification script now defaults to strict digest mode and supports opt-out via `--strict=false`.
 
 ### Milestone 3
 
@@ -210,7 +214,14 @@ Verified Task 1.0 through Task 1.3:
 - Handler/service baseline was green after flaky command-output fix.
 - Full mobile route and mobile Core race tests passed.
 
-Not yet verified:
+Milestone 2 unified verification completed:
 
-- Milestone 1 complete exit gate.
-- Any Milestone 2-6 implementation.
+- `cd /workspace/panel/server && go test ./service ./handler ./mobilecore ./appboot ./router ./database -count=1` passed.
+- `cd /workspace/panel/server && go test -race ./mobilecore ./service -count=1` passed.
+- `cd /workspace && go run scripts/generate-route-contract.go -check` passed (`423 routes`).
+- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
+- `GOOS=android GOARCH=arm64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
+
+Remaining verification pending:
+
+- Milestone 2 device-level runtime smoke matrix on API 28/35 and 4K/16K page-size environments.

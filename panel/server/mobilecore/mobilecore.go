@@ -56,6 +56,7 @@ type options struct {
 	Port                 int                       `json:"port"`
 	LocalToken           string                    `json:"localToken"`
 	NativeLibraryDir     string                    `json:"nativeLibraryDir"`
+	AndroidKeystoreKey   string                    `json:"androidKeystoreMasterKey"`
 	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
@@ -314,6 +315,36 @@ func StartCore(optionsJSON string) (response string) {
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 	}
+	if err := service.InitializeRuntimeSecurityWithKeystoreKey(parsed.DataDir, parsed.AndroidKeystoreKey); err != nil {
+		logDiagnostic(codeBootstrapFailed, "runtime-security")
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
+	nativeLibraryDir := strings.TrimSpace(parsed.NativeLibraryDir)
+	if nativeLibraryDir == "" {
+		nativeLibraryDir = strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR"))
+	}
+	runtimeManager := service.NewRuntimeComponentManager(nativeLibraryDir)
+	runtimeBaseline, runtimeErr := runtimeManager.LoadAndValidate()
+	if runtimeErr != nil {
+		if !service.AllowRuntimeBaselineFailureBypass() {
+			logDiagnostic(codeBootstrapFailed, "runtime-baseline")
+			if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+			}
+			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+		}
+		log.Printf("mobilecore: runtime baseline bypassed due to dev flag: %v", runtimeErr)
+	}
+	if service.RuntimeBaselineHasSevereFailure(runtimeBaseline) && !service.AllowRuntimeBaselineFailureBypass() {
+		logDiagnostic(codeBootstrapFailed, "runtime-baseline-gate")
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
+	}
 	listener, err := listenTCP("tcp", "127.0.0.1:0")
 	if err != nil {
 		logDiagnostic(codeListenFailed, "listen")
@@ -383,14 +414,6 @@ func StartCore(optionsJSON string) (response string) {
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
 	}
-	nativeLibraryDir := strings.TrimSpace(parsed.NativeLibraryDir)
-	if nativeLibraryDir == "" {
-		nativeLibraryDir = strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR"))
-	}
-	runtimeManager := service.NewRuntimeComponentManager(nativeLibraryDir)
-	if _, runtimeErr := runtimeManager.LoadAndValidate(); runtimeErr != nil {
-		log.Printf("mobilecore: runtime baseline warning: %v", runtimeErr)
-	}
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
 	runtime := newRuntimeContainer()
@@ -451,9 +474,9 @@ func StartCore(optionsJSON string) (response string) {
 		return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
 	}
 	runtimeCtx, runtimeCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
-	runtimeErr := running.runtime.Start(runtimeCtx)
+	runtimeStartErr := running.runtime.Start(runtimeCtx)
 	runtimeCancel()
-	if runtimeErr != nil {
+	if runtimeStartErr != nil {
 		_ = running.server.Close()
 		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
 			lifecycle.mu.Unlock()

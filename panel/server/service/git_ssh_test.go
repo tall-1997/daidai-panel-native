@@ -145,3 +145,12 @@ func TestBuildGitAuthConfigRejectsTokenForSSHRemote(t *testing.T) {
 		t.Fatal("expected token auth to reject SSH remote URL")
 	}
 }
+
+func TestGitAuthTypeForSSHKeyPath(t *testing.T) {
+	if got := gitAuthTypeForSSHKeyPath("/tmp/key"); got != model.SubAuthTypeSSH {
+		t.Fatalf("auth type=%q want=%q", got, model.SubAuthTypeSSH)
+	}
+	if got := gitAuthTypeForSSHKeyPath("   "); got != "" {
+		t.Fatalf("empty key auth type=%q want empty", got)
+	}
+}

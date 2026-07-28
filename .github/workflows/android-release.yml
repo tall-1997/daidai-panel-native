@@ -90,6 +90,14 @@ jobs:
         working-directory: app
         run: flutter build apk --release --target-platform android-arm64
 
+      - name: Verify runtime ELF manifest and hashes
+        run: |
+          go run ./scripts/run-runtime-smoke.go --output ./runtime/smoke-evidence.json
+          go run ./scripts/verify-runtime-elf.go \
+            --manifest ./runtime/manifest.json \
+            --smoke-evidence ./runtime/smoke-evidence.json \
+            --native-lib-dir ./app/android/app/src/main/jniLibs/arm64-v8a
+
       - name: Verify APK
         run: |
           test -s app/build/app/outputs/flutter-apk/app-release.apk

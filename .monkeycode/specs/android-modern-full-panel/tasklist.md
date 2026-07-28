@@ -174,7 +174,7 @@ go run scripts/generate-route-contract.go -check
 
 ### Task 2.1: Runtime Manifest and APK Packaging
 
-**Status:** Complete (runtime baseline scaffolding implemented)
+**Status:** Complete (Critical/Important review remediations merged: placeholder hash default-deny with explicit dev switch, manifest entrypoint boundary validation, severe baseline startup gate)
 
 Create `runtime/manifest.json`, `runtime/compatibility.json`, Gradle runtime packaging, final APK ELF checks, and `RuntimeComponentManager`. Package executable entries as `lib<runtime>_exec.so` and resolve them from `nativeLibraryDir`.
 
@@ -192,7 +192,7 @@ Package Android Node LTS, npm/npx, CA, TypeScript, and ts-node. Disable lifecycl
 
 ### Task 2.4: Shell, Git, and SSH Runtime
 
-**Status:** Complete (smoke-state scaffolding and Git/SSH hardening policy wiring)
+**Status:** Complete (smoke-state scaffolding and unified Git auth/runtime policy injection across clone/pull/reset)
 
 Package controlled Shell, Git HTTPS, and SSH transport. Disable hooks, pager, editor, external filters, and credential helpers. Test clone/fetch/sparse checkout and Host Key rejection.
 
@@ -204,7 +204,7 @@ Embed Yaegi with a fixed symbol allowlist. Package Go compiler/linker/asm tools 
 
 ### Task 2.6: Secret Store and Trust Authorization
 
-**Status:** Complete (minimal local Secret Store and trust authorization model skeleton)
+**Status:** Complete (local AES-GCM encrypted secret store + persisted trust authorization records with observable readiness state)
 
 Implement Android Keystore envelope encryption and source/version/SHA-256/capability authorization records. Add `:runner` trusted process and isolated pure-compute worker.
 

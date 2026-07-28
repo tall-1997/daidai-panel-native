@@ -1,0 +1,178 @@
+{
+  "version": "1",
+  "updated_at": "2026-07-28T08:24:00Z",
+  "matrix": [
+    "api28-4k",
+    "api35-4k",
+    "api35-16k"
+  ],
+  "records": [
+    {
+      "runtime_id": "python-3.12-android-arm64",
+      "version": "3.12.x",
+      "entry": "libpython_exec.so",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "PY_OK",
+          "status": "pass",
+          "output": "PY_OK"
+        },
+        {
+          "id": "SSL",
+          "status": "pass",
+          "output": "SSL"
+        },
+        {
+          "id": "SQLite",
+          "status": "pass",
+          "output": "SQLite"
+        },
+        {
+          "id": "venv",
+          "status": "pass",
+          "output": "venv"
+        },
+        {
+          "id": "wheel",
+          "status": "pass",
+          "output": "wheel"
+        }
+      ]
+    },
+    {
+      "runtime_id": "node-lts-android-arm64",
+      "version": "20.x",
+      "entry": "libnode_exec.so",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "CommonJS",
+          "status": "pass",
+          "output": "CommonJS"
+        },
+        {
+          "id": "ESM",
+          "status": "pass",
+          "output": "ESM"
+        },
+        {
+          "id": "HTTPS",
+          "status": "pass",
+          "output": "HTTPS"
+        }
+      ]
+    },
+    {
+      "runtime_id": "typescript-stable",
+      "version": "5.x",
+      "entry": "libnode_exec.so",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "TS_OK",
+          "status": "pass",
+          "output": "TS_OK"
+        }
+      ]
+    },
+    {
+      "runtime_id": "shell-android-arm64",
+      "version": "1.x",
+      "entry": "libshell_exec.so",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "SHELL_PIPE",
+          "status": "pass",
+          "output": "SHELL_PIPE"
+        },
+        {
+          "id": "SHELL_EXIT",
+          "status": "pass",
+          "output": "SHELL_EXIT"
+        },
+        {
+          "id": "SHELL_STOP",
+          "status": "pass",
+          "output": "SHELL_STOP"
+        }
+      ]
+    },
+    {
+      "runtime_id": "git-android-arm64",
+      "version": "2.x",
+      "entry": "libgit_exec.so",
+      "isolation_level": "broker",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "GIT_CLONE",
+          "status": "pass",
+          "output": "GIT_CLONE"
+        },
+        {
+          "id": "GIT_FETCH",
+          "status": "pass",
+          "output": "GIT_FETCH"
+        },
+        {
+          "id": "GIT_SPARSE_CHECKOUT",
+          "status": "pass",
+          "output": "GIT_SPARSE_CHECKOUT"
+        }
+      ]
+    },
+    {
+      "runtime_id": "ssh-android-arm64",
+      "version": "9.x",
+      "entry": "libssh_exec.so",
+      "isolation_level": "broker",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "SSH_HOSTKEY_OK",
+          "status": "pass",
+          "output": "SSH_HOSTKEY_OK"
+        },
+        {
+          "id": "SSH_HOSTKEY_REJECT",
+          "status": "pass",
+          "output": "SSH_HOSTKEY_REJECT"
+        }
+      ]
+    },
+    {
+      "runtime_id": "yaegi-go",
+      "version": "0.x",
+      "entry": "libyaegi_exec.so",
+      "isolation_level": "isolated-worker",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "GO_INTERPRET_OK",
+          "status": "pass",
+          "output": "GO_INTERPRET_OK"
+        }
+      ]
+    },
+    {
+      "runtime_id": "go-builder-android-arm64",
+      "version": "1.25.x",
+      "entry": "libgobuilder_exec.so",
+      "isolation_level": "trusted-builder",
+      "timeout_seconds": 5,
+      "checks": [
+        {
+          "id": "GO_BUILD_EXPORT_ONLY",
+          "status": "pass",
+          "output": "GO_BUILD_EXPORT_ONLY"
+        }
+      ]
+    }
+  ]
+}

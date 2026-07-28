@@ -3,6 +3,8 @@ package mobilecore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +44,10 @@ type testResult struct {
 }
 
 const testLocalToken = "0123456789abcdef0123456789abcdef"
+
+func init() {
+	os.Setenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE", "1")
+}
 
 type localTransport struct{ base http.RoundTripper }
 
@@ -1332,6 +1338,49 @@ func TestStartCoreRuntimeContainerFailureKeepsStoppedState(t *testing.T) {
 	}
 }
 
+func TestStartCoreBlocksOnRuntimeBaselineSevereFailure(t *testing.T) {
+	t.Setenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE", "0")
+	nativeDir, manifestPath, compatibilityPath := writeRuntimeFixture(t, strings.Repeat("a", 64))
+	t.Setenv("DAIDAI_RUNTIME_MANIFEST_PATH", manifestPath)
+	t.Setenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH", compatibilityPath)
+
+	options, err := json.Marshal(map[string]any{
+		"dataDir":          t.TempDir(),
+		"localToken":       testLocalToken,
+		"nativeLibraryDir": nativeDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, StartCore(string(options)))
+	if result.OK || result.ErrorCode != codeBootstrapFailed {
+		t.Fatalf("unexpected start result: %+v", result)
+	}
+}
+
+func TestStartCoreAllowsRuntimeBaselineBypassInDevMode(t *testing.T) {
+	nativeDir, manifestPath, compatibilityPath := writeRuntimeFixture(t, strings.Repeat("a", 64))
+	t.Setenv("DAIDAI_RUNTIME_MANIFEST_PATH", manifestPath)
+	t.Setenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH", compatibilityPath)
+	t.Setenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE", "1")
+
+	options, err := json.Marshal(map[string]any{
+		"dataDir":          t.TempDir(),
+		"localToken":       testLocalToken,
+		"nativeLibraryDir": nativeDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodeResult(t, StartCore(string(options)))
+	if !result.OK || result.Status != "running" {
+		t.Fatalf("unexpected start result: %+v", result)
+	}
+	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+		t.Fatalf("stop failed: %+v", stopped)
+	}
+}
+
 func TestStartCoreRuntimeContainerStartStopOrderAndIdempotent(t *testing.T) {
 	trace := make([]string, 0, 16)
 	mu := sync.Mutex{}
@@ -1575,4 +1624,57 @@ func TestStopCoreReportsRuntimeStopFailureAndKeepsDiagnosableState(t *testing.T)
 	if status := decodeResult(t, CoreStatus()); status.Running || status.ErrorCode != codeShutdownFailed || status.Status != "failed" {
 		t.Fatalf("core diagnostics missing after runtime stop failure: %+v", status)
 	}
+}
+
+func writeRuntimeFixture(t *testing.T, runtimeSHA string) (nativeDir, manifestPath, compatibilityPath string) {
+	t.Helper()
+	root := t.TempDir()
+	nativeDir = filepath.Join(root, "libs")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime native dir: %v", err)
+	}
+	entrypoint := filepath.Join(nativeDir, "libpython_exec.so")
+	if err := os.WriteFile(entrypoint, []byte("python"), 0o755); err != nil {
+		t.Fatalf("write runtime entrypoint: %v", err)
+	}
+	if strings.TrimSpace(runtimeSHA) == "" {
+		runtimeSHA = sha256HexText("python")
+	}
+	manifest := map[string]any{
+		"version": "1",
+		"components": []map[string]any{{
+			"id":         "python-3.12-android-arm64",
+			"abi":        "arm64-v8a",
+			"entrypoint": "libpython_exec.so",
+			"sha256":     runtimeSHA,
+		}},
+	}
+	compatibility := map[string]any{
+		"version": "1",
+		"abi":     "arm64-v8a",
+		"runtime_ids": []string{
+			"python-3.12-android-arm64",
+		},
+	}
+	manifestPath = filepath.Join(root, "manifest.json")
+	compatibilityPath = filepath.Join(root, "compatibility.json")
+	writeFixtureJSON(t, manifestPath, manifest)
+	writeFixtureJSON(t, compatibilityPath, compatibility)
+	return nativeDir, manifestPath, compatibilityPath
+}
+
+func writeFixtureJSON(t *testing.T, path string, payload any) {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal fixture json: %v", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatalf("write fixture json: %v", err)
+	}
+}
+
+func sha256HexText(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

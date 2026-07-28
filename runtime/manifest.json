@@ -7,7 +7,7 @@
       "version": "3.12.x",
       "abi": "arm64-v8a",
       "entrypoint": "libpython_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_PYTHON",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["python", "pip", "venv"]
     },
     {
@@ -15,7 +15,7 @@
       "version": "20.x",
       "abi": "arm64-v8a",
       "entrypoint": "libnode_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_NODE",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["node", "npm", "npx"]
     },
     {
@@ -23,7 +23,7 @@
       "version": "5.x",
       "abi": "arm64-v8a",
       "entrypoint": "libnode_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_TYPESCRIPT",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["typescript", "ts-node"]
     },
     {
@@ -31,7 +31,7 @@
       "version": "1.x",
       "abi": "arm64-v8a",
       "entrypoint": "libshell_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_SHELL",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["shell"]
     },
     {
@@ -39,7 +39,7 @@
       "version": "2.x",
       "abi": "arm64-v8a",
       "entrypoint": "libgit_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_GIT",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["git", "https"]
     },
     {
@@ -47,7 +47,7 @@
       "version": "9.x",
       "abi": "arm64-v8a",
       "entrypoint": "libssh_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_SSH",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["ssh", "known-hosts"]
     },
     {
@@ -55,7 +55,7 @@
       "version": "0.x",
       "abi": "arm64-v8a",
       "entrypoint": "libyaegi_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_YAEGI",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["go-interpret"]
     },
     {
@@ -63,7 +63,7 @@
       "version": "1.25.x",
       "abi": "arm64-v8a",
       "entrypoint": "libgobuilder_exec.so",
-      "sha256": "PLACEHOLDER_SHA256_GOBUILDER",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["go-build-export"]
     }
   ]
