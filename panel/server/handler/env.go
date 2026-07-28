@@ -250,7 +250,7 @@ func (h *EnvHandler) List(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(envs))
 	for i, e := range envs {
-		data[i] = e.ToDict()
+		data[i] = service.OpenEnvVarForResponse(c.Request.Context(), &e)
 	}
 
 	if wantAll {
@@ -339,12 +339,16 @@ func (h *EnvHandler) Create(c *gin.Context) {
 			SortOrder: envNormalSortOrder,
 			Position:  nextPos,
 		}
+		if err := service.SealEnvVarValue(c.Request.Context(), &env, item.Value); err != nil {
+			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
+			continue
+		}
 
 		if err := database.DB.Create(&env).Error; err != nil {
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
 			continue
 		}
-		results = append(results, env.ToDict())
+		results = append(results, service.OpenEnvVarForResponse(c.Request.Context(), &env))
 		createdCount++
 	}
 
@@ -406,8 +410,15 @@ func (h *EnvHandler) Update(c *gin.Context) {
 			updates["name"] = newName
 		}
 	}
-	if req.Value != nil && *req.Value != env.Value {
-		updates["value"] = *req.Value
+	if req.Value != nil && *req.Value != service.OpenEnvVarValue(c.Request.Context(), &env) {
+		sealed := env
+		if err := service.SealEnvVarValue(c.Request.Context(), &sealed, *req.Value); err != nil {
+			response.InternalError(c, "密封环境变量失败")
+			return
+		}
+		updates["value"] = sealed.Value
+		updates["secret"] = sealed.Secret
+		updates["sealed"] = sealed.Sealed
 	}
 	if req.Remarks != nil && *req.Remarks != env.Remarks {
 		updates["remarks"] = *req.Remarks
@@ -431,7 +442,7 @@ func (h *EnvHandler) Update(c *gin.Context) {
 	// 因此 Update 不需要撞名检测。运行时按 name 分组，顺序由 position 决定。
 
 	if len(updates) == 0 {
-		response.Success(c, gin.H{"message": "未检测到字段变更", "data": env.ToDict()})
+		response.Success(c, gin.H{"message": "未检测到字段变更", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
 		return
 	}
 
@@ -441,7 +452,7 @@ func (h *EnvHandler) Update(c *gin.Context) {
 	}
 
 	database.DB.First(&env, envID)
-	response.Success(c, gin.H{"message": "更新成功", "data": env.ToDict()})
+	response.Success(c, gin.H{"message": "更新成功", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
 }
 
 func (h *EnvHandler) Delete(c *gin.Context) {
@@ -464,7 +475,7 @@ func (h *EnvHandler) Get(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"data": env.ToDict()})
+	response.Success(c, gin.H{"data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
 }
 
 func (h *EnvHandler) Enable(c *gin.Context) {
@@ -476,7 +487,7 @@ func (h *EnvHandler) Enable(c *gin.Context) {
 	}
 	database.DB.Model(&env).Update("enabled", true)
 	env.Enabled = true
-	response.Success(c, gin.H{"message": "已启用", "data": env.ToDict()})
+	response.Success(c, gin.H{"message": "已启用", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
 }
 
 func (h *EnvHandler) Disable(c *gin.Context) {
@@ -488,7 +499,7 @@ func (h *EnvHandler) Disable(c *gin.Context) {
 	}
 	database.DB.Model(&env).Update("enabled", false)
 	env.Enabled = false
-	response.Success(c, gin.H{"message": "已禁用", "data": env.ToDict()})
+	response.Success(c, gin.H{"message": "已禁用", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
 }
 
 func (h *EnvHandler) BatchDelete(c *gin.Context) {
@@ -709,7 +720,7 @@ func (h *EnvHandler) Export(c *gin.Context) {
 
 	data := make(map[string]string)
 	for _, e := range envs {
-		data[e.Name] = e.Value
+		data[e.Name] = service.OpenEnvVarValue(c.Request.Context(), &e)
 	}
 
 	response.Success(c, gin.H{"data": data})
@@ -723,7 +734,8 @@ func (h *EnvHandler) ExportAll(c *gin.Context) {
 	for i, e := range envs {
 		data[i] = map[string]interface{}{
 			"name":    e.Name,
-			"value":   e.Value,
+			"value":   service.OpenEnvVarValue(c.Request.Context(), &e),
+			"secret":  e.Secret,
 			"remarks": e.Remarks,
 			"group":   e.Group,
 			"groups":  model.SplitEnvGroups(e.Group),
@@ -755,7 +767,7 @@ func (h *EnvHandler) ExportFiles(c *gin.Context) {
 	var envs []model.EnvVar
 	query.Find(&envs)
 
-	grouped := groupEnvs(envs)
+	grouped := groupEnvs(service.OpenEnvVarsForRuntime(c.Request.Context(), envs))
 
 	result := make(map[string]string)
 	if req.Format == "shell" || req.Format == "all" {
@@ -893,8 +905,15 @@ func (h *EnvHandler) Import(c *gin.Context) {
 			// duplicates when the value changes.
 			var existing model.EnvVar
 			if database.DB.Where("name = ? AND remarks = ?", name, remarks).First(&existing).Error == nil {
+				sealed := existing
+				if err := service.SealEnvVarValue(c.Request.Context(), &sealed, value); err != nil {
+					errors = append(errors, fmt.Sprintf("第 %d 项: %s", i+1, err.Error()))
+					continue
+				}
 				updates := map[string]interface{}{
-					"value":   value,
+					"value":   sealed.Value,
+					"secret":  sealed.Secret,
+					"sealed":  sealed.Sealed,
 					"enabled": enabled,
 				}
 				if hasGroup {
@@ -920,6 +939,10 @@ func (h *EnvHandler) Import(c *gin.Context) {
 			Enabled:   enabled,
 			SortOrder: envNormalSortOrder,
 			Position:  nextPos,
+		}
+		if err := service.SealEnvVarValue(c.Request.Context(), &env, value); err != nil {
+			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
+			continue
 		}
 		if err := database.DB.Create(&env).Error; err != nil {
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))

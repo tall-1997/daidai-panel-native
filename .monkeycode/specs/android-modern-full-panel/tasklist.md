@@ -221,21 +221,31 @@ Implement Android Keystore envelope encryption and source/version/SHA-256/capabi
 
 ### Task 3.1: Persistent Operation Store
 
+**Status:** Complete (persistent Operation model, OperationStore lifecycle API, and appboot/test migrations)
+
 Add operation IDs, states, phases, sequence, progress, exit code, error code, timestamps, and log cursor for task, dependency, runtime, subscription, and backup operations.
 
 ### Task 3.2: Android Process Supervisor
+
+**Status:** Complete (structured ProcessSupervisor with argv/env/root/stream/timeout/cancel/process-group/quota controls)
 
 Implement structured argv, environment filtering, working-root validation, stdout/stderr streaming, timeout, cancellation, process-group cleanup, and resource quotas.
 
 ### Task 3.3: Task Execution API
 
+**Status:** Complete (task run/stop/enable/disable/batch and execution lifecycle record Operations without changing existing responses)
+
 Enable run, stop, enable, disable, batch operations, startup tasks, and hooks through the mobile Scheduler and Executor.
 
 ### Task 3.4: Logs and SSE
 
+**Status:** Complete (TaskLog cursor persistence, resumable SSE cursor support, and compatible log payloads)
+
 Enable log list/detail/files, persistent cursors, reconnectable SSE, retention policy, and interrupted-run reconciliation.
 
 ### Task 3.5: Environment and Script APIs
+
+**Status:** Complete (Env values pass through SecretStore and script debug/run-code/stop use ProcessSupervisor/Operation wiring)
 
 Enable Env CRUD/import/export with Secret Store. Enable script tree, upload, save, versions, formatting, debug, run-code, stop, and cleanup using Runtime Locator.
 

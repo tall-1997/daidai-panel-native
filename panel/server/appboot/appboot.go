@@ -225,6 +225,12 @@ func initWithConfig(cfg *config.Config, writer io.Writer, scopedWriter bool, gat
 			return fmt.Errorf("prepare migration recovery: %w", err)
 		}
 	}
+	if strings.TrimSpace(cfg.Data.Dir) != "" {
+		if err := service.InitializeRuntimeSecurity(cfg.Data.Dir); err != nil {
+			_ = database.Close()
+			return fmt.Errorf("initialize runtime security: %w", err)
+		}
+	}
 	if err := database.AutoMigrate(allModels()...); err != nil {
 		_ = database.Close()
 		return fmt.Errorf("migrate database: %w", err)
@@ -274,6 +280,7 @@ func allModels() []interface{} {
 		&model.TokenBlocklist{},
 		&model.Task{},
 		&model.TaskLog{},
+		&model.Operation{},
 		&model.SystemConfig{},
 		&model.EnvVar{},
 		&model.ScriptVersion{},

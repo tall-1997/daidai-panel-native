@@ -2,16 +2,20 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"daidai-panel/config"
 	"daidai-panel/service"
 )
+
+var trackedScriptProcesses sync.Map
 
 var scriptInterpreterMap = map[string][]string{
 	".py":  {"python", "-u"},
@@ -68,6 +72,12 @@ func (run *debugRun) setProcess(process *os.Process) {
 	run.mu.Unlock()
 }
 
+func (run *debugRun) setSupervisedProcess(process service.SupervisedProcess) {
+	run.mu.Lock()
+	run.Managed = process
+	run.mu.Unlock()
+}
+
 func (run *debugRun) appendLog(line string) {
 	run.mu.Lock()
 	run.Logs = append(run.Logs, line)
@@ -119,7 +129,11 @@ func (run *debugRun) stop() {
 		return
 	}
 
-	service.KillProcessGroup(run.Process)
+	if run.Managed != nil {
+		_ = run.Managed.Cancel()
+	} else {
+		service.KillProcessGroup(run.Process)
+	}
 	run.Status = "stopped"
 	exitCode := -1
 	run.ExitCode = &exitCode
@@ -132,7 +146,11 @@ func (run *debugRun) killIfRunning() {
 	defer run.mu.Unlock()
 
 	if run.Process != nil && !run.Done {
-		service.KillProcessGroup(run.Process)
+		if run.Managed != nil {
+			_ = run.Managed.Cancel()
+		} else {
+			service.KillProcessGroup(run.Process)
+		}
 	}
 }
 
@@ -218,15 +236,24 @@ func newScriptCommand(interpreter string, target string, scriptArgs []string, wo
 
 func startTrackedCommand(cmd *exec.Cmd, run *debugRun) (*io.PipeWriter, chan struct{}, error) {
 	pipeReader, pipeWriter := io.Pipe()
-	cmd.Stdout = pipeWriter
-	cmd.Stderr = pipeWriter
-
-	if err := cmd.Start(); err != nil {
+	proc, err := service.GetProcessSupervisor().Start(context.Background(), service.ProcessSpec{
+		Argv:        cmd.Args,
+		Env:         cmd.Env,
+		WorkingDir:  cmd.Dir,
+		AllowedRoot: cmd.Dir,
+		Timeout:     2 * time.Hour,
+		Quota:       service.ProcessResourceQuota{MaxOutputBytes: 10 * 1024 * 1024},
+	}, func(event service.ProcessEvent) {
+		_, _ = pipeWriter.Write(event.Data)
+	})
+	if err != nil {
 		pipeWriter.Close()
 		return nil, nil, err
 	}
-
-	run.setProcess(cmd.Process)
+	run.setSupervisedProcess(proc)
+	trackedScriptProcesses.Store(cmd, proc)
+	process, _ := os.FindProcess(proc.PID())
+	run.setProcess(process)
 	scanDone := collectRunLogs(pipeReader, run)
 	return pipeWriter, scanDone, nil
 }
@@ -247,7 +274,12 @@ func collectRunLogs(reader io.Reader, run *debugRun) chan struct{} {
 }
 
 func waitTrackedCommand(cmd *exec.Cmd, pipeWriter *io.PipeWriter, scanDone chan struct{}) error {
-	err := cmd.Wait()
+	var err error
+	if raw, ok := trackedScriptProcesses.LoadAndDelete(cmd); ok {
+		_, err = raw.(service.SupervisedProcess).Wait()
+	} else {
+		err = cmd.Wait()
+	}
 	pipeWriter.Close()
 	<-scanDone
 	return err

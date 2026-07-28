@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
@@ -31,6 +33,7 @@ func validateAndEnableTask(task *model.Task) error {
 	if err := database.DB.Save(task).Error; err != nil {
 		return err
 	}
+	recordTaskControlOperation("task.enable", task.ID, model.OperationStateSuccess, 0, "")
 
 	if scheduler := service.GetSchedulerV2(); scheduler != nil {
 		if err := scheduler.AddJob(task); err != nil {
@@ -56,7 +59,31 @@ func disableTaskAndRemoveSchedule(task *model.Task) string {
 
 	task.Status = model.TaskStatusDisabled
 	database.DB.Save(task)
+	recordTaskControlOperation("task.disable", task.ID, model.OperationStateSuccess, 0, "")
 	return "已禁用"
+}
+
+func recordTaskControlOperation(kind string, taskID uint, state string, exitCode int, errorCode string) string {
+	operation, err := service.DefaultOperationStore().Create(service.OperationCreateOptions{
+		ID:       fmt.Sprintf("%s_%d_%d", strings.ReplaceAll(kind, ".", "_"), taskID, time.Now().UnixNano()),
+		Kind:     model.OperationKindTask,
+		Phase:    kind,
+		Progress: 0,
+	})
+	if err != nil {
+		return ""
+	}
+	_ = service.DefaultOperationStore().Start(operation.ID, kind)
+	switch state {
+	case model.OperationStateSuccess:
+		_ = service.DefaultOperationStore().Finish(operation.ID, exitCode, 0)
+	case model.OperationStateFailed:
+		code := exitCode
+		_ = service.DefaultOperationStore().Fail(operation.ID, &code, errorCode, 0)
+	default:
+		_ = service.DefaultOperationStore().Unknown(operation.ID, errorCode, 0)
+	}
+	return operation.ID
 }
 
 func (h *TaskHandler) Run(c *gin.Context) {
@@ -73,11 +100,13 @@ func (h *TaskHandler) Run(c *gin.Context) {
 		return
 	}
 
+	operationID := recordTaskControlOperation("task.run.request", uint(taskID), model.OperationStateSuccess, 0, "")
 	if err := service.GetSchedulerV2().RunNow(uint(taskID)); err != nil {
+		recordTaskControlOperation("task.run.enqueue", uint(taskID), model.OperationStateFailed, 1, "enqueue_failed")
 		response.Error(c, http.StatusServiceUnavailable, "任务入队失败: "+err.Error())
 		return
 	}
-	response.Success(c, gin.H{"message": "任务已启动"})
+	response.Success(c, gin.H{"message": "任务已启动", "operation_id": operationID})
 }
 
 func (h *TaskHandler) Stop(c *gin.Context) {
@@ -104,6 +133,7 @@ func (h *TaskHandler) Stop(c *gin.Context) {
 		service.MarkManualStop(uint(taskID))
 		service.KillProcessByPid(*task.PID)
 	}
+	recordTaskControlOperation("task.stop", uint(taskID), model.OperationStateUnknown, model.RunAborted, "aborted")
 
 	inactiveStatus := service.ResolveTaskInactiveStatus(&task)
 	abortRunStatus := model.RunAborted

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -151,6 +152,7 @@ func BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir string, defau
 	database.DB.Where("enabled = ?", true).
 		Order("sort_order DESC, position ASC, created_at ASC, id ASC").
 		Find(&envVarRecords)
+	envVarRecords = OpenEnvVarsForRuntime(context.Background(), envVarRecords)
 
 	// 先按 name 分组保持顺序，再用 joinTaskEnvValues 做带转义合并，
 	// 解决值内含 '&' 时脚本按 '&' 切分会错位的问题（与 splitTaskEnvValues 对称）。

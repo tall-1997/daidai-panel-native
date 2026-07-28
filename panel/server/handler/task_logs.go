@@ -25,11 +25,8 @@ func (h *TaskHandler) LatestLog(c *gin.Context) {
 	}
 
 	result := taskLog.ToDict()
-	if taskLog.Content != "" {
-		decompressed, err := service.DecompressFromBase64(taskLog.Content)
-		if err == nil {
-			result["content"] = decompressed
-		}
+	if content, err := service.TaskLogPlainContent(&taskLog); err == nil && content != "" {
+		result["content"] = content
 	} else if taskLog.LogPath != nil {
 		content, err := service.ReadLogFile(*taskLog.LogPath, config.C.Data.LogDir)
 		if err == nil {
@@ -66,6 +63,7 @@ func (h *TaskHandler) LiveLogs(c *gin.Context) {
 		"logs":   lines,
 		"done":   done,
 		"status": task.Status,
+		"cursor": len(strings.Join(lines, "\n")),
 	})
 }
 

@@ -64,6 +64,10 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 
 	runID := fmt.Sprintf("code_%d", time.Now().UnixMilli())
 	h.storeRun(runID, run)
+	operationID, _ := service.DefaultOperationStore().Create(service.OperationCreateOptions{ID: "script_" + runID, Kind: model.OperationKindScript, Phase: "run-code", Progress: 0})
+	if operationID != nil {
+		_ = service.DefaultOperationStore().Start(operationID.ID, "running")
+	}
 
 	startTime := time.Now()
 
@@ -75,6 +79,9 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 
 		if run.isStopped() {
 			os.Remove(tmpFile)
+			if operationID != nil {
+				_ = service.DefaultOperationStore().Unknown(operationID.ID, "stopped", 0)
+			}
 			return
 		}
 
@@ -141,9 +148,17 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 
 		os.Remove(tmpFile)
 		run.finish(exitCode, waitErr, elapsed)
+		if operationID != nil {
+			if exitCode == 0 {
+				_ = service.DefaultOperationStore().Finish(operationID.ID, exitCode, 0)
+			} else {
+				code := exitCode
+				_ = service.DefaultOperationStore().Fail(operationID.ID, &code, "exit_code", 0)
+			}
+		}
 	}()
 
-	response.Created(c, gin.H{"message": "代码已启动", "run_id": runID})
+	response.Created(c, gin.H{"message": "代码已启动", "run_id": runID, "operation_id": "script_" + runID})
 }
 
 func detectAutoInstallCandidate(ext, output, workDir string) *service.AutoInstallCandidate {

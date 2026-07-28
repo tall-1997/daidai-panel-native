@@ -47,6 +47,7 @@ func (h *TaskHandler) Batch(c *gin.Context) {
 			database.DB.Delete(&task)
 		case "run":
 			if task.Status != model.TaskStatusRunning {
+				recordTaskControlOperation("task.batch.run.request", id, model.OperationStateSuccess, 0, "")
 				if err := scheduler.RunNow(id); err == nil {
 					count++
 				}
@@ -54,6 +55,7 @@ func (h *TaskHandler) Batch(c *gin.Context) {
 			}
 		case "stop":
 			if task.Status == model.TaskStatusRunning {
+				recordTaskControlOperation("task.batch.stop", id, model.OperationStateUnknown, model.RunAborted, "aborted")
 				if executor := service.GetTaskExecutor(); executor != nil {
 					executor.StopTask(id)
 				}
@@ -191,6 +193,7 @@ func (h *TaskHandler) BatchRun(c *gin.Context) {
 			continue
 		}
 		if task.Status != model.TaskStatusRunning {
+			recordTaskControlOperation("task.batch.run.request", id, model.OperationStateSuccess, 0, "")
 			if scheduler != nil && scheduler.RunNow(id) == nil {
 				count++
 			}

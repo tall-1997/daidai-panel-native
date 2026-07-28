@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -553,7 +554,88 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	if err != nil {
 		return nil, nil, err
 	}
+	if runtime.GOOS != "android" {
+		return runSingleCommandLegacy(cmd, cleanup, timeout, maxLogSize, onOutput, onProcessStart...)
+	}
+	defer cleanup()
 
+	var outputBuilder strings.Builder
+	var outputMu sync.Mutex
+	totalSize := 0
+	truncated := false
+
+	emitChunk := func(chunk string) {
+		outputMu.Lock()
+		defer outputMu.Unlock()
+		if truncated {
+			return
+		}
+		if totalSize >= maxLogSize {
+			truncated = true
+			msg := "\n[日志已截断，超过最大大小限制]"
+			outputBuilder.WriteString(msg)
+			if onOutput != nil {
+				onOutput(msg)
+			}
+			return
+		}
+		outputBuilder.WriteString(chunk)
+		totalSize += len(chunk)
+		if onOutput != nil {
+			onOutput(chunk)
+		}
+	}
+
+	var timeoutDuration time.Duration
+	if timeout > 0 {
+		timeoutDuration = time.Duration(timeout) * time.Second
+	}
+
+	proc, err := GetProcessSupervisor().Start(context.Background(), ProcessSpec{
+		Argv:        cmd.Args,
+		Env:         cmd.Env,
+		WorkingDir:  cmd.Dir,
+		AllowedRoot: cmd.Dir,
+		Timeout:     timeoutDuration,
+		Quota:       ProcessResourceQuota{MaxOutputBytes: int64(maxLogSize)},
+	}, func(event ProcessEvent) {
+		emitChunk(string(event.Data))
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to start process: %w", err)
+	}
+	process, _ := os.FindProcess(proc.PID())
+	if len(onProcessStart) > 0 && onProcessStart[0] != nil {
+		onProcessStart[0](process)
+	}
+	procResult, _ := proc.Wait()
+	outputMu.Lock()
+	if outputBuilder.Len() == 0 && procResult.Output != "" {
+		outputBuilder.WriteString(procResult.Output)
+	}
+	currentOutput := outputBuilder.String()
+	outputMu.Unlock()
+	returnCode := procResult.ExitCode
+	if procResult.TimedOut {
+		returnCode = -1
+		msg := fmt.Sprintf("\n[任务超时，已在 %d 秒后终止]", timeout)
+		outputMu.Lock()
+		outputBuilder.WriteString(msg)
+		currentOutput = outputBuilder.String()
+		outputMu.Unlock()
+		if onOutput != nil {
+			onOutput(msg)
+		}
+	}
+
+	return &ScriptResult{
+		ReturnCode: returnCode,
+		Output:     currentOutput,
+		Truncated:  truncated,
+	}, process, nil
+}
+
+func runSingleCommandLegacy(cmd *exec.Cmd, cleanup func(), timeout int, maxLogSize int, onOutput OnOutputFunc, onProcessStart ...OnProcessStartFunc) (*ScriptResult, *os.Process, error) {
 	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		cleanup()
@@ -578,10 +660,6 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	var outputBuilder strings.Builder
 	totalSize := 0
 	truncated := false
-
-	// 不再用 Scanner 按行切，因为终端进度条常用裸 \r 覆盖当前行。
-	// 这里按字节流切片，把 \n / \r / \r\n 都当成边界保留下来，
-	// 让实时日志、历史日志和前端渲染都能还原真实终端语义。
 	reader := bufio.NewReaderSize(stdout, 256*1024)
 
 	emitChunk := func(chunk string) {
@@ -616,7 +694,6 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 				for i := 0; i < len(text); i++ {
 					chunkBuf.WriteByte(text[i])
 					if text[i] == '\r' {
-						// 兼容 Windows 风格 \r\n，整对一起作为一个边界发出。
 						if i+1 < len(text) && text[i+1] == '\n' {
 							chunkBuf.WriteByte(text[i+1])
 							i++
@@ -633,7 +710,6 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 					}
 				}
 				if lastBoundaryIndex == -1 {
-					// 当前片段里没有换行边界，继续累积，等待后续数据拼完整。
 				}
 			}
 			if err != nil {

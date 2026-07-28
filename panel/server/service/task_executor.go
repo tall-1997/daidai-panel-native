@@ -41,6 +41,16 @@ func (e *TaskExecutor) OnTaskScheduled(req *ExecutionRequest) {
 
 func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	task := req.Task
+	operation, err := DefaultOperationStore().Create(OperationCreateOptions{
+		ID:       fmt.Sprintf("task_%d_%d", task.ID, time.Now().UnixNano()),
+		Kind:     model.OperationKindTask,
+		Phase:    "queued",
+		Progress: 0,
+	})
+	if err == nil {
+		req.OperationID = operation.ID
+		_ = DefaultOperationStore().Start(operation.ID, "starting")
+	}
 
 	if task.DependsOn != nil {
 		var depTask model.Task
@@ -145,6 +155,10 @@ func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
 		"last_running_time": 0.0,
 		"pid":               gorm.Expr("NULL"),
 	})
+	if req.OperationID != "" {
+		code := 1
+		_ = DefaultOperationStore().Fail(req.OperationID, &code, "execution_failed", 0)
+	}
 }
 
 func KillProcessGroup(p *os.Process) {
@@ -277,6 +291,13 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			compressed, _ = tinyLog.Close()
 			GetTinyLogManager().Remove(tinyLog.LogID)
 		}
+		logCursor := int64(0)
+		if req.TaskLogID != 0 {
+			var latestLog model.TaskLog
+			if err := database.DB.Select("log_cursor").First(&latestLog, req.TaskLogID).Error; err == nil {
+				logCursor = latestLog.LogCursor
+			}
+		}
 
 		logStatus := model.LogStatusSuccess
 		if !success {
@@ -301,6 +322,7 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			"ended_at": endedAt,
 			"duration": duration,
 		})
+		_ = PersistLogCursor(req.TaskLogID, logCursor)
 
 		inactiveStatus := ResolveTaskInactiveStatus(task)
 		database.DB.Model(task).Updates(map[string]interface{}{
@@ -318,6 +340,18 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			Success:  finalSuccess,
 			ExitCode: exitCode,
 			Duration: duration,
+		}
+		if req.OperationID != "" {
+			if finalSuccess {
+				_ = DefaultOperationStore().Finish(req.OperationID, exitCode, logCursor)
+			} else {
+				code := exitCode
+				if finalAborted {
+					_ = DefaultOperationStore().Unknown(req.OperationID, "aborted", logCursor)
+				} else {
+					_ = DefaultOperationStore().Fail(req.OperationID, &code, "exit_code", logCursor)
+				}
+			}
 		}
 		e.OnTaskCompleted(req, result)
 
@@ -362,6 +396,10 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 		}
 		if fullLogPath != "" {
 			logMgr.Write(fullLogPath, chunk)
+		}
+		cursor := AppendLogCursor(req.TaskLogID, len(chunk))
+		if req.OperationID != "" {
+			_ = DefaultOperationStore().Progress(req.OperationID, "running", 50, cursor)
 		}
 	}
 

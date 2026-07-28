@@ -74,6 +74,7 @@ func SetupTestEnv(t *testing.T) string {
 		&model.TokenBlocklist{},
 		&model.Task{},
 		&model.TaskLog{},
+		&model.Operation{},
 		&model.SystemConfig{},
 		&model.EnvVar{},
 		&model.ScriptVersion{},

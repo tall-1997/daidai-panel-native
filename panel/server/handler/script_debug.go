@@ -113,6 +113,10 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 	}
 	runID := fmt.Sprintf("%d_%s", time.Now().UnixMilli(), runName)
 	h.storeRun(runID, run)
+	operationID, _ := service.DefaultOperationStore().Create(service.OperationCreateOptions{ID: "script_debug_" + runID, Kind: model.OperationKindScript, Phase: "debug", Progress: 0})
+	if operationID != nil {
+		_ = service.DefaultOperationStore().Start(operationID.ID, "running")
+	}
 
 	startTime := time.Now()
 
@@ -124,6 +128,9 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 		exitCode := resolveExitCode(waitErr)
 
 		if run.isStopped() {
+			if operationID != nil {
+				_ = service.DefaultOperationStore().Unknown(operationID.ID, "stopped", 0)
+			}
 			return
 		}
 
@@ -187,9 +194,17 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 		}
 
 		run.finish(exitCode, waitErr, elapsed)
+		if operationID != nil {
+			if exitCode == 0 {
+				_ = service.DefaultOperationStore().Finish(operationID.ID, exitCode, 0)
+			} else {
+				code := exitCode
+				_ = service.DefaultOperationStore().Fail(operationID.ID, &code, "exit_code", 0)
+			}
+		}
 	}()
 
-	response.Created(c, gin.H{"message": "脚本已启动", "run_id": runID})
+	response.Created(c, gin.H{"message": "脚本已启动", "run_id": runID, "operation_id": "script_debug_" + runID})
 }
 
 func prepareInlineDebugFile(requestPath, ext string) (full string, workDir string, cleanupFn func(), err error) {
@@ -251,7 +266,9 @@ func (h *ScriptHandler) DebugStop(c *gin.Context) {
 	}
 
 	run.stop()
-	response.Success(c, gin.H{"message": "已停止"})
+	operationID := "script_debug_" + runID
+	_ = service.DefaultOperationStore().Unknown(operationID, "stopped", 0)
+	response.Success(c, gin.H{"message": "已停止", "operation_id": operationID})
 }
 
 func (h *ScriptHandler) DebugClear(c *gin.Context) {

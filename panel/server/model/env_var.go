@@ -9,6 +9,8 @@ type EnvVar struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
 	Name      string    `gorm:"size:128;index;not null" json:"name"`
 	Value     string    `gorm:"type:text;default:''" json:"value"`
+	Secret    bool      `gorm:"default:false" json:"secret"`
+	Sealed    string    `gorm:"type:text;default:''" json:"-"`
 	Remarks   string    `gorm:"size:256;default:''" json:"remarks"`
 	Enabled   bool      `gorm:"default:true" json:"enabled"`
 	Position  float64   `gorm:"default:10000.0;index" json:"position"`
@@ -67,6 +69,7 @@ func (e *EnvVar) ToDict() map[string]interface{} {
 		"id":         e.ID,
 		"name":       e.Name,
 		"value":      e.Value,
+		"secret":     e.Secret,
 		"remarks":    e.Remarks,
 		"enabled":    e.Enabled,
 		"position":   e.Position,

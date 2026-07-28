@@ -11,6 +11,7 @@ import (
 
 	"daidai-panel/config"
 	"daidai-panel/pkg/pathutil"
+	"daidai-panel/service"
 )
 
 var allowedExtensions = map[string]bool{
@@ -34,6 +35,7 @@ const maxUploadSize = 100 * 1024 * 1024
 
 type debugRun struct {
 	Process  *os.Process
+	Managed  service.SupervisedProcess
 	Logs     []string
 	Done     bool
 	ExitCode *int

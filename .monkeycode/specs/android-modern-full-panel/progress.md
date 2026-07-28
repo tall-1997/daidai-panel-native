@@ -6,9 +6,7 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 2 review remediation is complete. All Critical/Important findings from the Milestone 2 review are fixed and validated with the unified verification suite.
-
-The local branch now contains Milestone 2 runtime/security hardening updates ready to push to `origin/main`.
+Milestone 3 implementation is complete on `main`. Persistent operations, process supervision, task execution lifecycle wiring, reconnectable log cursors, SecretStore-backed environment values, and script runtime execution wiring are implemented and validated with the unified Milestone 3 test suite.
 
 ## Completed Work
 
@@ -182,9 +180,15 @@ The local branch now contains Milestone 2 runtime/security hardening updates rea
 
 ### Milestone 3
 
-- Persistent operation store.
-- Android process supervisor.
-- Task execution, stopping, hooks, logs/SSE, environment, and script APIs.
+- Task 3.1 complete: added persistent `Operation` model/table, `OperationStore` service methods, and migration registration.
+- Task 3.2 complete: added structured `ProcessSupervisor` with argv, env filtering, working-root validation, stdout/stderr streaming, timeout, cancellation, process-group cleanup, and quota fields.
+- Task 3.3 complete: task run/stop/enable/disable/batch and execution lifecycle now create/update Operations while retaining existing API payloads.
+- Task 3.4 complete: TaskLog now persists `log_cursor`; SSE accepts cursor/Last-Event-ID and resumes from persisted history while retaining existing log APIs.
+- Task 3.5 complete: Env CRUD/import/export seals values through SecretStore when available and opens only selected runtime values; script debug/run-code/stop use ProcessSupervisor and Operations.
+- Verification completed:
+  - `cd /workspace/panel/server && go test ./service ./handler ./mobilecore ./appboot ./router ./database -count=1`
+  - `cd /workspace/panel/server && go test -race ./mobilecore ./service -count=1`
+  - `cd /workspace && go run scripts/generate-route-contract.go -check`
 
 ### Milestone 4
 

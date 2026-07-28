@@ -74,6 +74,7 @@ func (h *LogHandler) List(c *gin.Context) {
 func (h *LogHandler) Stream(c *gin.Context) {
 	taskIDStr := c.Param("id")
 	taskID, _ := strconv.ParseUint(taskIDStr, 10, 32)
+	cursor := service.ParseLogCursor(c.DefaultQuery("cursor", c.GetHeader("Last-Event-ID")))
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -85,8 +86,11 @@ func (h *LogHandler) Stream(c *gin.Context) {
 
 	if tl != nil {
 		history, _ := tl.ReadAll()
-		if len(history) > 0 {
-			writeSSEData(c.Writer, string(history))
+		if cursor > int64(len(history)) {
+			cursor = int64(len(history))
+		}
+		if len(history) > int(cursor) {
+			cursor = writeSSEDataWithCursor(c.Writer, string(history[cursor:]), cursor)
 			c.Writer.Flush()
 		}
 
@@ -102,7 +106,7 @@ func (h *LogHandler) Stream(c *gin.Context) {
 					c.Writer.Flush()
 					return
 				}
-				writeSSEData(c.Writer, string(data))
+				cursor = writeSSEDataWithCursor(c.Writer, string(data), cursor)
 				c.Writer.Flush()
 			case <-ctx.Done():
 				return
@@ -126,9 +130,23 @@ func (h *LogHandler) Stream(c *gin.Context) {
 		tl = mgr.FindByTaskID(uint(taskID))
 		if tl != nil {
 			history, _ := tl.ReadAll()
-			if len(history) > 0 {
-				writeSSEData(c.Writer, string(history))
+			if cursor > int64(len(history)) {
+				cursor = int64(len(history))
+			}
+			if len(history) > int(cursor) {
+				cursor = writeSSEDataWithCursor(c.Writer, string(history[cursor:]), cursor)
 				c.Writer.Flush()
+			}
+		} else {
+			var taskLog model.TaskLog
+			if err := database.DB.Where("task_id = ?", taskID).Order("started_at DESC").First(&taskLog).Error; err == nil {
+				if content, next, err := service.ReadTaskLogFromCursor(&taskLog, cursor); err == nil && content != "" {
+					cursor = writeSSEDataWithCursor(c.Writer, content, cursor)
+					if cursor < next {
+						cursor = next
+					}
+					c.Writer.Flush()
+				}
 			}
 		}
 		// 启动竞态：打开日志窗时任务可能刚入队、runTask 尚未置运行中/未建 TinyLog。
@@ -143,8 +161,11 @@ func (h *LogHandler) Stream(c *gin.Context) {
 			tl = mgr.FindByTaskID(uint(taskID))
 			if tl != nil {
 				history, _ := tl.ReadAll()
-				if len(history) > 0 {
-					writeSSEData(w, string(history))
+				if cursor > int64(len(history)) {
+					cursor = int64(len(history))
+				}
+				if len(history) > int(cursor) {
+					cursor = writeSSEDataWithCursor(w, string(history[cursor:]), cursor)
 					c.Writer.Flush()
 				}
 				fmt.Fprintf(w, "event: done\ndata: reconnect\n\n")
@@ -170,13 +191,24 @@ func (h *LogHandler) Stream(c *gin.Context) {
 }
 
 func writeSSEData(w io.Writer, data string) {
-	// SSE 分帧只需要保证每个 data: 行本身不跨物理换行。
-	// 这里保留裸 \r，避免终端进度条的覆盖刷新语义在传输层被抹掉。
 	data = strings.ReplaceAll(data, "\r\n", "\n")
 	for _, line := range strings.Split(data, "\n") {
 		fmt.Fprintf(w, "data: %s\n", line)
 	}
 	fmt.Fprint(w, "\n")
+}
+
+func writeSSEDataWithCursor(w io.Writer, data string, cursor int64) int64 {
+	// SSE 分帧只需要保证每个 data: 行本身不跨物理换行。
+	// 这里保留裸 \r，避免终端进度条的覆盖刷新语义在传输层被抹掉。
+	nextCursor := cursor + int64(len(data))
+	fmt.Fprintf(w, "id: %d\n", nextCursor)
+	data = strings.ReplaceAll(data, "\r\n", "\n")
+	for _, line := range strings.Split(data, "\n") {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprint(w, "\n")
+	return nextCursor
 }
 
 // streamDoneEventForStatus 根据任务真实状态决定 SSE done 事件的 data 值。

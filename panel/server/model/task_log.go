@@ -18,6 +18,7 @@ type TaskLog struct {
 	Status    *int       `json:"status"`
 	Duration  *float64   `json:"duration"`
 	LogPath   *string    `gorm:"size:256" json:"log_path"`
+	LogCursor int64      `gorm:"default:0" json:"log_cursor"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -37,6 +38,7 @@ func (l *TaskLog) ToDict() map[string]interface{} {
 		"status":     l.Status,
 		"duration":   l.Duration,
 		"log_path":   l.LogPath,
+		"log_cursor": l.LogCursor,
 		"started_at": l.StartedAt,
 		"ended_at":   l.EndedAt,
 		"created_at": l.CreatedAt,
