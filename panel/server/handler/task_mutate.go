@@ -61,6 +61,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		TaskBefore             *string  `json:"task_before"`
 		TaskAfter              *string  `json:"task_after"`
 		AllowMultipleInstances *bool    `json:"allow_multiple_instances"`
+		SchedulePolicy         *string  `json:"schedule_policy"`
 		StopSchedule           *string  `json:"stop_schedule"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -163,6 +164,14 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	}
 	if req.AllowMultipleInstances != nil {
 		task.AllowMultipleInstances = *req.AllowMultipleInstances
+	}
+	if req.SchedulePolicy != nil {
+		policy := model.NormalizeSchedulePolicy(*req.SchedulePolicy)
+		if policy != *req.SchedulePolicy {
+			response.BadRequest(c, "无效的调度并发策略")
+			return
+		}
+		task.SchedulePolicy = policy
 	}
 	if req.StopSchedule != nil {
 		task.StopSchedule = *req.StopSchedule
@@ -267,6 +276,14 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		req["success_exit_codes"] = normalized
 	}
+	if rawSchedulePolicy, exists := req["schedule_policy"]; exists {
+		value, ok := rawSchedulePolicy.(string)
+		if !ok || model.NormalizeSchedulePolicy(value) != value {
+			response.BadRequest(c, "无效的调度并发策略")
+			return
+		}
+		req["schedule_policy"] = value
+	}
 
 	allowedFields := map[string]bool{
 		"name": true, "command": true, "python_version": true, "cron_expression": true,
@@ -274,7 +291,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		"timeout":   true, "success_exit_codes": true, "random_delay_seconds": true, "max_retries": true, "retry_interval": true,
 		"notify_on_failure": true, "notify_on_success": true, "notify_on_abort": true, "notification_channel_id": true, "labels": true, "depends_on": true,
 		"sort_order": true, "task_before": true, "task_after": true,
-		"allow_multiple_instances": true, "stop_schedule": true,
+		"allow_multiple_instances": true, "schedule_policy": true, "stop_schedule": true,
 	}
 
 	updates := make(map[string]interface{})
@@ -381,6 +398,7 @@ func (h *TaskHandler) Copy(c *gin.Context) {
 		TaskBefore:             task.TaskBefore,
 		TaskAfter:              task.TaskAfter,
 		AllowMultipleInstances: task.AllowMultipleInstances,
+		SchedulePolicy:         task.EffectiveSchedulePolicy(),
 		StopSchedule:           task.StopSchedule,
 	}
 	database.DB.Select("*").Create(&newTask)

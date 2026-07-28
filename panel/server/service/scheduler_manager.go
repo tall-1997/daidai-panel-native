@@ -34,6 +34,9 @@ func StartSchedulerV2(ctx context.Context) error {
 	if count := RecoverAbandonedActiveTasks("面板上次异常退出，运行中的任务已标记为中断"); count > 0 {
 		log.Printf("recovered %d abandoned active task(s)", count)
 	}
+	if count := RecoverLaunchingScheduleInstances(); count > 0 {
+		log.Printf("marked %d launching schedule instance(s) as result_unknown", count)
+	}
 
 	workerCount := model.GetRegisteredConfigInt("max_concurrent_tasks")
 	if workerCount < 1 {
@@ -59,6 +62,9 @@ func StartSchedulerV2(ctx context.Context) error {
 			globalExecutor = nil
 			return fmt.Errorf("failed to add task %d: %w", task.ID, err)
 		}
+	}
+	if missed := globalScheduler.EnqueueRecentMissedSchedules(15 * time.Minute); missed > 0 {
+		log.Printf("scheduler v2 compensated %d recent missed schedule(s)", missed)
 	}
 
 	startupCount := globalScheduler.EnqueueStartupTasks()

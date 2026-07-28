@@ -1,8 +1,11 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +15,7 @@ import (
 	panelcron "daidai-panel/pkg/cron"
 
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
 
 type SchedulerConfig struct {
@@ -28,14 +32,16 @@ const (
 )
 
 type ExecutionRequest struct {
-	TaskID      uint
-	Task        *model.Task
-	TriggerType string
-	RetryIndex  int
-	LogID       string
-	TaskLogID   uint
-	OperationID string
-	CommandPlan *CommandExecutionPlan
+	TaskID             uint
+	Task               *model.Task
+	TriggerType        string
+	RetryIndex         int
+	LogID              string
+	TaskLogID          uint
+	OperationID        string
+	ScheduleInstanceID uint
+	ScheduledUTC       time.Time
+	CommandPlan        *CommandExecutionPlan
 }
 
 type ExecutionResult struct {
@@ -169,8 +175,11 @@ func (s *SchedulerV2) worker(id int) {
 }
 
 func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
-	if !s.checkConcurrency(req) {
+	if !s.prepareConcurrency(req) {
 		log.Printf("task %d: concurrency limit reached, skipping", req.TaskID)
+		if req.ScheduleInstanceID != 0 {
+			_ = markScheduleInstanceSkipped(req.ScheduleInstanceID, "policy_skip_running")
+		}
 		return
 	}
 
@@ -182,6 +191,9 @@ func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
 		s.handler.OnTaskScheduled(req)
 	}
 
+	if s.handler == nil {
+		return
+	}
 	err := s.handler.OnTaskExecuting(req)
 	if err != nil {
 		if s.handler != nil {
@@ -195,16 +207,43 @@ func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
 	}
 }
 
-func (s *SchedulerV2) checkConcurrency(req *ExecutionRequest) bool {
-	if req.Task.AllowMultipleInstances {
+func (s *SchedulerV2) prepareConcurrency(req *ExecutionRequest) bool {
+	if req == nil || req.Task == nil {
+		return false
+	}
+	policy := req.Task.EffectiveSchedulePolicy()
+	if req.TriggerType != TriggerTypeCron || policy == model.SchedulePolicyParallel {
 		return true
 	}
+	if policy == model.SchedulePolicyQueue {
+		for s.isTaskRunning(req.TaskID) {
+			if s.stopped.Load() {
+				return false
+			}
+			select {
+			case <-s.stopCh:
+				return false
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		return true
+	}
+	return !s.isTaskRunning(req.TaskID)
+}
 
+func (s *SchedulerV2) isTaskRunning(taskID uint) bool {
 	s.runningLock.RLock()
-	defer s.runningLock.RUnlock()
-
-	goids, exists := s.runningTasks[req.TaskID]
-	return !exists || len(goids) == 0
+	goids, exists := s.runningTasks[taskID]
+	running := exists && len(goids) > 0
+	s.runningLock.RUnlock()
+	if running {
+		return true
+	}
+	var task model.Task
+	if err := database.DB.Select("status").First(&task, taskID).Error; err != nil {
+		return false
+	}
+	return task.Status == model.TaskStatusRunning
 }
 
 func (s *SchedulerV2) addRunningTask(taskID uint, goid int64) {
@@ -286,6 +325,7 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 	taskID := task.ID
 	entryIDs := make([]cron.EntryID, 0, len(expressions))
 	for _, expression := range expressions {
+		expression := expression
 		schedule, err := panelcron.ParseSchedule(expression)
 		if err != nil {
 			for _, entryID := range entryIDs {
@@ -295,19 +335,10 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 		}
 
 		entryID := s.cron.Schedule(schedule, cron.FuncJob(func() {
-			var t model.Task
-			database.DB.First(&t, taskID)
-			req := &ExecutionRequest{
-				TaskID:      taskID,
-				Task:        &t,
-				TriggerType: TriggerTypeCron,
-				RetryIndex:  0,
-			}
-			if err := s.Enqueue(req); err != nil {
+			if _, err := s.enqueueScheduleInstance(taskID, expression, time.Now()); err != nil {
 				log.Printf("task %d enqueue failed: %v", taskID, err)
 				return
 			}
-			database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
 		}))
 		entryIDs = append(entryIDs, entryID)
 	}
@@ -341,6 +372,245 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 	}
 
 	return nil
+}
+
+func scheduleExpressionHash(expression string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(expression)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *SchedulerV2) enqueueScheduleInstance(taskID uint, expression string, scheduledAt time.Time) (*model.ScheduleInstance, error) {
+	if s == nil {
+		return nil, fmt.Errorf("scheduler stopped")
+	}
+	var task model.Task
+	if err := database.DB.First(&task, taskID).Error; err != nil {
+		return nil, err
+	}
+	if task.Status != model.TaskStatusEnabled && task.Status != model.TaskStatusQueued && task.Status != model.TaskStatusRunning {
+		return nil, fmt.Errorf("task disabled")
+	}
+
+	scheduledUTC := scheduledAt.UTC().Truncate(time.Second)
+	instance := &model.ScheduleInstance{
+		TaskID:         taskID,
+		ScheduledUTC:   scheduledUTC,
+		ExpressionHash: scheduleExpressionHash(expression),
+		Expression:     strings.TrimSpace(expression),
+		State:          model.ScheduleInstanceStatePending,
+		Policy:         task.EffectiveSchedulePolicy(),
+		CreatedAt:      time.Now().UTC(),
+	}
+	if err := database.DB.Where("task_id = ? AND scheduled_utc = ? AND expression_hash = ?", instance.TaskID, instance.ScheduledUTC, instance.ExpressionHash).
+		FirstOrCreate(instance).Error; err != nil {
+		return nil, err
+	}
+
+	claimed, err := claimScheduleInstance(instance.ID)
+	if err != nil {
+		return nil, err
+	}
+	if claimed == nil {
+		return instance, nil
+	}
+	if !task.AllowMultipleInstances && task.EffectiveSchedulePolicy() == model.SchedulePolicySkip && s.isTaskRunning(taskID) {
+		_ = markScheduleInstanceSkipped(claimed.ID, "policy_skip_running")
+		return claimed, nil
+	}
+
+	operationID, err := NewTaskRunOperation(taskID)
+	if err != nil {
+		_ = markScheduleInstanceUnknown(claimed.ID, "operation_create_failed")
+		return nil, err
+	}
+	if err := bindScheduleInstanceOperation(claimed.ID, operationID); err != nil {
+		return nil, err
+	}
+	req := &ExecutionRequest{
+		TaskID:             taskID,
+		Task:               &task,
+		TriggerType:        TriggerTypeCron,
+		RetryIndex:         0,
+		OperationID:        operationID,
+		ScheduleInstanceID: claimed.ID,
+		ScheduledUTC:       scheduledUTC,
+	}
+	if err := s.Enqueue(req); err != nil {
+		_ = markScheduleInstanceUnknown(claimed.ID, "enqueue_failed")
+		return nil, err
+	}
+	if task.Status != model.TaskStatusRunning {
+		database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
+	}
+	return claimed, nil
+}
+
+func claimScheduleInstance(instanceID uint) (*model.ScheduleInstance, error) {
+	var claimed model.ScheduleInstance
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		result := tx.Model(&model.ScheduleInstance{}).
+			Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStatePending).
+			Updates(map[string]interface{}{
+				"state":      model.ScheduleInstanceStateLaunching,
+				"claimed_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		return tx.First(&claimed, instanceID).Error
+	})
+	if err != nil || claimed.ID == 0 {
+		return nil, err
+	}
+	return &claimed, nil
+}
+
+func bindScheduleInstanceOperation(instanceID uint, operationID string) error {
+	return database.DB.Model(&model.ScheduleInstance{}).
+		Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStateLaunching).
+		Updates(map[string]interface{}{"operation_id": strings.TrimSpace(operationID)}).Error
+}
+
+func markScheduleInstanceLaunched(instanceID uint) error {
+	if instanceID == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	return database.DB.Model(&model.ScheduleInstance{}).
+		Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStateLaunching).
+		Updates(map[string]interface{}{
+			"state":      model.ScheduleInstanceStateLaunched,
+			"started_at": now,
+		}).Error
+}
+
+func markScheduleInstanceFinished(instanceID uint) error {
+	if instanceID == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	return database.DB.Model(&model.ScheduleInstance{}).
+		Where("id = ?", instanceID).
+		Updates(map[string]interface{}{"ended_at": now}).Error
+}
+
+func markScheduleInstanceSkipped(instanceID uint, reason string) error {
+	if instanceID == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	var instance model.ScheduleInstance
+	if err := database.DB.Select("task_id", "operation_id").First(&instance, instanceID).Error; err == nil && instance.OperationID != "" {
+		_ = DefaultOperationStore().Cancel(instance.OperationID, reason, CurrentTaskLogCursor(instance.TaskID))
+		clearTaskOperation(instance.TaskID, instance.OperationID)
+	}
+	return database.DB.Model(&model.ScheduleInstance{}).
+		Where("id = ?", instanceID).
+		Updates(map[string]interface{}{
+			"state":    model.ScheduleInstanceStateSkipped,
+			"reason":   strings.TrimSpace(reason),
+			"ended_at": now,
+		}).Error
+}
+
+func markScheduleInstanceUnknown(instanceID uint, reason string) error {
+	if instanceID == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	var instance model.ScheduleInstance
+	if err := database.DB.Select("task_id", "operation_id").First(&instance, instanceID).Error; err == nil && instance.OperationID != "" {
+		_ = DefaultOperationStore().Unknown(instance.OperationID, reason, CurrentTaskLogCursor(instance.TaskID))
+		clearTaskOperation(instance.TaskID, instance.OperationID)
+	}
+	return database.DB.Model(&model.ScheduleInstance{}).
+		Where("id = ?", instanceID).
+		Updates(map[string]interface{}{
+			"state":    model.ScheduleInstanceStateResultUnknown,
+			"reason":   strings.TrimSpace(reason),
+			"ended_at": now,
+		}).Error
+}
+
+func RecoverLaunchingScheduleInstances() int64 {
+	if database.DB == nil {
+		return 0
+	}
+	var instances []model.ScheduleInstance
+	if err := database.DB.Where("state = ?", model.ScheduleInstanceStateLaunching).Find(&instances).Error; err != nil {
+		return 0
+	}
+	var count int64
+	for i := range instances {
+		if err := markScheduleInstanceUnknown(instances[i].ID, "result_unknown_after_restart"); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *SchedulerV2) EnqueueRecentMissedSchedules(window time.Duration) int {
+	if s == nil || window <= 0 {
+		return 0
+	}
+	now := time.Now()
+	from := now.Add(-window)
+	var tasks []model.Task
+	database.DB.Where("status = ? AND task_type = ?", model.TaskStatusEnabled, model.TaskTypeCron).Find(&tasks)
+	compensated := 0
+	for i := range tasks {
+		task := tasks[i]
+		for _, expression := range panelcron.SplitExpressions(task.CronExpression) {
+			schedule, err := panelcron.ParseSchedule(expression)
+			if err != nil {
+				continue
+			}
+			misses := make([]time.Time, 0, 4)
+			cursor := from.Add(-time.Second)
+			for {
+				next := schedule.Next(cursor)
+				if next.IsZero() || next.After(now) {
+					break
+				}
+				if !next.Before(from) {
+					misses = append(misses, next)
+				}
+				cursor = next
+				if len(misses) > 512 {
+					break
+				}
+			}
+			if len(misses) == 0 {
+				continue
+			}
+			for _, missed := range misses[:len(misses)-1] {
+				_ = createMissedScheduleRecord(task.ID, expression, missed, task.EffectiveSchedulePolicy(), "older_miss_recorded")
+			}
+			if _, err := s.enqueueScheduleInstance(task.ID, expression, misses[len(misses)-1]); err == nil {
+				compensated++
+			}
+		}
+	}
+	return compensated
+}
+
+func createMissedScheduleRecord(taskID uint, expression string, scheduledAt time.Time, policy, reason string) error {
+	instance := &model.ScheduleInstance{
+		TaskID:         taskID,
+		ScheduledUTC:   scheduledAt.UTC().Truncate(time.Second),
+		ExpressionHash: scheduleExpressionHash(expression),
+		Expression:     strings.TrimSpace(expression),
+		State:          model.ScheduleInstanceStateSkipped,
+		Policy:         model.NormalizeSchedulePolicy(policy),
+		Reason:         strings.TrimSpace(reason),
+		CreatedAt:      time.Now().UTC(),
+	}
+	return database.DB.Where("task_id = ? AND scheduled_utc = ? AND expression_hash = ?", instance.TaskID, instance.ScheduledUTC, instance.ExpressionHash).
+		FirstOrCreate(instance).Error
 }
 
 func (s *SchedulerV2) stopTaskBySchedule(taskID uint) {

@@ -240,15 +240,24 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 }
 
 func (e *TaskExecutor) OnTaskStarted(req *ExecutionRequest) {
+	if req.ScheduleInstanceID != 0 {
+		_ = markScheduleInstanceLaunched(req.ScheduleInstanceID)
+	}
 	log.Printf("task %d started: %s", req.TaskID, req.Task.Name)
 }
 
 func (e *TaskExecutor) OnTaskCompleted(req *ExecutionRequest, result *ExecutionResult) {
+	if req.ScheduleInstanceID != 0 {
+		_ = markScheduleInstanceFinished(req.ScheduleInstanceID)
+	}
 	log.Printf("task %d completed: success=%v, duration=%.2fs",
 		req.TaskID, result.Success, result.Duration)
 }
 
 func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
+	if req.ScheduleInstanceID != 0 {
+		_ = markScheduleInstanceUnknown(req.ScheduleInstanceID, "launch_failed")
+	}
 	log.Printf("task %d failed: %v", req.TaskID, err)
 
 	task := req.Task

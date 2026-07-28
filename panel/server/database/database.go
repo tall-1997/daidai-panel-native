@@ -219,6 +219,7 @@ func EnsureColumns() error {
 		{"task_type", "VARCHAR(16) DEFAULT 'cron'"},
 		{"last_startup_auto_run_date", "VARCHAR(10) DEFAULT ''"},
 		{"allow_multiple_instances", "BOOLEAN DEFAULT 0"},
+		{"schedule_policy", "VARCHAR(16) NOT NULL DEFAULT 'skip'"},
 		{"timeout", "INTEGER DEFAULT 0"},
 		{"success_exit_codes", "VARCHAR(128) NOT NULL DEFAULT '0'"},
 		{"random_delay_seconds", "INTEGER"},

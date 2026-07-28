@@ -280,6 +280,7 @@ func allModels() []interface{} {
 		&model.TokenBlocklist{},
 		&model.Task{},
 		&model.TaskLog{},
+		&model.ScheduleInstance{},
 		&model.Operation{},
 		&model.SystemConfig{},
 		&model.EnvVar{},
