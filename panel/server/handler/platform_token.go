@@ -1,20 +1,60 @@
 package handler
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 	"daidai-panel/model"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type PlatformTokenHandler struct{}
 
+type sealedPlatformTokenPayload struct {
+	Provider string `json:"provider"`
+	Cipher   string `json:"cipher"`
+}
+
 func NewPlatformTokenHandler() *PlatformTokenHandler {
 	return &PlatformTokenHandler{}
+}
+
+func sealPlatformToken(ctx context.Context, tokenID string, token string) (string, string, error) {
+	sealed, err := service.RuntimeSecretStoreInstance().Seal(ctx, "platform-token:"+tokenID, []byte(token))
+	if err != nil {
+		return "", "", err
+	}
+	payload := sealedPlatformTokenPayload{
+		Provider: sealed.Provider,
+		Cipher:   base64.StdEncoding.EncodeToString(sealed.Cipher),
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256([]byte(token))
+	return string(encoded), hex.EncodeToString(sum[:]), nil
+}
+
+func platformTokenKeyParts(platformName, serviceName, serviceUser string) string {
+	parts := []string{strings.TrimSpace(platformName), strings.TrimSpace(serviceName), strings.TrimSpace(serviceUser)}
+	for i := range parts {
+		if parts[i] == "" {
+			parts[i] = "default"
+		}
+	}
+	return strings.Join(parts, ":")
 }
 
 func (h *PlatformTokenHandler) Platforms(c *gin.Context) {
@@ -85,22 +125,39 @@ func (h *PlatformTokenHandler) List(c *gin.Context) {
 
 func (h *PlatformTokenHandler) Create(c *gin.Context) {
 	var req struct {
-		PlatformID uint   `json:"platform_id" binding:"required"`
-		Name       string `json:"name" binding:"required"`
-		Token      string `json:"token" binding:"required"`
-		Remarks    string `json:"remarks"`
+		PlatformID  uint   `json:"platform_id" binding:"required"`
+		Name        string `json:"name" binding:"required"`
+		Token       string `json:"token" binding:"required"`
+		Service     string `json:"service"`
+		ServiceUser string `json:"service_user"`
+		Remarks     string `json:"remarks"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
 		return
 	}
 
+	var platform model.Platform
+	if err := database.DB.First(&platform, req.PlatformID).Error; err != nil {
+		response.BadRequest(c, "平台不存在")
+		return
+	}
+	sealed, tokenHash, err := sealPlatformToken(c.Request.Context(), platformTokenKeyParts(platform.Name, req.Service, req.ServiceUser), req.Token)
+	if err != nil {
+		response.InternalError(c, "封存令牌失败")
+		return
+	}
+
 	token := model.PlatformToken{
-		PlatformID: req.PlatformID,
-		Name:       req.Name,
-		Token:      req.Token,
-		Remarks:    req.Remarks,
-		Enabled:    true,
+		PlatformID:  req.PlatformID,
+		Name:        req.Name,
+		Token:       "",
+		TokenHash:   tokenHash,
+		Sealed:      sealed,
+		Service:     strings.TrimSpace(req.Service),
+		ServiceUser: strings.TrimSpace(req.ServiceUser),
+		Remarks:     req.Remarks,
+		Enabled:     true,
 	}
 
 	if err := database.DB.Create(&token).Error; err != nil {
@@ -122,9 +179,11 @@ func (h *PlatformTokenHandler) Update(c *gin.Context) {
 	}
 
 	var req struct {
-		Name    string `json:"name"`
-		Token   string `json:"token"`
-		Remarks string `json:"remarks"`
+		Name        string `json:"name"`
+		Token       string `json:"token"`
+		Service     string `json:"service"`
+		ServiceUser string `json:"service_user"`
+		Remarks     string `json:"remarks"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
@@ -136,7 +195,29 @@ func (h *PlatformTokenHandler) Update(c *gin.Context) {
 		updates["name"] = req.Name
 	}
 	if req.Token != "" {
-		updates["token"] = req.Token
+		if strings.TrimSpace(req.Token) != "********" {
+			var platform model.Platform
+			if err := database.DB.First(&platform, token.PlatformID).Error; err != nil {
+				response.BadRequest(c, "平台不存在")
+				return
+			}
+			serviceName := firstNonEmpty(req.Service, token.Service)
+			serviceUser := firstNonEmpty(req.ServiceUser, token.ServiceUser)
+			sealed, tokenHash, err := sealPlatformToken(c.Request.Context(), platformTokenKeyParts(platform.Name, serviceName, serviceUser), req.Token)
+			if err != nil {
+				response.InternalError(c, "封存令牌失败")
+				return
+			}
+			updates["token"] = ""
+			updates["token_hash"] = tokenHash
+			updates["sealed"] = sealed
+		}
+	}
+	if req.Service != "" {
+		updates["service"] = strings.TrimSpace(req.Service)
+	}
+	if req.ServiceUser != "" {
+		updates["service_user"] = strings.TrimSpace(req.ServiceUser)
 	}
 	if req.Remarks != "" {
 		updates["remarks"] = req.Remarks
@@ -148,6 +229,32 @@ func (h *PlatformTokenHandler) Update(c *gin.Context) {
 
 	database.DB.Preload("Platform").First(&token, tokenID)
 	response.Success(c, gin.H{"message": "更新成功", "data": token.ToDict()})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func ResolvePlatformTokenCredential(platformName, serviceName, serviceUser string) (*model.PlatformToken, error) {
+	query := database.DB.Model(&model.PlatformToken{}).
+		Joins("JOIN platforms ON platforms.id = platform_tokens.platform_id").
+		Where("platforms.name = ? AND platform_tokens.enabled = ?", strings.TrimSpace(platformName), true)
+	if strings.TrimSpace(serviceName) != "" {
+		query = query.Where("platform_tokens.service = ? OR platform_tokens.service = ''", strings.TrimSpace(serviceName))
+	}
+	if strings.TrimSpace(serviceUser) != "" {
+		query = query.Where("platform_tokens.service_user = ? OR platform_tokens.service_user = ''", strings.TrimSpace(serviceUser))
+	}
+	var token model.PlatformToken
+	if err := query.Order("platform_tokens.service_user DESC, platform_tokens.service DESC, platform_tokens.created_at DESC").First(&token).Error; err != nil {
+		return nil, fmt.Errorf("未配置服务凭据")
+	}
+	return &token, nil
 }
 
 func (h *PlatformTokenHandler) Delete(c *gin.Context) {

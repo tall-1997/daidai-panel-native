@@ -1,24 +1,102 @@
 package handler_test
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/handler"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 
 	"github.com/gin-gonic/gin"
 )
+
+type sealedPlatformTokenForTest struct {
+	Provider string `json:"provider"`
+	Cipher   string `json:"cipher"`
+}
+
+func sha256Hex(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func sealPlatformTokenForTest(key, value string) (string, string, error) {
+	sealed, err := service.RuntimeSecretStoreInstance().Seal(context.Background(), key, []byte(value))
+	if err != nil {
+		return "", "", err
+	}
+	payload, err := json.Marshal(sealedPlatformTokenForTest{
+		Provider: sealed.Provider,
+		Cipher:   base64.StdEncoding.EncodeToString(sealed.Cipher),
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return string(payload), sha256Hex(value), nil
+}
 
 func newOpenAPIRouter() *gin.Engine {
 	engine := gin.New()
 	api := engine.Group("/api/v1")
 	handler.NewOpenAPIHandler().RegisterRoutes(api)
 	return engine
+}
+
+func TestOpenAPITokenSupportsPerServiceUserCredentials(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	if err := service.InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+
+	engine := newOpenAPIRouter()
+	rawSecret := "service-secret"
+	app := &model.OpenApp{
+		Name:      "service-app",
+		AppKey:    "service-app-key",
+		AppSecret: "sha256:" + sha256Hex(rawSecret),
+		Scopes:    "notifications",
+		Enabled:   true,
+		RateLimit: 0,
+	}
+	if err := database.DB.Create(app).Error; err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	platform := &model.Platform{Name: app.AppKey, Label: "Service App"}
+	if err := database.DB.Create(platform).Error; err != nil {
+		t.Fatalf("create platform: %v", err)
+	}
+	sealed, tokenHash, err := sealPlatformTokenForTest("platform-token:"+app.AppKey+":notify:alice", "plain-token")
+	if err != nil {
+		t.Fatalf("seal token: %v", err)
+	}
+	if err := database.DB.Create(&model.PlatformToken{PlatformID: platform.ID, Name: "notify alice", Sealed: sealed, TokenHash: tokenHash, Service: "notify", ServiceUser: "alice", Enabled: true}).Error; err != nil {
+		t.Fatalf("create platform token: %v", err)
+	}
+
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/open-api/token", `{"app_key":"service-app-key","app_secret":"service-secret","service":"notify","service_user":"alice"}`, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected token success, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	data := payload["data"].(map[string]interface{})
+	accessToken, ok := data["access_token"].(string)
+	if !ok || accessToken == "" {
+		t.Fatalf("expected access token, got %#v", data)
+	}
+	if strings.Contains(rec.Body.String(), "plain-token") {
+		t.Fatalf("token response leaked service credential: %s", rec.Body.String())
+	}
 }
 
 func TestOpenAPIManagementResponsesUseTodayCallCount(t *testing.T) {

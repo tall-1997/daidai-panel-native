@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -43,6 +44,22 @@ type NotificationDispatchResult struct {
 	Errors       []string
 }
 
+type sealedNotificationConfig struct {
+	Provider string `json:"provider"`
+	Cipher   string `json:"cipher"`
+}
+
+type androidLocalNotificationPayload struct {
+	Title   string            `json:"title"`
+	Content string            `json:"content"`
+	Channel string            `json:"channel,omitempty"`
+	Context map[string]string `json:"context,omitempty"`
+}
+
+var androidLocalNotificationSend = func(androidLocalNotificationPayload) error {
+	return nil
+}
+
 func SendNotification(title, content string) {
 	SendNotificationWithOptions(title, content, NotificationDispatchOptions{})
 }
@@ -68,6 +85,48 @@ func SendNotificationWithOptions(title, content string, options NotificationDisp
 
 func SendNotificationToChannel(channel *model.NotifyChannel, title, content string) error {
 	return sendToChannel(*channel, title, content, nil)
+}
+
+func SealNotificationConfig(ctx context.Context, name, rawConfig string) (string, error) {
+	if strings.TrimSpace(rawConfig) == "" {
+		rawConfig = "{}"
+	}
+	if !json.Valid([]byte(rawConfig)) {
+		return "", fmt.Errorf("通知配置不是有效 JSON")
+	}
+	sealed, err := RuntimeSecretStoreInstance().Seal(ctx, "notification:"+name, []byte(rawConfig))
+	if err != nil {
+		return "", err
+	}
+	payload := sealedNotificationConfig{
+		Provider: sealed.Provider,
+		Cipher:   base64.StdEncoding.EncodeToString(sealed.Cipher),
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func RedactNotificationConfig(rawConfig string) string {
+	if isSealedNotificationConfig(rawConfig) {
+		return `{"sealed":true}`
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(rawConfig), &cfg); err != nil {
+		return `{"redacted":true}`
+	}
+	for _, key := range []string{"token", "secret", "password", "smtp_pass", "app_token", "authorization", "api_key"} {
+		if _, ok := cfg[key]; ok {
+			cfg[key] = "********"
+		}
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return `{"redacted":true}`
+	}
+	return string(encoded)
 }
 
 func SendNotificationSyncWithOptions(title, content string, options NotificationDispatchOptions) (NotificationDispatchResult, error) {
@@ -162,10 +221,53 @@ func recordNotificationSend(channelID uint, sentAt time.Time) {
 	}
 }
 
-func sendToChannel(ch model.NotifyChannel, title, content string, context map[string]string) error {
+func loadNotificationConfig(ch model.NotifyChannel) (map[string]string, error) {
+	configText := strings.TrimSpace(ch.Config)
+	if configText == "" {
+		configText = "{}"
+	}
+	if isSealedNotificationConfig(configText) {
+		opened, err := openSealedNotificationConfig("notification:"+ch.Name, configText)
+		if err != nil {
+			return nil, err
+		}
+		configText = string(opened)
+	}
 	var cfg map[string]string
-	if err := json.Unmarshal([]byte(ch.Config), &cfg); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+	if err := json.Unmarshal([]byte(configText), &cfg); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+	return cfg, nil
+}
+
+func isSealedNotificationConfig(raw string) bool {
+	var payload sealedNotificationConfig
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+	return strings.TrimSpace(payload.Provider) != "" && strings.TrimSpace(payload.Cipher) != ""
+}
+
+func openSealedNotificationConfig(key, raw string) ([]byte, error) {
+	var payload sealedNotificationConfig
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(payload.Cipher)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := RuntimeSecretStoreInstance().Open(context.Background(), key, SealedValue{Provider: payload.Provider, Cipher: ciphertext})
+	if err != nil {
+		return nil, err
+	}
+	return opened, nil
+}
+
+func sendToChannel(ch model.NotifyChannel, title, content string, context map[string]string) error {
+	cfg, err := loadNotificationConfig(ch)
+	if err != nil {
+		return err
 	}
 
 	// 多面板共用同一通知渠道时，可在标题前缀附带面板名称以便区分；留空则不附带。
@@ -173,8 +275,12 @@ func sendToChannel(ch model.NotifyChannel, title, content string, context map[st
 		title = "【" + label + "】" + title
 	}
 
-	var err error
+	err = nil
 	switch ch.Type {
+	case "android_local":
+		err = sendAndroidLocalNotification(cfg, title, content, context)
+	case "external_webhook":
+		err = sendExternalWebhook(cfg, title, content, context)
 	case "webhook":
 		err = sendWebhook(cfg, title, content)
 	case "email":
@@ -261,6 +367,57 @@ func httpPostWithClient(client *http.Client, url string, body interface{}, heade
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+func sendAndroidLocalNotification(cfg map[string]string, title, content string, context map[string]string) error {
+	channel := strings.TrimSpace(cfg["channel"])
+	if channel == "" {
+		channel = "default"
+	}
+	return androidLocalNotificationSend(androidLocalNotificationPayload{
+		Title:   title,
+		Content: content,
+		Channel: channel,
+		Context: context,
+	})
+}
+
+func sendExternalWebhook(cfg map[string]string, title, content string, context map[string]string) error {
+	webhookURL := strings.TrimSpace(cfg["url"])
+	if webhookURL == "" {
+		return fmt.Errorf("外部 Webhook URL 为空")
+	}
+	body := map[string]interface{}{
+		"title":   title,
+		"content": content,
+		"context": context,
+	}
+	if raw := strings.TrimSpace(cfg["body"]); raw != "" {
+		parsed, err := parseNotificationJSONTemplateWithContext(raw, title, content, context)
+		if err != nil {
+			return fmt.Errorf("外部 Webhook 请求体配置无效: %w", err)
+		}
+		body = map[string]interface{}{"payload": parsed}
+		if payload, ok := parsed.(map[string]interface{}); ok {
+			body = payload
+		}
+	}
+	headers := map[string]string{}
+	if rawHeaders := strings.TrimSpace(cfg["headers"]); rawHeaders != "" {
+		parsed, err := parseNotificationJSONTemplateWithContext(rawHeaders, title, content, context)
+		if err != nil {
+			return fmt.Errorf("外部 Webhook 请求头配置无效: %w", err)
+		}
+		if headerMap, ok := parsed.(map[string]interface{}); ok {
+			for key, value := range headerMap {
+				headers[key] = fmt.Sprint(value)
+			}
+		}
+	}
+	if token := strings.TrimSpace(cfg["bearer_token"]); token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+	return httpPost(webhookURL, body, headers)
 }
 
 func sendWebhook(cfg map[string]string, title, content string) error {

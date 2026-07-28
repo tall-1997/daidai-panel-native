@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -292,6 +293,91 @@ func TestSendToChannelKeepsTitleWhenPanelLabelEmpty(t *testing.T) {
 
 	if got := body["title"]; got != "原始标题" {
 		t.Fatalf("expected title unchanged when label empty, got %q", got)
+	}
+}
+
+func TestSendAndroidLocalNotificationAdapter(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	oldSend := androidLocalNotificationSend
+	defer func() { androidLocalNotificationSend = oldSend }()
+
+	var got androidLocalNotificationPayload
+	androidLocalNotificationSend = func(payload androidLocalNotificationPayload) error {
+		got = payload
+		return nil
+	}
+
+	ch := model.NotifyChannel{
+		Type:   "android_local",
+		Config: `{"channel":"tasks"}`,
+	}
+	if err := sendToChannel(ch, "任务完成", "输出完成", map[string]string{"task_id": "42"}); err != nil {
+		t.Fatalf("send android local notification: %v", err)
+	}
+	if got.Title != "任务完成" || got.Content != "输出完成" || got.Channel != "tasks" || got.Context["task_id"] != "42" {
+		t.Fatalf("unexpected local notification payload: %+v", got)
+	}
+}
+
+func TestSendExternalWebhookUsesTemplatesAndBearerToken(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	var body map[string]interface{}
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ch := model.NotifyChannel{
+		Type:   "external_webhook",
+		Config: fmt.Sprintf(`{"url":%q,"bearer_token":"secret-token","body":"{\"text\":\"{{title}} {{task_id}}\"}"}`, server.URL),
+	}
+	if err := sendToChannel(ch, "完成", "正文", map[string]string{"task_id": "task-1"}); err != nil {
+		t.Fatalf("send external webhook: %v", err)
+	}
+	if auth != "Bearer secret-token" {
+		t.Fatalf("unexpected Authorization header: %q", auth)
+	}
+	if body["text"] != "完成 task-1" {
+		t.Fatalf("unexpected webhook body: %#v", body)
+	}
+}
+
+func TestSealedNotificationConfigOpensAtDispatchAndRedacts(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	if err := InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+
+	var body map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sealed, err := SealNotificationConfig(context.Background(), "sealed-webhook", fmt.Sprintf(`{"url":%q,"token":"plain-secret"}`, server.URL))
+	if err != nil {
+		t.Fatalf("seal notification config: %v", err)
+	}
+	if strings.Contains(sealed, "plain-secret") || strings.Contains(RedactNotificationConfig(sealed), "plain-secret") {
+		t.Fatalf("sealed notification config leaked secret: %s", sealed)
+	}
+
+	ch := model.NotifyChannel{Name: "sealed-webhook", Type: "webhook", Config: sealed}
+	if err := sendToChannel(ch, "标题", "正文", nil); err != nil {
+		t.Fatalf("send sealed channel: %v", err)
+	}
+	if body["title"] != "标题" || body["content"] != "正文" {
+		t.Fatalf("unexpected webhook body: %#v", body)
 	}
 }
 

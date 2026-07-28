@@ -27,15 +27,19 @@ func (p *Platform) ToDict() map[string]interface{} {
 }
 
 type PlatformToken struct {
-	ID         uint       `gorm:"primarykey" json:"id"`
-	PlatformID uint       `gorm:"index;not null" json:"platform_id"`
-	Name       string     `gorm:"size:128;not null" json:"name"`
-	Token      string     `gorm:"type:text;not null" json:"-"`
-	Remarks    string     `gorm:"size:256" json:"remarks"`
-	Enabled    bool       `gorm:"default:true" json:"enabled"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID          uint       `gorm:"primarykey" json:"id"`
+	PlatformID  uint       `gorm:"index;not null" json:"platform_id"`
+	Name        string     `gorm:"size:128;not null" json:"name"`
+	Token       string     `gorm:"type:text;not null" json:"-"`
+	TokenHash   string     `gorm:"size:128;default:''" json:"-"`
+	Sealed      string     `gorm:"type:text;default:''" json:"-"`
+	Service     string     `gorm:"size:64;default:''" json:"service"`
+	ServiceUser string     `gorm:"size:128;default:''" json:"service_user"`
+	Remarks     string     `gorm:"size:256" json:"remarks"`
+	Enabled     bool       `gorm:"default:true" json:"enabled"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 
 	Platform *Platform `gorm:"foreignKey:PlatformID" json:"-"`
 }
@@ -46,14 +50,18 @@ func (PlatformToken) TableName() string {
 
 func (t *PlatformToken) ToDict() map[string]interface{} {
 	result := map[string]interface{}{
-		"id":          t.ID,
-		"platform_id": t.PlatformID,
-		"name":        t.Name,
-		"remarks":     t.Remarks,
-		"enabled":     t.Enabled,
-		"expires_at":  t.ExpiresAt,
-		"created_at":  t.CreatedAt,
-		"updated_at":  t.UpdatedAt,
+		"id":           t.ID,
+		"platform_id":  t.PlatformID,
+		"name":         t.Name,
+		"service":      t.Service,
+		"service_user": t.ServiceUser,
+		"remarks":      t.Remarks,
+		"enabled":      t.Enabled,
+		"token":        "********",
+		"sealed":       t.Sealed != "",
+		"expires_at":   t.ExpiresAt,
+		"created_at":   t.CreatedAt,
+		"updated_at":   t.UpdatedAt,
 	}
 	if t.Platform != nil {
 		result["platform_name"] = t.Platform.Label
@@ -63,7 +71,7 @@ func (t *PlatformToken) ToDict() map[string]interface{} {
 
 func (t *PlatformToken) ToDictWithToken() map[string]interface{} {
 	result := t.ToDict()
-	result["token"] = t.Token
+	result["token"] = "********"
 	return result
 }
 

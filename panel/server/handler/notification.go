@@ -43,7 +43,9 @@ func (h *NotificationHandler) List(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(channels))
 	for i, ch := range channels {
-		data[i] = ch.ToDict()
+		item := ch.ToDict()
+		item["config"] = service.RedactNotificationConfig(ch.Config)
+		data[i] = item
 	}
 
 	response.Success(c, gin.H{"data": data})
@@ -63,11 +65,16 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 	if req.Config == "" {
 		req.Config = "{}"
 	}
+	sealedConfig, err := service.SealNotificationConfig(c.Request.Context(), req.Name, req.Config)
+	if err != nil {
+		response.InternalError(c, "封存通知配置失败")
+		return
+	}
 
 	ch := model.NotifyChannel{
 		Name:    req.Name,
 		Type:    req.Type,
-		Config:  req.Config,
+		Config:  sealedConfig,
 		Enabled: true,
 	}
 
@@ -76,7 +83,9 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	response.Created(c, gin.H{"message": "创建成功", "data": ch.ToDict()})
+	item := ch.ToDict()
+	item["config"] = service.RedactNotificationConfig(ch.Config)
+	response.Created(c, gin.H{"message": "创建成功", "data": item})
 }
 
 func (h *NotificationHandler) Update(c *gin.Context) {
@@ -97,6 +106,20 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 	allowed := map[string]bool{"name": true, "type": true, "config": true}
 	updates := make(map[string]interface{})
 	for k, v := range req {
+		if k == "config" {
+			if rawConfig, ok := v.(string); ok {
+				if strings.TrimSpace(rawConfig) == "********" {
+					continue
+				}
+				sealedConfig, err := service.SealNotificationConfig(c.Request.Context(), ch.Name, rawConfig)
+				if err != nil {
+					response.InternalError(c, "封存通知配置失败")
+					return
+				}
+				updates[k] = sealedConfig
+				continue
+			}
+		}
 		if allowed[k] {
 			updates[k] = v
 		}
@@ -107,7 +130,9 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 	}
 
 	database.DB.First(&ch, chID)
-	response.Success(c, gin.H{"message": "更新成功", "data": ch.ToDict()})
+	item := ch.ToDict()
+	item["config"] = service.RedactNotificationConfig(ch.Config)
+	response.Success(c, gin.H{"message": "更新成功", "data": item})
 }
 
 func (h *NotificationHandler) Delete(c *gin.Context) {
@@ -219,6 +244,8 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 
 func (h *NotificationHandler) Types(c *gin.Context) {
 	types := []map[string]string{
+		{"type": "android_local", "name": "Android 本地通知"},
+		{"type": "external_webhook", "name": "外部 Webhook"},
 		{"type": "webhook", "name": "Webhook"},
 		{"type": "email", "name": "邮件"},
 		{"type": "telegram", "name": "Telegram"},

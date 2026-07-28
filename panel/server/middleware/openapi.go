@@ -37,6 +37,9 @@ func appScopeAllowed(scopeList, required string) bool {
 
 func loadOpenAppByUsername(username string) (*model.OpenApp, error) {
 	appKey := strings.TrimPrefix(username, "app:")
+	if idx := strings.Index(appKey, ":"); idx >= 0 {
+		appKey = appKey[:idx]
+	}
 	var app model.OpenApp
 	if err := database.DB.Where("app_key = ?", appKey).First(&app).Error; err != nil {
 		return nil, err

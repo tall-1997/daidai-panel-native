@@ -2,9 +2,11 @@ package handler
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
@@ -29,6 +31,25 @@ func generateRandomKey(length int) string {
 	bytes := make([]byte, length)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+func hashOpenAppSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func checkOpenAppSecret(stored, provided string) bool {
+	if strings.HasPrefix(stored, "sha256:") {
+		return stored == hashOpenAppSecret(provided)
+	}
+	return stored == provided
+}
+
+func redactOpenAppSecret(stored string) string {
+	if strings.TrimSpace(stored) == "" {
+		return ""
+	}
+	return "********"
 }
 
 type openAppDailyCountRow struct {
@@ -109,10 +130,11 @@ func (h *OpenAPIHandler) Create(c *gin.Context) {
 		return
 	}
 
+	rawSecret := generateRandomKey(32)
 	app := model.OpenApp{
 		Name:      req.Name,
 		AppKey:    generateRandomKey(16),
-		AppSecret: generateRandomKey(32),
+		AppSecret: hashOpenAppSecret(rawSecret),
 		Scopes:    req.Scopes,
 		Enabled:   true,
 		RateLimit: req.RateLimit,
@@ -123,7 +145,9 @@ func (h *OpenAPIHandler) Create(c *gin.Context) {
 		return
 	}
 
-	response.Created(c, gin.H{"message": "创建成功", "data": buildOpenAppResponse(&app, 0, true)})
+	data := buildOpenAppResponse(&app, 0, false)
+	data["app_secret"] = rawSecret
+	response.Created(c, gin.H{"message": "创建成功", "data": data})
 }
 
 func (h *OpenAPIHandler) Update(c *gin.Context) {
@@ -199,10 +223,12 @@ func (h *OpenAPIHandler) ResetSecret(c *gin.Context) {
 	}
 
 	newSecret := generateRandomKey(32)
-	database.DB.Model(&app).Update("app_secret", newSecret)
-	app.AppSecret = newSecret
+	app.AppSecret = hashOpenAppSecret(newSecret)
+	database.DB.Model(&app).Update("app_secret", app.AppSecret)
 
-	response.Success(c, gin.H{"message": "密钥已重置", "data": buildOpenAppResponse(&app, loadOpenAppDailyCount(app.ID), true)})
+	data := buildOpenAppResponse(&app, loadOpenAppDailyCount(app.ID), false)
+	data["app_secret"] = newSecret
+	response.Success(c, gin.H{"message": "密钥已重置", "data": data})
 }
 
 func (h *OpenAPIHandler) ViewSecret(c *gin.Context) {
@@ -234,13 +260,15 @@ func (h *OpenAPIHandler) ViewSecret(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"data": gin.H{"app_secret": app.AppSecret}})
+	response.Success(c, gin.H{"data": gin.H{"app_secret": redactOpenAppSecret(app.AppSecret)}})
 }
 
 func (h *OpenAPIHandler) Token(c *gin.Context) {
 	var req struct {
-		AppKey    string `json:"app_key" binding:"required"`
-		AppSecret string `json:"app_secret" binding:"required"`
+		AppKey      string `json:"app_key" binding:"required"`
+		AppSecret   string `json:"app_secret" binding:"required"`
+		Service     string `json:"service"`
+		ServiceUser string `json:"service_user"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
@@ -258,13 +286,26 @@ func (h *OpenAPIHandler) Token(c *gin.Context) {
 		return
 	}
 
-	if app.AppSecret != req.AppSecret {
+	if !checkOpenAppSecret(app.AppSecret, req.AppSecret) {
 		response.Unauthorized(c, "凭证无效")
 		return
 	}
 
+	serviceName := strings.TrimSpace(req.Service)
+	serviceUser := strings.TrimSpace(req.ServiceUser)
+	if serviceName != "" || serviceUser != "" {
+		if _, err := ResolvePlatformTokenCredential(app.AppKey, serviceName, serviceUser); err != nil {
+			response.Forbidden(c, "服务凭据未配置")
+			return
+		}
+	}
+	username := fmt.Sprintf("app:%s", app.AppKey)
+	if serviceName != "" || serviceUser != "" {
+		username = fmt.Sprintf("app:%s:%s:%s", app.AppKey, serviceName, serviceUser)
+	}
+
 	claims := &middleware.Claims{
-		Username:  fmt.Sprintf("app:%s", app.AppKey),
+		Username:  username,
 		Role:      fmt.Sprintf("app:%s", app.Scopes),
 		TokenType: "access",
 		RegisteredClaims: jwt.RegisteredClaims{
