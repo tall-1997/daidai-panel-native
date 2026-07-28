@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
@@ -128,6 +133,36 @@ func TestDependencyCreateRejectsProjectedQuotaBeforeStartingInstall(t *testing.T
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"projected_bytes"`)) {
 		t.Fatalf("expected projected quota usage, got %s", rec.Body.String())
+	}
+}
+
+func TestDependencyRunRestoresStagingWhenCommandStartFails(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	target := filepath.Join(config.C.Data.Dir, "deps", "nodejs", "node_modules", "left-pad")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "package.json"), []byte(`{"name":"left-pad"}`), 0o644); err != nil {
+		t.Fatalf("write target package: %v", err)
+	}
+	dep := model.Dependency{Type: model.DepTypeNodeJS, Name: "left-pad", Status: model.DepStatusInstalling}
+	if err := database.DB.Create(&dep).Error; err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+	dep.OperationID = createDependencyOperation(dep.ID)
+
+	runCmdWithSSE(exec.Command("/definitely/missing/dependency-installer"), dep.ID, model.DepStatusInstalled, false)
+
+	if _, err := os.Stat(filepath.Join(target, "package.json")); err != nil {
+		t.Fatalf("expected previous target restored after start failure: %v", err)
+	}
+	var updated model.Dependency
+	if err := database.DB.First(&updated, dep.ID).Error; err != nil {
+		t.Fatalf("reload dependency: %v", err)
+	}
+	if updated.Status != model.DepStatusFailed || !strings.Contains(updated.Log, "previous target restored") {
+		t.Fatalf("expected failed dependency with staging restore log, got %+v", updated)
 	}
 }
 

@@ -742,9 +742,10 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
+		rollbackLog := finishStaging("failed")
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
-			"log":    err.Error(),
+			"log":    err.Error() + "\n" + rollbackLog,
 		})
 		if operationID != "" {
 			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_PIPE_FAILED", -1)
@@ -762,9 +763,10 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	}()
 
 	if err := cmd.Start(); err != nil {
+		rollbackLog := finishStaging("failed")
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
-			"log":    err.Error(),
+			"log":    err.Error() + "\n" + rollbackLog,
 		})
 		if operationID != "" {
 			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_START_FAILED", -1)
