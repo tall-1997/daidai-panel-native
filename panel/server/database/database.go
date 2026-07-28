@@ -291,6 +291,14 @@ func EnsureColumns() error {
 	if err := ensureTableColumns("api_call_logs", []columnDef{
 		{"app_name", "VARCHAR(128)"},
 		{"duration", "REAL DEFAULT 0"},
+		{"service", "VARCHAR(128) DEFAULT ''"},
+		{"service_user", "VARCHAR(128) DEFAULT ''"},
+	}); err != nil {
+		return err
+	}
+
+	if err := ensureTableColumns("sub_logs", []columnDef{
+		{"log_cursor", "INTEGER DEFAULT 0"},
 	}); err != nil {
 		return err
 	}

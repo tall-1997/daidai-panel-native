@@ -21,7 +21,8 @@ const (
 	DependencyReasonSourceUnsigned     = "SOURCE_REQUIRES_SIGNED_AUTHORIZATION"
 	DependencyReasonQuotaExceeded      = "DEPENDENCY_QUOTA_EXCEEDED"
 
-	DefaultDependencyQuotaBytes int64 = 1024 * 1024 * 1024
+	DefaultDependencyQuotaBytes          int64 = 1024 * 1024 * 1024
+	DefaultDependencyInstallReserveBytes int64 = 64 * 1024 * 1024
 )
 
 type DependencyCompatibilityDetails struct {
@@ -45,9 +46,10 @@ type DependencyCompatibilityDetails struct {
 }
 
 type DependencyQuotaDetails struct {
-	LimitBytes int64  `json:"limit_bytes"`
-	UsedBytes  int64  `json:"used_bytes"`
-	Status     string `json:"status"`
+	LimitBytes     int64  `json:"limit_bytes"`
+	UsedBytes      int64  `json:"used_bytes"`
+	ProjectedBytes int64  `json:"projected_bytes"`
+	Status         string `json:"status"`
 }
 
 type nativeAllowlistEntry struct {
@@ -198,13 +200,21 @@ func (d DependencyCompatibilityDetails) Map() map[string]any {
 }
 
 func CurrentDependencyQuotaDetails() DependencyQuotaDetails {
+	return ProjectedDependencyQuotaDetails(0)
+}
+
+func ProjectedDependencyQuotaDetails(projectedAdditionalBytes int64) DependencyQuotaDetails {
 	limit := DependencyQuotaLimitBytes()
 	used := directorySize(filepath.Join(config.C.Data.Dir, "deps"))
+	if projectedAdditionalBytes < 0 {
+		projectedAdditionalBytes = 0
+	}
+	projected := used + projectedAdditionalBytes
 	status := "ok"
-	if limit > 0 && used > limit {
+	if limit > 0 && projected > limit {
 		status = "exceeded"
 	}
-	return DependencyQuotaDetails{LimitBytes: limit, UsedBytes: used, Status: status}
+	return DependencyQuotaDetails{LimitBytes: limit, UsedBytes: used, ProjectedBytes: projected, Status: status}
 }
 
 func DependencyQuotaLimitBytes() int64 {
@@ -219,10 +229,24 @@ func DependencyQuotaLimitBytes() int64 {
 	return parsed
 }
 
+func DependencyProjectedInstallBytes(depType, packageName, pythonVersion string) int64 {
+	if override := strings.TrimSpace(os.Getenv("DAIDAI_DEPENDENCY_INSTALL_RESERVE_BYTES")); override != "" {
+		parsed, err := strconv.ParseInt(override, 10, 64)
+		if err == nil && parsed >= 0 {
+			return parsed
+		}
+	}
+	return DefaultDependencyInstallReserveBytes
+}
+
 func CheckDependencyQuota() error {
-	quota := CurrentDependencyQuotaDetails()
-	if quota.LimitBytes > 0 && quota.UsedBytes > quota.LimitBytes {
-		return fmt.Errorf("%s: used %d bytes exceeds limit %d bytes", DependencyReasonQuotaExceeded, quota.UsedBytes, quota.LimitBytes)
+	return CheckDependencyQuotaWithProjection(0)
+}
+
+func CheckDependencyQuotaWithProjection(projectedAdditionalBytes int64) error {
+	quota := ProjectedDependencyQuotaDetails(projectedAdditionalBytes)
+	if quota.LimitBytes > 0 && quota.ProjectedBytes > quota.LimitBytes {
+		return fmt.Errorf("%s: projected %d bytes exceeds limit %d bytes (used %d bytes)", DependencyReasonQuotaExceeded, quota.ProjectedBytes, quota.LimitBytes, quota.UsedBytes)
 	}
 	return nil
 }

@@ -137,6 +137,7 @@ type SubLog struct {
 	OperationID    string    `gorm:"size:64;index;default:''" json:"operation_id"`
 	Status         int       `gorm:"default:0" json:"status"`
 	Content        string    `gorm:"type:text" json:"content"`
+	LogCursor      int64     `gorm:"default:0" json:"log_cursor"`
 	Duration       float64   `gorm:"default:0" json:"duration"`
 	CreatedAt      time.Time `json:"created_at"`
 
@@ -154,6 +155,7 @@ func (l *SubLog) ToDict() map[string]interface{} {
 		"operation_id":    l.OperationID,
 		"status":          l.Status,
 		"content":         l.Content,
+		"log_cursor":      l.LogCursor,
 		"duration":        l.Duration,
 		"created_at":      l.CreatedAt,
 	}

@@ -92,6 +92,45 @@ func TestDependencyCreatePersistsOperationAndCompatibilityDetails(t *testing.T) 
 	}
 }
 
+func TestDependencyCreateRejectsProjectedQuotaBeforeStartingInstall(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	originalRunner := dependencyInstallRunner
+	originalProjectedUsage := dependencyProjectedUsageBytes
+	defer func() {
+		dependencyInstallRunner = originalRunner
+		dependencyProjectedUsageBytes = originalProjectedUsage
+	}()
+	started := false
+	dependencyInstallRunner = func(id uint, depType, name string) {
+		started = true
+	}
+	dependencyProjectedUsageBytes = func(depType, name, pythonVersion string) int64 {
+		return 2 * 1024 * 1024 * 1024
+	}
+
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	rec := performDepsJSONRequest(engine, http.MethodPost, "/api/v1/deps", map[string]any{
+		"type":  model.DepTypeNodeJS,
+		"names": []string{"left-pad"},
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if started {
+		t.Fatal("dependency install should not start after projected quota rejection")
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"reason_code":"DEPENDENCY_QUOTA_EXCEEDED"`)) {
+		t.Fatalf("expected quota compatibility details, got %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"projected_bytes"`)) {
+		t.Fatalf("expected projected quota usage, got %s", rec.Body.String())
+	}
+}
+
 func performDepsJSONRequest(engine *gin.Engine, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))

@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,13 @@ import (
 )
 
 type PullCallback func(line string)
+
+type subscriptionWorktreeJournal struct {
+	DestDir    string `json:"dest_dir"`
+	BackupDir  string `json:"backup_dir"`
+	StagingDir string `json:"staging_dir"`
+	Phase      string `json:"phase"`
+}
 
 func PullSubscription(sub *model.Subscription) (string, error) {
 	return PullSubscriptionWithCallback(sub, nil)
@@ -57,10 +65,24 @@ func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 
 	var fullLog strings.Builder
 	lineCursor := int64(0)
+	subLog := model.SubLog{
+		SubscriptionID: sub.ID,
+		OperationID:    operationID,
+		Status:         1,
+		Content:        "",
+		LogCursor:      0,
+	}
+	logPersisted := database.DB.Create(&subLog).Error == nil
 	emit := func(line string) {
 		lineCursor++
 		fullLog.WriteString(line)
 		fullLog.WriteString("\n")
+		if logPersisted {
+			updates := map[string]interface{}{"content": fullLog.String(), "log_cursor": lineCursor}
+			if lineCursor == 1 || lineCursor%5 == 0 {
+				_ = database.DB.Model(&model.SubLog{}).Where("id = ?", subLog.ID).Updates(updates).Error
+			}
+		}
 		if operationID != "" && lineCursor%5 == 0 {
 			_ = store.Progress(operationID, "pulling", 50, lineCursor)
 		}
@@ -109,14 +131,23 @@ func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 
 	emit(fmt.Sprintf("[完成] 耗时 %.2f 秒, 状态: %s", duration, map[int]string{0: "成功", 1: "失败"}[status]))
 
-	subLog := model.SubLog{
-		SubscriptionID: sub.ID,
-		OperationID:    operationID,
-		Status:         status,
-		Content:        fullLog.String(),
-		Duration:       duration,
+	if logPersisted {
+		database.DB.Model(&model.SubLog{}).Where("id = ?", subLog.ID).Updates(map[string]interface{}{
+			"status":     status,
+			"content":    fullLog.String(),
+			"duration":   duration,
+			"log_cursor": lineCursor,
+		})
+	} else {
+		database.DB.Create(&model.SubLog{
+			SubscriptionID: sub.ID,
+			OperationID:    operationID,
+			Status:         status,
+			Content:        fullLog.String(),
+			Duration:       duration,
+			LogCursor:      lineCursor,
+		})
 	}
-	database.DB.Create(&subLog)
 
 	now := time.Now()
 	database.DB.Model(sub).Updates(map[string]interface{}{
@@ -498,10 +529,17 @@ func cloneSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, 
 
 func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
 	backupDir := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".previous")
+	journalPath := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".replace-journal.json")
+	if err := recoverSubscriptionWorktreeJournal(journalPath); err != nil {
+		return err
+	}
 	backupActive := false
 	_ = os.RemoveAll(backupDir)
 
 	if _, err := os.Stat(destDir); err == nil {
+		if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "backup"}); err != nil {
+			return err
+		}
 		if err := os.Rename(destDir, backupDir); err != nil {
 			return fmt.Errorf("备份当前订阅工作区失败: %w", err)
 		}
@@ -510,6 +548,9 @@ func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
 		return fmt.Errorf("检查当前订阅工作区失败: %w", err)
 	}
 
+	if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "publish"}); err != nil {
+		return err
+	}
 	if err := os.Rename(stagingDir, destDir); err != nil {
 		if backupActive {
 			_ = os.Rename(backupDir, destDir)
@@ -517,7 +558,47 @@ func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
 		return fmt.Errorf("发布新订阅工作区失败: %w", err)
 	}
 
+	_ = os.Remove(journalPath)
 	_ = backupActive
+	return nil
+}
+
+func writeSubscriptionWorktreeJournal(path string, journal subscriptionWorktreeJournal) error {
+	data, err := json.Marshal(journal)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("写入订阅工作区 crash journal 失败: %w", err)
+	}
+	return nil
+}
+
+func recoverSubscriptionWorktreeJournal(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取订阅工作区 crash journal 失败: %w", err)
+	}
+	var journal subscriptionWorktreeJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return fmt.Errorf("解析订阅工作区 crash journal 失败: %w", err)
+	}
+	if journal.DestDir == "" || journal.BackupDir == "" {
+		return fmt.Errorf("订阅工作区 crash journal 缺少路径")
+	}
+	if _, err := os.Stat(journal.DestDir); os.IsNotExist(err) {
+		if _, backupErr := os.Stat(journal.BackupDir); backupErr == nil {
+			if restoreErr := os.Rename(journal.BackupDir, journal.DestDir); restoreErr != nil {
+				return fmt.Errorf("恢复订阅工作区 crash journal 失败: %w", restoreErr)
+			}
+		}
+	} else if err != nil {
+		return fmt.Errorf("检查订阅工作区 crash journal 目标失败: %w", err)
+	}
+	_ = os.Remove(path)
 	return nil
 }
 
