@@ -1387,7 +1387,162 @@ func TestStartCoreRuntimeContainerStartStopOrderAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestStopCoreReportsRuntimeStopFailureAndStillConverges(t *testing.T) {
+func TestStartCoreRuntimeWorkersStartOnlyAfterMarkReadySuccess(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
+	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CheckpointWALAndClose(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+
+	startCalls := 0
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{{
+			name: "scheduler",
+			start: func(context.Context) error {
+				startCalls++
+				return nil
+			},
+			stop: func(context.Context) error { return nil },
+		}})
+	}
+	t.Cleanup(func() { newRuntimeContainer = original })
+
+	started := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if !started.OK {
+		t.Fatalf("start: %+v", started)
+	}
+	if startCalls != 1 {
+		t.Fatalf("runtime start calls=%d want=1", startCalls)
+	}
+	if !RecoveryConverged() {
+		t.Fatal("recovery gate did not open after runtime started")
+	}
+	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
+		t.Fatalf("stop: %+v", stopped)
+	}
+}
+
+func TestStartCoreMarkReadyFailurePreventsRuntimeWorkerStart(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
+	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CheckpointWALAndClose(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalMarkReady := markGenerationReady
+	markGenerationReady = func(*generationStore, string) error {
+		return errors.New("mark-ready failure")
+	}
+	t.Cleanup(func() { markGenerationReady = originalMarkReady })
+
+	startCalls := 0
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{{
+			name: "scheduler",
+			start: func(context.Context) error {
+				startCalls++
+				return nil
+			},
+			stop: func(context.Context) error { return nil },
+		}})
+	}
+	t.Cleanup(func() { newRuntimeContainer = original })
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeRecoveryFailed {
+		t.Fatalf("result: %+v", result)
+	}
+	if startCalls != 0 {
+		t.Fatalf("runtime start calls=%d want=0", startCalls)
+	}
+	if RecoveryConverged() {
+		t.Fatal("recovery gate opened after markReady failure")
+	}
+	if status := decodeResult(t, CoreStatus()); status.Running || status.Status == "running" {
+		t.Fatalf("core leaked running state: %+v", status)
+	}
+}
+
+func TestStartCoreRuntimeWorkerStartRequiresRecoveryGate(t *testing.T) {
+	resetRecoveryLifecycle(t)
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	oldGeneration, err := store.converge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
+	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CheckpointWALAndClose(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sealGeneration(filepath.Base(oldGeneration), generationBaseline{}); err != nil {
+		t.Fatal(err)
+	}
+
+	startCalls := 0
+	original := newRuntimeContainer
+	newRuntimeContainer = func() RuntimeContainer {
+		return newOrderedRuntimeContainer([]runtimeComponent{{
+			name: "scheduler",
+			start: func(context.Context) error {
+				startCalls++
+				return nil
+			},
+			stop: func(context.Context) error { return nil },
+		}})
+	}
+	originalGate := runtimeWorkerStartGate
+	runtimeWorkerStartGate = func(prepared, recoveryConverged bool) bool {
+		return false
+	}
+	t.Cleanup(func() {
+		newRuntimeContainer = original
+		runtimeWorkerStartGate = originalGate
+	})
+
+	result := decodeResult(t, StartCore(`{"dataDir":"`+root+`","localToken":"`+testLocalToken+`"}`))
+	if result.OK || result.ErrorCode != codeRecoveryFailed {
+		t.Fatalf("result: %+v", result)
+	}
+	if startCalls != 0 {
+		t.Fatalf("runtime start calls=%d want=0", startCalls)
+	}
+	if status := decodeResult(t, CoreStatus()); status.Status == "running" || status.Running {
+		t.Fatalf("gate bypass leaked running state: %+v", status)
+	}
+}
+
+func TestStopCoreReportsRuntimeStopFailureAndKeepsDiagnosableState(t *testing.T) {
+	resetRecoveryLifecycle(t)
 	original := newRuntimeContainer
 	newRuntimeContainer = func() RuntimeContainer {
 		return newOrderedRuntimeContainer([]runtimeComponent{{
@@ -1397,13 +1552,27 @@ func TestStopCoreReportsRuntimeStopFailureAndStillConverges(t *testing.T) {
 		}})
 	}
 	t.Cleanup(func() { newRuntimeContainer = original })
+	originalMarkReady := markGenerationReady
+	markGenerationReady = func(store *generationStore, generationID string) error {
+		return store.markReady(generationID)
+	}
+	t.Cleanup(func() { markGenerationReady = originalMarkReady })
+	originalGate := runtimeWorkerStartGate
+	runtimeWorkerStartGate = func(prepared, recoveryConverged bool) bool {
+		return recoveryConverged
+	}
+	t.Cleanup(func() { runtimeWorkerStartGate = originalGate })
 
-	startForTest(t, t.TempDir())
+	started := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`"}`))
+	if !started.OK {
+		t.Fatalf("start core: %+v", started)
+	}
+	t.Cleanup(func() { _ = StopCore(1000) })
 	stopped := decodeResult(t, StopCore(5000))
-	if !stopped.OK || stopped.Status != "stopped" {
+	if stopped.OK || stopped.ErrorCode != codeShutdownFailed || stopped.Status != "failed" {
 		t.Fatalf("stop result: %+v", stopped)
 	}
-	if status := decodeResult(t, CoreStatus()); status.Running {
-		t.Fatalf("core remained running after stop with runtime failure: %+v", status)
+	if status := decodeResult(t, CoreStatus()); status.Running || status.ErrorCode != codeShutdownFailed || status.Status != "failed" {
+		t.Fatalf("core diagnostics missing after runtime stop failure: %+v", status)
 	}
 }

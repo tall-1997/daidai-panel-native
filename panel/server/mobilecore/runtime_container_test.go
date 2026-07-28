@@ -139,3 +139,32 @@ func TestRuntimeContainerActiveInterruptionPath(t *testing.T) {
 		t.Fatal("active work interruption not observed")
 	}
 }
+
+func TestRuntimeContainerHealthKeepsFailureLastError(t *testing.T) {
+	container := newOrderedRuntimeContainer([]runtimeComponent{
+		{
+			name:  "scheduler",
+			start: func(context.Context) error { return errors.New("boom") },
+			stop:  func(context.Context) error { return nil },
+			health: func() bool {
+				return false
+			},
+		},
+	})
+
+	err := container.Start(context.Background())
+	if err == nil {
+		t.Fatal("expected start failure")
+	}
+	health := container.Health()
+	if len(health.Components) != 1 {
+		t.Fatalf("components=%d want=1", len(health.Components))
+	}
+	component := health.Components[0]
+	if component.State != "failed" {
+		t.Fatalf("state=%q want=failed", component.State)
+	}
+	if component.LastError == "" {
+		t.Fatal("lastError is empty")
+	}
+}

@@ -115,6 +115,10 @@ var (
 	generationFilesystemOps = defaultFilesystemOps
 	probeCoreReadiness      = probeHealthEndpoint
 	newRuntimeContainer     = newServiceRuntimeContainer
+	markGenerationReady     = func(store *generationStore, generationID string) error { return store.markReady(generationID) }
+	runtimeWorkerStartGate  = func(prepared, recoveryConverged bool) bool {
+		return recoveryConverged
+	}
 )
 
 type lifecycleState struct {
@@ -414,31 +418,9 @@ func StartCore(optionsJSON string) (response string) {
 		lifecycle.mu.Unlock()
 		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
-	runtimeCtx, runtimeCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
-	runtimeErr := running.runtime.Start(runtimeCtx)
-	runtimeCancel()
-	if runtimeErr != nil {
-		_ = running.server.Close()
-		if prepared {
-			if rollbackErr := rollbackMigration(); rollbackErr != nil {
-				lifecycle.mu.Unlock()
-				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
-			}
-		} else {
-			if restoreErr := restoreAfterStartFailure(previous); restoreErr != nil {
-				lifecycle.mu.Unlock()
-				return failure(codeRecoveryFailed, "core recovery failed", result{Status: "cleanup_required", CleanupRequired: true})
-			}
-		}
-		lifecycle.mu.Unlock()
-		logDiagnostic(codeBootstrapFailed, "runtime-start")
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
+	recoveryConverged := !prepared
 	if prepared {
-		if err := store.markReady(activeID); err != nil {
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
-			_ = running.runtime.Stop(shutdownCtx)
-			shutdownCancel()
+		if err := markGenerationReady(store, activeID); err != nil {
 			_ = running.server.Close()
 			if rollbackErr := rollbackMigration(); rollbackErr != nil {
 				lifecycle.mu.Unlock()
@@ -447,6 +429,29 @@ func StartCore(optionsJSON string) (response string) {
 			lifecycle.mu.Unlock()
 			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
 		}
+		recoveryConverged = true
+	}
+	if !runtimeWorkerStartGate(prepared, recoveryConverged) {
+		_ = running.server.Close()
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			lifecycle.mu.Unlock()
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		lifecycle.mu.Unlock()
+		return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+	}
+	runtimeCtx, runtimeCancel := context.WithTimeout(context.Background(), runtimeLifecycleTimeout)
+	runtimeErr := running.runtime.Start(runtimeCtx)
+	runtimeCancel()
+	if runtimeErr != nil {
+		_ = running.server.Close()
+		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
+			lifecycle.mu.Unlock()
+			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
+		}
+		lifecycle.mu.Unlock()
+		logDiagnostic(codeBootstrapFailed, "runtime-start")
+		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 	}
 	lifecycle.core = running
 	lifecycle.capabilities = cloneCapabilitySnapshot(parsed.PlatformCapabilities)
@@ -500,6 +505,16 @@ func StopCore(timeoutMillis int64) string {
 		runtimeErr := running.runtime.Stop(ctx)
 		if runtimeErr != nil {
 			logDiagnostic(codeShutdownFailed, "runtime-stop")
+			cancel()
+			lifecycle.mu.Lock()
+			if lifecycle.core == running {
+				lifecycle.status = "failed"
+				lifecycle.errorCode = codeShutdownFailed
+				lifecycle.errorText = "core shutdown failed"
+			}
+			value := lifecycle.statusResultLocked()
+			lifecycle.mu.Unlock()
+			return failure(codeShutdownFailed, "core shutdown failed", value)
 		}
 	}
 	err := running.server.Shutdown(ctx)

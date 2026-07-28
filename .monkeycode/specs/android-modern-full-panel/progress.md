@@ -6,7 +6,7 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 1 is in progress. Tasks 1.0 through 1.4 are implemented and committed locally.
+Milestone 1 is in progress. Tasks 1.0 through 1.4 are implemented locally, and Task 1.4 review findings are remediated with strict TDD coverage.
 
 The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit gate and its commits have not been pushed.
 
@@ -28,6 +28,11 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - `panel/server/service/log_cleanup.go`
   - Added context-aware start/stop APIs and retained existing compatibility wrappers.
 - Added and expanded tests for ordered start/reverse stop/partial rollback/restart/idempotent/active interruption paths.
+- Task 1.4 review fixes completed:
+  - Runtime workers now start only after recovery finalize reaches `markReady` success; any finalize failure keeps workers stopped.
+  - `StopCore` runtime stop failure now returns `SHUTDOWN_FAILED` and preserves diagnosable `failed` lifecycle state.
+  - Added a hard runtime-start recovery gate seam enforcing `RecoveryConverged` on the worker startup path.
+  - Removed redundant `LastError` no-op logic in `runtime_container.go` and added regression test coverage.
 - Verification completed:
   - `go test -race ./mobilecore ./service ./router -count=1`
   - `go test ./handler ./service -count=1`

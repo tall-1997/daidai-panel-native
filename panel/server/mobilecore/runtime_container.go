@@ -149,9 +149,6 @@ func (container *orderedRuntimeContainer) Health() HealthSnapshot {
 		if component.health != nil {
 			if component.health() {
 				health.State = "running"
-				if health.LastError == "" {
-					health.LastError = ""
-				}
 			} else if health.State == "running" {
 				health.State = "stopped"
 			}
