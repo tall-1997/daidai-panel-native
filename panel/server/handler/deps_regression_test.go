@@ -24,6 +24,74 @@ func newDepsTestRouter() *gin.Engine {
 	return engine
 }
 
+func TestDependencyCreateReturnsCompatibilityDetailsForUnsupportedPackage(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	rec := performDepsJSONRequest(engine, http.MethodPost, "/api/v1/deps", map[string]any{
+		"type":  model.DepTypeNodeJS,
+		"names": []string{"sharp"},
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"reason_code":"NATIVE_NOT_ALLOWLISTED"`)) {
+		t.Fatalf("expected stable compatibility reason details: %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"npm_script_policy":"ignore-scripts"`)) {
+		t.Fatalf("expected npm script policy in compatibility details: %s", rec.Body.String())
+	}
+}
+
+func TestDependencyCreatePersistsOperationAndCompatibilityDetails(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	originalRunner := dependencyInstallRunner
+	defer func() {
+		dependencyInstallRunner = originalRunner
+	}()
+	done := make(chan uint, 1)
+	dependencyInstallRunner = func(id uint, depType, name string) {
+		done <- id
+	}
+
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	rec := performDepsJSONRequest(engine, http.MethodPost, "/api/v1/deps", map[string]any{
+		"type":  model.DepTypeNodeJS,
+		"names": []string{"left-pad"},
+	}, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var depID uint
+	select {
+	case depID = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for dependency runner")
+	}
+	var dep model.Dependency
+	if err := database.DB.First(&dep, depID).Error; err != nil {
+		t.Fatalf("load dependency: %v", err)
+	}
+	if dep.OperationID == "" || dep.CompatibilityDetails == "" {
+		t.Fatalf("expected operation and compatibility metadata, got %+v", dep)
+	}
+	var op model.Operation
+	if err := database.DB.First(&op, "id = ?", dep.OperationID).Error; err != nil {
+		t.Fatalf("load operation: %v", err)
+	}
+	if op.Kind != model.OperationKindDependency || op.State != model.OperationStatePending {
+		t.Fatalf("unexpected operation state: %+v", op)
+	}
+}
+
 func performDepsJSONRequest(engine *gin.Engine, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
 	payload, _ := json.Marshal(body)
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))

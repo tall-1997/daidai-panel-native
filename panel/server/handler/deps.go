@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -195,17 +196,20 @@ func (h *DepsHandler) Create(c *gin.Context) {
 		return
 	}
 	created := []map[string]interface{}{}
+	unsupported := []map[string]interface{}{}
 	skipped := 0
 	for _, name := range req.Names {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
-		if strings.ContainsAny(name, ";|&`$(){}") {
-			continue
-		}
-
 		for _, pythonVersion := range dependencyPythonInstallVersions(req.Type) {
+			compatibility := service.EvaluateDependencyCompatibility(req.Type, name, pythonVersion)
+			if !compatibility.Supported() {
+				unsupported = append(unsupported, compatibility.Map())
+				continue
+			}
+
 			// Python 依赖按 PEP 503 归一化键去重：同名（忽略大小写/分隔符差异）已存在且
 			// 已安装/安装中/排队中的，跳过、不重复安装。
 			if req.Type == model.DepTypePython {
@@ -217,18 +221,27 @@ func (h *DepsHandler) Create(c *gin.Context) {
 			}
 
 			dep := model.Dependency{
-				Type:          req.Type,
-				Name:          name,
-				PythonVersion: pythonVersion,
-				Status:        model.DepStatusInstalling,
+				Type:                 req.Type,
+				Name:                 name,
+				PythonVersion:        pythonVersion,
+				Status:               model.DepStatusInstalling,
+				CompatibilityDetails: compatibility.JSON(),
 			}
 			if err := database.DB.Create(&dep).Error; err != nil {
 				continue
 			}
+			dep.OperationID = createDependencyOperation(dep.ID)
 			created = append(created, dep.ToDict())
 
 			go dependencyInstallRunner(dep.ID, req.Type, name)
 		}
+	}
+	if len(created) == 0 && len(unsupported) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":                 "依赖不在 Android 兼容清单内",
+			"compatibility_details": unsupported,
+		})
+		return
 	}
 
 	message := fmt.Sprintf("已提交 %d 个依赖安装", len(created))
@@ -239,8 +252,9 @@ func (h *DepsHandler) Create(c *gin.Context) {
 		message = fmt.Sprintf("%s，已存在跳过 %d 个", message, skipped)
 	}
 	response.Created(c, gin.H{
-		"message": message,
-		"data":    created,
+		"message":               message,
+		"data":                  created,
+		"compatibility_details": unsupported,
 	})
 }
 
@@ -388,9 +402,11 @@ func (h *DepsHandler) Reinstall(c *gin.Context) {
 		return
 	}
 
+	operationID := createDependencyOperation(dep.ID)
 	database.DB.Model(&dep).Updates(map[string]interface{}{
-		"status": model.DepStatusInstalling,
-		"log":    "",
+		"status":       model.DepStatusInstalling,
+		"log":          "",
+		"operation_id": operationID,
 	})
 
 	go dependencyInstallRunner(dep.ID, dep.Type, dep.Name)
@@ -448,9 +464,11 @@ func (h *DepsHandler) BatchReinstall(c *gin.Context) {
 	}
 
 	for index, dep := range queue {
+		operationID := createDependencyOperation(dep.ID)
 		database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
-			"status": model.DepStatusQueued,
-			"log":    appendDepsLog(dep.Log, fmt.Sprintf("[批量重装] 已加入顺序队列（%d/%d）", index+1, len(queue))),
+			"status":       model.DepStatusQueued,
+			"log":          appendDepsLog(dep.Log, fmt.Sprintf("[批量重装] 已加入顺序队列（%d/%d）", index+1, len(queue))),
+			"operation_id": operationID,
 		})
 	}
 
@@ -479,6 +497,19 @@ func (h *DepsHandler) Cancel(c *gin.Context) {
 	var dep model.Dependency
 	if err := database.DB.First(&dep, id).Error; err != nil {
 		response.NotFound(c, "依赖不存在")
+		return
+	}
+
+	if dep.Status == model.DepStatusQueued {
+		updates := map[string]interface{}{
+			"status": model.DepStatusCancelled,
+			"log":    appendDepsLog(dep.Log, "[依赖任务已取消]"),
+		}
+		database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(updates)
+		if dep.OperationID != "" {
+			_ = service.DefaultOperationStore().Cancel(dep.OperationID, "DEPENDENCY_CANCELED", -1)
+		}
+		response.Success(c, gin.H{"message": "取消请求已提交"})
 		return
 	}
 
@@ -667,6 +698,27 @@ func (h *DepsHandler) SetMirrors(c *gin.Context) {
 func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess bool) {
 	broadcaster := getOrCreateBroadcaster(id)
 	defer removeBroadcaster(id)
+	operationID, depType, depName, pythonVersion := dependencyOperationContext(id)
+	operationStore := service.DefaultOperationStore()
+	if operationID != "" {
+		_ = operationStore.Start(operationID, "staging")
+	}
+	finishStaging := func(reason string) string { return "[staging] no staging required" }
+	stagingState := "skipped"
+	if successStatus == model.DepStatusInstalled && !deleteOnSuccess {
+		finishStaging, stagingState = service.PrepareDependencyStaging(depType, depName, pythonVersion)
+	}
+	if stagingState == "prepare_failed" {
+		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status": model.DepStatusFailed,
+			"log":    finishStaging("failed"),
+		})
+		if operationID != "" {
+			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_STAGING_FAILED", -1)
+		}
+		broadcaster.done()
+		return
+	}
 
 	service.SetPgid(cmd)
 
@@ -676,6 +728,9 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 			"status": model.DepStatusFailed,
 			"log":    err.Error(),
 		})
+		if operationID != "" {
+			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_PIPE_FAILED", -1)
+		}
 		broadcaster.done()
 		return
 	}
@@ -693,6 +748,9 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 			"status": model.DepStatusFailed,
 			"log":    err.Error(),
 		})
+		if operationID != "" {
+			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_START_FAILED", -1)
+		}
 		broadcaster.done()
 		return
 	}
@@ -733,8 +791,17 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		lastPersistAt = time.Now()
 		logDirty = false
 	}
+	logLen := func() int64 {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return int64(logBuf.Len())
+	}
 
 	appendLine(fmt.Sprintf("[依赖任务已启动，超时阈值：%s]", dependencyOperationTimeout.Truncate(time.Second)), true)
+	appendLine("[staging] 已启用依赖 staging 与失败回滚", true)
+	if operationID != "" {
+		_ = operationStore.Progress(operationID, "running", 10, 0)
+	}
 
 	scanDone := make(chan struct{})
 	go func() {
@@ -745,6 +812,9 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		for scanner.Scan() {
 			appendLine(scanner.Text(), true)
 			flushLog(false)
+			if operationID != "" {
+				_ = operationStore.Progress(operationID, "running", 50, logLen())
+			}
 		}
 
 		if err := scanner.Err(); err != nil {
@@ -782,6 +852,10 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 			appendLine(hint, true)
 		}
 	}
+	if (status == model.DepStatusFailed || status == model.DepStatusCancelled) && successStatus == model.DepStatusInstalled && !deleteOnSuccess {
+		appendLine(service.RollbackDependencyInstall(depType, depName, pythonVersion), true)
+	}
+	appendLine(finishStaging(map[bool]string{true: "success", false: "failed"}[status == successStatus]), true)
 
 	flushLog(true)
 
@@ -798,7 +872,16 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	}
 
 	if status == successStatus {
+		if operationID != "" {
+			_ = operationStore.Finish(operationID, 0, logLen())
+		}
 		go service.SnapshotDepsToHost()
+	} else if operationID != "" {
+		if status == model.DepStatusCancelled {
+			_ = operationStore.Cancel(operationID, "DEPENDENCY_CANCELED", logLen())
+		} else {
+			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_FAILED", logLen())
+		}
 	}
 
 	broadcaster.done()
@@ -859,6 +942,29 @@ func installDependency(id uint, depType, name string) {
 		pythonVersion = service.NormalizePythonVersionOrDefault(pythonVersion)
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("python_version", pythonVersion)
 	}
+	compatibility := service.EvaluateDependencyCompatibility(depType, name, pythonVersion)
+	if !compatibility.Supported() {
+		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status":                model.DepStatusFailed,
+			"log":                   compatibility.Message,
+			"compatibility_details": compatibility.JSON(),
+		})
+		if opID, _, _, _ := dependencyOperationContext(id); opID != "" {
+			_ = service.DefaultOperationStore().Fail(opID, nil, compatibility.ReasonCode, -1)
+		}
+		return
+	}
+	if err := service.CheckDependencyQuota(); err != nil {
+		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"status":                model.DepStatusFailed,
+			"log":                   err.Error(),
+			"compatibility_details": compatibility.JSON(),
+		})
+		if opID, _, _, _ := dependencyOperationContext(id); opID != "" {
+			_ = service.DefaultOperationStore().Fail(opID, nil, service.DependencyReasonQuotaExceeded, -1)
+		}
+		return
+	}
 	switch depType {
 	case model.DepTypeNodeJS:
 		nodeUnlock := service.LockNodePackageOperation()
@@ -877,6 +983,7 @@ func installDependency(id uint, depType, name string) {
 			})
 			return
 		}
+		service.EnforceNpmScriptPolicy(cmd)
 	case model.DepTypePython:
 		var err error
 		cmd, err = service.NewPipInstallCommandForPythonVersion(pythonVersion, name)
@@ -921,6 +1028,29 @@ func installDependency(id uint, depType, name string) {
 	}
 
 	runCmdWithSSE(cmd, id, model.DepStatusInstalled, false)
+}
+
+func createDependencyOperation(id uint) string {
+	operationID := fmt.Sprintf("dep_%d_%d", id, time.Now().UnixNano())
+	op, err := service.DefaultOperationStore().Create(service.OperationCreateOptions{
+		ID:       operationID,
+		Kind:     model.OperationKindDependency,
+		Phase:    "queued",
+		Progress: 0,
+	})
+	if err != nil {
+		return ""
+	}
+	database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("operation_id", op.ID)
+	return op.ID
+}
+
+func dependencyOperationContext(id uint) (operationID, depType, name, pythonVersion string) {
+	var dep model.Dependency
+	if err := database.DB.Select("operation_id", "type", "name", "python_version").First(&dep, id).Error; err != nil {
+		return "", "", "", ""
+	}
+	return dep.OperationID, dep.Type, dep.Name, dep.PythonVersion
 }
 
 func uninstallDependency(id uint, depType, name, pythonVersion string) {

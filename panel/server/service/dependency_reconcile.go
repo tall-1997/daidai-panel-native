@@ -13,6 +13,8 @@ var dependencyReinstallBatchFunc = reinstallDependenciesAsync
 var dependencyRestartReinstallBatchFunc = reinstallDependenciesAfterRestartAsync
 
 func ReconcileDependenciesAfterRestart() {
+	recoverInterruptedDependencyOperations()
+
 	var installed []model.Dependency
 	database.DB.Where("status = ?", model.DepStatusInstalled).Find(&installed)
 	reinstallAfterRestart := make([]model.Dependency, 0)
@@ -67,6 +69,9 @@ func ReconcileDependenciesAfterRestart() {
 				"status": model.DepStatusInstalled,
 				"log":    nextLog,
 			})
+			if dep.OperationID != "" {
+				_ = DefaultOperationStore().Finish(dep.OperationID, 0, int64(len(nextLog)))
+			}
 			log.Printf("dep verify: %s/%s was %s, reconciled to installed", dep.Type, dep.Name, dep.Status)
 			continue
 		}
@@ -87,12 +92,35 @@ func ReconcileDependenciesAfterRestart() {
 			"status": model.DepStatusFailed,
 			"log":    appendDependencyLog(dep.Log, "[启动校验] 操作因服务重启而中断"),
 		})
+		if dep.OperationID != "" {
+			_ = DefaultOperationStore().Unknown(dep.OperationID, "DEPENDENCY_RECOVERY_REQUIRED", int64(len(dep.Log)))
+		}
 		log.Printf("dep verify: %s/%s was %s, reset to failed", dep.Type, dep.Name, dep.Status)
 	}
 
 	if len(toResume) > 0 {
 		dependencyReinstallBatchFunc(toResume)
 		log.Printf("dep verify: resumed %d restored dependencies after restart", len(toResume))
+	}
+}
+
+func recoverInterruptedDependencyOperations() {
+	if database.DB == nil {
+		return
+	}
+	var operations []model.Operation
+	database.DB.Where("kind = ? AND state IN ?", model.OperationKindDependency, []string{model.OperationStatePending, model.OperationStateRunning}).Find(&operations)
+	store := DefaultOperationStore()
+	for _, op := range operations {
+		var dep model.Dependency
+		if err := database.DB.Where("operation_id = ?", op.ID).First(&dep).Error; err != nil {
+			_ = store.Unknown(op.ID, "DEPENDENCY_OPERATION_ORPHANED", op.LogCursor)
+			continue
+		}
+		if dep.Status != model.DepStatusInstalling && dep.Status != model.DepStatusRemoving && dep.Status != model.DepStatusQueued {
+			continue
+		}
+		_ = store.Unknown(op.ID, "DEPENDENCY_OPERATION_RECOVERED", op.LogCursor)
 	}
 }
 
