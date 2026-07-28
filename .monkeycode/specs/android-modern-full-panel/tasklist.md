@@ -352,13 +352,13 @@ Reserve 10 version codes per release, build `releaseBase + 1` Recovery APK with 
 
 ### Task 6.3: Release Evidence
 
-**Status:** Complete (APK hash, SBOM, licenses, runtime manifest, route trace, compatibility matrix template, page-size report, and test-report handoff)
+**Status:** Complete (APK hash, SBOM, licenses, runtime manifest, route trace, compatibility matrix template, page-size report, test-report handoff, and CI evidence artifact upload via `scripts/generate-release-evidence.go`)
 
 Generate APK, SHA-256, SBOM, third-party licenses, runtime manifest, route trace, compatibility matrix, page-size report, and test reports.
 
 ### Task 6.4: Device and Stability Gate
 
-**Status:** Final rollout in progress (100 Core cycles, API matrix, 24-hour/seven-day stability, storage, Doze, restart, process-kill, and upgrade/recovery evidence assigned to user real-device testing)
+**Status:** Final rollout in progress (100 Core cycles, API matrix, 24-hour/seven-day stability, storage, Doze, restart, process-kill, and upgrade/recovery evidence structures are generated under `release/evidence/` for user real-device testing)
 
 Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze, restart, process kill, and upgrade/recovery tests.
 

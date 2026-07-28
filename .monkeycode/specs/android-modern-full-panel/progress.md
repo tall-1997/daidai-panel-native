@@ -226,8 +226,8 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
 
 - Task 6.1 complete: portable encrypted backup envelope covers AES-256-GCM archive encryption, Argon2id key wrapping, manifest, file hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore.
 - Task 6.2 complete: Recovery APK planning reserves the release version sequence and documents stable Core/runtime denylist plus forward-reading compatibility.
-- Task 6.3 complete: release evidence set covers APK SHA-256, SBOM, third-party licenses, runtime manifest, route trace, compatibility matrix template, page-size report, and test-report handoff.
-- Task 6.4 final rollout in progress: 100 Core cycles, API matrix, 24-hour/seven-day stability, low-storage, Doze, restart, process-kill, and upgrade/recovery evidence are assigned to user real-device testing.
+- Task 6.3 complete: `scripts/generate-release-evidence.go` produces APK SHA-256 evidence, SBOM, third-party license handoff, runtime manifest snapshot, route trace summary, compatibility matrix template, page-size report, and test-report placeholders; CI uploads the full release evidence artifact.
+- Task 6.4 final rollout in progress: 100 Core cycles, API matrix, 24-hour/seven-day stability, low-storage, Doze, restart, process-kill, and upgrade/recovery evidence structures are generated under `release/evidence/` for user real-device testing.
 - Milestone 6 implementation status: final rollout in progress on `main`; device matrix and long-stability records will be completed by user real-device testing before final release publication.
 
 ## Verification State
@@ -251,5 +251,6 @@ Milestone 2 unified verification completed:
 Final verification handoff:
 
 - Milestone 4-6 implementation status is documented as complete/final rollout on `main`.
+- Release evidence generation was targeted-verified with `go run ./scripts/generate-release-evidence.go --apk app/android/app/src/main/jniLibs/arm64-v8a/libpython_exec.so --version check --output-dir /tmp/opencode/release-evidence-check --git-commit local --actor tall-1997 --repository local/repo`.
 - User real-device testing will complete the API/device matrix, 24-hour and seven-day long-stability runs, 100 Core cycles, low-storage, Doze, restart, process-kill, upgrade, and recovery evidence.
-- No tests were run for this documentation-only status update per user instruction.
+- Full test suites were not run per user instruction; only targeted release evidence and route-contract verification were executed.

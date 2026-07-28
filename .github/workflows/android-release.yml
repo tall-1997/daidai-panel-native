@@ -105,6 +105,17 @@ jobs:
           cp app/build/app/outputs/flutter-apk/app-release.apk "daidai-panel-native-${VERSION}-arm64.apk"
           sha256sum "daidai-panel-native-${VERSION}-arm64.apk" > "daidai-panel-native-${VERSION}-arm64.apk.sha256"
 
+      - name: Generate release evidence bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME:-snapshot}"
+          go run ./scripts/generate-release-evidence.go \
+            --apk "daidai-panel-native-${VERSION}-arm64.apk" \
+            --version "${VERSION}" \
+            --output-dir ./release/evidence \
+            --git-commit "${GITHUB_SHA}" \
+            --actor "${GITHUB_ACTOR}" \
+            --repository "${GITHUB_REPOSITORY}"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -114,6 +125,19 @@ jobs:
             daidai-panel-native-*-arm64.apk.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload release evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ github.ref_name || 'snapshot' }}
+          path: |
+            release/evidence/**
+            runtime/manifest.json
+            runtime/smoke-evidence.json
+            runtime/compatibility.json
+            contracts/backend-api-mobile.json
+          if-no-files-found: error
+          retention-days: 30
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -126,6 +150,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: daidai-panel-native-0.0.1-arm64
+
+      - name: Download release evidence artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-evidence-${{ github.ref_name }}
+          path: release-evidence
 
       - name: Create GitHub Release
         env:
@@ -144,9 +174,11 @@ jobs:
           当前版本为阶段性构建。仓库未配置正式签名 Secret 时，APK 使用开发签名构建。
           EOF
           VERSION="${GITHUB_REF_NAME}"
+          tar -czf "release-evidence-${VERSION}.tar.gz" release-evidence
           gh release create "${VERSION}" \
             "daidai-panel-native-${VERSION}-arm64.apk" \
             "daidai-panel-native-${VERSION}-arm64.apk.sha256" \
+            "release-evidence-${VERSION}.tar.gz" \
             --repo "${{ github.repository }}" \
             --title "呆呆面板本机版 ${VERSION}" \
             --notes-file release-notes.md

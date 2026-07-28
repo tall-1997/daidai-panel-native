@@ -19,6 +19,7 @@
 ## 文档索引
 
 - `ARCHITECTURE.md`：系统边界、组件、数据流和交付结构。
+- `RELEASE_EVIDENCE.md`：Milestone 6 发布证据脚本、产物、CI 上传和长稳证据结构。
 - `../specs/android-local-panel/requirements.md`：EARS 格式产品需求与验收标准。
 - `../specs/android-local-panel/design.md`：Android 完整执行版技术设计。
 
