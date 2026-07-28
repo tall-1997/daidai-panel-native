@@ -114,6 +114,38 @@ func openSubscriptionGitToken(ctx context.Context, sub *model.Subscription) (str
 	return sub.AuthToken, nil
 }
 
+func SealSubscriptionAuthToken(ctx context.Context, sub *model.Subscription, token string) error {
+	if sub == nil {
+		return nil
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		sub.AuthToken = ""
+		sub.AuthTokenSecretProvider = ""
+		sub.AuthTokenSecretCipher = nil
+		return nil
+	}
+	sealed, err := RuntimeSecretStoreInstance().Seal(ctx, fmt.Sprintf("subscription:%d:git-token", sub.ID), []byte(token))
+	if err != nil {
+		return fmt.Errorf("封存 Git Token SecretStore 凭据失败: %w", err)
+	}
+	sub.AuthToken = ""
+	sub.AuthTokenSecretProvider = sealed.Provider
+	sub.AuthTokenSecretCipher = append([]byte{}, sealed.Cipher...)
+	return nil
+}
+
+func ClearSubscriptionAuthSecrets(sub *model.Subscription) {
+	if sub == nil {
+		return
+	}
+	sub.AuthToken = ""
+	sub.AuthTokenSecretProvider = ""
+	sub.AuthTokenSecretCipher = nil
+	sub.SSHKeySecretProvider = ""
+	sub.SSHKeySecretCipher = nil
+}
+
 func writeSubscriptionSSHKeySecret(ctx context.Context, sub *model.Subscription) (string, error) {
 	if sub == nil || !sub.HasSSHKeySecret() {
 		return "", nil
@@ -126,6 +158,41 @@ func writeSubscriptionSSHKeySecret(ctx context.Context, sub *model.Subscription)
 		return "", fmt.Errorf("打开 Git SSH Key SecretStore 凭据失败: %w", err)
 	}
 	return writeTempSSHKey(string(opened))
+}
+
+func OpenSSHKeyPrivateKey(ctx context.Context, key *model.SSHKey) (string, error) {
+	if key == nil {
+		return "", nil
+	}
+	if key.HasPrivateKeySecret() {
+		opened, err := RuntimeSecretStoreInstance().Open(ctx, fmt.Sprintf("ssh-key:%d:private-key", key.ID), SealedValue{
+			Provider: key.PrivateKeySecretProvider,
+			Cipher:   append([]byte{}, key.PrivateKeySecretCipher...),
+		})
+		if err != nil {
+			return "", fmt.Errorf("打开 SSH Key SecretStore 凭据失败: %w", err)
+		}
+		return string(opened), nil
+	}
+	return key.PrivateKey, nil
+}
+
+func SealSSHKeyPrivateKey(ctx context.Context, key *model.SSHKey, privateKey string) error {
+	if key == nil {
+		return nil
+	}
+	privateKey = strings.TrimSpace(privateKey)
+	if privateKey == "" {
+		return nil
+	}
+	sealed, err := RuntimeSecretStoreInstance().Seal(ctx, fmt.Sprintf("ssh-key:%d:private-key", key.ID), []byte(privateKey))
+	if err != nil {
+		return fmt.Errorf("封存 SSH Key SecretStore 凭据失败: %w", err)
+	}
+	key.PrivateKey = ""
+	key.PrivateKeySecretProvider = sealed.Provider
+	key.PrivateKeySecretCipher = append([]byte{}, sealed.Cipher...)
+	return nil
 }
 
 func ensureGitKnownHostsFile() (string, error) {

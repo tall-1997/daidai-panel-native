@@ -159,7 +159,11 @@ func resolveSubscriptionSSHKeyPath(ctx context.Context, sub *model.Subscription)
 	if err := database.DB.First(&sshKey, *sub.SSHKeyID).Error; err != nil {
 		return "", cleanup, nil
 	}
-	tmpFile, err := writeTempSSHKey(sshKey.PrivateKey)
+	privateKey, err := OpenSSHKeyPrivateKey(ctx, &sshKey)
+	if err != nil {
+		return "", cleanup, err
+	}
+	tmpFile, err := writeTempSSHKey(privateKey)
 	if err != nil {
 		return "", cleanup, fmt.Errorf("写入 SSH 密钥失败: %w", err)
 	}

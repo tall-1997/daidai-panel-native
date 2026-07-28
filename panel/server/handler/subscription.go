@@ -242,12 +242,39 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		SSHKeyID:       sshKeyID,
 		AuthType:       authType,
 		AuthUsername:   req.AuthUsername,
-		AuthToken:      authToken,
 		Alias:          req.Alias,
 		ForceOverwrite: req.ForceOverwrite,
 	}
 
-	if err := database.DB.Create(&sub).Error; err != nil {
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		response.InternalError(c, "创建订阅失败")
+		return
+	}
+	if err := tx.Create(&sub).Error; err != nil {
+		tx.Rollback()
+		response.InternalError(c, "创建订阅失败")
+		return
+	}
+	if authType == model.SubAuthTypeToken {
+		if err := service.SealSubscriptionAuthToken(c.Request.Context(), &sub, authToken); err != nil {
+			tx.Rollback()
+			response.InternalError(c, "创建订阅失败")
+			return
+		}
+		if err := tx.Model(&sub).Updates(map[string]interface{}{
+			"auth_token":                 sub.AuthToken,
+			"auth_token_secret_provider": sub.AuthTokenSecretProvider,
+			"auth_token_secret_cipher":   sub.AuthTokenSecretCipher,
+			"ssh_key_secret_provider":    sub.SSHKeySecretProvider,
+			"ssh_key_secret_cipher":      sub.SSHKeySecretCipher,
+		}).Error; err != nil {
+			tx.Rollback()
+			response.InternalError(c, "创建订阅失败")
+			return
+		}
+	}
+	if err := tx.Commit().Error; err != nil {
 		response.InternalError(c, "创建订阅失败")
 		return
 	}
@@ -295,7 +322,10 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 		}
 	}
 
-	if _, hasAuthType := updates["auth_type"]; hasAuthType || updates["ssh_key_id"] != nil || updates["auth_token"] != nil {
+	_, hasAuthType := updates["auth_type"]
+	_, hasSSHKeyID := updates["ssh_key_id"]
+	_, hasAuthToken := updates["auth_token"]
+	if hasAuthType || hasSSHKeyID || hasAuthToken {
 		var rawSSHKeyID *uint
 		if value, exists := updates["ssh_key_id"]; exists {
 			switch typed := value.(type) {
@@ -321,26 +351,52 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 			authType = text
 		}
 
-		authToken := sub.AuthToken
+		authToken := strings.TrimSpace(sub.AuthToken)
+		if authToken == "" && sub.HasAuthToken() {
+			authToken = "existing-token"
+		}
+		newAuthToken := ""
 		if value, exists := updates["auth_token"]; exists {
 			text, ok := value.(string)
 			if !ok {
 				response.BadRequest(c, "无效的仓库访问令牌")
 				return
 			}
-			if strings.TrimSpace(text) != "" || sub.EffectiveAuthType() != model.SubAuthTypeToken {
+			if strings.TrimSpace(text) != "" {
+				authToken = text
+				newAuthToken = text
+			} else if !sub.HasAuthToken() || sub.EffectiveAuthType() != model.SubAuthTypeToken {
 				authToken = text
 			}
 		}
 
-		normalizedType, normalizedSSHKeyID, normalizedToken, err := normalizeSubscriptionAuthInput(authType, rawSSHKeyID, authToken)
+		normalizedType, normalizedSSHKeyID, _, err := normalizeSubscriptionAuthInput(authType, rawSSHKeyID, authToken)
 		if err != nil {
 			response.BadRequest(c, err.Error())
 			return
 		}
 		updates["auth_type"] = normalizedType
 		updates["ssh_key_id"] = normalizedSSHKeyID
-		updates["auth_token"] = normalizedToken
+		delete(updates, "auth_token")
+		if normalizedType != model.SubAuthTypeToken {
+			service.ClearSubscriptionAuthSecrets(&sub)
+			updates["auth_token"] = sub.AuthToken
+			updates["auth_token_secret_provider"] = sub.AuthTokenSecretProvider
+			updates["auth_token_secret_cipher"] = sub.AuthTokenSecretCipher
+			updates["ssh_key_secret_provider"] = sub.SSHKeySecretProvider
+			updates["ssh_key_secret_cipher"] = sub.SSHKeySecretCipher
+		} else if newAuthToken != "" || strings.TrimSpace(sub.AuthToken) != "" {
+			if newAuthToken == "" {
+				newAuthToken = strings.TrimSpace(sub.AuthToken)
+			}
+			if err := service.SealSubscriptionAuthToken(c.Request.Context(), &sub, newAuthToken); err != nil {
+				response.InternalError(c, "更新订阅失败")
+				return
+			}
+			updates["auth_token"] = sub.AuthToken
+			updates["auth_token_secret_provider"] = sub.AuthTokenSecretProvider
+			updates["auth_token_secret_cipher"] = sub.AuthTokenSecretCipher
+		}
 	}
 
 	if len(updates) > 0 {

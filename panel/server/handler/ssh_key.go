@@ -7,6 +7,7 @@ import (
 	"daidai-panel/middleware"
 	"daidai-panel/model"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,11 +41,34 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 	}
 
 	key := model.SSHKey{
-		Name:       req.Name,
-		PrivateKey: req.PrivateKey,
+		Name: req.Name,
 	}
 
-	if err := database.DB.Create(&key).Error; err != nil {
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		response.InternalError(c, "创建 SSH 密钥失败")
+		return
+	}
+	if err := tx.Create(&key).Error; err != nil {
+		tx.Rollback()
+		response.InternalError(c, "创建 SSH 密钥失败")
+		return
+	}
+	if err := service.SealSSHKeyPrivateKey(c.Request.Context(), &key, req.PrivateKey); err != nil {
+		tx.Rollback()
+		response.InternalError(c, "创建 SSH 密钥失败")
+		return
+	}
+	if err := tx.Model(&key).Updates(map[string]interface{}{
+		"private_key":                 key.PrivateKey,
+		"private_key_secret_provider": key.PrivateKeySecretProvider,
+		"private_key_secret_cipher":   key.PrivateKeySecretCipher,
+	}).Error; err != nil {
+		tx.Rollback()
+		response.InternalError(c, "创建 SSH 密钥失败")
+		return
+	}
+	if err := tx.Commit().Error; err != nil {
 		response.InternalError(c, "创建 SSH 密钥失败")
 		return
 	}
@@ -75,7 +99,13 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 		updates["name"] = req.Name
 	}
 	if req.PrivateKey != "" {
-		updates["private_key"] = req.PrivateKey
+		if err := service.SealSSHKeyPrivateKey(c.Request.Context(), &key, req.PrivateKey); err != nil {
+			response.InternalError(c, "更新 SSH 密钥失败")
+			return
+		}
+		updates["private_key"] = key.PrivateKey
+		updates["private_key_secret_provider"] = key.PrivateKeySecretProvider
+		updates["private_key_secret_cipher"] = key.PrivateKeySecretCipher
 	}
 
 	if len(updates) > 0 {

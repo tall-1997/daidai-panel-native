@@ -1,6 +1,8 @@
 package handler_test
 
 import (
+	"context"
+	"encoding/base64"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,8 +10,23 @@ import (
 
 	"daidai-panel/database"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 )
+
+type handlerSecretStore struct{}
+
+func (handlerSecretStore) Seal(_ context.Context, _ string, payload []byte) (service.SealedValue, error) {
+	return service.SealedValue{Provider: "test", Cipher: []byte("sealed:" + base64.StdEncoding.EncodeToString(payload))}, nil
+}
+
+func (handlerSecretStore) Open(_ context.Context, _ string, value service.SealedValue) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.TrimPrefix(string(value.Cipher), "sealed:"))
+}
+
+func (handlerSecretStore) Status() service.SecretStoreStatus {
+	return service.SecretStoreStatus{Provider: "test", Ready: true}
+}
 
 func TestSubscriptionCreatePersistsForceOverwriteFalse(t *testing.T) {
 	testutil.SetupTestEnv(t)
@@ -103,6 +120,8 @@ func TestSubscriptionUpdateKeepsForceOverwriteFalseAfterReload(t *testing.T) {
 
 func TestSubscriptionCreatePersistsTokenAuthWithoutLeakingToken(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	restore := service.SetRuntimeSecretStoreForTest(handlerSecretStore{})
+	defer restore()
 
 	operator := testutil.MustCreateUser(t, "subscription-token-operator", "operator")
 	token := testutil.MustCreateAccessToken(t, operator.Username, operator.Role)
@@ -138,8 +157,14 @@ func TestSubscriptionCreatePersistsTokenAuthWithoutLeakingToken(t *testing.T) {
 	if sub.EffectiveAuthType() != model.SubAuthTypeToken {
 		t.Fatalf("expected stored auth type token, got %q", sub.EffectiveAuthType())
 	}
-	if strings.TrimSpace(sub.AuthToken) != "ghp_demo_token" {
-		t.Fatalf("expected stored auth token, got %q", sub.AuthToken)
+	if strings.TrimSpace(sub.AuthToken) != "" {
+		t.Fatalf("expected plaintext auth token to be empty, got %q", sub.AuthToken)
+	}
+	if !sub.HasAuthTokenSecret() {
+		t.Fatalf("expected auth token SecretStore fields to be populated")
+	}
+	if strings.Contains(string(sub.AuthTokenSecretCipher), "ghp_demo_token") {
+		t.Fatalf("expected sealed auth token payload, got %q", string(sub.AuthTokenSecretCipher))
 	}
 	if sub.SSHKeyID != nil {
 		t.Fatalf("expected ssh_key_id cleared for token auth, got %#v", sub.SSHKeyID)
@@ -148,6 +173,8 @@ func TestSubscriptionCreatePersistsTokenAuthWithoutLeakingToken(t *testing.T) {
 
 func TestSubscriptionUpdateKeepsExistingTokenWhenAuthTokenOmitted(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	restore := service.SetRuntimeSecretStoreForTest(handlerSecretStore{})
+	defer restore()
 
 	operator := testutil.MustCreateUser(t, "subscription-token-editor", "operator")
 	token := testutil.MustCreateAccessToken(t, operator.Username, operator.Role)
@@ -177,8 +204,11 @@ func TestSubscriptionUpdateKeepsExistingTokenWhenAuthTokenOmitted(t *testing.T) 
 	if err := database.DB.First(&updated, sub.ID).Error; err != nil {
 		t.Fatalf("reload subscription: %v", err)
 	}
-	if strings.TrimSpace(updated.AuthToken) != "ghp_keep_me" {
-		t.Fatalf("expected auth token to stay unchanged, got %q", updated.AuthToken)
+	if strings.TrimSpace(updated.AuthToken) != "" {
+		t.Fatalf("expected legacy plaintext auth token to be cleared, got %q", updated.AuthToken)
+	}
+	if !updated.HasAuthTokenSecret() {
+		t.Fatalf("expected legacy auth token to migrate into SecretStore fields")
 	}
 	if updated.EffectiveAuthType() != model.SubAuthTypeToken {
 		t.Fatalf("expected auth type token after update, got %q", updated.EffectiveAuthType())

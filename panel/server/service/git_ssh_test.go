@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"daidai-panel/config"
+	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
@@ -150,6 +151,44 @@ func TestResolveSubscriptionSSHKeyPathUsesSecretStoreKeyMaterial(t *testing.T) {
 	}
 	if len(store.openedKeys) != 1 || store.openedKeys[0] != "subscription:7:ssh-key" {
 		t.Fatalf("expected ssh key to open through subscription SecretStore key, got %#v", store.openedKeys)
+	}
+}
+
+func TestResolveSubscriptionSSHKeyPathUsesReferencedSealedSSHKey(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	store := &gitAuthTestSecretStore{}
+	restore := SetRuntimeSecretStoreForTest(store)
+	defer restore()
+
+	key := model.SSHKey{
+		Name:                     "sealed-deploy-key",
+		PrivateKeySecretProvider: "test",
+		PrivateKeySecretCipher:   []byte("referenced-private-key"),
+	}
+	if err := database.DB.Create(&key).Error; err != nil {
+		t.Fatalf("create ssh key: %v", err)
+	}
+	sub := &model.Subscription{
+		ID:       8,
+		AuthType: model.SubAuthTypeSSH,
+		SSHKeyID: &key.ID,
+	}
+	path, cleanup, err := resolveSubscriptionSSHKeyPath(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("resolve referenced ssh key secret: %v", err)
+	}
+	defer cleanup()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read materialized ssh key: %v", err)
+	}
+	if string(content) != "referenced-private-key" {
+		t.Fatalf("expected materialized referenced key content from SecretStore")
+	}
+	wantKey := fmt.Sprintf("ssh-key:%d:private-key", key.ID)
+	if len(store.openedKeys) != 1 || store.openedKeys[0] != wantKey {
+		t.Fatalf("expected referenced ssh key to open through SSHKey SecretStore key, got %#v", store.openedKeys)
 	}
 }
 
