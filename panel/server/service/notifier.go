@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/model"
 )
@@ -342,6 +343,9 @@ func httpPost(url string, body interface{}, headers map[string]string) error {
 }
 
 func httpPostWithClient(client *http.Client, url string, body interface{}, headers map[string]string) error {
+	if err := validateWebhookURL(url); err != nil {
+		return err
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -356,6 +360,7 @@ func httpPostWithClient(client *http.Client, url string, body interface{}, heade
 		req.Header.Set(k, v)
 	}
 
+	client = webhookHTTPClient(client)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -367,6 +372,77 @@ func httpPostWithClient(client *http.Client, url string, body interface{}, heade
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+func webhookHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = NewHTTPClient(10 * time.Second)
+	}
+	clone := *client
+	previous := clone.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := validateWebhookURL(req.URL.String()); err != nil {
+			return err
+		}
+		if previous != nil {
+			return previous(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clone
+}
+
+func validateWebhookURL(rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("Webhook URL 无效: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("Webhook URL 仅支持 http/https")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("Webhook URL 禁止包含用户信息")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("Webhook URL 主机为空")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return validateWebhookIP(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("Webhook URL 主机解析失败: %w", err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("Webhook URL 主机没有可用地址")
+	}
+	for _, ip := range ips {
+		if err := validateWebhookIP(ip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWebhookIP(ip net.IP) error {
+	if ip == nil {
+		return fmt.Errorf("Webhook URL 主机地址无效")
+	}
+	if configModeIsTest() && ip.IsLoopback() {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return fmt.Errorf("Webhook URL 禁止访问内网或本机地址")
+	}
+	return nil
+}
+
+func configModeIsTest() bool {
+	return config.C != nil && strings.EqualFold(config.C.Server.Mode, "test")
 }
 
 func sendAndroidLocalNotification(cfg map[string]string, title, content string, context map[string]string) error {
@@ -1504,6 +1580,9 @@ func renderNotificationJSONValueWithContext(value interface{}, title, content st
 
 func sendCustomWebhook(cfg map[string]string, title, content string) error {
 	webhookURL := cfg["url"]
+	if err := validateWebhookURL(webhookURL); err != nil {
+		return err
+	}
 	method := cfg["method"]
 	if method == "" {
 		method = "POST"
@@ -1534,7 +1613,7 @@ func sendCustomWebhook(cfg map[string]string, title, content string) error {
 		}
 	}
 
-	client := NewHTTPClient(10 * time.Second)
+	client := webhookHTTPClient(NewHTTPClient(10 * time.Second))
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -142,3 +142,42 @@ func TestPullGitRepoWithCallbackReplacesExistingRepoAtomically(t *testing.T) {
 		t.Fatalf("expected atomic replacement to drop old local-only file, stat err=%v", err)
 	}
 }
+
+func TestAtomicReplaceSubscriptionWorktreeRecoversCrashJournal(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	parent := filepath.Join(root, "scripts")
+	destDir := filepath.Join(parent, "journal-repo")
+	backupDir := filepath.Join(parent, ".journal-repo.previous")
+	stagingDir := filepath.Join(parent, ".journal-repo.staging-test")
+	journalPath := filepath.Join(parent, ".journal-repo.replace-journal.json")
+
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("mkdir backup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "healthy.js"), []byte("healthy"), 0o644); err != nil {
+		t.Fatalf("write backup file: %v", err)
+	}
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatalf("mkdir staging: %v", err)
+	}
+	if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "publish"}); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	nextStaging := filepath.Join(parent, ".journal-repo.staging-next")
+	if err := os.MkdirAll(nextStaging, 0o755); err != nil {
+		t.Fatalf("mkdir next staging: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nextStaging, "new.js"), []byte("new"), 0o644); err != nil {
+		t.Fatalf("write next staging file: %v", err)
+	}
+	if err := atomicReplaceSubscriptionWorktree(destDir, nextStaging); err != nil {
+		t.Fatalf("atomic replace after crash journal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "new.js")); err != nil {
+		t.Fatalf("expected new worktree published: %v", err)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatalf("expected journal removed, stat err=%v", err)
+	}
+}
