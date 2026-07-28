@@ -3,6 +3,9 @@ package service
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +17,20 @@ import (
 	"daidai-panel/model"
 )
 
-const subscriptionHookTimeoutSeconds = 900
+const (
+	subscriptionHookTimeoutSeconds = 900
+	subscriptionHookTrustVersion   = "v1"
+	subscriptionHookCapability     = "subscription-hook"
+)
+
+var ErrSubscriptionHookUnauthorized = errors.New("subscription hook is not authorized")
+
+type subscriptionHookTrustMetadata struct {
+	Source     string
+	Version    string
+	SHA256     string
+	Capability string
+}
 
 func runSubscriptionHookIfConfigured(ctx context.Context, sub *model.Subscription, emit PullCallback) error {
 	hookScript := normalizeSubscriptionHookScript(sub)
@@ -43,6 +59,10 @@ func runSubscriptionHookInWorkDir(ctx context.Context, sub *model.Subscription, 
 	if ctx != nil && ctx.Err() != nil {
 		return fmt.Errorf("拉取已停止")
 	}
+	metadata := buildSubscriptionHookTrustMetadata(sub, hookScript)
+	if !RuntimeTrustAuthorizer().IsAuthorized(metadata.Source, metadata.Version, metadata.SHA256, metadata.Capability) {
+		return fmt.Errorf("%w: source=%s version=%s sha256=%s capability=%s", ErrSubscriptionHookUnauthorized, metadata.Source, metadata.Version, metadata.SHA256, metadata.Capability)
+	}
 	emit("[执行订阅钩子]")
 	err := runSubscriptionHookScript(ctx, hookScript, workDir, buildSubscriptionHookEnv(sub, workDir), func(line string) {
 		emit("[hook] " + line)
@@ -56,6 +76,39 @@ func runSubscriptionHookInWorkDir(ctx context.Context, sub *model.Subscription, 
 
 	emit("[订阅钩子完成]")
 	return nil
+}
+
+func buildSubscriptionHookTrustMetadata(sub *model.Subscription, hookScript string) subscriptionHookTrustMetadata {
+	sum := sha256.Sum256([]byte(hookScript))
+	return subscriptionHookTrustMetadata{
+		Source:     subscriptionHookTrustSource(sub),
+		Version:    subscriptionHookTrustVersion,
+		SHA256:     hex.EncodeToString(sum[:]),
+		Capability: subscriptionHookCapability,
+	}
+}
+
+func subscriptionHookTrustSource(sub *model.Subscription) string {
+	if sub == nil {
+		return "subscription-hook:unknown"
+	}
+	parts := []string{
+		"subscription-hook",
+		strings.TrimSpace(sub.Type),
+		strings.TrimSpace(sub.URL),
+		strings.TrimSpace(sub.Branch),
+		subscriptionSaveDir(sub),
+	}
+	return strings.Join(parts, ":")
+}
+
+func AuthorizeSubscriptionHookForTest(sub *model.Subscription) {
+	hookScript := normalizeSubscriptionHookScript(sub)
+	if hookScript == "" {
+		return
+	}
+	metadata := buildSubscriptionHookTrustMetadata(sub, hookScript)
+	SeedRuntimeTrustRecord(metadata.Source, metadata.Version, metadata.SHA256, []string{metadata.Capability})
 }
 
 func runSubscriptionHookScript(ctx context.Context, content, workDir string, envVars map[string]string, onOutput OnOutputFunc) error {

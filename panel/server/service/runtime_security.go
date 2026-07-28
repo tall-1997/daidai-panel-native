@@ -134,6 +134,7 @@ type TrustAuthorization struct {
 
 type TrustAuthorizer interface {
 	Upsert(TrustAuthorization)
+	IsAuthorized(source, version, digest, capability string) bool
 	List() []TrustAuthorization
 	Status() TrustAuthorizerStatus
 }
@@ -164,6 +165,32 @@ func (authorizer *localTrustAuthorizer) Upsert(record TrustAuthorization) {
 	authorizer.records[key] = normalized
 	authorizer.persistLocked()
 	authorizer.mu.Unlock()
+}
+
+func (authorizer *localTrustAuthorizer) IsAuthorized(source, version, digest, capability string) bool {
+	query := normalizeTrustAuthorization(TrustAuthorization{
+		Source:       source,
+		Version:      version,
+		SHA256:       digest,
+		Capabilities: []string{capability},
+	})
+	if !isTrustRecordValid(query) || len(query.Capabilities) == 0 {
+		return false
+	}
+	key := query.Source + "|" + query.Version + "|" + query.SHA256
+
+	authorizer.mu.RLock()
+	record, ok := authorizer.records[key]
+	authorizer.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	for _, allowed := range record.Capabilities {
+		if allowed == query.Capabilities[0] {
+			return true
+		}
+	}
+	return false
 }
 
 func (authorizer *localTrustAuthorizer) List() []TrustAuthorization {

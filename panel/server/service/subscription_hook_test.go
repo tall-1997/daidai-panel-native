@@ -1,6 +1,9 @@
 package service
 
 import (
+	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -19,6 +22,62 @@ func TestNormalizeSubscriptionHookScriptRewritesQingLongPaths(t *testing.T) {
 	want := `bash $SUB_DIR/copyfiles.sh ; cd $SUB_DIR && python jbdl.py`
 	if got != want {
 		t.Fatalf("unexpected hook rewrite: got %q want %q", got, want)
+	}
+}
+
+func TestRunSubscriptionHookRejectsUnauthorizedScriptBeforeExecution(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	if err := InitializeRuntimeSecurity(t.TempDir()); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+
+	workDir := t.TempDir()
+	marker := filepath.Join(workDir, "marker")
+	sub := &model.Subscription{
+		ID:         11,
+		Name:       "unauthorized-hook",
+		Type:       model.SubTypeGitRepo,
+		URL:        "https://example.com/org/repo.git",
+		Branch:     "main",
+		HookScript: "printf executed > marker",
+	}
+
+	err := runSubscriptionHookInWorkDir(context.Background(), sub, workDir, func(string) {})
+	if !errors.Is(err, ErrSubscriptionHookUnauthorized) {
+		t.Fatalf("expected ErrSubscriptionHookUnauthorized, got %v", err)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("hook script should not execute before authorization, stat err=%v", statErr)
+	}
+}
+
+func TestRunSubscriptionHookAllowsExplicitlyAuthorizedScript(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	if err := InitializeRuntimeSecurity(t.TempDir()); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+
+	workDir := t.TempDir()
+	marker := filepath.Join(workDir, "marker")
+	sub := &model.Subscription{
+		ID:         12,
+		Name:       "authorized-hook",
+		Type:       model.SubTypeGitRepo,
+		URL:        "https://example.com/org/repo.git",
+		Branch:     "main",
+		HookScript: "printf executed > marker",
+	}
+	AuthorizeSubscriptionHookForTest(sub)
+
+	if err := runSubscriptionHookInWorkDir(context.Background(), sub, workDir, func(string) {}); err != nil {
+		t.Fatalf("run authorized hook: %v", err)
+	}
+	payload, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read hook marker: %v", err)
+	}
+	if string(payload) != "executed" {
+		t.Fatalf("marker payload=%q want executed", string(payload))
 	}
 }
 
