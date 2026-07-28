@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/model"
@@ -25,7 +26,7 @@ var (
 	subscriptionSchedulerMu     sync.Mutex
 	subscriptionSchedulerOn     bool
 	subscriptionPullStateMu     sync.Mutex
-	subscriptionPullRunning     = make(map[uint]bool)
+	subscriptionPullRunning     = make(map[uint]string)
 	subscriptionPullCancels     = make(map[uint]context.CancelFunc)
 )
 
@@ -37,6 +38,7 @@ func StartSubscriptionScheduler(ctx context.Context) error {
 	if subscriptionSchedulerOn {
 		return nil
 	}
+	ReconcileInterruptedSubscriptionPulls()
 
 	s := &SubscriptionScheduler{
 		cron:     cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
@@ -104,22 +106,40 @@ func GetSubscriptionScheduler() *SubscriptionScheduler {
 func IsSubscriptionPullRunning(subID uint) bool {
 	subscriptionPullStateMu.Lock()
 	defer subscriptionPullStateMu.Unlock()
+	_, ok := subscriptionPullRunning[subID]
+	return ok
+}
+
+func CurrentSubscriptionPullOperationID(subID uint) string {
+	subscriptionPullStateMu.Lock()
+	defer subscriptionPullStateMu.Unlock()
 	return subscriptionPullRunning[subID]
 }
 
-func beginSubscriptionPull(subID uint) (context.Context, bool) {
+func BeginSubscriptionPull(subID uint) (context.Context, *model.Operation, error) {
 	subscriptionPullStateMu.Lock()
 	defer subscriptionPullStateMu.Unlock()
-	if subscriptionPullRunning[subID] {
-		return nil, false
+	if _, ok := subscriptionPullRunning[subID]; ok {
+		return nil, nil, fmt.Errorf("该订阅正在拉取中")
+	}
+
+	operationID := fmt.Sprintf("subscription_%d_%d", subID, time.Now().UnixNano())
+	operation, err := DefaultOperationStore().Create(OperationCreateOptions{
+		ID:       operationID,
+		Kind:     model.OperationKindSubscription,
+		Phase:    "queued",
+		Progress: 0,
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	subscriptionPullRunning[subID] = true
+	subscriptionPullRunning[subID] = operationID
 	subscriptionPullCancels[subID] = cancel
-	return ctx, true
+	return ctx, operation, nil
 }
 
-func finishSubscriptionPull(subID uint) {
+func FinishSubscriptionPull(subID uint) {
 	subscriptionPullStateMu.Lock()
 	defer subscriptionPullStateMu.Unlock()
 	if cancel, exists := subscriptionPullCancels[subID]; exists {
@@ -130,28 +150,55 @@ func finishSubscriptionPull(subID uint) {
 }
 
 func StopSubscriptionPull(subID uint) bool {
+	_, ok := StopSubscriptionPullWithOperation(subID)
+	return ok
+}
+
+func StopSubscriptionPullWithOperation(subID uint) (string, bool) {
 	subscriptionPullStateMu.Lock()
 	defer subscriptionPullStateMu.Unlock()
 
 	cancel, exists := subscriptionPullCancels[subID]
 	if !exists {
-		return false
+		return "", false
 	}
+	operationID := subscriptionPullRunning[subID]
 	cancel()
-	return true
+	return operationID, true
 }
 
 func ExecuteSubscriptionPull(sub *model.Subscription, onOutput PullCallback) (string, error) {
 	if sub == nil {
 		return "", fmt.Errorf("订阅不存在")
 	}
-	ctx, ok := beginSubscriptionPull(sub.ID)
-	if !ok {
-		return "", fmt.Errorf("该订阅正在拉取中")
+	ctx, operation, err := BeginSubscriptionPull(sub.ID)
+	if err != nil {
+		return "", err
 	}
-	defer finishSubscriptionPull(sub.ID)
+	defer FinishSubscriptionPull(sub.ID)
 
-	return PullSubscriptionWithContext(ctx, sub, onOutput)
+	return PullSubscriptionWithOperation(ctx, sub, onOutput, operation.ID)
+}
+
+func PullSubscriptionWithOperation(ctx context.Context, sub *model.Subscription, onOutput PullCallback, operationID string) (string, error) {
+	return pullSubscriptionWithContext(ctx, sub, onOutput, operationID)
+}
+
+func ReconcileInterruptedSubscriptionPulls() {
+	if database.DB == nil {
+		return
+	}
+	var operations []model.Operation
+	if err := database.DB.Where("kind = ? AND state IN ?", model.OperationKindSubscription, []string{model.OperationStatePending, model.OperationStateRunning}).Find(&operations).Error; err != nil {
+		log.Printf("subscription pull reconciliation query failed: %v", err)
+		return
+	}
+	store := DefaultOperationStore()
+	for _, operation := range operations {
+		if err := store.Unknown(operation.ID, "interrupted_pull", operation.LogCursor); err != nil {
+			log.Printf("subscription pull reconciliation failed for %s: %v", operation.ID, err)
+		}
+	}
 }
 
 func (s *SubscriptionScheduler) AddOrUpdateJob(sub *model.Subscription) error {

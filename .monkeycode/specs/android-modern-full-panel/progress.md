@@ -6,7 +6,7 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 3 implementation tasks are complete on `main`. Current target is Milestone 3 review remediation: persistent operations, process supervision, task execution lifecycle wiring, reconnectable log cursors, SecretStore-backed environment values, and script runtime execution wiring are implemented, while final Milestone 3 completion remains pending until review findings are fixed and the exit gate is re-verified.
+Milestone 4 Task 4.4 is complete on `main`: notification channels now include Android local notification and external webhook adapters, sensitive channel and Platform Token values are sealed or redacted, Sponsor fallback behavior remains stable, and OpenAPI token issuance supports per-service user credential binding.
 
 ## Completed Work
 
@@ -197,7 +197,22 @@ Milestone 3 implementation tasks are complete on `main`. Current target is Miles
 
 - Task 4.1 complete: pip/npm dependency operations now return stable compatibility details for unsupported packages, enforce signed native allowlist checks, keep npm lifecycle scripts disabled, stage install attempts, rollback failed or canceled installs, check dependency quota, persist dependency Operations, and recover interrupted operations after restart.
 - Task 4.1 verification attempted: `cd /workspace/panel/server && go test ./service -run 'TestEvaluateDependencyCompatibility|TestEnforceNpmScriptPolicy|TestCheckDependencyQuota|TestPrepareDependencyStaging|TestReconcileDependenciesAfterRestartRecoversInterruptedOperation' -count=1` and `cd /workspace/panel/server && go test ./handler -run 'TestDependencyCreate(ReturnsCompatibilityDetails|PersistsOperation)' -count=1` are blocked by existing `service/notifier.go:278:6: err redeclared in this block` package compile failure outside Task4.1 files; `cd /workspace/panel/server && go test ./model -count=1` passed.
-- Git/SSH provider, subscriptions, notifications, external integrations, OpenAPI.
+- Task 4.2 complete: Git Provider now supports HTTPS/SSH provider hardening with CA env wiring, persistent known_hosts, SecretStore-backed token/key opening, sparse checkout through staging clone, and atomic worktree replacement for force-overwrite subscription pulls.
+- Task 4.2 compatibility: existing subscription paths, SaveDir/Alias derivation, legacy token storage, SSHKeyID-backed key material, sparse checkout filters, and preserve-local-modification mode remain supported.
+- Task 4.2 safety: `GitClone`/`GitPull` keep SSH key parameters as filesystem paths, reject inline private key material, and convert Host Key verification failures into a stop-and-confirm error message.
+- Task 4.2 verification passed: `cd /workspace/panel/server && go test ./service -run 'Test(AppendGitSSHEnvUsesPersistentKnownHosts|BuildGitAuthConfig|ResolveSubscriptionSSHKeyPath|NormalizeGitProviderError|GitAuthTypeForSSHKeyPath|PullGitRepoWithCallback|GitHasWorkingTreeChanges|ApplySubscriptionForceOverwriteSetting)' -count=1`.
+- Task 4.3 complete: subscription pull now creates and updates subscription Operations, returns `operation_id` from pull/stop APIs, emits the operation ID on pull SSE, filters logs by operation ID, and reconciles interrupted pending/running subscription Operations to `unknown` on scheduler startup.
+- Task 4.3 safety: force-overwrite Git pulls clone into staging, run hooks before publish, atomically switch the healthy staging worktree into place, retain the previous healthy worktree at `.<saveDir>.previous`, and leave the active version untouched on cancellation or staging failure; single-file subscriptions download to a staging file before rename.
+- Task 4.3 compatibility: existing CRUD payload fields, schedules, whitelist/blacklist sparse checkout behavior, hook environment, preserve-local-modification mode, legacy token/SSHKeyID paths, and SubLog list payloads remain compatible while adding optional `operation_id` fields.
+- Task 4.3 verification attempted: `cd /workspace/panel/server && go test ./service -run 'Test(PullGitRepoWithCallbackAtomicSwitchKeepsPreviousHealthyVersion|PullGitRepoWithCallbackCancelledStagingLeavesActiveVersion|ExecuteSubscriptionPullTracksOperationAndLog|ReconcileInterruptedSubscriptionPullsMarksRunningOperationsUnknown|PullGitRepoWithCallbackConvertsExistingNonGitDirectoryInPlace|PullGitRepoWithCallbackPreserveModeSkipsFalseConflictWhenRepoIsClean|BuildSubscriptionHookEnvUsesSubscriptionWorkDir|NormalizeSubscriptionHookScriptRewritesQingLongPaths)$' -count=1` is blocked by existing `service/notifier.go:278:6: err redeclared in this block` package compile failure outside Task4.3 files.
+- Task 4.4 complete: notification channels now include Android local notification and external webhook adapters while retaining existing notification send/test interfaces.
+- Task 4.4 security: new notification channel configs and Platform Token values are SecretStore-backed or explicitly redacted in responses; Platform Token entries now support service and service-user binding for per-service credentials.
+- Task 4.4 OpenAPI: new/reset app secrets are stored as SHA-256 hashes, token issuance validates hashed secrets, and per-service token requests require matching enabled service credentials.
+- Task 4.4 Sponsor coverage remains stable for unavailable feed fallback, remote URL normalization, and stripped portal payload fields.
+- Task 4.4 verification completed:
+  - `cd /workspace/panel/server && go test ./service -run 'Test(SendAndroidLocalNotificationAdapter|SendExternalWebhookUsesTemplatesAndBearerToken|SealedNotificationConfigOpensAtDispatchAndRedacts|SendToChannel|SendWecom|SendWxPusher)' -count=1`
+  - `cd /workspace/panel/server && go test ./handler -run 'Test(OpenAPI|PlatformToken|Notification|Sponsor)' -count=1`
+  - `cd /workspace/panel/server && go test ./middleware -run 'TestAppToken|TestOpenAPIAccess' -count=1`
 
 ### Milestone 5
 

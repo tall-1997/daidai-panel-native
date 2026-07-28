@@ -30,40 +30,51 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 }
 
 func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, onOutput PullCallback) (string, error) {
+	return pullSubscriptionWithContext(ctx, sub, onOutput, "")
+}
+
+func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, onOutput PullCallback, operationID string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	startTime := time.Now()
-
-	var sshKeyPath string
-	if sub.SSHKeyID != nil {
-		var sshKey model.SSHKey
-		if err := database.DB.First(&sshKey, *sub.SSHKeyID).Error; err == nil {
-			tmpFile, err := writeTempSSHKey(sshKey.PrivateKey)
-			if err != nil {
-				return "", fmt.Errorf("写入 SSH 密钥失败: %w", err)
-			}
-			defer os.Remove(tmpFile)
-			sshKeyPath = tmpFile
-		}
+	store := DefaultOperationStore()
+	if operationID != "" {
+		_ = store.Start(operationID, "pulling")
 	}
-	authCfg, err := buildGitAuthConfig(os.Environ(), sub.URL, sub, sshKeyPath)
+
+	sshKeyPath, cleanupSSHKey, err := resolveSubscriptionSSHKeyPath(ctx, sub)
+	if err != nil {
+		return "", err
+	}
+	defer cleanupSSHKey()
+
+	authCfg, err := buildGitAuthConfigWithContext(ctx, os.Environ(), sub.URL, sub, sshKeyPath)
 	if err != nil {
 		return "", err
 	}
 	defer authCfg.CleanupFunc()
 
 	var fullLog strings.Builder
+	lineCursor := int64(0)
 	emit := func(line string) {
+		lineCursor++
 		fullLog.WriteString(line)
 		fullLog.WriteString("\n")
+		if operationID != "" && lineCursor%5 == 0 {
+			_ = store.Progress(operationID, "pulling", 50, lineCursor)
+		}
 		if onOutput != nil {
 			onOutput(line)
 		}
 	}
 
 	emit(fmt.Sprintf("[开始拉取] %s (%s)", sub.Name, sub.Type))
+	if operationID != "" {
+		emit(fmt.Sprintf("[Operation] %s", operationID))
+	}
 	applySubscriptionForceOverwriteSetting(sub)
+	hookHandledByPull := sub.Type == model.SubTypeGitRepo && (sub.ForceOverwrite == nil || *sub.ForceOverwrite)
 
 	var output string
 	var pullErr error
@@ -78,8 +89,8 @@ func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 	if pullErr == nil && ctx.Err() != nil {
 		pullErr = fmt.Errorf("拉取已停止")
 	}
-	if pullErr == nil {
-		pullErr = runSubscriptionHookIfConfigured(sub, emit)
+	if pullErr == nil && !hookHandledByPull {
+		pullErr = runSubscriptionHookIfConfigured(ctx, sub, emit)
 	}
 	if pullErr == nil && ctx.Err() != nil {
 		pullErr = fmt.Errorf("拉取已停止")
@@ -100,6 +111,7 @@ func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 
 	subLog := model.SubLog{
 		SubscriptionID: sub.ID,
+		OperationID:    operationID,
 		Status:         status,
 		Content:        fullLog.String(),
 		Duration:       duration,
@@ -112,7 +124,46 @@ func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 		"status":       status,
 	})
 
+	if operationID != "" {
+		if pullErr == nil {
+			_ = store.Finish(operationID, 0, lineCursor)
+		} else if ctx.Err() != nil {
+			_ = store.Cancel(operationID, "stopped", lineCursor)
+		} else {
+			exitCode := 1
+			_ = store.Fail(operationID, &exitCode, "pull_failed", lineCursor)
+		}
+	}
+
 	return output, pullErr
+}
+
+func resolveSubscriptionSSHKeyPath(ctx context.Context, sub *model.Subscription) (string, func(), error) {
+	cleanup := func() {}
+	if sub == nil || sub.EffectiveAuthType() != model.SubAuthTypeSSH {
+		return "", cleanup, nil
+	}
+
+	if sub.HasSSHKeySecret() {
+		path, err := writeSubscriptionSSHKeySecret(ctx, sub)
+		if err != nil {
+			return "", cleanup, err
+		}
+		return path, func() { _ = os.Remove(path) }, nil
+	}
+
+	if sub.SSHKeyID == nil {
+		return "", cleanup, nil
+	}
+	var sshKey model.SSHKey
+	if err := database.DB.First(&sshKey, *sub.SSHKeyID).Error; err != nil {
+		return "", cleanup, nil
+	}
+	tmpFile, err := writeTempSSHKey(sshKey.PrivateKey)
+	if err != nil {
+		return "", cleanup, fmt.Errorf("写入 SSH 密钥失败: %w", err)
+	}
+	return tmpFile, func() { _ = os.Remove(tmpFile) }, nil
 }
 
 func applySubscriptionForceOverwriteSetting(sub *model.Subscription) {
@@ -189,6 +240,11 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 	}
 	env := authCfg.Env
 
+	forceOverwrite := sub.ForceOverwrite == nil || *sub.ForceOverwrite
+	if IsGitRepo(destDir) && forceOverwrite {
+		return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
+	}
+
 	if IsGitRepo(destDir) {
 		var fullOutput strings.Builder
 		branchLabel := "默认分支"
@@ -222,7 +278,6 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			return fullOutput.String(), err
 		}
 
-		forceOverwrite := sub.ForceOverwrite == nil || *sub.ForceOverwrite
 		if forceOverwrite {
 			emit("[覆盖更新本地文件] 正在用远端最新提交覆盖当前订阅目录中的仓库内容")
 			cmd = exec.CommandContext(ctx, "git", "reset", "--hard", "FETCH_HEAD")
@@ -286,6 +341,10 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		if readErr != nil {
 			return "", fmt.Errorf("读取保存目录失败: %w", readErr)
 		}
+		if len(entries) > 0 && forceOverwrite {
+			return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
+		}
+
 		if len(entries) > 0 {
 			var fullOutput strings.Builder
 			branchLabel := "默认分支"
@@ -358,14 +417,51 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		}
 	}
 
-	emit(fmt.Sprintf("[git clone] %s -> %s", authCfg.DisplayURL, saveDir))
-	os.MkdirAll(destDir, 0755)
+	return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
+}
+
+func replaceSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir, saveDir string, env []string, emit PullCallback) (string, error) {
+	parent := filepath.Dir(destDir)
+	base := filepath.Base(destDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("创建订阅目录失败: %w", err)
+	}
+
+	stagingDir, err := os.MkdirTemp(parent, "."+base+".staging-*")
+	if err != nil {
+		return "", fmt.Errorf("创建订阅 staging 工作区失败: %w", err)
+	}
+	stagingActive := true
+	defer func() {
+		if stagingActive {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
+
+	var fullOutput strings.Builder
+	emit(fmt.Sprintf("[git clone] %s -> %s (staging)", authCfg.DisplayURL, saveDir))
+	output, err := cloneSubscriptionGitWorktree(ctx, sub, authCfg, stagingDir, env, emit)
+	fullOutput.WriteString(output)
+	if err != nil {
+		return fullOutput.String(), normalizeGitProviderError(output, err)
+	}
+	if err := runSubscriptionHookInWorkDir(ctx, sub, stagingDir, emit); err != nil {
+		return fullOutput.String(), err
+	}
+
+	emit("[原子切换] 正在用新工作区替换当前订阅目录")
+	if err := atomicReplaceSubscriptionWorktree(destDir, stagingDir); err != nil {
+		return fullOutput.String(), err
+	}
+	stagingActive = false
+	emit("[已完成] 已原子切换到新的健康订阅工作区")
+	return fullOutput.String(), nil
+}
+
+func cloneSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir string, env []string, emit PullCallback) (string, error) {
 	args := []string{"clone", "--depth", "1"}
 	sparsePatterns := buildSubscriptionSparseCheckoutPatterns(sub)
 	if len(sparsePatterns) > 0 {
-		// 有指定子目录/白名单时，先不检出工作区，避免 clone 阶段把整个仓库文件落盘。
-		// --filter=blob:none 对 GitHub 这类支持 partial clone 的远端能少下载无关 blob；
-		// 不支持的远端会退化为普通浅克隆，但工作区仍只会检出匹配路径。
 		args = append(args, "--filter=blob:none", "--no-checkout")
 	}
 	if sub.Branch != "" {
@@ -377,7 +473,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 	cmd.Env = env
 	output, err := runCmdWithCallback(ctx, cmd, emit)
 	if err != nil {
-		return output, err
+		return output, normalizeGitProviderError(output, err)
 	}
 	if len(sparsePatterns) > 0 {
 		var fullOutput strings.Builder
@@ -394,6 +490,31 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		return fullOutput.String(), err
 	}
 	return output, nil
+}
+
+func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
+	backupDir := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".previous")
+	backupActive := false
+	_ = os.RemoveAll(backupDir)
+
+	if _, err := os.Stat(destDir); err == nil {
+		if err := os.Rename(destDir, backupDir); err != nil {
+			return fmt.Errorf("备份当前订阅工作区失败: %w", err)
+		}
+		backupActive = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查当前订阅工作区失败: %w", err)
+	}
+
+	if err := os.Rename(stagingDir, destDir); err != nil {
+		if backupActive {
+			_ = os.Rename(backupDir, destDir)
+		}
+		return fmt.Errorf("发布新订阅工作区失败: %w", err)
+	}
+
+	_ = backupActive
+	return nil
 }
 
 func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) []string {
@@ -508,12 +629,40 @@ func pullSingleFileWithCallback(ctx context.Context, sub *model.Subscription, _ 
 	}
 
 	destPath := filepath.Join(config.C.Data.ScriptsDir, saveDir, filename)
-	emit(fmt.Sprintf("[下载] %s -> %s/%s", sub.URL, saveDir, filename))
-	output, err := DownloadFileWithContext(ctx, sub.URL, destPath)
+	parent := filepath.Dir(destPath)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("创建目录失败: %w", err)
+	}
+	tmpFile, err := os.CreateTemp(parent, "."+filepath.Base(filename)+".staging-*")
+	if err != nil {
+		return "", fmt.Errorf("创建单文件 staging 失败: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	stagingActive := true
+	defer func() {
+		if stagingActive {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	emit(fmt.Sprintf("[下载] %s -> %s/%s (staging)", sub.URL, saveDir, filename))
+	output, err := DownloadFileWithContext(ctx, sub.URL, tmpPath)
 	if output != "" {
 		emit(output)
 	}
-	return output, err
+	if err != nil {
+		return output, err
+	}
+	if ctx.Err() != nil {
+		return output, fmt.Errorf("拉取已停止")
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return output, fmt.Errorf("发布单文件订阅失败: %w", err)
+	}
+	stagingActive = false
+	emit("[已完成] 已原子切换到新的单文件订阅版本")
+	return output, nil
 }
 
 func syncGitRemoteWithCallback(ctx context.Context, repoDir, remoteURL string, env []string, emit PullCallback) (string, error) {

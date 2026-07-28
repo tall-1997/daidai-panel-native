@@ -270,13 +270,19 @@ Implement wheel/package compatibility, signed native allowlist, npm script polic
 
 ### Task 4.2: Git Provider
 
+**Status:** Complete (HTTPS/SSH auth provider hardening with CA, known_hosts, SecretStore-backed token/key access, sparse checkout staging, and atomic worktree replacement)
+
 Implement HTTPS and SSH providers with CA, known_hosts, Token/Key Secret Store access, sparse checkout, and atomic worktree replacement.
 
 ### Task 4.3: Subscription Lifecycle
 
+**Status:** Complete (CRUD-compatible pull/stop/logs/SSE/scheduler lifecycle with Operation tracking, staging atomic switch, previous healthy version retention, cancelable hooks, and interrupted-pull reconciliation)
+
 Enable CRUD, pull, stop, logs, SSE, scheduler, whitelist/blacklist, hooks, and interrupted-pull reconciliation.
 
 ### Task 4.4: Notifications and External Integrations
+
+**Status:** Complete (channels, Android local notification adapter, external webhooks, sealed Platform Token credentials, Sponsor stability, and OpenAPI per-service user credential binding)
 
 Enable channels, Android local notification adapter, external webhooks, Platform Token, Sponsor, and OpenAPI with per-service user credentials.
 

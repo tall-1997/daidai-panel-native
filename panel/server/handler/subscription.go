@@ -17,9 +17,10 @@ import (
 )
 
 type subPullBroadcaster struct {
-	mu   sync.RWMutex
-	subs map[chan string]struct{}
-	log  strings.Builder
+	mu          sync.RWMutex
+	subs        map[chan string]struct{}
+	log         strings.Builder
+	operationID string
 }
 
 var (
@@ -79,6 +80,18 @@ func (b *subPullBroadcaster) broadcast(line string) {
 		default:
 		}
 	}
+}
+
+func (b *subPullBroadcaster) setOperationID(operationID string) {
+	b.mu.Lock()
+	b.operationID = operationID
+	b.mu.Unlock()
+}
+
+func (b *subPullBroadcaster) currentOperationID() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.operationID
 }
 
 func (b *subPullBroadcaster) done() {
@@ -188,7 +201,7 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		SubPath        string `json:"sub_path"`
 		SSHKeyID       *uint  `json:"ssh_key_id"`
 		AuthType       string `json:"auth_type"`
-		AuthUsername    string `json:"auth_username"`
+		AuthUsername   string `json:"auth_username"`
 		AuthToken      string `json:"auth_token"`
 		Alias          string `json:"alias"`
 		ForceOverwrite *bool  `json:"force_overwrite"`
@@ -228,7 +241,7 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		SubPath:        req.SubPath,
 		SSHKeyID:       sshKeyID,
 		AuthType:       authType,
-		AuthUsername:    req.AuthUsername,
+		AuthUsername:   req.AuthUsername,
 		AuthToken:      authToken,
 		Alias:          req.Alias,
 		ForceOverwrite: req.ForceOverwrite,
@@ -387,22 +400,25 @@ func (h *SubscriptionHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	if service.IsSubscriptionPullRunning(uint(subID)) {
-		response.BadRequest(c, "该订阅正在拉取中")
+	ctx, operation, err := service.BeginSubscriptionPull(uint(subID))
+	if err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	broadcaster := getOrCreateSubBroadcaster(uint(subID))
+	broadcaster.setOperationID(operation.ID)
 
 	go func() {
+		defer service.FinishSubscriptionPull(uint(subID))
 		defer removeSubBroadcaster(uint(subID))
-		service.ExecuteSubscriptionPull(&sub, func(line string) {
+		service.PullSubscriptionWithOperation(ctx, &sub, func(line string) {
 			broadcaster.broadcast(line)
-		})
+		}, operation.ID)
 		broadcaster.done()
 	}()
 
-	response.Success(c, gin.H{"message": "拉取任务已启动"})
+	response.Success(c, gin.H{"message": "拉取任务已启动", "operation_id": operation.ID})
 }
 
 func (h *SubscriptionHandler) StopPull(c *gin.Context) {
@@ -419,12 +435,13 @@ func (h *SubscriptionHandler) StopPull(c *gin.Context) {
 		broadcaster.broadcast("[停止请求] 正在终止当前拉取任务...")
 	}
 
-	if !service.StopSubscriptionPull(uint(subID)) {
+	operationID, ok := service.StopSubscriptionPullWithOperation(uint(subID))
+	if !ok {
 		response.BadRequest(c, "拉取任务停止失败")
 		return
 	}
 
-	response.Success(c, gin.H{"message": "已发送停止请求"})
+	response.Success(c, gin.H{"message": "已发送停止请求", "operation_id": operationID})
 }
 
 func (h *SubscriptionHandler) PullStream(c *gin.Context) {
@@ -443,6 +460,11 @@ func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 		fmt.Fprintf(c.Writer, "event: done\ndata: not_running\n\n")
 		c.Writer.Flush()
 		return
+	}
+
+	if operationID := broadcaster.currentOperationID(); operationID != "" {
+		fmt.Fprintf(c.Writer, "event: operation\ndata: %s\n\n", operationID)
+		c.Writer.Flush()
 	}
 
 	history := broadcaster.history()
@@ -497,6 +519,9 @@ func (h *SubscriptionHandler) Logs(c *gin.Context) {
 	}
 
 	query := database.DB.Model(&model.SubLog{}).Where("subscription_id = ?", subID)
+	if operationID := strings.TrimSpace(c.Query("operation_id")); operationID != "" {
+		query = query.Where("operation_id = ?", operationID)
+	}
 
 	var total int64
 	query.Count(&total)
