@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -188,8 +189,12 @@ func StartCore(optionsJSON string) (response string) {
 	}
 	probePath := filepath.Join(parsed.DataDir, recoveryMetadataDirName, recoveryMetadataOpsDirName)
 	if err := probeRecoveryMetadataPlatform(probePath); err != nil {
-		logDiagnostic(codeInvalidDataDir, "recovery-platform")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		if runtime.GOOS == "android" {
+			log.Printf("mobilecore: Android recovery metadata probe degraded: %v", err)
+		} else {
+			logDiagnostic(codeInvalidDataDir, "recovery-platform")
+			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		}
 	}
 	if _, err := os.Stat(filepath.Join(parsed.DataDir, activeGenerationName)); errors.Is(err, os.ErrNotExist) {
 		if err := checkpointFlatDatabase(filepath.Join(parsed.DataDir, "daidai.db")); err != nil {
