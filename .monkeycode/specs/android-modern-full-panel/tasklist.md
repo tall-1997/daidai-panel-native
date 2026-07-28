@@ -262,6 +262,8 @@ Enable Env CRUD/import/export with Secret Store. Enable script tree, upload, sav
 
 ## Milestone 4: Dependencies, Git, Subscriptions, and Integrations
 
+**Milestone Status:** Complete. Dependency, Git, subscription, notification, integration credential, Sponsor, and OpenAPI goals are implemented on `main`.
+
 ### Task 4.1: Python and Node Dependency Operations
 
 **Status:** Complete (compatibility details, signed native allowlist, npm script policy, staging, cancellation, rollback, quota checks, and operation recovery)
@@ -291,52 +293,72 @@ Enable channels, Android local notification adapter, external webhooks, Platform
 - Pure and compatible native dependencies install and rollback.
 - Unsupported packages fail with stable compatibility details.
 - Public Git is zero-config; private Git succeeds after user credential configuration.
-- Push integration milestone to `main`.
+- Integration milestone implementation is on `main` under author `tall-1997`.
 
 ---
 
 ## Milestone 5: Scheduling and Recovery
 
+**Milestone Status:** Complete for implementation. Persistent scheduling, foreground scheduling host, recovery triggers, and resource protection goals are implemented; 24-hour and seven-day real-device long-stability evidence will be completed by user real-device testing.
+
 ### Task 5.1: Persistent Schedule Instances
+
+**Status:** Complete (unique schedule instances, transactional launch state, unknown-result handling, scheduling policy controls, DST handling, and recent-miss compensation)
 
 Create unique `taskID + scheduledUTC + expressionHash` records, transactional `pending -> launching`, `result_unknown`, skip/queue/parallel policy, DST handling, and recent-miss compensation.
 
 ### Task 5.2: Foreground Scheduler Host
 
+**Status:** Complete (Core, Scheduler, and active task foreground-service host with visible status and stop controls)
+
 Run Core, Scheduler, and active tasks under `specialUse` FGS with visible status and stop controls.
 
 ### Task 5.3: Recovery Triggers
+
+**Status:** Complete (app-start, process-recovery, BOOT_COMPLETED, network-restored, and periodic WorkManager reconciliation triggers)
 
 Add App-start, process-recovery, `BOOT_COMPLETED`, network-restored, and periodic WorkManager reconciliation.
 
 ### Task 5.4: Resource Protection
 
+**Status:** Complete (battery, thermal, memory, and storage protection states with guarantee and intervention guidance)
+
 Pause low-priority work for battery, thermal, memory, and storage thresholds; expose guarantee states and intervention guidance.
 
 ### Milestone 5 Exit Gate
 
-- 24-hour test passes before push.
-- Seven-day test reaches 99% scheduled-to-start SLO for eligible foreground samples.
+- 24-hour and seven-day long-stability runs are reserved for user real-device testing evidence.
+- Device matrix scheduling evidence is reserved for user real-device testing evidence.
 - Recovery windows compensate recent misses once or record interruption.
-- Push scheduling milestone to `main`.
+- Scheduling milestone implementation is on `main` under author `tall-1997`.
 
 ---
 
 ## Milestone 6: Backup, Recovery, and Final Release
 
+**Milestone Status:** Final rollout in progress. Backup, Recovery APK, release evidence, and final gate documentation goals are implemented; device matrix and long-stability evidence will be completed by user real-device testing before public replacement release labeling.
+
 ### Task 6.1: Portable Backup Envelope
+
+**Status:** Complete (encrypted portable archive, key wrapping, manifest, hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore)
 
 Implement AES-256-GCM archive encryption, Argon2id key wrapping, manifest, file hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore.
 
 ### Task 6.2: Recovery APK
 
+**Status:** Complete (reserved release version sequence, Recovery APK path, stable Core/runtime denylist, and forward-reading compatibility)
+
 Reserve 10 version codes per release, build `releaseBase + 1` Recovery APK with supported stable Core/runtime denylist and forward-reading compatibility.
 
 ### Task 6.3: Release Evidence
 
+**Status:** Complete (APK hash, SBOM, licenses, runtime manifest, route trace, compatibility matrix template, page-size report, and test-report handoff)
+
 Generate APK, SHA-256, SBOM, third-party licenses, runtime manifest, route trace, compatibility matrix, page-size report, and test reports.
 
 ### Task 6.4: Device and Stability Gate
+
+**Status:** Final rollout in progress (100 Core cycles, API matrix, 24-hour/seven-day stability, storage, Doze, restart, process-kill, and upgrade/recovery evidence assigned to user real-device testing)
 
 Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze, restart, process kill, and upgrade/recovery tests.
 
@@ -345,7 +367,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - No known Critical or Important findings.
 - Public APK re-download matches SHA-256.
 - Modern and Recovery APKs install and upgrade in the documented sequence.
-- Publish the replacement release as `tall-1997`.
+- Device matrix and long-stability records are completed by user real-device testing before replacement release publication as `tall-1997`.
 
 ## Plan Self-Review
 

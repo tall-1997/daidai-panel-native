@@ -6,7 +6,7 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 4 Task 4.4 is complete on `main`: notification channels now include Android local notification and external webhook adapters, sensitive channel and Platform Token values are sealed or redacted, Sponsor fallback behavior remains stable, and OpenAPI token issuance supports per-service user credential binding.
+Milestone 4-6 implementation goals are complete or in final rollout on `main`: integration, scheduling/recovery, backup/recovery, and release-evidence work is documented as delivered. Device matrix and long-stability evidence are assigned to user real-device testing before final public replacement release labeling.
 
 ## Completed Work
 
@@ -216,16 +216,19 @@ Milestone 4 Task 4.4 is complete on `main`: notification channels now include An
 
 ### Milestone 5
 
-- Persistent schedule instances.
-- Foreground Scheduler, recovery triggers, boot restoration, resource protection.
-- 24-hour and seven-day scheduling evidence.
+- Task 5.1 complete: persistent schedule instances use unique `taskID + scheduledUTC + expressionHash` identity, transactional launch states, `result_unknown`, skip/queue/parallel policy controls, DST handling, and recent-miss compensation.
+- Task 5.2 complete: Core, Scheduler, and active task execution are represented under the Android foreground scheduling host with visible status and stop controls.
+- Task 5.3 complete: app-start, process-recovery, `BOOT_COMPLETED`, network-restored, and periodic WorkManager reconciliation trigger coverage is implemented.
+- Task 5.4 complete: resource protection pauses low-priority work under battery, thermal, memory, and storage pressure and exposes guarantee/intervention states.
+- Milestone 5 implementation status: complete on `main`; 24-hour and seven-day scheduling SLO evidence is reserved for user real-device long-stability testing.
 
 ### Milestone 6
 
-- Portable encrypted backup.
-- Recovery APK and version sequence.
-- SBOM, licenses, runtime manifest, route trace, compatibility matrix.
-- Device matrix, stability gates, final replacement Release.
+- Task 6.1 complete: portable encrypted backup envelope covers AES-256-GCM archive encryption, Argon2id key wrapping, manifest, file hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore.
+- Task 6.2 complete: Recovery APK planning reserves the release version sequence and documents stable Core/runtime denylist plus forward-reading compatibility.
+- Task 6.3 complete: release evidence set covers APK SHA-256, SBOM, third-party licenses, runtime manifest, route trace, compatibility matrix template, page-size report, and test-report handoff.
+- Task 6.4 final rollout in progress: 100 Core cycles, API matrix, 24-hour/seven-day stability, low-storage, Doze, restart, process-kill, and upgrade/recovery evidence are assigned to user real-device testing.
+- Milestone 6 implementation status: final rollout in progress on `main`; device matrix and long-stability records will be completed by user real-device testing before final release publication.
 
 ## Verification State
 
@@ -245,6 +248,8 @@ Milestone 2 unified verification completed:
 - `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
 - `GOOS=android GOARCH=arm64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
 
-Remaining verification pending:
+Final verification handoff:
 
-- Milestone 2 device-level runtime smoke matrix on API 28/35 and 4K/16K page-size environments.
+- Milestone 4-6 implementation status is documented as complete/final rollout on `main`.
+- User real-device testing will complete the API/device matrix, 24-hour and seven-day long-stability runs, 100 Core cycles, low-storage, Doze, restart, process-kill, upgrade, and recovery evidence.
+- No tests were run for this documentation-only status update per user instruction.
