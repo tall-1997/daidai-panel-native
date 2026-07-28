@@ -202,6 +202,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/directory" -> createScriptDirectory(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/upload" -> uploadScript(session)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/format" -> formatScript(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> runScript(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run-code" -> runCode(body(session))
             normalizedUri.startsWith("/scripts/run/") && normalizedUri.endsWith("/logs") -> ok(JSONObject().put("data", JSONObject().put("logs", JSONArray()).put("status", "success")))
             normalizedUri.startsWith("/scripts/run/") && session.method == NanoHTTPD.Method.PUT -> ok(JSONObject().put("message", "stopped"))
@@ -510,6 +511,18 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun runCode(json: JSONObject): NanoHTTPD.Response = ok(
         JSONObject().put("data", JSONObject().put("run_id", "android-local-${Instant.now().toEpochMilli()}").put("status", "success").put("logs", JSONArray().put("Android local fallback accepted run-code")))
     )
+
+    private fun runScript(json: JSONObject): NanoHTTPD.Response {
+        val path = json.optString("path", "script.py")
+        val file = scriptFile(path)
+        if (!file.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
+        val runId = "android-local-${Instant.now().toEpochMilli()}"
+        return ok(
+            JSONObject()
+                .put("run_id", runId)
+                .put("data", JSONObject().put("run_id", runId).put("status", "success").put("logs", JSONArray().put("Android local fallback accepted script run: $path")))
+        )
+    }
 
     private fun scriptFile(path: String): File {
         val clean = path.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." && it != ".." }.joinToString(File.separator)
