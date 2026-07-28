@@ -57,6 +57,9 @@ type options struct {
 	LocalToken           string                    `json:"localToken"`
 	NativeLibraryDir     string                    `json:"nativeLibraryDir"`
 	AndroidKeystoreKey   string                    `json:"androidKeystoreMasterKey"`
+	RuntimeManifestPath  string                    `json:"runtimeManifestPath"`
+	RuntimeCompatPath    string                    `json:"runtimeCompatibilityPath"`
+	RuntimeSmokePath     string                    `json:"runtimeSmokeEvidencePath"`
 	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
@@ -326,6 +329,7 @@ func StartCore(optionsJSON string) (response string) {
 	if nativeLibraryDir == "" {
 		nativeLibraryDir = strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR"))
 	}
+	applyRuntimeMetadataPathEnv(parsed)
 	runtimeManager := service.NewRuntimeComponentManager(nativeLibraryDir)
 	runtimeBaseline, runtimeErr := runtimeManager.LoadAndValidate()
 	if runtimeErr != nil {
@@ -497,6 +501,18 @@ func StartCore(optionsJSON string) (response string) {
 
 	go observeServe(running, serveResult)
 	return encode(value)
+}
+
+func applyRuntimeMetadataPathEnv(parsed options) {
+	if value := strings.TrimSpace(parsed.RuntimeManifestPath); value != "" {
+		_ = os.Setenv("DAIDAI_RUNTIME_MANIFEST_PATH", value)
+	}
+	if value := strings.TrimSpace(parsed.RuntimeCompatPath); value != "" {
+		_ = os.Setenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH", value)
+	}
+	if value := strings.TrimSpace(parsed.RuntimeSmokePath); value != "" {
+		_ = os.Setenv("DAIDAI_RUNTIME_SMOKE_EVIDENCE_PATH", value)
+	}
 }
 
 func StopCore(timeoutMillis int64) string {

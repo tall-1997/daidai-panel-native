@@ -11,6 +11,7 @@ object GoCoreBridge {
         val current = status(localToken)
         if (current["phase"] == "ready") return current
 
+        val runtimeMetadata = AndroidRuntimeMetadataBridge.metadataOptions(context)
         val options = JSONObject()
             .put("dataDir", context.filesDir.resolve("local-panel").absolutePath)
             .put("bindHost", "127.0.0.1")
@@ -18,6 +19,9 @@ object GoCoreBridge {
             .put("localToken", localToken)
             .put("nativeLibraryDir", context.applicationInfo.nativeLibraryDir)
             .put("androidKeystoreMasterKey", AndroidRuntimeSecretBridge.runtimeMasterKey(context))
+            .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))
+            .put("runtimeCompatibilityPath", runtimeMetadata.getValue("runtimeCompatibilityPath"))
+            .put("runtimeSmokeEvidencePath", runtimeMetadata.getValue("runtimeSmokeEvidencePath"))
             .toString()
         val raw = invokeString(GoCoreReflectionContract.START_CORE, arrayOf(String::class.java), arrayOf(options))
         return mapResultWithEndpoint(raw, localToken)

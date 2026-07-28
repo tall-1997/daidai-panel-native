@@ -83,6 +83,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _initCheck() async {
     final serverUrl = await SecureStorage.getServerUrl();
     if (serverUrl == null || serverUrl.isEmpty) {
+      if (Platform.isAndroid) {
+        try {
+          final status = await MethodChannelLocalPanelHost().ensureStarted();
+          final resolved = resolveManagedLocalPanel(status);
+          _selectedPanel = resolved.panel;
+          _currentUrl = resolved.panel.url;
+          _panels = await SecureStorage.getPanels();
+          final adopted = await ManagedLocalConnectionMonitor.instance.adoptHealthy(
+            resolved,
+          );
+          if (!adopted) throw StateError('Remote transition in progress');
+          if (mounted) setState(() {});
+          final auth = ref.read(authProvider.notifier);
+          await auth.checkInit();
+          final authState = ref.read(authProvider);
+          if (mounted) setState(() => _needsInit = authState.needsInit);
+          return;
+        } catch (_) {
+          _error = '本地面板启动失败，请稍后重试或手动填写远程面板地址';
+        }
+      }
       // 没有已保存的服务器地址，显示服务器地址输入框
       _needsServerUrl = true;
       _serverUrlController.text = '127.0.0.1:5700';
