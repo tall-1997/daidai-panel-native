@@ -100,6 +100,39 @@ func TestRecoveryMetadataNamespaceRejectsConflicts(t *testing.T) {
 	}
 }
 
+func TestRecoveryMetadataNamespaceCreationSurvivesEverySyncFailure(t *testing.T) {
+	for failAt := 1; failAt <= 6; failAt++ {
+		t.Run(fmt.Sprintf("sync-%d", failAt), func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "nested", "data")
+			store := newGenerationStore(root, defaultFilesystemOps())
+			old := recoveryNamespaceSync
+			calls := 0
+			recoveryNamespaceSync = func(path string) error {
+				calls++
+				if calls == failAt {
+					return errors.New("sync failure")
+				}
+				return platformSyncDirectory(path)
+			}
+			err := store.ensureRecoveryMetadataNamespace()
+			recoveryNamespaceSync = old
+			if calls >= failAt && err == nil {
+				t.Fatalf("sync %d failure not propagated", failAt)
+			}
+			restarted := newGenerationStore(root, defaultFilesystemOps())
+			if err := restarted.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{root, filepath.Join(root, recoveryMetadataDirName), filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName)} {
+				info, err := os.Lstat(path)
+				if err != nil || !info.IsDir() {
+					t.Fatalf("namespace path invalid %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteAtomicRejectsTargetsOutsideMetadataAllowlist(t *testing.T) {
 	root := t.TempDir()
 	store := newGenerationStore(root, defaultFilesystemOps())
@@ -338,6 +371,7 @@ func TestPreparedExchangeMatrixConvergesToOld(t *testing.T) {
 		{"target-new-exchange-old", true, "new", "old"},
 		{"target-old-exchange-new", true, "old", "new"},
 		{"target-old-no-exchange", true, "old", ""},
+		{"target-old-exchange-old", true, "old", "old"},
 		{"old-absent-target-new", false, "new", ""},
 		{"old-absent-target-absent", false, "", ""},
 	}
@@ -507,11 +541,16 @@ func TestExistingTargetPublishSyncFailuresRollback(t *testing.T) {
 func TestProbeOwnershipBusinessDirectoryConcurrencyAndCleanup(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, ".recovery-probe", "business"), "keep")
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	ops := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName)
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); errs <- platformProbeRecoveryMetadata(root) }()
+		go func() { defer wg.Done(); errs <- platformProbeRecoveryMetadata(ops) }()
 	}
 	wg.Wait()
 	close(errs)
@@ -524,22 +563,51 @@ func TestProbeOwnershipBusinessDirectoryConcurrencyAndCleanup(t *testing.T) {
 	if err != nil || string(data) != "keep" {
 		t.Fatalf("business probe directory changed: %q %v", data, err)
 	}
-	bad := filepath.Join(root, recoveryProbePrefix+"1785180000000000000-aabbccddeeff0011")
-	if err := os.Mkdir(bad, 0o700); err != nil {
+	if err := platformProbeRecoveryMetadata(ops); err != nil {
 		t.Fatal(err)
 	}
-	if err := platformProbeRecoveryMetadata(root); err == nil {
-		t.Fatal("marker-less reserved probe was accepted")
+}
+
+func TestProbeUsesRecoveryOpsAuthorityAndCrashLayoutConverges(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(bad); err != nil {
-		t.Fatalf("marker-less business directory removed: %v", err)
+	ops := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName)
+	old := recoveryProbeBoundary
+	recoveryProbeBoundary = func(point string) error {
+		if point == "probe-after-first-link" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	if err := platformProbeRecoveryMetadata(ops); err == nil {
+		t.Fatal("expected probe crash")
+	}
+	recoveryProbeBoundary = old
+	entries, err := os.ReadDir(ops)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("probe operation not retained: %v %v", entries, err)
+	}
+	if err := store.convergeMetadataJournals(); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ = os.ReadDir(ops)
+	if len(entries) != 0 {
+		t.Fatalf("probe operation not retired: %v", entries)
 	}
 }
 
 func TestProbeCleanupFailuresAreOwnedAndConverge(t *testing.T) {
-	for _, point := range []string{"probe-remove-first", "probe-remove-second", "probe-remove-target", "probe-remove-" + recoveryProbeMarkerName, "probe-remove-directory"} {
+	for _, point := range []string{"probe-remove-" + recoveryMetadataNewName, "probe-remove-publish-state", "probe-remove-" + recoveryMetadataOldName, "probe-remove-directory"} {
 		t.Run(point, func(t *testing.T) {
 			root := t.TempDir()
+			store := newGenerationStore(root, defaultFilesystemOps())
+			if err := store.ensureRecoveryMetadataNamespace(); err != nil {
+				t.Fatal(err)
+			}
+			ops := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName)
 			old := recoveryProbeBoundary
 			fired := false
 			recoveryProbeBoundary = func(got string) error {
@@ -549,18 +617,16 @@ func TestProbeCleanupFailuresAreOwnedAndConverge(t *testing.T) {
 				}
 				return nil
 			}
-			if err := platformProbeRecoveryMetadata(root); err == nil {
+			if err := platformProbeRecoveryMetadata(ops); err == nil {
 				t.Fatalf("boundary %s not reached", point)
 			}
 			recoveryProbeBoundary = old
-			if err := platformProbeRecoveryMetadata(root); err != nil {
+			if err := store.convergeMetadataJournals(); err != nil {
 				t.Fatal(err)
 			}
-			entries, _ := os.ReadDir(root)
-			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), recoveryProbePrefix) {
-					t.Fatalf("probe remains: %s", entry.Name())
-				}
+			entries, _ := os.ReadDir(ops)
+			if len(entries) != 0 {
+				t.Fatalf("probe remains: %v", entries)
 			}
 		})
 	}

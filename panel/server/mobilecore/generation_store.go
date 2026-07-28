@@ -137,6 +137,7 @@ type filesystemOps struct {
 var probeRecoveryMetadataPlatform = platformProbeRecoveryMetadata
 var recoveryPublishBoundary = func(string) error { return nil }
 var recoveryProbeBoundary = func(string) error { return nil }
+var recoveryNamespaceSync = platformSyncDirectory
 var recoveryRollbackBoundary = func(string) error { return nil }
 
 func defaultFilesystemOps() filesystemOps {
@@ -552,8 +553,7 @@ func (store *generationStore) copyDataset(source, destination string, flat bool)
 			return err
 		}
 		first := strings.Split(relative, string(filepath.Separator))[0]
-		probeOwned := flat && store.isOwnedProbeNamespace(filepath.Join(source, first))
-		if flat && (first == generationsDirName || first == recoveryMetadataDirName || probeOwned || relative == activeGenerationName || relative == recoveryTransactionName) {
+		if flat && (first == generationsDirName || first == recoveryMetadataDirName || relative == activeGenerationName || relative == recoveryTransactionName) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -1100,13 +1100,16 @@ func (store *generationStore) isOwnedProbeNamespace(path string) bool {
 }
 
 func (store *generationStore) ensureRecoveryMetadataNamespace() error {
+	if err := store.ensureDurableDirectory(store.root); err != nil {
+		return err
+	}
 	base := filepath.Join(store.root, recoveryMetadataDirName)
 	if info, err := store.ops.lstat(base); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("recovery metadata namespace is not a trusted directory")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(base, 0o700); err != nil {
+		if err := store.ensureDurableDirectory(base); err != nil {
 			return err
 		}
 		if err := store.writeSyncedFileExclusive(filepath.Join(base, recoveryMetadataMarkerName), []byte(recoveryMetadataMarkerValue), 0o600); err != nil {
@@ -1116,6 +1119,23 @@ func (store *generationStore) ensureRecoveryMetadataNamespace() error {
 		return err
 	}
 	marker, err := os.ReadFile(filepath.Join(base, recoveryMetadataMarkerName))
+	if errors.Is(err, os.ErrNotExist) {
+		entries, readErr := os.ReadDir(base)
+		if readErr != nil {
+			return readErr
+		}
+		if len(entries) != 0 {
+			return errors.New("recovery metadata marker is missing")
+		}
+		if err := store.writeSyncedFileExclusive(filepath.Join(base, recoveryMetadataMarkerName), []byte(recoveryMetadataMarkerValue), 0o600); err != nil {
+			return err
+		}
+		if err := recoveryNamespaceSync(base); err != nil {
+			return err
+		}
+		marker = []byte(recoveryMetadataMarkerValue)
+		err = nil
+	}
 	if err != nil || string(marker) != recoveryMetadataMarkerValue {
 		return errors.New("recovery metadata marker is invalid")
 	}
@@ -1129,14 +1149,45 @@ func (store *generationStore) ensureRecoveryMetadataNamespace() error {
 		return errors.New("recovery metadata marker has unsafe links")
 	}
 	ops := filepath.Join(base, recoveryMetadataOpsDirName)
-	if err := os.Mkdir(ops, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := store.ensureDurableDirectory(ops); err != nil {
 		return err
 	}
 	info, err := store.ops.lstat(ops)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("recovery metadata ops is not a trusted directory")
 	}
-	return platformSyncDirectory(base)
+	return recoveryNamespaceSync(base)
+}
+
+func (store *generationStore) ensureDurableDirectory(path string) error {
+	if info, err := store.ops.lstat(path); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("durable namespace path is unsafe")
+		}
+		parent := filepath.Dir(path)
+		if parent != path {
+			if err := recoveryNamespaceSync(parent); err != nil {
+				return err
+			}
+		}
+		return recoveryNamespaceSync(path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return errors.New("durable namespace parent unavailable")
+	}
+	if err := store.ensureDurableDirectory(parent); err != nil {
+		return err
+	}
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	if err := recoveryNamespaceSync(parent); err != nil {
+		return err
+	}
+	return recoveryNamespaceSync(path)
 }
 
 func stateForData(data []byte) metadataState {
@@ -1568,7 +1619,7 @@ func (store *generationStore) convergePreparedMetadata(opDir, target string, jou
 	if !valid(targetState, old, newState, absent) || !valid(exchangeState, old, newState, absent) {
 		return errors.New("prepared metadata matrix is unsafe")
 	}
-	if targetState == old && (exchangeState == newState || exchangeState == absent) {
+	if targetState == old && (exchangeState == newState || exchangeState == old || exchangeState == absent) {
 		return nil
 	}
 	if !old.Present && targetState == absent && exchangeState == absent {

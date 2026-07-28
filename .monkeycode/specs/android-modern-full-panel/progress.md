@@ -106,6 +106,10 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
   - Replaced the fixed probe directory with marker-bound random operation namespaces, flock-based concurrent isolation, and marker-last tombstone cleanup.
   - Preserved ordinary probe-named business directories during flat import and safely rejected marker-less reserved-looking operations.
   - Removed platform-side destructive rollback, retained exchange-state until journal-level rollback succeeded, and verified restart convergence after persistent rollback failures.
+- Reserved-namespace probe architecture verified:
+  - Creates and durably synchronizes `dataDir/.recovery-meta/ops` before probing platform primitives or touching legacy data.
+  - Runs each probe as a random pre-authority operation inside `ops`, allowing normal journal authority convergence to retire every crash layout.
+  - Accepts the PREPARED `target=old, exchange=old` intermediate state and persists ROLLED_BACK before owned cleanup.
 
 ## Task 1.3 Review Findings Resolved
 

@@ -977,7 +977,7 @@ func TestStartCoreProbesRecoveryCapabilityBeforeLegacyCheckpoint(t *testing.T) {
 	}
 }
 
-func TestStartCoreProbeFailureDoesNotCreateMissingDataDir(t *testing.T) {
+func TestStartCoreProbeFailureLeavesOnlyDurableRecoveryNamespace(t *testing.T) {
 	resetRecoveryLifecycle(t)
 	dataDir := filepath.Join(t.TempDir(), "missing", "data")
 	oldProbe := probeRecoveryMetadataPlatform
@@ -992,8 +992,15 @@ func TestStartCoreProbeFailureDoesNotCreateMissingDataDir(t *testing.T) {
 	if result.OK {
 		t.Fatalf("result=%+v", result)
 	}
-	if _, err := os.Stat(dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("probe failure created dataDir: %v", err)
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != recoveryMetadataDirName {
+		t.Fatalf("unexpected dataDir after unsupported probe: %v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, recoveryMetadataDirName, recoveryMetadataOpsDirName)); err != nil {
+		t.Fatal(err)
 	}
 }
 
