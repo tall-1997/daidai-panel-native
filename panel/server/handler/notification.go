@@ -37,15 +37,19 @@ func updateNotificationTestState(channelID uint, status string) {
 	}
 }
 
+func notificationChannelResponse(ch model.NotifyChannel) map[string]interface{} {
+	item := ch.ToDict()
+	item["config"] = service.RedactNotificationConfig(ch.Config)
+	return item
+}
+
 func (h *NotificationHandler) List(c *gin.Context) {
 	var channels []model.NotifyChannel
 	database.DB.Order("created_at DESC").Find(&channels)
 
 	data := make([]map[string]interface{}, len(channels))
 	for i, ch := range channels {
-		item := ch.ToDict()
-		item["config"] = service.RedactNotificationConfig(ch.Config)
-		data[i] = item
+		data[i] = notificationChannelResponse(ch)
 	}
 
 	response.Success(c, gin.H{"data": data})
@@ -83,9 +87,7 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 		return
 	}
 
-	item := ch.ToDict()
-	item["config"] = service.RedactNotificationConfig(ch.Config)
-	response.Created(c, gin.H{"message": "创建成功", "data": item})
+	response.Created(c, gin.H{"message": "创建成功", "data": notificationChannelResponse(ch)})
 }
 
 func (h *NotificationHandler) Update(c *gin.Context) {
@@ -130,9 +132,7 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 	}
 
 	database.DB.First(&ch, chID)
-	item := ch.ToDict()
-	item["config"] = service.RedactNotificationConfig(ch.Config)
-	response.Success(c, gin.H{"message": "更新成功", "data": item})
+	response.Success(c, gin.H{"message": "更新成功", "data": notificationChannelResponse(ch)})
 }
 
 func (h *NotificationHandler) Delete(c *gin.Context) {
@@ -150,7 +150,7 @@ func (h *NotificationHandler) Enable(c *gin.Context) {
 	}
 	database.DB.Model(&ch).Update("enabled", true)
 	ch.Enabled = true
-	response.Success(c, gin.H{"message": "已启用", "data": ch.ToDict()})
+	response.Success(c, gin.H{"message": "已启用", "data": notificationChannelResponse(ch)})
 }
 
 func (h *NotificationHandler) Disable(c *gin.Context) {
@@ -162,7 +162,7 @@ func (h *NotificationHandler) Disable(c *gin.Context) {
 	}
 	database.DB.Model(&ch).Update("enabled", false)
 	ch.Enabled = false
-	response.Success(c, gin.H{"message": "已禁用", "data": ch.ToDict()})
+	response.Success(c, gin.H{"message": "已禁用", "data": notificationChannelResponse(ch)})
 }
 
 func (h *NotificationHandler) Test(c *gin.Context) {
