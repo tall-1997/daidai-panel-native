@@ -495,7 +495,7 @@ func markScheduleInstanceFinished(instanceID uint) error {
 	now := time.Now().UTC()
 	return database.DB.Model(&model.ScheduleInstance{}).
 		Where("id = ?", instanceID).
-		Updates(map[string]interface{}{"ended_at": now}).Error
+		Updates(map[string]interface{}{"state": model.ScheduleInstanceStateLaunched, "ended_at": now}).Error
 }
 
 func markScheduleInstanceSkipped(instanceID uint, reason string) error {
@@ -543,6 +543,10 @@ func RecoverLaunchingScheduleInstances() int64 {
 	var instances []model.ScheduleInstance
 	if err := database.DB.Where("state = ?", model.ScheduleInstanceStateLaunching).Find(&instances).Error; err != nil {
 		return 0
+	}
+	var running []model.ScheduleInstance
+	if err := database.DB.Where("state = ? AND ended_at IS NULL", model.ScheduleInstanceStateLaunched).Find(&running).Error; err == nil {
+		instances = append(instances, running...)
 	}
 	var count int64
 	for i := range instances {

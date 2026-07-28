@@ -38,9 +38,10 @@ func (ScheduleInstance) TableName() string {
 }
 
 func NormalizeSchedulePolicy(policy string) string {
-	switch strings.ToLower(strings.TrimSpace(policy)) {
+	normalized := strings.ToLower(strings.TrimSpace(policy))
+	switch normalized {
 	case SchedulePolicySkip, SchedulePolicyQueue, SchedulePolicyParallel:
-		return policy
+		return normalized
 	default:
 		return SchedulePolicySkip
 	}
