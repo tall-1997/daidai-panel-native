@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"daidai-panel/config"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 )
 
@@ -26,8 +27,49 @@ func TestScriptCommandPartsSupportsGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected go command, got error: %v", err)
 	}
-	if len(parts) != 3 || parts[0] != "go" || parts[1] != "run" || parts[2] != "demo.go" {
+	if len(parts) != 2 || parts[0] != "yaegi-go" || parts[1] != "demo.go" {
 		t.Fatalf("unexpected go command parts: %#v", parts)
+	}
+}
+
+func TestScriptRuntimeInterpreterUsesYaegiRuntimeIDForGo(t *testing.T) {
+	interpreter, err := scriptRuntimeInterpreter(".go")
+	if err != nil {
+		t.Fatalf("expected go runtime id, got error: %v", err)
+	}
+	if interpreter != "yaegi-go" {
+		t.Fatalf("expected yaegi-go runtime id, got %q", interpreter)
+	}
+}
+
+func TestNewScriptCommandUsesRuntimeLocatorForGoRuntimeID(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	nativeDir := filepath.Join(root, "native")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
+	yaegi := filepath.Join(nativeDir, "libyaegi_go_exec.so")
+	if err := os.WriteFile(yaegi, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write yaegi runtime: %v", err)
+	}
+	restore := service.SetRuntimeLocatorForTest(service.NewManifestRuntimeLocator(nativeDir, service.RuntimeManifest{Components: []service.RuntimeManifestComponent{{ID: service.RuntimeIDYaegiGo, Entrypoint: "libyaegi_go_exec.so"}}}))
+	defer restore()
+
+	scriptPath := filepath.Join(config.C.Data.ScriptsDir, "demo.go")
+	if err := os.WriteFile(scriptPath, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cmd, cleanup, err := newScriptCommand(service.RuntimeIDYaegiGo, scriptPath, []string{"--flag"}, config.C.Data.ScriptsDir, nil)
+	if err != nil {
+		t.Fatalf("new go runtime command: %v", err)
+	}
+	defer cleanup()
+	if cmd.Args[0] != yaegi {
+		t.Fatalf("expected runtime entrypoint %q, got %#v", yaegi, cmd.Args)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "go run") {
+		t.Fatalf("go runtime command must not use go run: %#v", cmd.Args)
 	}
 }
 

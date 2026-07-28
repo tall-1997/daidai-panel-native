@@ -116,8 +116,8 @@ func TestParseCommandExecutionPlanSupportsTaskModesAndArgs(t *testing.T) {
 			t.Fatalf("parse go task plan: %v", err)
 		}
 
-		if plan.Interpreter != "go" {
-			t.Fatalf("expected go interpreter, got %q", plan.Interpreter)
+		if plan.Interpreter != RuntimeIDYaegiGo {
+			t.Fatalf("expected go runtime id, got %q", plan.Interpreter)
 		}
 		if plan.Mode != commandModeNow {
 			t.Fatalf("expected now mode, got %q", plan.Mode)
@@ -133,8 +133,8 @@ func TestParseCommandExecutionPlanSupportsTaskModesAndArgs(t *testing.T) {
 			t.Fatalf("parse direct go plan: %v", err)
 		}
 
-		if plan.Interpreter != "go" {
-			t.Fatalf("expected go interpreter, got %q", plan.Interpreter)
+		if plan.Interpreter != RuntimeIDYaegiGo {
+			t.Fatalf("expected go runtime id, got %q", plan.Interpreter)
 		}
 		if filepath.Base(plan.FullPath) != "worker.go" {
 			t.Fatalf("expected worker.go path, got %q", plan.FullPath)
@@ -158,6 +158,108 @@ func TestParseCommandExecutionPlanSupportsTaskModesAndArgs(t *testing.T) {
 		}
 	})
 
+}
+
+func TestBuildCmdForGoUsesYaegiRuntimeAndNeverGoRun(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	nativeDir := filepath.Join(root, "native")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
+	yaegi := filepath.Join(nativeDir, "libyaegi_go_exec.so")
+	if err := os.WriteFile(yaegi, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write yaegi runtime: %v", err)
+	}
+	restore := SetRuntimeLocatorForTest(NewManifestRuntimeLocator(nativeDir, RuntimeManifest{Components: []RuntimeManifestComponent{{ID: RuntimeIDYaegiGo, Entrypoint: "libyaegi_go_exec.so"}}}))
+	defer restore()
+
+	scriptPath := filepath.Join(config.C.Data.ScriptsDir, "worker.go")
+	if err := os.WriteFile(scriptPath, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write go script: %v", err)
+	}
+
+	cmd, cleanup, err := buildCmd(&CommandExecutionPlan{
+		Interpreter: RuntimeIDYaegiGo,
+		FullPath:    scriptPath,
+		WorkDir:     config.C.Data.ScriptsDir,
+		ScriptArgs:  []string{"--flag"},
+	}, config.C.Data.ScriptsDir, map[string]string{"A": "B"})
+	if err != nil {
+		t.Fatalf("build managed go command: %v", err)
+	}
+	defer cleanup()
+	if cmd.Args[0] != yaegi {
+		t.Fatalf("expected yaegi runtime executable %q, got args=%#v", yaegi, cmd.Args)
+	}
+	for _, arg := range cmd.Args {
+		if arg == "run" {
+			t.Fatalf("go runtime command must not use go run: %#v", cmd.Args)
+		}
+	}
+}
+
+func TestBuildCmdForGoPlanUsesRuntimeLocatorEntrypoint(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	nativeDir := filepath.Join(root, "native")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
+	yaegi := filepath.Join(nativeDir, "libyaegi_go_exec.so")
+	if err := os.WriteFile(yaegi, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write yaegi runtime: %v", err)
+	}
+	restore := SetRuntimeLocatorForTest(NewManifestRuntimeLocator(nativeDir, RuntimeManifest{Components: []RuntimeManifestComponent{{ID: RuntimeIDYaegiGo, Entrypoint: "libyaegi_go_exec.so", Capabilities: []string{"run-code"}}}}))
+	defer restore()
+
+	scriptPath := filepath.Join(config.C.Data.ScriptsDir, "worker.go")
+	if err := os.WriteFile(scriptPath, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write go script: %v", err)
+	}
+
+	cmd, cleanup, err := buildCmd(&CommandExecutionPlan{
+		Interpreter: RuntimeIDYaegiGo,
+		FullPath:    scriptPath,
+		WorkDir:     config.C.Data.ScriptsDir,
+		ScriptArgs:  []string{"--flag"},
+	}, config.C.Data.ScriptsDir, map[string]string{"A": "B"})
+	if err != nil {
+		t.Fatalf("build go runtime command: %v", err)
+	}
+	defer cleanup()
+	if cmd.Args[0] != yaegi {
+		t.Fatalf("expected runtime entrypoint %q, got %#v", yaegi, cmd.Args)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "go run") {
+		t.Fatalf("go runtime command must not use go run: %#v", cmd.Args)
+	}
+}
+
+func TestBuildCmdRejectsGoBuilderRuntimeExecution(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	nativeDir := filepath.Join(root, "native")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir native dir: %v", err)
+	}
+	builder := filepath.Join(nativeDir, "libgo_builder.so")
+	if err := os.WriteFile(builder, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write go builder runtime: %v", err)
+	}
+	restore := SetRuntimeLocatorForTest(NewManifestRuntimeLocator(nativeDir, RuntimeManifest{Components: []RuntimeManifestComponent{{ID: RuntimeIDGoBuilderAndroidARM, Entrypoint: "libgo_builder.so", Capabilities: []string{"build-export"}}}}))
+	defer restore()
+
+	scriptPath := filepath.Join(config.C.Data.ScriptsDir, "worker.go")
+	if err := os.WriteFile(scriptPath, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write go script: %v", err)
+	}
+
+	_, _, err := buildCmd(&CommandExecutionPlan{
+		Interpreter: RuntimeIDGoBuilderAndroidARM,
+		FullPath:    scriptPath,
+		WorkDir:     config.C.Data.ScriptsDir,
+	}, config.C.Data.ScriptsDir, nil)
+	if err == nil || !strings.Contains(err.Error(), "only supports build export") {
+		t.Fatalf("expected go builder export-only error, got %v", err)
+	}
 }
 
 func TestParseCommandExecutionPlanSupportsManagedDependencyCommands(t *testing.T) {

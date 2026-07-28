@@ -80,6 +80,8 @@ func recordTaskControlOperation(kind string, taskID uint, state string, exitCode
 	case model.OperationStateFailed:
 		code := exitCode
 		_ = service.DefaultOperationStore().Fail(operation.ID, &code, errorCode, 0)
+	case model.OperationStateCanceled:
+		_ = service.DefaultOperationStore().Cancel(operation.ID, errorCode, 0)
 	default:
 		_ = service.DefaultOperationStore().Unknown(operation.ID, errorCode, 0)
 	}
@@ -100,9 +102,15 @@ func (h *TaskHandler) Run(c *gin.Context) {
 		return
 	}
 
-	operationID := recordTaskControlOperation("task.run.request", uint(taskID), model.OperationStateSuccess, 0, "")
+	operationID, err := service.NewTaskRunOperation(uint(taskID))
+	if err != nil {
+		response.Error(c, http.StatusServiceUnavailable, "任务入队失败: "+err.Error())
+		return
+	}
 	if err := service.GetSchedulerV2().RunNow(uint(taskID)); err != nil {
-		recordTaskControlOperation("task.run.enqueue", uint(taskID), model.OperationStateFailed, 1, "enqueue_failed")
+		service.ClearTaskOperationForTask(uint(taskID), operationID)
+		code := 1
+		_ = service.DefaultOperationStore().Fail(operationID, &code, "enqueue_failed", 0)
 		response.Error(c, http.StatusServiceUnavailable, "任务入队失败: "+err.Error())
 		return
 	}
@@ -133,7 +141,10 @@ func (h *TaskHandler) Stop(c *gin.Context) {
 		service.MarkManualStop(uint(taskID))
 		service.KillProcessByPid(*task.PID)
 	}
-	recordTaskControlOperation("task.stop", uint(taskID), model.OperationStateUnknown, model.RunAborted, "aborted")
+	operationID := service.CancelTaskOperation(uint(taskID), "aborted")
+	if operationID == "" {
+		operationID = recordTaskControlOperation("task.stop", uint(taskID), model.OperationStateCanceled, model.RunAborted, "aborted")
+	}
 
 	inactiveStatus := service.ResolveTaskInactiveStatus(&task)
 	abortRunStatus := model.RunAborted
@@ -165,7 +176,7 @@ func (h *TaskHandler) Stop(c *gin.Context) {
 		})
 	}
 
-	response.Success(c, gin.H{"message": "任务已停止"})
+	response.Success(c, gin.H{"message": "任务已停止", "operation_id": operationID})
 }
 
 func (h *TaskHandler) Enable(c *gin.Context) {

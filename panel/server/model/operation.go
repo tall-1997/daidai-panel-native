@@ -19,6 +19,25 @@ const (
 	OperationStateCanceled = "canceled"
 )
 
+func IsOperationTerminalState(state string) bool {
+	switch state {
+	case OperationStateSuccess, OperationStateFailed, OperationStateAborted, OperationStateUnknown, OperationStateCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func OperationTerminalStates() []string {
+	return []string{
+		OperationStateSuccess,
+		OperationStateFailed,
+		OperationStateAborted,
+		OperationStateUnknown,
+		OperationStateCanceled,
+	}
+}
+
 type Operation struct {
 	ID        string     `gorm:"primaryKey;size:64" json:"id"`
 	Kind      string     `gorm:"size:32;index;not null" json:"kind"`

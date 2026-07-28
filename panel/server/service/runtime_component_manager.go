@@ -648,28 +648,7 @@ func allowRuntimePlaceholderHash() bool {
 }
 
 func (manager *RuntimeComponentManager) resolveEntrypointPath(entrypoint string) (string, error) {
-	baseDir := filepath.Clean(strings.TrimSpace(manager.nativeLibraryDir))
-	if baseDir == "" || baseDir == "." {
-		return "", errors.New("native library dir is empty")
-	}
-	entrypoint = strings.TrimSpace(entrypoint)
-	if entrypoint == "" {
-		return "", errors.New("entrypoint is empty")
-	}
-	cleaned := filepath.Clean(entrypoint)
-	if cleaned == "." || cleaned == string(filepath.Separator) || strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
-		return "", errors.New("entrypoint escapes native library dir")
-	}
-	resolved := filepath.Clean(filepath.Join(baseDir, cleaned))
-	relative, err := filepath.Rel(baseDir, resolved)
-	if err != nil {
-		return "", err
-	}
-	relative = filepath.Clean(relative)
-	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", errors.New("entrypoint escapes native library dir")
-	}
-	return resolved, nil
+	return resolveRuntimeEntrypointPath(manager.nativeLibraryDir, entrypoint)
 }
 
 func RuntimeBaselineHasSevereFailure(baseline RuntimeComponentBaseline) bool {

@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - v0.0.1
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -101,21 +101,22 @@ jobs:
       - name: Verify APK
         run: |
           test -s app/build/app/outputs/flutter-apk/app-release.apk
-          cp app/build/app/outputs/flutter-apk/app-release.apk daidai-panel-native-0.0.1-arm64.apk
-          sha256sum daidai-panel-native-0.0.1-arm64.apk > daidai-panel-native-0.0.1-arm64.apk.sha256
+          VERSION="${GITHUB_REF_NAME:-snapshot}"
+          cp app/build/app/outputs/flutter-apk/app-release.apk "daidai-panel-native-${VERSION}-arm64.apk"
+          sha256sum "daidai-panel-native-${VERSION}-arm64.apk" > "daidai-panel-native-${VERSION}-arm64.apk.sha256"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: daidai-panel-native-0.0.1-arm64
           path: |
-            daidai-panel-native-0.0.1-arm64.apk
-            daidai-panel-native-0.0.1-arm64.apk.sha256
+            daidai-panel-native-*-arm64.apk
+            daidai-panel-native-*-arm64.apk.sha256
           if-no-files-found: error
           retention-days: 14
 
   release:
-    if: github.ref == 'refs/tags/v0.0.1'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: verify-build
     runs-on: ubuntu-latest
     permissions:
@@ -131,19 +132,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          # 呆呆面板本机版 0.0.1
+          # 呆呆面板本机版 ${{ github.ref_name }}
 
-          - Android ARM64 技术预览版。
+          - Android ARM64 构建版。
           - App 内嵌 Go 面板 Core，使用动态回环端口。
           - 支持本地管理员初始化、认证和任务管理 API。
           - 使用安装级 token、严格 Host 与 Origin 校验。
           - 使用 Android `:panel` 专用进程隔离 Core 生命周期。
+          - 包含 Milestone 1-3 的 Core 恢复、运行时安全基线、执行 Operation、日志 cursor 与 SecretStore 改进。
 
-          当前版本为技术预览版。仓库未配置正式签名 Secret 时，APK 使用开发签名构建。
+          当前版本为阶段性构建。仓库未配置正式签名 Secret 时，APK 使用开发签名构建。
           EOF
-          gh release create v0.0.1 \
-            daidai-panel-native-0.0.1-arm64.apk \
-            daidai-panel-native-0.0.1-arm64.apk.sha256 \
+          VERSION="${GITHUB_REF_NAME}"
+          gh release create "${VERSION}" \
+            "daidai-panel-native-${VERSION}-arm64.apk" \
+            "daidai-panel-native-${VERSION}-arm64.apk.sha256" \
             --repo "${{ github.repository }}" \
-            --title "呆呆面板本机版 0.0.1" \
+            --title "呆呆面板本机版 ${VERSION}" \
             --notes-file release-notes.md

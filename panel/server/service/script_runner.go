@@ -95,7 +95,7 @@ var extInterpreterMap = map[string]string{
 	".mjs": "node",
 	".ts":  "ts-node",
 	".sh":  "bash",
-	".go":  "go",
+	".go":  RuntimeIDYaegiGo,
 }
 
 var desiInterpreterMap = map[string]string{
@@ -104,7 +104,7 @@ var desiInterpreterMap = map[string]string{
 	".py":  "python3",
 	".ts":  "ts-node",
 	".sh":  "bash",
-	".go":  "go",
+	".go":  RuntimeIDYaegiGo,
 }
 
 func ParseCommandExecutionPlan(command, scriptsDir string) (*CommandExecutionPlan, error) {
@@ -121,7 +121,7 @@ func ParseCommandExecutionPlan(command, scriptsDir string) (*CommandExecutionPla
 		return parseTaskCommandPlan(tokens[1:], scriptsDir, "")
 	case "desi":
 		return parseTaskCommandPlan(tokens[1:], scriptsDir, commandModeDesi)
-	case "python", "python3", "python3.10", "python3.11", "python3.12", "node", "ts-node", "bash", "go":
+	case "python", "python3", "python3.10", "python3.11", "python3.12", "node", "ts-node", "bash", "go", RuntimeIDYaegiGo:
 		return parseInterpreterCommandPlan(tokens[0], tokens[1:], scriptsDir)
 	default:
 		if isManagedExecutableName(tokens[0]) {
@@ -272,6 +272,9 @@ func parseInterpreterCommandPlan(interpreter string, tokens []string, scriptsDir
 	fullPath, pathTokenCount, err := findScriptTarget(tokens, scriptsDir)
 	if err != nil {
 		return nil, err
+	}
+	if interpreter == "go" {
+		interpreter = RuntimeIDYaegiGo
 	}
 
 	return &CommandExecutionPlan{
@@ -1103,7 +1106,37 @@ func buildCmd(plan *CommandExecutionPlan, workDir string, envVars map[string]str
 		_ = NormalizeShellScriptFile(plan.FullPath)
 	}
 
+	if isScriptRuntimeID(plan.Interpreter) {
+		return CreateScriptRuntimeCommand(plan.Interpreter, plan.FullPath, plan.ScriptArgs, workDir, envVars)
+	}
+
 	return CreateManagedCommand(plan.Interpreter, plan.FullPath, plan.ScriptArgs, workDir, envVars)
+}
+
+func isScriptRuntimeID(interpreter string) bool {
+	switch interpreter {
+	case RuntimeIDYaegiGo, RuntimeIDGoBuilderAndroidARM:
+		return true
+	default:
+		return false
+	}
+}
+
+func CreateScriptRuntimeCommand(runtimeID, scriptPath string, scriptArgs []string, workDir string, envVars map[string]string) (*exec.Cmd, func(), error) {
+	executable, err := RuntimeLocatorInstance().Resolve(runtimeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if runtimeID == RuntimeIDGoBuilderAndroidARM {
+		return nil, nil, fmt.Errorf("runtime %s only supports build export", runtimeID)
+	}
+
+	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
+	cmd := exec.Command(executable.Path, args...)
+	cmd.Dir = workDir
+	cmd.Env = buildBootstrapProcessEnv(envVars)
+	setPgid(cmd)
+	return cmd, func() {}, nil
 }
 
 func buildEnv(envVars map[string]string) []string {

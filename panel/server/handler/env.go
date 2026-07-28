@@ -250,7 +250,7 @@ func (h *EnvHandler) List(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(envs))
 	for i, e := range envs {
-		data[i] = service.OpenEnvVarForResponse(c.Request.Context(), &e)
+		data[i] = service.OpenEnvVarForResponse(&e)
 	}
 
 	if wantAll {
@@ -310,6 +310,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	results := []map[string]interface{}{}
 	errors := []string{}
 	createdCount := 0
+	sealFailed := false
 
 	for i, item := range items {
 		if item.Name == "" {
@@ -340,6 +341,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 			Position:  nextPos,
 		}
 		if err := service.SealEnvVarValue(c.Request.Context(), &env, item.Value); err != nil {
+			sealFailed = true
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
 			continue
 		}
@@ -348,7 +350,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
 			continue
 		}
-		results = append(results, service.OpenEnvVarForResponse(c.Request.Context(), &env))
+		results = append(results, service.OpenEnvVarForResponse(&env))
 		createdCount++
 	}
 
@@ -362,6 +364,10 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		"data":    results,
 		"errors":  errors,
 		"created": createdCount,
+	}
+	if sealFailed {
+		response.InternalError(c, "密封环境变量失败")
+		return
 	}
 	if createdCount > 0 {
 		response.Created(c, payload)
@@ -410,15 +416,23 @@ func (h *EnvHandler) Update(c *gin.Context) {
 			updates["name"] = newName
 		}
 	}
-	if req.Value != nil && *req.Value != service.OpenEnvVarValue(c.Request.Context(), &env) {
-		sealed := env
-		if err := service.SealEnvVarValue(c.Request.Context(), &sealed, *req.Value); err != nil {
-			response.InternalError(c, "密封环境变量失败")
-			return
+	if req.Value != nil {
+		shouldUpdateValue := true
+		if *req.Value == service.RedactedEnvSecretValue {
+			shouldUpdateValue = false
+		} else if !env.Secret && *req.Value == env.Value {
+			shouldUpdateValue = false
 		}
-		updates["value"] = sealed.Value
-		updates["secret"] = sealed.Secret
-		updates["sealed"] = sealed.Sealed
+		if shouldUpdateValue {
+			sealed := env
+			if err := service.SealEnvVarValue(c.Request.Context(), &sealed, *req.Value); err != nil {
+				response.InternalError(c, "密封环境变量失败")
+				return
+			}
+			updates["value"] = sealed.Value
+			updates["secret"] = sealed.Secret
+			updates["sealed"] = sealed.Sealed
+		}
 	}
 	if req.Remarks != nil && *req.Remarks != env.Remarks {
 		updates["remarks"] = *req.Remarks
@@ -442,7 +456,7 @@ func (h *EnvHandler) Update(c *gin.Context) {
 	// 因此 Update 不需要撞名检测。运行时按 name 分组，顺序由 position 决定。
 
 	if len(updates) == 0 {
-		response.Success(c, gin.H{"message": "未检测到字段变更", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
+		response.Success(c, gin.H{"message": "未检测到字段变更", "data": service.OpenEnvVarForResponse(&env)})
 		return
 	}
 
@@ -452,7 +466,7 @@ func (h *EnvHandler) Update(c *gin.Context) {
 	}
 
 	database.DB.First(&env, envID)
-	response.Success(c, gin.H{"message": "更新成功", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
+	response.Success(c, gin.H{"message": "更新成功", "data": service.OpenEnvVarForResponse(&env)})
 }
 
 func (h *EnvHandler) Delete(c *gin.Context) {
@@ -475,7 +489,7 @@ func (h *EnvHandler) Get(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
+	response.Success(c, gin.H{"data": service.OpenEnvVarForResponse(&env)})
 }
 
 func (h *EnvHandler) Enable(c *gin.Context) {
@@ -485,9 +499,12 @@ func (h *EnvHandler) Enable(c *gin.Context) {
 		response.NotFound(c, "环境变量不存在")
 		return
 	}
-	database.DB.Model(&env).Update("enabled", true)
+	if err := database.DB.Model(&env).Update("enabled", true).Error; err != nil {
+		response.InternalError(c, "启用失败")
+		return
+	}
 	env.Enabled = true
-	response.Success(c, gin.H{"message": "已启用", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
+	response.Success(c, gin.H{"message": "已启用", "data": service.OpenEnvVarForResponse(&env)})
 }
 
 func (h *EnvHandler) Disable(c *gin.Context) {
@@ -497,9 +514,12 @@ func (h *EnvHandler) Disable(c *gin.Context) {
 		response.NotFound(c, "环境变量不存在")
 		return
 	}
-	database.DB.Model(&env).Update("enabled", false)
+	if err := database.DB.Model(&env).Update("enabled", false).Error; err != nil {
+		response.InternalError(c, "禁用失败")
+		return
+	}
 	env.Enabled = false
-	response.Success(c, gin.H{"message": "已禁用", "data": service.OpenEnvVarForResponse(c.Request.Context(), &env)})
+	response.Success(c, gin.H{"message": "已禁用", "data": service.OpenEnvVarForResponse(&env)})
 }
 
 func (h *EnvHandler) BatchDelete(c *gin.Context) {
@@ -720,7 +740,11 @@ func (h *EnvHandler) Export(c *gin.Context) {
 
 	data := make(map[string]string)
 	for _, e := range envs {
-		data[e.Name] = service.OpenEnvVarValue(c.Request.Context(), &e)
+		if e.Secret {
+			data[e.Name] = service.RedactedEnvSecretValue
+		} else {
+			data[e.Name] = e.Value
+		}
 	}
 
 	response.Success(c, gin.H{"data": data})
@@ -732,9 +756,13 @@ func (h *EnvHandler) ExportAll(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(envs))
 	for i, e := range envs {
+		value := e.Value
+		if e.Secret {
+			value = service.RedactedEnvSecretValue
+		}
 		data[i] = map[string]interface{}{
 			"name":    e.Name,
-			"value":   service.OpenEnvVarValue(c.Request.Context(), &e),
+			"value":   value,
 			"secret":  e.Secret,
 			"remarks": e.Remarks,
 			"group":   e.Group,
@@ -767,7 +795,7 @@ func (h *EnvHandler) ExportFiles(c *gin.Context) {
 	var envs []model.EnvVar
 	query.Find(&envs)
 
-	grouped := groupEnvs(service.OpenEnvVarsForRuntime(c.Request.Context(), envs))
+	grouped := groupEnvs(redactEnvVarsForExport(envs))
 
 	result := make(map[string]string)
 	if req.Format == "shell" || req.Format == "all" {
@@ -793,6 +821,17 @@ func groupEnvs(envs []model.EnvVar) map[string]string {
 		result[name] = service.JoinTaskEnvValues(vals)
 	}
 	return result
+}
+
+func redactEnvVarsForExport(envs []model.EnvVar) []model.EnvVar {
+	redacted := make([]model.EnvVar, len(envs))
+	for i := range envs {
+		redacted[i] = envs[i]
+		if redacted[i].Secret {
+			redacted[i].Value = service.RedactedEnvSecretValue
+		}
+	}
+	return redacted
 }
 
 func exportShell(envs map[string]string) string {

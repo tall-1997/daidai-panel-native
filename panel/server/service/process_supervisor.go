@@ -1,14 +1,12 @@
 package service
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +17,8 @@ type ProcessResourceQuota struct {
 	MaxProcesses   int
 	MaxMemoryBytes int64
 }
+
+var ErrUnsupportedProcessQuota = errors.New("unsupported process quota")
 
 type ProcessSpec struct {
 	Argv        []string
@@ -74,6 +74,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, fmt.Errorf("process argv is empty")
 	}
+	if err := validateProcessQuota(spec.Quota); err != nil {
+		return nil, err
+	}
 	workDir, err := validateProcessWorkingDir(spec.WorkingDir, spec.AllowedRoot)
 	if err != nil {
 		return nil, err
@@ -93,21 +96,6 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 	cmd.Env = filterProcessEnv(spec.Env)
 	setPgid(cmd)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return nil, err
-	}
-
 	proc := &defaultSupervisedProcess{
 		cmd:     cmd,
 		ctx:     ctx,
@@ -115,9 +103,12 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 		onEvent: onEvent,
 		quota:   spec.Quota,
 	}
-	proc.readWG.Add(2)
-	go proc.collect("stdout", stdout)
-	go proc.collect("stderr", stderr)
+	cmd.Stdout = processEventWriter{process: proc, stream: "stdout"}
+	cmd.Stderr = processEventWriter{process: proc, stream: "stderr"}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
 	go func() {
 		<-ctx.Done()
 		if ctx.Err() != nil {
@@ -133,7 +124,6 @@ type defaultSupervisedProcess struct {
 	cancel    context.CancelFunc
 	onEvent   func(ProcessEvent)
 	quota     ProcessResourceQuota
-	readWG    sync.WaitGroup
 	outputMu  sync.Mutex
 	output    strings.Builder
 	collected int64
@@ -150,7 +140,6 @@ func (p *defaultSupervisedProcess) PID() int {
 
 func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
 	err := p.cmd.Wait()
-	p.readWG.Wait()
 	p.cancel()
 	exitCode := 0
 	if err != nil {
@@ -181,18 +170,17 @@ func (p *defaultSupervisedProcess) Cancel() error {
 	return nil
 }
 
-func (p *defaultSupervisedProcess) collect(stream string, reader io.Reader) {
-	defer p.readWG.Done()
-	buf := bufio.NewReaderSize(reader, 256*1024)
-	for {
-		chunk, err := buf.ReadBytes('\n')
-		if len(chunk) > 0 {
-			p.emit(stream, chunk)
-		}
-		if err != nil {
-			return
-		}
+type processEventWriter struct {
+	process *defaultSupervisedProcess
+	stream  string
+}
+
+func (writer processEventWriter) Write(payload []byte) (int, error) {
+	if len(payload) == 0 {
+		return 0, nil
 	}
+	writer.process.emit(writer.stream, payload)
+	return len(payload), nil
 }
 
 func (p *defaultSupervisedProcess) emit(stream string, chunk []byte) {
@@ -212,6 +200,16 @@ func (p *defaultSupervisedProcess) emit(stream string, chunk []byte) {
 	}
 }
 
+func validateProcessQuota(quota ProcessResourceQuota) error {
+	if quota.MaxProcesses > 0 {
+		return fmt.Errorf("%w: MaxProcesses", ErrUnsupportedProcessQuota)
+	}
+	if quota.MaxMemoryBytes > 0 {
+		return fmt.Errorf("%w: MaxMemoryBytes", ErrUnsupportedProcessQuota)
+	}
+	return nil
+}
+
 func validateProcessWorkingDir(workDir, allowedRoot string) (string, error) {
 	if strings.TrimSpace(workDir) == "" {
 		workDir = "."
@@ -220,27 +218,54 @@ func validateProcessWorkingDir(workDir, allowedRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	realWork, err := filepath.EvalSymlinks(absWork)
+	if err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(allowedRoot) == "" {
-		return absWork, nil
+		return realWork, nil
 	}
 	absRoot, err := filepath.Abs(allowedRoot)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(absRoot, absWork)
+	realRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRoot, realWork)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("working directory is outside allowed root")
 	}
-	return absWork, nil
+	return realWork, nil
 }
 
 func filterProcessEnv(env []string) []string {
-	blocked := map[string]bool{
-		"LD_PRELOAD":            true,
-		"DYLD_INSERT_LIBRARIES": true,
+	if len(env) == 0 {
+		env = os.Environ()
 	}
-	if runtime.GOOS == "android" {
-		blocked["LD_LIBRARY_PATH"] = true
+	blocked := map[string]bool{
+		"BASH_ENV":                   true,
+		"DYLD_FALLBACK_LIBRARY_PATH": true,
+		"DYLD_FRAMEWORK_PATH":        true,
+		"DYLD_INSERT_LIBRARIES":      true,
+		"DYLD_LIBRARY_PATH":          true,
+		"ENV":                        true,
+		"GCONV_PATH":                 true,
+		"IFS":                        true,
+		"JAVA_TOOL_OPTIONS":          true,
+		"LD_AUDIT":                   true,
+		"LD_DEBUG":                   true,
+		"LD_LIBRARY_PATH":            true,
+		"LD_ORIGIN_PATH":             true,
+		"LD_PRELOAD":                 true,
+		"NODE_OPTIONS":               true,
+		"PERL5LIB":                   true,
+		"PYTHONHOME":                 true,
+		"PYTHONPATH":                 true,
+		"RUBYOPT":                    true,
+		"SHELLOPTS":                  true,
+		"_JAVA_OPTIONS":              true,
 	}
 	result := make([]string, 0, len(env))
 	for _, entry := range env {
@@ -249,7 +274,7 @@ func filterProcessEnv(env []string) []string {
 			continue
 		}
 		key := entry[:idx]
-		if blocked[key] {
+		if blocked[strings.ToUpper(key)] {
 			continue
 		}
 		result = append(result, entry)

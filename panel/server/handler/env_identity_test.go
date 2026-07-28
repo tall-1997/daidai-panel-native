@@ -10,14 +10,24 @@ import (
 
 	"daidai-panel/database"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 )
+
+func setupEnvRuntimeTest(t *testing.T) string {
+	t.Helper()
+	root := testutil.SetupTestEnv(t)
+	if err := service.InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
+	return root
+}
 
 // TestCreateUpsertsOnNameAndRemarks was previously the upsert契约；青龙化后
 // POST /envs 不再按 (name, remarks) 覆盖旧行，而是纯 insert。两次 POST 同
 // (name, remarks) 应当产生两行，每行独立 id，value 互不干扰 —— 多账号场景。
 func TestCreateUpsertsOnNameAndRemarks(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-upsert-operator", "operator")
@@ -53,8 +63,8 @@ func TestCreateUpsertsOnNameAndRemarks(t *testing.T) {
 	if secondID == firstID {
 		t.Fatalf("expected distinct id for second insert, got firstID=%d == secondID=%d", firstID, secondID)
 	}
-	if got, _ := secondData["value"].(string); got != "456" {
-		t.Fatalf("expected second row value=456, got %q", got)
+	if got, _ := secondData["value"].(string); got != service.RedactedEnvSecretValue {
+		t.Fatalf("expected second row value redacted, got %q", got)
 	}
 
 	var rowCount int64
@@ -67,7 +77,7 @@ func TestCreateUpsertsOnNameAndRemarks(t *testing.T) {
 // TestCreateInsertsWhenRemarksDiffer makes sure different remarks for the
 // same name still create separate rows (multi-account scenario).
 func TestCreateInsertsWhenRemarksDiffer(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-multi-operator", "operator")
@@ -95,7 +105,7 @@ func TestCreateInsertsWhenRemarksDiffer(t *testing.T) {
 // TestCreateUpsertsWithEmptyRemarks 验证空 remarks 也走纯 insert 分支：
 // 两次 POST 同 name + 空 remarks 应当产生两行，而不是覆盖。
 func TestCreateUpsertsWithEmptyRemarks(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-empty-operator", "operator")
@@ -126,7 +136,7 @@ func TestCreateUpsertsWithEmptyRemarks(t *testing.T) {
 // now flows through the generic PUT endpoint instead of needing a separate
 // /enable or /disable call.
 func TestUpdateAcceptsEnabledAndValueInSingleRequest(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-update-operator", "operator")
@@ -148,8 +158,11 @@ func TestUpdateAcceptsEnabledAndValueInSingleRequest(t *testing.T) {
 	if err := database.DB.First(&reloaded, env.ID).Error; err != nil {
 		t.Fatalf("reload env: %v", err)
 	}
-	if reloaded.Value != "off" {
-		t.Fatalf("expected value off, got %q", reloaded.Value)
+	if reloaded.Value != "" || !reloaded.Secret || reloaded.Sealed == "" {
+		t.Fatalf("expected value to be sealed after update, got %+v", reloaded)
+	}
+	if got := service.OpenEnvVarValue(nil, &reloaded); got != "off" {
+		t.Fatalf("expected decrypted value off, got %q", got)
 	}
 	if reloaded.Enabled {
 		t.Fatalf("expected enabled=false, got true")
@@ -163,7 +176,7 @@ func TestUpdateAcceptsEnabledAndValueInSingleRequest(t *testing.T) {
 // 不再是唯一键，把一条 row 的 name/remarks 改到和另一条相同应当正常 200 OK，
 // 原行被实际更新。多账号场景下允许两条都是 "KEEPER/stable"。
 func TestUpdateRejectsIdentityCollision(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-collision-operator", "operator")
@@ -204,7 +217,7 @@ func TestUpdateRejectsIdentityCollision(t *testing.T) {
 // TestUpdateSkipsDatabaseWriteWhenNoChange asserts the change-detection short
 // circuit: unchanged payloads must not bump updated_at.
 func TestUpdateSkipsDatabaseWriteWhenNoChange(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-noop-operator", "operator")
@@ -241,7 +254,7 @@ func TestUpdateSkipsDatabaseWriteWhenNoChange(t *testing.T) {
 // matching on (name, value) — where a refreshed value forked a duplicate — to
 // matching on (name, remarks), so imports cleanly overwrite the value.
 func TestImportMergeMatchesOnNameAndRemarks(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	setupEnvRuntimeTest(t)
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-import-operator", "operator")
@@ -279,8 +292,11 @@ func TestImportMergeMatchesOnNameAndRemarks(t *testing.T) {
 	if err := database.DB.First(&reloaded, existing.ID).Error; err != nil {
 		t.Fatalf("reload existing: %v", err)
 	}
-	if reloaded.Value != "new" {
-		t.Fatalf("expected merged value new, got %q", reloaded.Value)
+	if reloaded.Value != "" || !reloaded.Secret || reloaded.Sealed == "" {
+		t.Fatalf("expected merged value sealed, got %+v", reloaded)
+	}
+	if got := service.OpenEnvVarValue(nil, &reloaded); got != "new" {
+		t.Fatalf("expected decrypted merged value new, got %q", got)
 	}
 	if !reloaded.Enabled {
 		t.Fatalf("expected enabled flipped to true on merge, got false")

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,11 @@ import (
 )
 
 type OperationStore struct{}
+
+var (
+	ErrOperationNotFound = errors.New("operation not found")
+	ErrOperationTerminal = errors.New("operation is already terminal")
+)
 
 type OperationCreateOptions struct {
 	ID       string
@@ -55,11 +61,11 @@ func (s *OperationStore) Create(opts OperationCreateOptions) (*model.Operation, 
 
 func (s *OperationStore) Start(id, phase string) error {
 	now := time.Now()
-	return s.update(id, map[string]interface{}{
+	return s.updateNonTerminal(id, map[string]interface{}{
 		"state":      model.OperationStateRunning,
 		"phase":      strings.TrimSpace(phase),
 		"started_at": now,
-	})
+	}, false)
 }
 
 func (s *OperationStore) Progress(id, phase string, progress float64, logCursor int64) error {
@@ -70,7 +76,7 @@ func (s *OperationStore) Progress(id, phase string, progress float64, logCursor 
 	if logCursor >= 0 {
 		updates["log_cursor"] = logCursor
 	}
-	return s.update(id, updates)
+	return s.updateNonTerminal(id, updates, true)
 }
 
 func (s *OperationStore) Finish(id string, exitCode int, logCursor int64) error {
@@ -86,7 +92,7 @@ func (s *OperationStore) Finish(id string, exitCode int, logCursor int64) error 
 	if logCursor >= 0 {
 		updates["log_cursor"] = logCursor
 	}
-	return s.update(id, updates)
+	return s.updateNonTerminal(id, updates, false)
 }
 
 func (s *OperationStore) Fail(id string, exitCode *int, errorCode string, logCursor int64) error {
@@ -104,7 +110,7 @@ func (s *OperationStore) Fail(id string, exitCode *int, errorCode string, logCur
 	if logCursor >= 0 {
 		updates["log_cursor"] = logCursor
 	}
-	return s.update(id, updates)
+	return s.updateNonTerminal(id, updates, false)
 }
 
 func (s *OperationStore) Unknown(id, errorCode string, logCursor int64) error {
@@ -119,7 +125,22 @@ func (s *OperationStore) Unknown(id, errorCode string, logCursor int64) error {
 	if logCursor >= 0 {
 		updates["log_cursor"] = logCursor
 	}
-	return s.update(id, updates)
+	return s.updateNonTerminal(id, updates, false)
+}
+
+func (s *OperationStore) Cancel(id, errorCode string, logCursor int64) error {
+	now := time.Now()
+	updates := map[string]interface{}{
+		"state":      model.OperationStateCanceled,
+		"phase":      "canceled",
+		"progress":   100.0,
+		"error_code": strings.TrimSpace(errorCode),
+		"ended_at":   now,
+	}
+	if logCursor >= 0 {
+		updates["log_cursor"] = logCursor
+	}
+	return s.updateNonTerminal(id, updates, false)
 }
 
 func (s *OperationStore) List(kind, state string, limit int) ([]model.Operation, error) {
@@ -152,11 +173,31 @@ func (s *OperationStore) Get(id string) (*model.Operation, error) {
 	return &operation, nil
 }
 
-func (s *OperationStore) update(id string, updates map[string]interface{}) error {
+func (s *OperationStore) updateNonTerminal(id string, updates map[string]interface{}, ignoreTerminal bool) error {
 	if database.DB == nil {
 		return fmt.Errorf("database is not initialized")
 	}
-	return database.DB.Model(&model.Operation{}).Where("id = ?", strings.TrimSpace(id)).Updates(updates).Error
+	trimmedID := strings.TrimSpace(id)
+	result := database.DB.Model(&model.Operation{}).
+		Where("id = ? AND state NOT IN ?", trimmedID, model.OperationTerminalStates()).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	var current model.Operation
+	if err := database.DB.Select("state").First(&current, "id = ?", trimmedID).Error; err != nil {
+		return ErrOperationNotFound
+	}
+	if !model.IsOperationTerminalState(current.State) {
+		return nil
+	}
+	if ignoreTerminal && model.IsOperationTerminalState(current.State) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrOperationTerminal, current.State)
 }
 
 func clampOperationProgress(progress float64) float64 {

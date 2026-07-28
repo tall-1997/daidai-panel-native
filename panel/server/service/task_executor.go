@@ -27,6 +27,17 @@ type TaskExecutor struct {
 	runWG            sync.WaitGroup
 }
 
+type taskOperationRegistry struct {
+	mu      sync.Mutex
+	pending map[uint][]string
+	current map[uint]string
+}
+
+var taskOperations = taskOperationRegistry{
+	pending: make(map[uint][]string),
+	current: make(map[uint]string),
+}
+
 func NewTaskExecutor() *TaskExecutor {
 	return &TaskExecutor{
 		scriptsDir:       config.C.Data.ScriptsDir,
@@ -35,21 +46,129 @@ func NewTaskExecutor() *TaskExecutor {
 	}
 }
 
+func NewTaskRunOperation(taskID uint) (string, error) {
+	operation, err := DefaultOperationStore().Create(OperationCreateOptions{
+		ID:       fmt.Sprintf("task_%d_%d", taskID, time.Now().UnixNano()),
+		Kind:     model.OperationKindTask,
+		Phase:    "queued",
+		Progress: 0,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	taskOperations.mu.Lock()
+	taskOperations.pending[taskID] = append(taskOperations.pending[taskID], operation.ID)
+	taskOperations.mu.Unlock()
+	return operation.ID, nil
+}
+
+func ClaimTaskRunOperation(taskID uint) string {
+	taskOperations.mu.Lock()
+	defer taskOperations.mu.Unlock()
+
+	pending := taskOperations.pending[taskID]
+	if len(pending) > 0 {
+		operationID := pending[0]
+		if len(pending) == 1 {
+			delete(taskOperations.pending, taskID)
+		} else {
+			taskOperations.pending[taskID] = pending[1:]
+		}
+		taskOperations.current[taskID] = operationID
+		return operationID
+	}
+	return ""
+}
+
+func setCurrentTaskOperation(taskID uint, operationID string) {
+	if operationID == "" {
+		return
+	}
+	taskOperations.mu.Lock()
+	taskOperations.current[taskID] = operationID
+	taskOperations.mu.Unlock()
+}
+
+func clearTaskOperation(taskID uint, operationID string) {
+	taskOperations.mu.Lock()
+	pending := taskOperations.pending[taskID]
+	for i, id := range pending {
+		if id != operationID {
+			continue
+		}
+		pending = append(pending[:i], pending[i+1:]...)
+		if len(pending) == 0 {
+			delete(taskOperations.pending, taskID)
+		} else {
+			taskOperations.pending[taskID] = pending
+		}
+		break
+	}
+	if taskOperations.current[taskID] == operationID {
+		delete(taskOperations.current, taskID)
+	}
+	taskOperations.mu.Unlock()
+}
+
+func ClearTaskOperationForTask(taskID uint, operationID string) {
+	clearTaskOperation(taskID, operationID)
+}
+
+func CurrentTaskOperationID(taskID uint) string {
+	taskOperations.mu.Lock()
+	defer taskOperations.mu.Unlock()
+
+	if operationID := taskOperations.current[taskID]; operationID != "" {
+		return operationID
+	}
+	if pending := taskOperations.pending[taskID]; len(pending) > 0 {
+		return pending[0]
+	}
+	return ""
+}
+
+func CancelTaskOperation(taskID uint, errorCode string) string {
+	operationID := CurrentTaskOperationID(taskID)
+	if operationID == "" {
+		return ""
+	}
+	_ = DefaultOperationStore().Cancel(operationID, errorCode, CurrentTaskLogCursor(taskID))
+	return operationID
+}
+
+func CurrentTaskLogCursor(taskID uint) int64 {
+	if database.DB == nil || taskID == 0 {
+		return 0
+	}
+	var runningLog model.TaskLog
+	if err := database.DB.Select("log_cursor").Where("task_id = ? AND status = ?", taskID, model.LogStatusRunning).
+		Order("started_at DESC").First(&runningLog).Error; err != nil {
+		return 0
+	}
+	return runningLog.LogCursor
+}
+
 func (e *TaskExecutor) OnTaskScheduled(req *ExecutionRequest) {
 	log.Printf("task %d scheduled: %s", req.TaskID, req.Task.Name)
 }
 
 func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	task := req.Task
-	operation, err := DefaultOperationStore().Create(OperationCreateOptions{
-		ID:       fmt.Sprintf("task_%d_%d", task.ID, time.Now().UnixNano()),
-		Kind:     model.OperationKindTask,
-		Phase:    "queued",
-		Progress: 0,
-	})
-	if err == nil {
-		req.OperationID = operation.ID
-		_ = DefaultOperationStore().Start(operation.ID, "starting")
+	operationID := strings.TrimSpace(req.OperationID)
+	if operationID == "" {
+		operationID = ClaimTaskRunOperation(task.ID)
+	}
+	if operationID == "" {
+		operationID, _ = NewTaskRunOperation(task.ID)
+		if operationID != "" {
+			ClaimTaskRunOperation(task.ID)
+		}
+	}
+	if operationID != "" {
+		req.OperationID = operationID
+		setCurrentTaskOperation(task.ID, operationID)
+		_ = DefaultOperationStore().Start(operationID, "starting")
 	}
 
 	if task.DependsOn != nil {
@@ -158,6 +277,7 @@ func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
 	if req.OperationID != "" {
 		code := 1
 		_ = DefaultOperationStore().Fail(req.OperationID, &code, "execution_failed", 0)
+		clearTaskOperation(req.TaskID, req.OperationID)
 	}
 }
 
@@ -347,11 +467,12 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			} else {
 				code := exitCode
 				if finalAborted {
-					_ = DefaultOperationStore().Unknown(req.OperationID, "aborted", logCursor)
+					_ = DefaultOperationStore().Cancel(req.OperationID, "aborted", logCursor)
 				} else {
 					_ = DefaultOperationStore().Fail(req.OperationID, &code, "exit_code", logCursor)
 				}
 			}
+			clearTaskOperation(req.TaskID, req.OperationID)
 		}
 		e.OnTaskCompleted(req, result)
 

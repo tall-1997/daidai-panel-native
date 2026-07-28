@@ -55,7 +55,7 @@ func (h *TaskHandler) Batch(c *gin.Context) {
 			}
 		case "stop":
 			if task.Status == model.TaskStatusRunning {
-				recordTaskControlOperation("task.batch.stop", id, model.OperationStateUnknown, model.RunAborted, "aborted")
+				recordTaskControlOperation("task.batch.stop", id, model.OperationStateCanceled, model.RunAborted, "aborted")
 				if executor := service.GetTaskExecutor(); executor != nil {
 					executor.StopTask(id)
 				}

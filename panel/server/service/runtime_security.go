@@ -335,6 +335,16 @@ func RuntimeSecretStoreInstance() SecretStore {
 	return runtimeSecretStore
 }
 
+func SetRuntimeSecretStoreForTest(store SecretStore) func() {
+	previous := runtimeSecretStore
+	if store == nil {
+		runtimeSecretStore = &LocalSecretStore{provider: "local-aes-gcm", version: "v1", transport: "in-process"}
+	} else {
+		runtimeSecretStore = store
+	}
+	return func() { runtimeSecretStore = previous }
+}
+
 func RuntimeTrustAuthorizer() TrustAuthorizer {
 	return trustAuthorizer
 }

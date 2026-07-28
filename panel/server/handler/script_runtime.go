@@ -23,7 +23,7 @@ var scriptInterpreterMap = map[string][]string{
 	".mjs": {"node"},
 	".ts":  {"npx", "ts-node"},
 	".sh":  {"bash"},
-	".go":  {"go", "run"},
+	".go":  {service.RuntimeIDYaegiGo},
 }
 
 var scriptLanguageExtMap = map[string]string{
@@ -216,7 +216,7 @@ func scriptRuntimeInterpreter(ext string) (string, error) {
 	case ".sh":
 		return "bash", nil
 	case ".go":
-		return "go", nil
+		return service.RuntimeIDYaegiGo, nil
 	default:
 		return "", fmt.Errorf("不支持执行此文件类型")
 	}
@@ -231,6 +231,9 @@ func buildScriptExecEnv(workDir string) map[string]string {
 }
 
 func newScriptCommand(interpreter string, target string, scriptArgs []string, workDir string, envMap map[string]string) (*exec.Cmd, func(), error) {
+	if interpreter == service.RuntimeIDYaegiGo || interpreter == service.RuntimeIDGoBuilderAndroidARM {
+		return service.CreateScriptRuntimeCommand(interpreter, target, scriptArgs, workDir, envMap)
+	}
 	return service.CreateManagedCommand(interpreter, target, scriptArgs, workDir, envMap)
 }
 

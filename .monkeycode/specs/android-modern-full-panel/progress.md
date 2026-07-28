@@ -6,7 +6,7 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 3 implementation is complete on `main`. Persistent operations, process supervision, task execution lifecycle wiring, reconnectable log cursors, SecretStore-backed environment values, and script runtime execution wiring are implemented and validated with the unified Milestone 3 test suite.
+Milestone 3 implementation tasks are complete on `main`. Current target is Milestone 3 review remediation: persistent operations, process supervision, task execution lifecycle wiring, reconnectable log cursors, SecretStore-backed environment values, and script runtime execution wiring are implemented, while final Milestone 3 completion remains pending until review findings are fixed and the exit gate is re-verified.
 
 ## Completed Work
 
@@ -155,8 +155,9 @@ Milestone 3 implementation is complete on `main`. Persistent operations, process
 
 ## Next Actions
 
-1. Implement Task 1.4 worker lifecycle.
-2. Run the Milestone 1 exit gate, push all Milestone 1 commits to `main` as `tall-1997`, and wait for CI before starting Milestone 2.
+1. Fix Milestone 3 review findings on `main`.
+2. Re-run the Milestone 3 exit gate after the review fixes are complete.
+3. Update task status and progress evidence after the re-verification passes.
 
 ## Remaining Milestones
 
@@ -179,6 +180,8 @@ Milestone 3 implementation is complete on `main`. Persistent operations, process
 - Runtime ELF verification script now defaults to strict digest mode and supports opt-out via `--strict=false`.
 
 ### Milestone 3
+
+- Controller status: review remediation in progress; tasks 3.1-3.5 are implementation-complete, with final milestone completion pending review-fix verification.
 
 - Task 3.1 complete: added persistent `Operation` model/table, `OperationStore` service methods, and migration registration.
 - Task 3.2 complete: added structured `ProcessSupervisor` with argv, env filtering, working-root validation, stdout/stderr streaming, timeout, cancellation, process-group cleanup, and quota fields.

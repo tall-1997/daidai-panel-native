@@ -219,6 +219,8 @@ Implement Android Keystore envelope encryption and source/version/SHA-256/capabi
 
 ## Milestone 3: Execution, Logs, Environment, and Scripts
 
+**Milestone Status:** Review remediation in progress. Implementation tasks 3.1-3.5 are complete; final Milestone 3 completion remains pending until review findings are fixed and the exit gate is re-verified.
+
 ### Task 3.1: Persistent Operation Store
 
 **Status:** Complete (persistent Operation model, OperationStore lifecycle API, and appboot/test migrations)
@@ -245,7 +247,7 @@ Enable log list/detail/files, persistent cursors, reconnectable SSE, retention p
 
 ### Task 3.5: Environment and Script APIs
 
-**Status:** Complete (Env values pass through SecretStore and script debug/run-code/stop use ProcessSupervisor/Operation wiring)
+**Status:** Complete (Env values pass through SecretStore and script debug/run-code/stop use ProcessSupervisor/Operation wiring; final controller status updated for Milestone 3 review remediation)
 
 Enable Env CRUD/import/export with Secret Store. Enable script tree, upload, save, versions, formatting, debug, run-code, stop, and cleanup using Runtime Locator.
 
