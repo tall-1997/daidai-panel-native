@@ -74,3 +74,71 @@ func TestPullGitRepoWithCallbackConvertsExistingNonGitDirectoryInPlace(t *testin
 		t.Fatalf("expected old file to be cleaned, got err=%v", err)
 	}
 }
+
+func TestPullGitRepoWithCallbackReplacesExistingRepoAtomically(t *testing.T) {
+	root := testutil.SetupTestEnv(t)
+	remoteDir := filepath.Join(root, "remote.git")
+	worktreeDir := filepath.Join(root, "worktree")
+
+	runGit(t, root, "init", "--bare", remoteDir)
+	runGit(t, root, "clone", remoteDir, worktreeDir)
+
+	if err := os.WriteFile(filepath.Join(worktreeDir, "repo.js"), []byte("console.log('v1')\n"), 0o644); err != nil {
+		t.Fatalf("write repo file: %v", err)
+	}
+	runGit(t, worktreeDir, "add", "repo.js")
+	runGit(t, worktreeDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, worktreeDir, "push", "origin", "HEAD:main")
+
+	sub := &model.Subscription{
+		Name:    "atomic-sub",
+		Type:    model.SubTypeGitRepo,
+		URL:     remoteDir,
+		Branch:  "main",
+		SaveDir: "atomic-repo",
+	}
+	authCfg, err := buildGitAuthConfig(os.Environ(), sub.URL, sub, "")
+	if err != nil {
+		t.Fatalf("build git auth config: %v", err)
+	}
+	output, err := pullGitRepoWithCallback(context.Background(), sub, authCfg, func(string) {})
+	if err != nil {
+		t.Fatalf("initial pull failed: %v\n%s", err, output)
+	}
+
+	destDir := filepath.Join(config.C.Data.ScriptsDir, sub.SaveDir)
+	if err := os.WriteFile(filepath.Join(destDir, "local-only.js"), []byte("local"), 0o644); err != nil {
+		t.Fatalf("write local-only file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeDir, "repo.js"), []byte("console.log('v2')\n"), 0o644); err != nil {
+		t.Fatalf("write updated repo file: %v", err)
+	}
+	runGit(t, worktreeDir, "add", "repo.js")
+	runGit(t, worktreeDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "update")
+	runGit(t, worktreeDir, "push", "origin", "HEAD:main")
+
+	authCfg, err = buildGitAuthConfig(os.Environ(), sub.URL, sub, "")
+	if err != nil {
+		t.Fatalf("build git auth config for update: %v", err)
+	}
+	var lines []string
+	output, err = pullGitRepoWithCallback(context.Background(), sub, authCfg, func(line string) {
+		lines = append(lines, line)
+	})
+	if err != nil {
+		t.Fatalf("atomic update failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "原子切换") {
+		t.Fatalf("expected atomic switch log, got lines=%v output:\n%s", lines, output)
+	}
+	content, err := os.ReadFile(filepath.Join(destDir, "repo.js"))
+	if err != nil {
+		t.Fatalf("read updated repo file: %v", err)
+	}
+	if strings.ReplaceAll(string(content), "\r\n", "\n") != "console.log('v2')\n" {
+		t.Fatalf("expected updated repo content, got %q", string(content))
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "local-only.js")); !os.IsNotExist(err) {
+		t.Fatalf("expected atomic replacement to drop old local-only file, stat err=%v", err)
+	}
+}

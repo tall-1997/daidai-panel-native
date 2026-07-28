@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +20,10 @@ type gitAuthConfig struct {
 }
 
 func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscription, sshKeyPath string) (gitAuthConfig, error) {
+	return buildGitAuthConfigWithContext(context.Background(), baseEnv, remoteURL, sub, sshKeyPath)
+}
+
+func buildGitAuthConfigWithContext(ctx context.Context, baseEnv []string, remoteURL string, sub *model.Subscription, sshKeyPath string) (gitAuthConfig, error) {
 	env := ApplyGitSSHRuntimePolicy(AppendProxyEnv(baseEnv))
 	cleanup := func() {}
 	remoteURL = strings.TrimSpace(remoteURL)
@@ -26,6 +31,9 @@ func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscript
 	authType := ""
 	if sub != nil {
 		authType = sub.EffectiveAuthType()
+		if caPath := strings.TrimSpace(sub.CACertPath); caPath != "" {
+			env = appendOrReplaceEnv(env, "GIT_SSL_CAINFO", caPath)
+		}
 	}
 
 	switch authType {
@@ -34,6 +42,9 @@ func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscript
 		if sshKeyPath == "" {
 			return gitAuthConfig{}, fmt.Errorf("已配置 SSH 鉴权，但未找到可用 SSH 密钥")
 		}
+		if err := validateGitSSHKeyPath(sshKeyPath); err != nil {
+			return gitAuthConfig{}, err
+		}
 
 		knownHostsPath, err := ensureGitKnownHostsFile()
 		if err != nil {
@@ -41,13 +52,17 @@ func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscript
 		}
 		env = append(env, "GIT_SSH_COMMAND="+buildGitSSHCommand(sshKeyPath, knownHostsPath))
 	case model.SubAuthTypeToken:
-		if sub == nil || strings.TrimSpace(sub.AuthToken) == "" {
+		token, err := openSubscriptionGitToken(ctx, sub)
+		if err != nil {
+			return gitAuthConfig{}, err
+		}
+		if strings.TrimSpace(token) == "" {
 			return gitAuthConfig{}, fmt.Errorf("已配置 Token 鉴权，但访问令牌为空")
 		}
 		if !isHTTPGitRemoteURL(remoteURL) {
 			return gitAuthConfig{}, fmt.Errorf("Token 鉴权仅支持 HTTP/HTTPS 仓库地址，请改用 HTTPS 地址")
 		}
-		embedded, err := injectGitTokenIntoURL(remoteURL, sub.AuthUsername, sub.AuthToken)
+		embedded, err := injectGitTokenIntoURL(remoteURL, sub.AuthUsername, token)
 		if err != nil {
 			return gitAuthConfig{}, err
 		}
@@ -60,6 +75,51 @@ func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscript
 		DisplayURL:  displayURL,
 		CleanupFunc: cleanup,
 	}, nil
+}
+
+func validateGitSSHKeyPath(sshKeyPath string) error {
+	if strings.Contains(sshKeyPath, "BEGIN ") && strings.Contains(sshKeyPath, "PRIVATE KEY") {
+		return fmt.Errorf("SSH 密钥参数必须是私钥文件路径，不能直接传入私钥内容")
+	}
+	info, err := os.Stat(sshKeyPath)
+	if err != nil {
+		return fmt.Errorf("读取 SSH 密钥文件失败: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("SSH 密钥路径指向目录: %s", sshKeyPath)
+	}
+	return nil
+}
+
+func openSubscriptionGitToken(ctx context.Context, sub *model.Subscription) (string, error) {
+	if sub == nil {
+		return "", nil
+	}
+	if sub.HasAuthTokenSecret() {
+		opened, err := RuntimeSecretStoreInstance().Open(ctx, fmt.Sprintf("subscription:%d:git-token", sub.ID), SealedValue{
+			Provider: sub.AuthTokenSecretProvider,
+			Cipher:   append([]byte{}, sub.AuthTokenSecretCipher...),
+		})
+		if err != nil {
+			return "", fmt.Errorf("打开 Git Token SecretStore 凭据失败: %w", err)
+		}
+		return string(opened), nil
+	}
+	return sub.AuthToken, nil
+}
+
+func writeSubscriptionSSHKeySecret(ctx context.Context, sub *model.Subscription) (string, error) {
+	if sub == nil || !sub.HasSSHKeySecret() {
+		return "", nil
+	}
+	opened, err := RuntimeSecretStoreInstance().Open(ctx, fmt.Sprintf("subscription:%d:ssh-key", sub.ID), SealedValue{
+		Provider: sub.SSHKeySecretProvider,
+		Cipher:   append([]byte{}, sub.SSHKeySecretCipher...),
+	})
+	if err != nil {
+		return "", fmt.Errorf("打开 Git SSH Key SecretStore 凭据失败: %w", err)
+	}
+	return writeTempSSHKey(string(opened))
 }
 
 func ensureGitKnownHostsFile() (string, error) {
@@ -86,7 +146,7 @@ func ensureGitKnownHostsFile() (string, error) {
 
 func buildGitSSHCommand(sshKeyPath, knownHostsPath string) string {
 	return fmt.Sprintf(
-		"ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s",
+		"ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s -o GlobalKnownHostsFile=/dev/null",
 		shellEscapeSSHArg(sshKeyPath),
 		shellEscapeSSHArg(knownHostsPath),
 	)

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,23 @@ import (
 	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
+
+type gitAuthTestSecretStore struct {
+	openedKeys []string
+}
+
+func (s *gitAuthTestSecretStore) Seal(context.Context, string, []byte) (SealedValue, error) {
+	return SealedValue{}, fmt.Errorf("seal not used")
+}
+
+func (s *gitAuthTestSecretStore) Open(_ context.Context, key string, value SealedValue) ([]byte, error) {
+	s.openedKeys = append(s.openedKeys, key)
+	return append([]byte{}, value.Cipher...), nil
+}
+
+func (s *gitAuthTestSecretStore) Status() SecretStoreStatus {
+	return SecretStoreStatus{Provider: "test", Ready: true}
+}
 
 func TestAppendGitSSHEnvUsesPersistentKnownHosts(t *testing.T) {
 	testutil.SetupTestEnv(t)
@@ -49,8 +68,8 @@ func TestAppendGitSSHEnvUsesPersistentKnownHosts(t *testing.T) {
 	if strings.Contains(sshCommand, "StrictHostKeyChecking=no") {
 		t.Fatalf("expected host key checking to stay enabled, got %q", sshCommand)
 	}
-	if strings.Contains(sshCommand, "/dev/null") {
-		t.Fatalf("expected persistent known_hosts instead of /dev/null, got %q", sshCommand)
+	if strings.Contains(sshCommand, "UserKnownHostsFile=/dev/null") {
+		t.Fatalf("expected persistent user known_hosts instead of /dev/null, got %q", sshCommand)
 	}
 	if !strings.Contains(sshCommand, "StrictHostKeyChecking=accept-new") {
 		t.Fatalf("expected accept-new host key policy, got %q", sshCommand)
@@ -62,6 +81,83 @@ func TestAppendGitSSHEnvUsesPersistentKnownHosts(t *testing.T) {
 	}
 	if !strings.Contains(sshCommand, shellEscapeSSHArg(knownHostsPath)) {
 		t.Fatalf("expected ssh command to reference known_hosts %q, got %q", knownHostsPath, sshCommand)
+	}
+}
+
+func TestBuildGitAuthConfigUsesCAFileAndSecretStoreToken(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	store := &gitAuthTestSecretStore{}
+	restore := SetRuntimeSecretStoreForTest(store)
+	defer restore()
+
+	sub := &model.Subscription{
+		ID:                      42,
+		URL:                     "https://github.com/example/private.git",
+		AuthType:                model.SubAuthTypeToken,
+		AuthTokenSecretProvider: "test",
+		AuthTokenSecretCipher:   []byte("secret-token"),
+		CACertPath:              filepath.Join(t.TempDir(), "ca.pem"),
+	}
+	cfg, err := buildGitAuthConfigWithContext(context.Background(), []string{"BASE=1"}, sub.URL, sub, "")
+	if err != nil {
+		t.Fatalf("build git auth config with secret token: %v", err)
+	}
+
+	if !strings.Contains(cfg.RemoteURL, "x-access-token:secret-token@github.com") {
+		t.Fatalf("expected opened SecretStore token in remote URL, got %q", cfg.RemoteURL)
+	}
+	if strings.Contains(cfg.DisplayURL, "secret-token") {
+		t.Fatalf("DisplayURL should not leak token, got %q", cfg.DisplayURL)
+	}
+	assertEnvContainsPrefix(t, cfg.Env, "GIT_SSL_CAINFO="+sub.CACertPath)
+	if len(store.openedKeys) != 1 || store.openedKeys[0] != "subscription:42:git-token" {
+		t.Fatalf("expected token to open through subscription SecretStore key, got %#v", store.openedKeys)
+	}
+}
+
+func TestResolveSubscriptionSSHKeyPathUsesSecretStoreKeyMaterial(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	store := &gitAuthTestSecretStore{}
+	restore := SetRuntimeSecretStoreForTest(store)
+	defer restore()
+
+	sub := &model.Subscription{
+		ID:                   7,
+		AuthType:             model.SubAuthTypeSSH,
+		SSHKeySecretProvider: "test",
+		SSHKeySecretCipher:   []byte("test-private-key"),
+	}
+	path, cleanup, err := resolveSubscriptionSSHKeyPath(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("resolve ssh key secret: %v", err)
+	}
+	defer cleanup()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read materialized ssh key: %v", err)
+	}
+	if string(content) != "test-private-key" {
+		t.Fatalf("expected materialized key content from SecretStore")
+	}
+	if len(store.openedKeys) != 1 || store.openedKeys[0] != "subscription:7:ssh-key" {
+		t.Fatalf("expected ssh key to open through subscription SecretStore key, got %#v", store.openedKeys)
+	}
+}
+
+func TestBuildGitAuthConfigRejectsInlineSSHPrivateKeyMaterial(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	sub := &model.Subscription{AuthType: model.SubAuthTypeSSH}
+	_, err := buildGitAuthConfig(nil, "git@github.com:demo/private.git", sub, "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----")
+	if err == nil || !strings.Contains(err.Error(), "文件路径") {
+		t.Fatalf("expected inline private key material to be rejected as path misuse, got %v", err)
+	}
+}
+
+func TestNormalizeGitProviderErrorRequiresHostKeyConfirmation(t *testing.T) {
+	err := normalizeGitProviderError("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!", fmt.Errorf("git failed"))
+	if err == nil || !strings.Contains(err.Error(), "请确认新的主机指纹") {
+		t.Fatalf("expected host key change to require confirmation, got %v", err)
 	}
 }
 

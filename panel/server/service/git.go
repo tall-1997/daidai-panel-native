@@ -13,7 +13,7 @@ import (
 )
 
 func GitClone(url, branch, destDir string, sshKeyPath string) (string, error) {
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destDir), 0755); err != nil {
 		return "", fmt.Errorf("创建目录失败: %w", err)
 	}
 
@@ -39,7 +39,7 @@ func GitClone(url, branch, destDir string, sshKeyPath string) (string, error) {
 	cmd.Dir = config.C.Data.ScriptsDir
 	cmd.Env = authCfg.Env
 	output, err := cmd.CombinedOutput()
-	return string(output), err
+	return string(output), normalizeGitProviderError(string(output), err)
 }
 
 func GitPull(repoDir string, sshKeyPath string) (string, error) {
@@ -55,7 +55,7 @@ func GitPull(repoDir string, sshKeyPath string) (string, error) {
 	cmd.Env = authCfg.Env
 
 	output, err := cmd.CombinedOutput()
-	return string(output), err
+	return string(output), normalizeGitProviderError(string(output), err)
 }
 
 func gitAuthTypeForSSHKeyPath(sshKeyPath string) string {
@@ -63,6 +63,17 @@ func gitAuthTypeForSSHKeyPath(sshKeyPath string) string {
 		return model.SubAuthTypeSSH
 	}
 	return ""
+}
+
+func normalizeGitProviderError(output string, err error) error {
+	if err == nil {
+		return nil
+	}
+	lower := strings.ToLower(output)
+	if strings.Contains(lower, "remote host identification has changed") || strings.Contains(lower, "host key verification failed") {
+		return fmt.Errorf("SSH Host Key 已改变或无法验证，Git 操作已停止；请确认新的主机指纹后更新 known_hosts: %w", err)
+	}
+	return err
 }
 
 func GitReset(repoDir string) (string, error) {
