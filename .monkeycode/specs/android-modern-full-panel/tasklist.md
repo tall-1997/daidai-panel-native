@@ -264,6 +264,8 @@ Enable Env CRUD/import/export with Secret Store. Enable script tree, upload, sav
 
 ### Task 4.1: Python and Node Dependency Operations
 
+**Status:** Complete (compatibility details, signed native allowlist, npm script policy, staging, cancellation, rollback, quota checks, and operation recovery)
+
 Implement wheel/package compatibility, signed native allowlist, npm script policy, staging, cancellation, rollback, quota checks, and operation recovery.
 
 ### Task 4.2: Git Provider

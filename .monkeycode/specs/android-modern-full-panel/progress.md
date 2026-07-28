@@ -195,7 +195,8 @@ Milestone 3 implementation tasks are complete on `main`. Current target is Miles
 
 ### Milestone 4
 
-- pip/npm dependency operations and compatibility allowlist.
+- Task 4.1 complete: pip/npm dependency operations now return stable compatibility details for unsupported packages, enforce signed native allowlist checks, keep npm lifecycle scripts disabled, stage install attempts, rollback failed or canceled installs, check dependency quota, persist dependency Operations, and recover interrupted operations after restart.
+- Task 4.1 verification attempted: `cd /workspace/panel/server && go test ./service -run 'TestEvaluateDependencyCompatibility|TestEnforceNpmScriptPolicy|TestCheckDependencyQuota|TestPrepareDependencyStaging|TestReconcileDependenciesAfterRestartRecoversInterruptedOperation' -count=1` and `cd /workspace/panel/server && go test ./handler -run 'TestDependencyCreate(ReturnsCompatibilityDetails|PersistsOperation)' -count=1` are blocked by existing `service/notifier.go:278:6: err redeclared in this block` package compile failure outside Task4.1 files; `cd /workspace/panel/server && go test ./model -count=1` passed.
 - Git/SSH provider, subscriptions, notifications, external integrations, OpenAPI.
 
 ### Milestone 5
