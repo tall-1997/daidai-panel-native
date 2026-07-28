@@ -6,9 +6,9 @@ Remote: `origin/main`
 
 ## Current Position
 
-Milestone 1 is in progress. Tasks 1.0 through 1.4 are implemented locally, and Task 1.4 review findings are remediated with strict TDD coverage.
+Milestone 2 is in progress. Task 2.1 baseline scaffolding is already present, and Tasks 2.2 through 2.6 are now implemented as server-side runtime/security baseline structures for unified Milestone 2 verification.
 
-The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit gate and its commits have not been pushed.
+The local branch remains ahead of `origin/main` with Milestone 2 scaffolding updates pending final milestone-level unified tests.
 
 ## Completed Work
 
@@ -169,9 +169,12 @@ The local branch is ahead of `origin/main`. Milestone 1 has not reached its exit
 
 ### Milestone 2
 
-- Runtime manifest and signed APK ELF packaging.
-- Python, Node.js, TypeScript, Shell, Git, SSH, Yaegi, and Go Builder.
-- Secret Store, trusted runner, isolated pure-compute worker, source/SHA-256 authorization.
+- Runtime manifest and signed APK ELF packaging scaffolding is complete.
+- Python runtime baseline/smoke-state structure is complete with `PY_OK`/`SSL`/`SQLite`/`venv`/`wheel` check IDs.
+- Node.js and TypeScript smoke-state structure is complete with `CommonJS`/`ESM`/`HTTPS`/`TS_OK`, and npm lifecycle scripts are default-disabled through runtime policy.
+- Shell, Git, and SSH smoke-state structure is complete with default policy wiring for hooks/pager/editor/external filters/credential helper suppression.
+- Yaegi and Go Builder runtime declarations and smoke placeholders are complete, with explicit Go Builder export-only policy markers.
+- Secret Store minimal abstraction plus local placeholder implementation and trust authorization record model (`source`/`version`/`sha256`/`capability`) are complete and connected to runtime baseline status.
 
 ### Milestone 3
 

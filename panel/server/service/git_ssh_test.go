@@ -27,6 +27,13 @@ func TestAppendGitSSHEnvUsesPersistentKnownHosts(t *testing.T) {
 		t.Fatalf("build git auth config: %v", err)
 	}
 	env := envCfg.Env
+	assertEnvContainsPrefix(t, env, "GIT_TERMINAL_PROMPT=0")
+	assertEnvContainsPrefix(t, env, "GIT_EDITOR=:")
+	assertEnvContainsPrefix(t, env, "GIT_PAGER=cat")
+	assertEnvContainsPrefix(t, env, "GIT_CONFIG_KEY_0=core.hooksPath")
+	assertEnvContainsPrefix(t, env, "GIT_CONFIG_VALUE_0=/dev/null")
+	assertEnvContainsPrefix(t, env, "GIT_CONFIG_KEY_3=credential.helper")
+	assertEnvContainsPrefix(t, env, "GIT_CONFIG_VALUE_3=")
 
 	var sshCommand string
 	for _, entry := range env {
@@ -56,6 +63,16 @@ func TestAppendGitSSHEnvUsesPersistentKnownHosts(t *testing.T) {
 	if !strings.Contains(sshCommand, shellEscapeSSHArg(knownHostsPath)) {
 		t.Fatalf("expected ssh command to reference known_hosts %q, got %q", knownHostsPath, sshCommand)
 	}
+}
+
+func assertEnvContainsPrefix(t *testing.T, env []string, expected string) {
+	t.Helper()
+	for _, entry := range env {
+		if entry == expected {
+			return
+		}
+	}
+	t.Fatalf("expected env to contain %q, got %v", expected, env)
 }
 
 func TestBuildGitAuthConfigEmbedsTokenIntoURL(t *testing.T) {

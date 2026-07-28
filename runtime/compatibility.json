@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "updated_at": "2026-07-28T00:00:00Z",
+  "abi": "arm64-v8a",
+  "required_checks": [
+    "aarch64-bionic",
+    "pie",
+    "relro",
+    "nx",
+    "no-text-relocation",
+    "page-align-4k",
+    "page-align-16k",
+    "dt-needed-in-apk-or-system"
+  ],
+  "runtime_ids": [
+    "python-3.12-android-arm64",
+    "node-lts-android-arm64",
+    "typescript-stable",
+    "shell-android-arm64",
+    "git-android-arm64",
+    "ssh-android-arm64",
+    "yaegi-go",
+    "go-builder-android-arm64"
+  ]
+}

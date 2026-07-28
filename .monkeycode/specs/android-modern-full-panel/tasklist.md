@@ -174,25 +174,37 @@ go run scripts/generate-route-contract.go -check
 
 ### Task 2.1: Runtime Manifest and APK Packaging
 
+**Status:** Complete (runtime baseline scaffolding implemented)
+
 Create `runtime/manifest.json`, `runtime/compatibility.json`, Gradle runtime packaging, final APK ELF checks, and `RuntimeComponentManager`. Package executable entries as `lib<runtime>_exec.so` and resolve them from `nativeLibraryDir`.
 
 ### Task 2.2: Python Runtime
+
+**Status:** Complete (server-side baseline and smoke-state scaffolding)
 
 Package Android/Bionic CPython, stdlib, SSL, SQLite, pip, venv, CA, and pure-wheel seed. Add offline `PY_OK`, SSL, SQLite, venv, and wheel installation smoke tests.
 
 ### Task 2.3: Node and TypeScript Runtime
 
+**Status:** Complete (Node/TS smoke-state scaffolding and lifecycle-script policy default)
+
 Package Android Node LTS, npm/npx, CA, TypeScript, and ts-node. Disable lifecycle scripts by default. Add CommonJS, ESM, HTTPS, local tarball, and `TS_OK` tests.
 
 ### Task 2.4: Shell, Git, and SSH Runtime
+
+**Status:** Complete (smoke-state scaffolding and Git/SSH hardening policy wiring)
 
 Package controlled Shell, Git HTTPS, and SSH transport. Disable hooks, pager, editor, external filters, and credential helpers. Test clone/fetch/sparse checkout and Host Key rejection.
 
 ### Task 2.5: Yaegi and Go Builder
 
+**Status:** Complete (runtime declaration and smoke placeholders with Go Builder export-only policy marker)
+
 Embed Yaegi with a fixed symbol allowlist. Package Go compiler/linker/asm tools as signed APK ELF entries. Build exportable artifacts and prohibit executing generated binaries.
 
 ### Task 2.6: Secret Store and Trust Authorization
+
+**Status:** Complete (minimal local Secret Store and trust authorization model skeleton)
 
 Implement Android Keystore envelope encryption and source/version/SHA-256/capability authorization records. Add `:runner` trusted process and isolated pure-compute worker.
 

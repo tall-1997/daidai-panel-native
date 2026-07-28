@@ -17,6 +17,7 @@ import (
 
 	"daidai-panel/middleware"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -94,12 +95,13 @@ var androidRuntimePresets = []androidRuntimePreset{
 }
 
 type androidRuntimeStatus struct {
-	Supported bool                       `json:"supported"`
-	Arch      string                     `json:"arch"`
-	BinDir    string                     `json:"bin_dir"`
-	Termux    bool                       `json:"termux_detected"`
-	Runtimes  []androidRuntimeItem       `json:"runtimes"`
-	Presets   []androidRuntimePreset     `json:"presets"`
+	Supported       bool                             `json:"supported"`
+	Arch            string                           `json:"arch"`
+	BinDir          string                           `json:"bin_dir"`
+	Termux          bool                             `json:"termux_detected"`
+	Runtimes        []androidRuntimeItem             `json:"runtimes"`
+	Presets         []androidRuntimePreset           `json:"presets"`
+	RuntimeBaseline service.RuntimeComponentBaseline `json:"runtime_baseline"`
 }
 
 type androidRuntimeItem struct {
@@ -200,9 +202,10 @@ func (h *AndroidRuntimeHandler) Status(c *gin.Context) {
 	androidBinDir := resolveAndroidRuntimeBinDir()
 	if !androidSupported() {
 		response.Success(c, androidRuntimeStatus{
-			Supported: false,
-			Arch:      detectArch(),
-			BinDir:    androidBinDir,
+			Supported:       false,
+			Arch:            detectArch(),
+			BinDir:          androidBinDir,
+			RuntimeBaseline: service.RuntimeComponentBaselineSnapshot(),
 		})
 		return
 	}
@@ -222,12 +225,13 @@ func (h *AndroidRuntimeHandler) Status(c *gin.Context) {
 	}
 
 	response.Success(c, androidRuntimeStatus{
-		Supported: true,
-		Arch:      arch,
-		BinDir:    androidBinDir,
-		Termux:    termuxDetected(),
-		Runtimes:  runtimes,
-		Presets:   presets,
+		Supported:       true,
+		Arch:            arch,
+		BinDir:          androidBinDir,
+		Termux:          termuxDetected(),
+		Runtimes:        runtimes,
+		Presets:         presets,
+		RuntimeBaseline: service.RuntimeComponentBaselineSnapshot(),
 	})
 }
 

@@ -16,6 +16,7 @@ object GoCoreBridge {
             .put("bindHost", "127.0.0.1")
             .put("port", 0)
             .put("localToken", localToken)
+            .put("nativeLibraryDir", context.applicationInfo.nativeLibraryDir)
             .toString()
         val raw = invokeString(GoCoreReflectionContract.START_CORE, arrayOf(String::class.java), arrayOf(options))
         return mapResultWithEndpoint(raw, localToken)

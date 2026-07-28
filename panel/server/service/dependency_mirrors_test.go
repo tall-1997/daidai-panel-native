@@ -178,3 +178,38 @@ func TestSetNpmMirrorWritesAndClearsConfig(t *testing.T) {
 		t.Fatalf("expected cleared npm mirror, got %q", got)
 	}
 }
+
+func TestNpmInstallEnvDisablesLifecycleScriptsByDefault(t *testing.T) {
+	t.Setenv("DAIDAI_NPM_ENABLE_LIFECYCLE_SCRIPTS", "")
+	env := NpmInstallEnv([]string{"PATH=/usr/bin"}, "")
+
+	assertContainsEnv(t, env, "NPM_CONFIG_IGNORE_SCRIPTS=true")
+	assertContainsEnv(t, env, "npm_config_ignore_scripts=true")
+}
+
+func TestNpmInstallEnvCanEnableLifecycleScriptsByEnv(t *testing.T) {
+	t.Setenv("DAIDAI_NPM_ENABLE_LIFECYCLE_SCRIPTS", "true")
+	env := NpmInstallEnv([]string{"PATH=/usr/bin"}, "")
+
+	assertMissingEnvPrefix(t, env, "NPM_CONFIG_IGNORE_SCRIPTS=")
+	assertMissingEnvPrefix(t, env, "npm_config_ignore_scripts=")
+}
+
+func assertContainsEnv(t *testing.T, env []string, want string) {
+	t.Helper()
+	for _, entry := range env {
+		if entry == want {
+			return
+		}
+	}
+	t.Fatalf("expected env to contain %q, got %v", want, env)
+}
+
+func assertMissingEnvPrefix(t *testing.T, env []string, prefix string) {
+	t.Helper()
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			t.Fatalf("expected env to omit prefix %q, got %v", prefix, env)
+		}
+	}
+}

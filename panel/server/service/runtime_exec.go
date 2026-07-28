@@ -845,7 +845,7 @@ func createManagedNodeCommand(scriptPath string, scriptArgs []string, workDir st
 
 	cmd := exec.Command(nodeBin, args...)
 	cmd.Dir = workDir
-	cmd.Env = buildBootstrapProcessEnv(envVars)
+	cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
 	setPgid(cmd)
 	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }
@@ -870,7 +870,7 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 		args = append(args, scriptArgs...)
 		cmd := exec.Command(tsNodeBin, args...)
 		cmd.Dir = workDir
-		cmd.Env = buildBootstrapProcessEnv(envVars)
+		cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
 		setPgid(cmd)
 		return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 	}
@@ -887,7 +887,7 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 
 	cmd := exec.Command(npxBin, args...)
 	cmd.Dir = workDir
-	cmd.Env = buildBootstrapProcessEnv(envVars)
+	cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
 	setPgid(cmd)
 	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }

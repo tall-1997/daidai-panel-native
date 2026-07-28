@@ -19,7 +19,7 @@ type gitAuthConfig struct {
 }
 
 func buildGitAuthConfig(baseEnv []string, remoteURL string, sub *model.Subscription, sshKeyPath string) (gitAuthConfig, error) {
-	env := AppendProxyEnv(baseEnv)
+	env := ApplyGitSSHRuntimePolicy(AppendProxyEnv(baseEnv))
 	cleanup := func() {}
 	remoteURL = strings.TrimSpace(remoteURL)
 	displayURL := remoteURL

@@ -92,7 +92,7 @@ func SanitizePipEnv(base []string) []string {
 }
 
 func NpmInstallEnv(base []string, configured string) []string {
-	env := append([]string{}, base...)
+	env := ApplyNodeRuntimePolicy(append([]string{}, base...))
 	mirror := EffectiveNpmMirror(configured)
 	if mirror == "" {
 		return env

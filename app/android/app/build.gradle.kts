@@ -86,12 +86,24 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     lint {
         disable.add("MissingVersion")
     }
 
     buildFeatures {
         aidl = true
+    }
+
+    sourceSets {
+        getByName("main") {
+            assets.srcDirs("../../../runtime")
+        }
     }
 }
 
@@ -135,8 +147,24 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
     }
 }
 
+val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
+    group = "verification"
+    description = "Fails when runtime manifest metadata is missing."
+    doLast {
+        val manifest = rootProject.file("../../runtime/manifest.json")
+        val compatibility = rootProject.file("../../runtime/compatibility.json")
+        check(manifest.isFile) {
+            "Missing runtime/manifest.json in repository root."
+        }
+        check(compatibility.isFile) {
+            "Missing runtime/compatibility.json in repository root."
+        }
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
+    dependsOn(verifyRuntimeMetadata)
 }
 
 flutter {

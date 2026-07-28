@@ -55,6 +55,7 @@ type options struct {
 	BindHost             string                    `json:"bindHost"`
 	Port                 int                       `json:"port"`
 	LocalToken           string                    `json:"localToken"`
+	NativeLibraryDir     string                    `json:"nativeLibraryDir"`
 	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
 }
 
@@ -170,6 +171,7 @@ func StartCore(optionsJSON string) (response string) {
 		logDiagnostic(code, diagnostic)
 		return failure(code, message, result{Status: "stopped"})
 	}
+	service.ResetRuntimeComponentBaseline()
 	recoveryReady.Store(false)
 	store := newGenerationStore(parsed.DataDir, generationFilesystemOps())
 	if err := store.validateRootComponents(); err != nil {
@@ -380,6 +382,14 @@ func StartCore(optionsJSON string) (response string) {
 			}
 			return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
 		}
+	}
+	nativeLibraryDir := strings.TrimSpace(parsed.NativeLibraryDir)
+	if nativeLibraryDir == "" {
+		nativeLibraryDir = strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR"))
+	}
+	runtimeManager := service.NewRuntimeComponentManager(nativeLibraryDir)
+	if _, runtimeErr := runtimeManager.LoadAndValidate(); runtimeErr != nil {
+		log.Printf("mobilecore: runtime baseline warning: %v", runtimeErr)
 	}
 	lifecycle.mu.Lock()
 	lifecycle.nextID++
