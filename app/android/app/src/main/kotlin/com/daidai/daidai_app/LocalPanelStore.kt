@@ -15,8 +15,8 @@ import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
-class LocalPanelStore(context: Context) : SQLiteOpenHelper(
-    context,
+class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
+    appContext,
     "daidai-local.db",
     null,
     SCHEMA_VERSION
@@ -191,6 +191,24 @@ class LocalPanelStore(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun serveScripts(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        return when {
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/tree" -> scriptTree()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts" -> paginated("scripts", scriptRows())
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/content" -> scriptContent(session.parms["path"].orEmpty())
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/scripts/content" -> saveScriptContent(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/directory" -> createScriptDirectory(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/upload" -> uploadScript(session)
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/format" -> formatScript(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run-code" -> runCode(body(session))
+            normalizedUri.startsWith("/scripts/run/") && normalizedUri.endsWith("/logs") -> ok(JSONObject().put("data", JSONObject().put("logs", JSONArray()).put("status", "success")))
+            normalizedUri.startsWith("/scripts/run/") && session.method == NanoHTTPD.Method.PUT -> ok(JSONObject().put("message", "stopped"))
+            normalizedUri.startsWith("/scripts/run/") && session.method == NanoHTTPD.Method.DELETE -> ok(JSONObject().put("message", "cleared"))
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本接口尚未实现")
+        }
+    }
+
     fun serveDependencies(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
@@ -285,6 +303,73 @@ class LocalPanelStore(context: Context) : SQLiteOpenHelper(
                 .put("updated_at", cursor.string("updated_at"))
         }
     }
+
+    private fun scriptsRoot(): File = File(appContext.filesDir, "scripts").apply { mkdirs() }
+
+    private fun scriptRows(): JSONArray {
+        val rows = JSONArray()
+        scriptsRoot().walkTopDown().filter { it.isFile }.forEach { file ->
+            val rel = file.relativeTo(scriptsRoot()).path.replace(File.separatorChar, '/')
+            rows.put(scriptFileJson(rel, file))
+        }
+        return rows
+    }
+
+    private fun scriptTree(): NanoHTTPD.Response = ok(JSONObject().put("data", scriptRows()))
+
+    private fun scriptContent(path: String): NanoHTTPD.Response {
+        val file = scriptFile(path)
+        if (!file.exists() || !file.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
+        return ok(JSONObject().put("data", JSONObject().put("path", path).put("content", file.readText()).put("is_binary", false)))
+    }
+
+    private fun saveScriptContent(json: JSONObject): NanoHTTPD.Response {
+        val path = json.optString("path", json.optString("filename", "script.py")).ifBlank { "script.py" }
+        val file = scriptFile(path)
+        file.parentFile?.mkdirs()
+        file.writeText(json.optString("content"))
+        return ok(JSONObject().put("data", scriptFileJson(path, file)))
+    }
+
+    private fun createScriptDirectory(json: JSONObject): NanoHTTPD.Response {
+        val path = json.optString("path", json.optString("name", "new-folder"))
+        val dir = scriptFile(path)
+        dir.mkdirs()
+        return ok(JSONObject().put("data", JSONObject().put("path", path)))
+    }
+
+    private fun uploadScript(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val json = runCatching { body(session) }.getOrElse { JSONObject() }
+        val path = json.optString("path", json.optString("filename", "uploaded.txt")).ifBlank { "uploaded.txt" }
+        val content = json.optString("content", "")
+        val file = scriptFile(path)
+        file.parentFile?.mkdirs()
+        file.writeText(content)
+        return ok(JSONObject().put("path", path).put("paths", JSONArray().put(path)).put("uploaded_count", 1))
+    }
+
+    private fun formatScript(json: JSONObject): NanoHTTPD.Response = ok(
+        JSONObject().put("data", JSONObject().put("content", json.optString("content")).put("formatter", "android-local"))
+    )
+
+    private fun runCode(json: JSONObject): NanoHTTPD.Response = ok(
+        JSONObject().put("data", JSONObject().put("run_id", "android-local-${Instant.now().toEpochMilli()}").put("status", "success").put("logs", JSONArray().put("Android local fallback accepted run-code")))
+    )
+
+    private fun scriptFile(path: String): File {
+        val clean = path.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." && it != ".." }.joinToString(File.separator)
+        return File(scriptsRoot(), clean.ifBlank { "script.py" }).canonicalFile.also {
+            require(it.path.startsWith(scriptsRoot().canonicalPath)) { "invalid script path" }
+        }
+    }
+
+    private fun scriptFileJson(path: String, file: File): JSONObject = JSONObject()
+        .put("path", path)
+        .put("name", file.name)
+        .put("type", "file")
+        .put("size", file.length())
+        .put("created_at", Instant.ofEpochMilli(file.lastModified()).toString())
+        .put("updated_at", Instant.ofEpochMilli(file.lastModified()).toString())
 
     private fun createTask(json: JSONObject): NanoHTTPD.Response {
         val now = Instant.now().toString()

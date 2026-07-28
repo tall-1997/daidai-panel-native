@@ -56,6 +56,7 @@ class LocalPanelHttpServer(
                     jsonResponse(JSONObject().put("data", JSONObject().put("panel_title", "呆呆本地面板")))
 
                 session.uri.startsWith("/api/tasks") -> store.serveTasks(session)
+                session.uri.startsWith("/api/scripts") -> store.serveScripts(session)
                 session.uri.startsWith("/api/envs") -> store.serveEnvs(session)
                 session.uri.startsWith("/api/deps") || session.uri.startsWith("/api/v1/deps") ->
                     store.serveDependencies(session)
