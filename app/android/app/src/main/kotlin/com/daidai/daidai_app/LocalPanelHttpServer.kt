@@ -46,8 +46,14 @@ class LocalPanelHttpServer(
                 session.method == Method.GET && session.uri == "/api/system/version" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("version", "android-local-mvp")))
 
+                session.method == Method.GET && session.uri == "/api/android/recovery-metadata" ->
+                    jsonResponse(recoveryMetadata())
+
                 session.method == Method.GET && session.uri == "/api/system/info" ->
                     jsonResponse(systemInfo())
+
+                session.uri.startsWith("/api/system/backup") || session.uri.startsWith("/api/system/backups") ||
+                    session.uri.startsWith("/api/system/restore") -> store.serveBackup(session)
 
                 session.method == Method.GET && session.uri == "/api/system/dashboard" ->
                     jsonResponse(store.dashboard())
@@ -87,6 +93,9 @@ class LocalPanelHttpServer(
                 .put("linux_package_manager", true)
                 .put("foreground_scheduler", true)
                 .put("exact_cron", false)
+                .put("portable_backup_envelope", true)
+                .put("atomic_restore", true)
+                .put("recovery_apk_metadata", true)
         )
         .put(
             "limits",
@@ -121,6 +130,15 @@ class LocalPanelHttpServer(
                 .put("resource_scope", "android_app_sandbox")
         )
     }
+
+    private fun recoveryMetadata(): JSONObject = JSONObject().put(
+        "data",
+        RecoveryApkMetadata.metadata(
+            releaseBase = 0,
+            stableCoreVersion = "android-local-mvp",
+            stableRuntimeManifestSha256 = "0".repeat(64),
+        ),
+    )
 
     private fun percentage(used: Long, total: Long): Double =
         if (total <= 0) 0.0 else used.toDouble() * 100 / total

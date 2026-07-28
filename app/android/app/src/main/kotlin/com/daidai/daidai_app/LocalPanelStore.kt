@@ -12,6 +12,7 @@ import org.json.JSONObject
 import java.io.File
 import java.time.Instant
 import java.security.SecureRandom
+import java.time.format.DateTimeFormatter
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -240,6 +241,18 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun serveBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        return when {
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/system/backups" -> listBackups()
+            session.method == NanoHTTPD.Method.POST && session.uri == "/api/system/backup" -> createBackup(body(session))
+            session.method == NanoHTTPD.Method.POST && session.uri == "/api/system/backup/upload" -> uploadBackup(session)
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/system/backup/download" -> downloadBackup(session)
+            session.method == NanoHTTPD.Method.POST && session.uri == "/api/system/restore" -> restoreBackup(body(session))
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/system/restore/progress" -> restoreProgress()
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "备份接口尚未实现")
+        }
+    }
+
     private fun taskRows(): JSONArray = queryRows(
         "SELECT * FROM tasks ORDER BY id DESC"
     ) { cursor ->
@@ -305,6 +318,148 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     }
 
     private fun scriptsRoot(): File = File(appContext.filesDir, "scripts").apply { mkdirs() }
+
+    private fun backupsRoot(): File = File(appContext.filesDir, "backups").apply { mkdirs() }
+
+    private fun restoreTargetRoot(): File = File(appContext.filesDir, "portable-restore").apply { mkdirs() }
+
+    private fun listBackups(): NanoHTTPD.Response {
+        val files = JSONArray()
+        backupsRoot().listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".enc") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.forEach { file ->
+                files.put(
+                    JSONObject()
+                        .put("filename", file.name)
+                        .put("size", file.length())
+                        .put("created_at", Instant.ofEpochMilli(file.lastModified()).toString()),
+                )
+            }
+        return ok(JSONObject().put("data", files))
+    }
+
+    private fun createBackup(json: JSONObject): NanoHTTPD.Response {
+        val password = json.optString("password")
+        if (password.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Android 本地备份需要密码")
+        val source = buildPortableBackupSource()
+        val runtimeRequirements = JSONObject()
+            .put("schemaVersion", SCHEMA_VERSION)
+            .put("runtimeManifest", "manifest.json")
+            .put("platform", "android")
+        val bytes = PortableBackupEnvelope().exportDirectory(source, password.toCharArray(), runtimeRequirements)
+        val filename = "daidai-android-${DateTimeFormatter.ISO_INSTANT.format(Instant.now()).replace(':', '-')}.enc"
+        val output = File(backupsRoot(), filename)
+        output.outputStream().use { stream ->
+            stream.write(bytes)
+            stream.fd.sync()
+        }
+        source.deleteRecursively()
+        return ok(
+            JSONObject()
+                .put("filename", filename)
+                .put("size", output.length())
+                .put("encrypted", true)
+                .put("envelope", PortableBackupEnvelope.readManifest(bytes)),
+        )
+    }
+
+    private fun downloadBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val file = backupFile(session.parms["filename"].orEmpty())
+            ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "备份文件不存在")
+        return NanoHTTPD.newFixedLengthResponse(
+            NanoHTTPD.Response.Status.OK,
+            "application/octet-stream",
+            file.inputStream(),
+            file.length(),
+        ).apply {
+            addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+        }
+    }
+
+    private fun uploadBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val files = HashMap<String, String>()
+        session.parseBody(files)
+        val uploaded = files["file"] ?: files["content"] ?: files.values.firstOrNull()
+            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "缺少备份文件")
+        val originalName = session.parms["filename"]
+            ?: File(uploaded).name.takeIf { it.endsWith(".enc") }
+            ?: "imported-${System.nanoTime()}.enc"
+        val clean = originalName.substringAfterLast('/').substringAfterLast('\\')
+            .let { if (it.endsWith(".enc")) it else "$it.enc" }
+        val bytes = File(uploaded).readBytes()
+        PortableBackupEnvelope.readManifest(bytes)
+        val output = File(backupsRoot(), clean)
+        output.outputStream().use { stream ->
+            stream.write(bytes)
+            stream.fd.sync()
+        }
+        return ok(JSONObject().put("filename", output.name).put("size", output.length()).put("encrypted", true))
+    }
+
+    private fun restoreBackup(json: JSONObject): NanoHTTPD.Response {
+        val filename = json.optString("filename")
+        val password = json.optString("password")
+        if (password.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "恢复加密备份需要密码")
+        val file = backupFile(filename) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "备份文件不存在")
+        return try {
+            PortableBackupEnvelope().restoreDirectory(file.readBytes(), password.toCharArray(), restoreTargetRoot())
+            ok(
+                JSONObject()
+                    .put("status", "completed")
+                    .put("stage", "atomic_restore")
+                    .put("filename", filename)
+                    .put("message", "备份已完成解密、校验和原子恢复暂存"),
+            )
+        } catch (_: WrongBackupPasswordException) {
+            error(NanoHTTPD.Response.Status.UNAUTHORIZED, "备份密码错误")
+        }
+    }
+
+    private fun restoreProgress(): NanoHTTPD.Response = ok(
+        JSONObject()
+            .put("active", false)
+            .put("status", "idle")
+            .put("stage", "idle")
+            .put("percent", 100)
+            .put("source", "android_portable_envelope"),
+    )
+
+    private fun backupFile(filename: String): File? {
+        val clean = filename.substringAfterLast('/').substringAfterLast('\\')
+        if (clean.isBlank() || !clean.endsWith(".enc")) return null
+        val file = File(backupsRoot(), clean).canonicalFile
+        return file.takeIf { it.path.startsWith(backupsRoot().canonicalPath) && it.isFile }
+    }
+
+    private fun buildPortableBackupSource(): File {
+        val source = File(appContext.cacheDir, "portable-backup-${System.nanoTime()}").apply { mkdirs() }
+        readableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+        readableDatabase.path?.let { path ->
+            val database = File(path)
+            if (database.isFile) database.copyTo(File(source, "database/daidai-local.db").apply { parentFile?.mkdirs() }, overwrite = true)
+            listOf("-wal", "-shm").forEach { suffix ->
+                val companion = File("$path$suffix")
+                if (companion.isFile) {
+                    companion.copyTo(
+                        File(source, "database/${database.name}$suffix").apply { parentFile?.mkdirs() },
+                        overwrite = true,
+                    )
+                }
+            }
+        }
+        if (scriptsRoot().exists()) {
+            scriptsRoot().walkTopDown().filter { it.isFile }.forEach { file ->
+                val relative = scriptsRoot().toPath().relativize(file.toPath()).joinToString("/") { it.toString() }
+                file.copyTo(File(source, "scripts/$relative").apply { parentFile?.mkdirs() }, overwrite = true)
+            }
+        }
+        File(source, "manifest/runtime-requirements.json").apply {
+            parentFile?.mkdirs()
+            writeText(JSONObject().put("schemaVersion", SCHEMA_VERSION).put("platform", "android").toString())
+        }
+        return source
+    }
 
     private fun scriptRows(): JSONArray {
         val rows = JSONArray()
