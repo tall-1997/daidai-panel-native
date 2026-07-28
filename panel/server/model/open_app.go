@@ -42,17 +42,15 @@ func (a *OpenApp) ToDictWithSecret() map[string]interface{} {
 }
 
 type ApiCallLog struct {
-	ID          uint      `gorm:"primarykey" json:"id"`
-	AppID       uint      `gorm:"index" json:"app_id"`
-	AppName     string    `gorm:"size:128" json:"app_name"`
-	Endpoint    string    `gorm:"size:256" json:"endpoint"`
-	Method      string    `gorm:"size:16" json:"method"`
-	Service     string    `gorm:"size:128;default:''" json:"service"`
-	ServiceUser string    `gorm:"size:128;default:''" json:"service_user"`
-	Status      int       `gorm:"default:200" json:"status"`
-	Duration    float64   `gorm:"default:0" json:"duration"`
-	IP          string    `gorm:"size:64" json:"ip"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        uint      `gorm:"primarykey" json:"id"`
+	AppID     uint      `gorm:"index" json:"app_id"`
+	AppName   string    `gorm:"size:128" json:"app_name"`
+	Endpoint  string    `gorm:"size:256" json:"endpoint"`
+	Method    string    `gorm:"size:16" json:"method"`
+	Status    int       `gorm:"default:200" json:"status"`
+	Duration  float64   `gorm:"default:0" json:"duration"`
+	IP        string    `gorm:"size:64" json:"ip"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (ApiCallLog) TableName() string {
@@ -61,16 +59,14 @@ func (ApiCallLog) TableName() string {
 
 func (l *ApiCallLog) ToDict() map[string]interface{} {
 	return map[string]interface{}{
-		"id":           l.ID,
-		"app_id":       l.AppID,
-		"app_name":     l.AppName,
-		"endpoint":     l.Endpoint,
-		"method":       l.Method,
-		"service":      l.Service,
-		"service_user": l.ServiceUser,
-		"status":       l.Status,
-		"duration":     l.Duration,
-		"ip":           l.IP,
-		"created_at":   l.CreatedAt,
+		"id":         l.ID,
+		"app_id":     l.AppID,
+		"app_name":   l.AppName,
+		"endpoint":   l.Endpoint,
+		"method":     l.Method,
+		"status":     l.Status,
+		"duration":   l.Duration,
+		"ip":         l.IP,
+		"created_at": l.CreatedAt,
 	}
 }

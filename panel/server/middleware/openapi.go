@@ -47,17 +47,6 @@ func loadOpenAppByUsername(username string) (*model.OpenApp, error) {
 	return &app, nil
 }
 
-func openAPIBindingFromUsername(username string) (serviceName, serviceUser string) {
-	parts := strings.Split(strings.TrimPrefix(username, "app:"), ":")
-	if len(parts) >= 2 {
-		serviceName = strings.TrimSpace(parts[1])
-	}
-	if len(parts) >= 3 {
-		serviceUser = strings.TrimSpace(parts[2])
-	}
-	return serviceName, serviceUser
-}
-
 func RequireUserToken() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		username := c.GetString("username")
@@ -96,9 +85,6 @@ func OpenAPIAccess(scope string) gin.HandlerFunc {
 		}
 
 		c.Set("app_scope_authorized", true)
-		serviceName, serviceUser := openAPIBindingFromUsername(username)
-		c.Set("openapi_service", serviceName)
-		c.Set("openapi_service_user", serviceUser)
 
 		if app.RateLimit > 0 {
 			since := time.Now().Add(-time.Hour)
@@ -120,15 +106,13 @@ func OpenAPIAccess(scope string) gin.HandlerFunc {
 		}
 
 		database.DB.Create(&model.ApiCallLog{
-			AppID:       app.ID,
-			AppName:     app.Name,
-			Endpoint:    endpoint,
-			Method:      c.Request.Method,
-			Service:     serviceName,
-			ServiceUser: serviceUser,
-			Status:      c.Writer.Status(),
-			Duration:    float64(time.Since(start).Milliseconds()),
-			IP:          ResolveClientIP(c),
+			AppID:    app.ID,
+			AppName:  app.Name,
+			Endpoint: endpoint,
+			Method:   c.Request.Method,
+			Status:   c.Writer.Status(),
+			Duration: float64(time.Since(start).Milliseconds()),
+			IP:       ResolveClientIP(c),
 		})
 	}
 }

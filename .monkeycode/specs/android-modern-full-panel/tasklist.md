@@ -309,19 +309,19 @@ Create unique `taskID + scheduledUTC + expressionHash` records, transactional `p
 
 ### Task 5.2: Foreground Scheduler Host
 
-**Status:** Complete (Core, Scheduler, and active task foreground-service host with visible status and stop controls)
+**Status:** Complete (Android specialUse FGS status, visible stop control, scheduler guarantee payload, and Core capability propagation)
 
 Run Core, Scheduler, and active tasks under `specialUse` FGS with visible status and stop controls.
 
 ### Task 5.3: Recovery Triggers
 
-**Status:** Complete (app-start, process-recovery, BOOT_COMPLETED, network-restored, and periodic WorkManager reconciliation triggers)
+**Status:** Complete (app-start, process-recovery, BOOT_COMPLETED, network-restored, and 15-minute WorkManager reconciliation triggers)
 
 Add App-start, process-recovery, `BOOT_COMPLETED`, network-restored, and periodic WorkManager reconciliation.
 
 ### Task 5.4: Resource Protection
 
-**Status:** Complete (battery, thermal, memory, and storage protection states with guarantee and intervention guidance)
+**Status:** Complete (battery, thermal, memory, and storage protection states pause low-priority scheduler work with guarantee and intervention guidance)
 
 Pause low-priority work for battery, thermal, memory, and storage thresholds; expose guarantee states and intervention guidance.
 

@@ -22,6 +22,12 @@ object GoCoreResultMapper {
             this["base_url"] = endpoint
             this["instance_id"] = result.optLong("id").toString()
             this["local_token"] = localToken
+            result.optJSONObject("platformCapabilities")?.let {
+                this["platform_capabilities"] = it.toString()
+            }
+            result.optJSONObject("schedulerGuarantee")?.let {
+                this["scheduler_guarantee"] = it.toString()
+            }
         }
     }
 

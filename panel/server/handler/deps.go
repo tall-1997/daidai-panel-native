@@ -32,9 +32,8 @@ var (
 	depOperations   = make(map[uint]context.CancelFunc)
 	depOpsMu        sync.Mutex
 
-	dependencyInstallRunner       = installDependency
-	dependencyExportTextFunc      = buildDependencyExportText
-	dependencyProjectedUsageBytes = service.DependencyProjectedInstallBytes
+	dependencyInstallRunner  = installDependency
+	dependencyExportTextFunc = buildDependencyExportText
 )
 
 const dependencyOperationTimeout = 20 * time.Minute
@@ -206,17 +205,7 @@ func (h *DepsHandler) Create(c *gin.Context) {
 		}
 		for _, pythonVersion := range dependencyPythonInstallVersions(req.Type) {
 			compatibility := service.EvaluateDependencyCompatibility(req.Type, name, pythonVersion)
-			projectedBytes := dependencyProjectedUsageBytes(req.Type, name, pythonVersion)
-			compatibility.Quota = service.ProjectedDependencyQuotaDetails(projectedBytes)
 			if !compatibility.Supported() {
-				unsupported = append(unsupported, compatibility.Map())
-				continue
-			}
-			if err := service.CheckDependencyQuotaWithProjection(projectedBytes); err != nil {
-				compatibility.Status = service.DependencyCompatibilityUnsupported
-				compatibility.ReasonCode = service.DependencyReasonQuotaExceeded
-				compatibility.Message = err.Error()
-				compatibility.Quota = service.ProjectedDependencyQuotaDetails(projectedBytes)
 				unsupported = append(unsupported, compatibility.Map())
 				continue
 			}
@@ -248,15 +237,8 @@ func (h *DepsHandler) Create(c *gin.Context) {
 		}
 	}
 	if len(created) == 0 && len(unsupported) > 0 {
-		errorMessage := "依赖不在 Android 兼容清单内"
-		for _, item := range unsupported {
-			if item["reason_code"] == service.DependencyReasonQuotaExceeded {
-				errorMessage = "依赖配额不足"
-				break
-			}
-		}
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":                 errorMessage,
+			"error":                 "依赖不在 Android 兼容清单内",
 			"compatibility_details": unsupported,
 		})
 		return

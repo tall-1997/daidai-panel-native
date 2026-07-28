@@ -2,7 +2,6 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,14 +20,7 @@ type subPullBroadcaster struct {
 	mu          sync.RWMutex
 	subs        map[chan string]struct{}
 	log         strings.Builder
-	entries     []subPullEvent
-	cursor      int64
 	operationID string
-}
-
-type subPullEvent struct {
-	Cursor int64
-	Line   string
 }
 
 var (
@@ -76,11 +68,8 @@ func (b *subPullBroadcaster) unsubscribe(ch chan string) {
 
 func (b *subPullBroadcaster) broadcast(line string) {
 	b.mu.Lock()
-	b.cursor++
-	cursor := b.cursor
 	b.log.WriteString(line)
 	b.log.WriteString("\n")
-	b.entries = append(b.entries, subPullEvent{Cursor: cursor, Line: line})
 	b.mu.Unlock()
 
 	b.mu.RLock()
@@ -120,18 +109,6 @@ func (b *subPullBroadcaster) history() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.log.String()
-}
-
-func (b *subPullBroadcaster) historySince(cursor int64) []subPullEvent {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	items := make([]subPullEvent, 0, len(b.entries))
-	for _, item := range b.entries {
-		if item.Cursor > cursor {
-			items = append(items, item)
-		}
-	}
-	return items
 }
 
 type SubscriptionHandler struct{}
@@ -525,8 +502,6 @@ func (h *SubscriptionHandler) StopPull(c *gin.Context) {
 
 func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 	subID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	cursor := parseSSECursor(firstNonEmptyString(c.Query("cursor"), c.GetHeader("Last-Event-ID")))
-	operationIDFilter := strings.TrimSpace(c.Query("operation_id"))
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -538,7 +513,6 @@ func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 	subPullStreamsMu.RUnlock()
 
 	if !exists {
-		writePersistedSubscriptionLogEvents(c, uint(subID), operationIDFilter, cursor)
 		fmt.Fprintf(c.Writer, "event: done\ndata: not_running\n\n")
 		c.Writer.Flush()
 		return
@@ -549,15 +523,15 @@ func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 		c.Writer.Flush()
 	}
 
-	for _, item := range broadcaster.historySince(cursor) {
-		if item.Line != "" {
-			fmt.Fprintf(c.Writer, "id: %d\ndata: %s\n\n", item.Cursor, item.Line)
+	history := broadcaster.history()
+	if history != "" {
+		for _, line := range strings.Split(strings.TrimRight(history, "\n"), "\n") {
+			if line != "" {
+				fmt.Fprintf(c.Writer, "data: %s\n\n", line)
+			}
 		}
-		if item.Cursor > cursor {
-			cursor = item.Cursor
-		}
+		c.Writer.Flush()
 	}
-	c.Writer.Flush()
 
 	sub := broadcaster.subscribe()
 	defer broadcaster.unsubscribe(sub)
@@ -576,8 +550,7 @@ func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 				c.Writer.Flush()
 				return
 			}
-			cursor++
-			fmt.Fprintf(c.Writer, "id: %d\ndata: %s\n\n", cursor, line)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", line)
 			c.Writer.Flush()
 		case <-ctx.Done():
 			return
@@ -587,43 +560,6 @@ func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 			return
 		}
 	}
-}
-
-func parseSSECursor(value string) int64 {
-	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil || parsed < 0 {
-		return 0
-	}
-	return parsed
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func writePersistedSubscriptionLogEvents(c *gin.Context, subID uint, operationID string, cursor int64) {
-	query := database.DB.Model(&model.SubLog{}).Where("subscription_id = ?", subID)
-	if operationID != "" {
-		query = query.Where("operation_id = ?", operationID)
-	}
-	var log model.SubLog
-	if err := query.Order("created_at DESC").First(&log).Error; err != nil {
-		return
-	}
-	lines := strings.Split(strings.TrimRight(log.Content, "\n"), "\n")
-	for index, line := range lines {
-		lineCursor := int64(index + 1)
-		if line == "" || lineCursor <= cursor {
-			continue
-		}
-		fmt.Fprintf(c.Writer, "id: %d\ndata: %s\n\n", lineCursor, line)
-	}
-	c.Status(http.StatusOK)
 }
 
 func (h *SubscriptionHandler) Logs(c *gin.Context) {

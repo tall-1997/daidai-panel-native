@@ -3,7 +3,6 @@ package handler_test
 import (
 	"context"
 	"encoding/base64"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -213,34 +212,5 @@ func TestSubscriptionUpdateKeepsExistingTokenWhenAuthTokenOmitted(t *testing.T) 
 	}
 	if updated.EffectiveAuthType() != model.SubAuthTypeToken {
 		t.Fatalf("expected auth type token after update, got %q", updated.EffectiveAuthType())
-	}
-}
-
-func TestSubscriptionPullStreamResumesPersistedLogFromCursor(t *testing.T) {
-	testutil.SetupTestEnv(t)
-
-	operator := testutil.MustCreateUser(t, "subscription-stream-operator", "operator")
-	token := testutil.MustCreateAccessToken(t, operator.Username, operator.Role)
-	engine := newProtectedRouter()
-
-	sub := model.Subscription{Name: "stream-sub", Type: model.SubTypeGitRepo, URL: "https://github.com/example/stream.git", Enabled: true}
-	if err := database.DB.Create(&sub).Error; err != nil {
-		t.Fatalf("create subscription: %v", err)
-	}
-	log := model.SubLog{SubscriptionID: sub.ID, OperationID: "subop-1", Status: 1, Content: "line-1\nline-2\nline-3\n", LogCursor: 3}
-	if err := database.DB.Create(&log).Error; err != nil {
-		t.Fatalf("create subscription log: %v", err)
-	}
-
-	rec := performRequest(engine, http.MethodGet, "/api/v1/subscriptions/"+strconv.FormatUint(uint64(sub.ID), 10)+"/pull-stream?operation_id=subop-1&cursor=1", map[string]string{
-		"Authorization": "Bearer " + token,
-	})
-	body, _ := io.ReadAll(rec.Result().Body)
-	text := string(body)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rec.Code, text)
-	}
-	if strings.Contains(text, "line-1") || !strings.Contains(text, "id: 2\ndata: line-2") || !strings.Contains(text, "id: 3\ndata: line-3") {
-		t.Fatalf("unexpected resumed SSE body: %s", text)
 	}
 }

@@ -52,29 +52,31 @@ const (
 )
 
 type options struct {
-	DataDir              string                    `json:"dataDir"`
-	BindHost             string                    `json:"bindHost"`
-	Port                 int                       `json:"port"`
-	LocalToken           string                    `json:"localToken"`
-	NativeLibraryDir     string                    `json:"nativeLibraryDir"`
-	AndroidKeystoreKey   string                    `json:"androidKeystoreMasterKey"`
-	RuntimeManifestPath  string                    `json:"runtimeManifestPath"`
-	RuntimeCompatPath    string                    `json:"runtimeCompatibilityPath"`
-	RuntimeSmokePath     string                    `json:"runtimeSmokeEvidencePath"`
-	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
+	DataDir              string                             `json:"dataDir"`
+	BindHost             string                             `json:"bindHost"`
+	Port                 int                                `json:"port"`
+	LocalToken           string                             `json:"localToken"`
+	NativeLibraryDir     string                             `json:"nativeLibraryDir"`
+	AndroidKeystoreKey   string                             `json:"androidKeystoreMasterKey"`
+	RuntimeManifestPath  string                             `json:"runtimeManifestPath"`
+	RuntimeCompatPath    string                             `json:"runtimeCompatibilityPath"`
+	RuntimeSmokePath     string                             `json:"runtimeSmokeEvidencePath"`
+	PlatformCapabilities router.CapabilitySnapshot          `json:"platformCapabilities"`
+	SchedulerGuarantee   service.SchedulerGuaranteeSnapshot `json:"schedulerGuarantee"`
 }
 
 type result struct {
-	OK                   bool                      `json:"ok"`
-	ID                   int64                     `json:"id,omitempty"`
-	Running              bool                      `json:"running"`
-	Status               string                    `json:"status"`
-	Endpoint             string                    `json:"endpoint,omitempty"`
-	ErrorCode            string                    `json:"errorCode,omitempty"`
-	Error                string                    `json:"error,omitempty"`
-	CleanupRequired      bool                      `json:"cleanupRequired"`
-	ProcessRequirement   string                    `json:"processRequirement,omitempty"`
-	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
+	OK                   bool                               `json:"ok"`
+	ID                   int64                              `json:"id,omitempty"`
+	Running              bool                               `json:"running"`
+	Status               string                             `json:"status"`
+	Endpoint             string                             `json:"endpoint,omitempty"`
+	ErrorCode            string                             `json:"errorCode,omitempty"`
+	Error                string                             `json:"error,omitempty"`
+	CleanupRequired      bool                               `json:"cleanupRequired"`
+	ProcessRequirement   string                             `json:"processRequirement,omitempty"`
+	PlatformCapabilities router.CapabilitySnapshot          `json:"platformCapabilities"`
+	SchedulerGuarantee   service.SchedulerGuaranteeSnapshot `json:"schedulerGuarantee"`
 }
 
 type globalState struct {
@@ -751,6 +753,7 @@ func parseOptions(raw string) (options, string, string, string) {
 			return parsed, codeInvalidOptions, "platform capability state is invalid", "capability-state"
 		}
 	}
+	parsed.SchedulerGuarantee = normalizeMobileSchedulerGuarantee(parsed.SchedulerGuarantee)
 	return parsed, "", "", ""
 }
 
@@ -864,6 +867,7 @@ func (state *lifecycleState) statusResultLocked() result {
 		Error:              state.errorText,
 		CleanupRequired:    status == "cleanup_required" || state.core != nil && status != "running",
 		ProcessRequirement: `android:process=":panel"`,
+		SchedulerGuarantee: service.CurrentSchedulerGuarantee(),
 	}
 	if state.core != nil {
 		value.PlatformCapabilities = cloneCapabilitySnapshot(state.core.capabilities)
@@ -879,6 +883,11 @@ func (state *lifecycleState) statusResultLocked() result {
 		value.PlatformCapabilities = router.CapabilitySnapshot{Version: 1, Capabilities: map[string]router.CapabilityState{}}
 	}
 	return value
+}
+
+func normalizeMobileSchedulerGuarantee(snapshot service.SchedulerGuaranteeSnapshot) service.SchedulerGuaranteeSnapshot {
+	service.ConfigureSchedulerGuarantee(snapshot)
+	return service.CurrentSchedulerGuarantee()
 }
 
 func cloneCapabilitySnapshot(snapshot router.CapabilitySnapshot) router.CapabilitySnapshot {

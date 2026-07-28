@@ -12,6 +12,8 @@ object GoCoreBridge {
         if (current["phase"] == "ready") return current
 
         val runtimeMetadata = AndroidRuntimeMetadataBridge.metadataOptions(context)
+        val foregroundActive = LocalPanelHostService.isPersistentSchedulingEnabled(context)
+        val hostStatus = AndroidSchedulerHostStatus.status(context, foregroundActive, recoveryTrigger = "app-start")
         val options = JSONObject()
             .put("dataDir", context.filesDir.resolve("local-panel").absolutePath)
             .put("bindHost", "127.0.0.1")
@@ -22,6 +24,15 @@ object GoCoreBridge {
             .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))
             .put("runtimeCompatibilityPath", runtimeMetadata.getValue("runtimeCompatibilityPath"))
             .put("runtimeSmokeEvidencePath", runtimeMetadata.getValue("runtimeSmokeEvidencePath"))
+            .put("platformCapabilities", AndroidSchedulerHostStatus.platformCapabilities(context))
+            .put(
+                "schedulerGuarantee",
+                JSONObject()
+                    .put("state", hostStatus["scheduler_guarantee_state"])
+                    .put("reasonCode", hostStatus["scheduler_guarantee_reason"])
+                    .put("intervention", hostStatus["scheduler_intervention"])
+                    .put("source", "android-host"),
+            )
             .toString()
         val raw = invokeString(GoCoreReflectionContract.START_CORE, arrayOf(String::class.java), arrayOf(options))
         return mapResultWithEndpoint(raw, localToken)

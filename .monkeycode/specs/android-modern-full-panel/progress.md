@@ -217,9 +217,14 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
 ### Milestone 5
 
 - Task 5.1 complete: persistent schedule instances use unique `taskID + scheduledUTC + expressionHash` identity, transactional launch states, `result_unknown`, skip/queue/parallel policy controls, DST handling, and recent-miss compensation.
-- Task 5.2 complete: Core, Scheduler, and active task execution are represented under the Android foreground scheduling host with visible status and stop controls.
-- Task 5.3 complete: app-start, process-recovery, `BOOT_COMPLETED`, network-restored, and periodic WorkManager reconciliation trigger coverage is implemented.
-- Task 5.4 complete: resource protection pauses low-priority work under battery, thermal, memory, and storage pressure and exposes guarantee/intervention states.
+- Task 5.2 complete: Android `specialUse` foreground scheduler host reports foreground status, scheduler host state, active recovery trigger, resource snapshot, guarantee state, and intervention guidance through the local host status payload; the visible notification keeps stop control and shows resource-protection status.
+- Task 5.2 Core bridge: Android passes scheduler host platform capabilities and scheduler guarantee snapshots into gomobile StartCore options; mobilecore exposes the current scheduler guarantee in Core status.
+- Task 5.3 complete: app-start, process-recovery service recreation, `BOOT_COMPLETED`, network-restored callback, and 15-minute WorkManager periodic reconciliation triggers are implemented; recovery Work starts the FGS only when the user has enabled persistent scheduling.
+- Task 5.4 complete: Android evaluates battery, thermal, memory, and storage pressure into guarantee states, while Go `service` pauses low-priority cron/startup/background work under `resource_limited` or `system_stopped` and preserves manual execution.
+- Task 5.2-5.4 verification completed:
+  - `cd /workspace/panel/server && go test ./service -run 'TestShouldPauseLowPriorityWorkOnlyPausesBackgroundTriggers|TestTaskExecutorFailsCronOperationWhenResourceLimited' -count=1`
+  - `cd /workspace/panel/server && go test ./mobilecore -run 'TestStartCoreRejectsInvalidCapabilityVersionAndState|TestStartCorePublishesImmutableCapabilitySnapshot' -count=1`
+- Android unit verification attempted with `cd /workspace/app/android && ./gradlew :app:testDebugUnitTest --tests 'com.daidai.daidai_app.AndroidResourceProtectionTest' --tests 'com.daidai.daidai_app.AndroidSchedulerHostStatusTest'`, but the repository currently has no Gradle wrapper; `gradle` and `kotlinc` are not installed in the execution image.
 - Milestone 5 implementation status: complete on `main`; 24-hour and seven-day scheduling SLO evidence is reserved for user real-device long-stability testing.
 
 ### Milestone 6

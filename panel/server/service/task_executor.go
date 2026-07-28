@@ -170,6 +170,13 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 		setCurrentTaskOperation(task.ID, operationID)
 		_ = DefaultOperationStore().Start(operationID, "starting")
 	}
+	if guarantee, paused := ShouldPauseLowPriorityWork(req.TriggerType); paused {
+		if operationID != "" {
+			_ = DefaultOperationStore().Fail(operationID, nil, guarantee.ReasonCode, CurrentTaskLogCursor(task.ID))
+			clearTaskOperation(task.ID, operationID)
+		}
+		return SchedulerPauseError(guarantee)
+	}
 
 	if task.DependsOn != nil {
 		var depTask model.Task

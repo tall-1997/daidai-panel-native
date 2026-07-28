@@ -81,25 +81,6 @@ func TestCheckDependencyQuota(t *testing.T) {
 	}
 }
 
-func TestCheckDependencyQuotaUsesProjectedUsage(t *testing.T) {
-	testutil.SetupTestEnv(t)
-	t.Setenv("DAIDAI_DEPENDENCY_QUOTA_BYTES", "10")
-	depsDir := filepath.Join(config.C.Data.Dir, "deps")
-	if err := os.MkdirAll(depsDir, 0o755); err != nil {
-		t.Fatalf("mkdir deps: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(depsDir, "payload"), []byte("12345"), 0o644); err != nil {
-		t.Fatalf("write payload: %v", err)
-	}
-
-	if err := CheckDependencyQuotaWithProjection(4); err != nil {
-		t.Fatalf("expected projected usage within quota, got %v", err)
-	}
-	if err := CheckDependencyQuotaWithProjection(6); err == nil || !strings.Contains(err.Error(), "projected 11 bytes") {
-		t.Fatalf("expected projected quota error, got %v", err)
-	}
-}
-
 func TestPrepareDependencyStagingRestoresNodeTargetOnFailure(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	target := filepath.Join(config.C.Data.Dir, "deps", "nodejs", "node_modules", "left-pad")

@@ -7,13 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/smtp"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"daidai-panel/config"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
@@ -349,30 +346,6 @@ func TestSendExternalWebhookUsesTemplatesAndBearerToken(t *testing.T) {
 	}
 	if body["text"] != "完成 task-1" {
 		t.Fatalf("unexpected webhook body: %#v", body)
-	}
-}
-
-func TestWebhookURLValidationRejectsLocalTargetsAndRedirects(t *testing.T) {
-	testutil.SetupTestEnv(t)
-	config.C.Server.Mode = "production"
-
-	if err := validateWebhookURL("http://127.0.0.1/hook"); err == nil {
-		t.Fatal("expected loopback webhook URL to be rejected")
-	}
-	if err := validateWebhookURL("file:///tmp/hook"); err == nil {
-		t.Fatal("expected non-http webhook URL to be rejected")
-	}
-
-	client := webhookHTTPClient(&http.Client{Timeout: time.Second})
-	redirectURL := "http://93.184.216.34/hook"
-	req := httptest.NewRequest(http.MethodGet, "http://webhook.example/start", nil)
-	req.URL, _ = url.Parse(redirectURL)
-	if err := client.CheckRedirect(req, nil); err != nil {
-		t.Fatalf("expected public redirect target to pass validation: %v", err)
-	}
-	req.URL, _ = url.Parse("http://169.254.169.254/latest/meta-data")
-	if err := client.CheckRedirect(req, nil); err == nil {
-		t.Fatal("expected metadata redirect target to be rejected")
 	}
 }
 

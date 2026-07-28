@@ -111,6 +111,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     implementation("com.xeonyu:bsdiff:1.0.4")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("androidx.work:work-runtime-ktx:2.11.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
     if (file("libs/mobilecore.aar").exists()) {

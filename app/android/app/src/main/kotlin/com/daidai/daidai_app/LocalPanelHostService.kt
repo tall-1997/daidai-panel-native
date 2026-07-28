@@ -13,17 +13,26 @@ class LocalPanelHostService : Service() {
     companion object {
         const val ACTION_ENABLE_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_ENABLE_PERSISTENT"
         const val ACTION_DISABLE_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_DISABLE_PERSISTENT"
-        private const val PERSISTENT_PREFS_NAME = "local_panel_persistent_foreground"
-        private const val PREF_PERSISTENT_ENABLED = "enabled"
+        const val ACTION_RECOVER_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_RECOVER_PERSISTENT"
+        const val EXTRA_RECOVERY_TRIGGER = "recovery_trigger"
+        const val PERSISTENT_PREFS_NAME = "local_panel_persistent_foreground"
+        const val PREF_PERSISTENT_ENABLED = "enabled"
         private const val CHANNEL_ID = "local_panel_scheduler"
         private const val NOTIFICATION_ID = 5700
+
+        fun isPersistentSchedulingEnabled(context: android.content.Context): Boolean =
+            context.getSharedPreferences(PERSISTENT_PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .getBoolean(PREF_PERSISTENT_ENABLED, false)
     }
 
     private val localToken: String = PanelProcessLocalToken.value
     private lateinit var persistentPolicy: PersistentForegroundPolicy
     private lateinit var recoveryCoordinator: PersistentCoreRecoveryCoordinator
+    private lateinit var networkRecovery: LocalPanelNetworkRecovery
     @Volatile
     private var recoveryFailure: Map<String, Any>? = null
+    @Volatile
+    private var lastRecoveryTrigger: String = "app-start"
     @Volatile
     private var destroyed = false
     private val binder = object : ILocalPanelService.Stub() {
@@ -55,22 +64,34 @@ class LocalPanelHostService : Service() {
             runtime = { LocalPanelRuntime.ensureStarted(applicationContext, localToken) },
             onResult = ::handleRecoveryResult,
         )
+        networkRecovery = LocalPanelNetworkRecovery(applicationContext) {
+            lastRecoveryTrigger = "network"
+            LocalPanelRecoveryTriggers.reconcileWhenNetworkRestored(applicationContext)
+        }
         persistentPolicy = PersistentForegroundPolicy(readPersistentSelection())
         applyPersistentAction(persistentPolicy.recoveryAction())
+        LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) {
+            lastRecoveryTrigger = "process-recovery"
             restorePersistentSelection()
             return if (persistentPolicy.enabled) START_STICKY else START_NOT_STICKY
         }
         if (intent.action == ACTION_ENABLE_PERSISTENT) {
+            lastRecoveryTrigger = "app-start"
             setPersistentScheduling(true)
             return START_STICKY
         }
         if (intent.action == ACTION_DISABLE_PERSISTENT) {
             setPersistentScheduling(false)
             return START_NOT_STICKY
+        }
+        if (intent.action == ACTION_RECOVER_PERSISTENT) {
+            lastRecoveryTrigger = intent.getStringExtra(EXTRA_RECOVERY_TRIGGER) ?: "process-recovery"
+            restorePersistentSelection()
+            return if (persistentPolicy.enabled) START_STICKY else START_NOT_STICKY
         }
         return START_NOT_STICKY
     }
@@ -79,6 +100,7 @@ class LocalPanelHostService : Service() {
 
     override fun onDestroy() {
         destroyed = true
+        networkRecovery.stop()
         recoveryCoordinator.close()
         // The Core belongs to the :panel process, not this Service instance.
         // A replacement Service must never let an old onDestroy stop its Core.
@@ -89,6 +111,7 @@ class LocalPanelHostService : Service() {
     private fun encodeWithState(status: Map<String, Any>): String = GoCoreResultMapper.encode(
         status.toMutableMap().apply {
             this["foreground_service_enabled"] = persistentPolicy.foregroundActive
+            putAll(AndroidSchedulerHostStatus.status(applicationContext, persistentPolicy.foregroundActive, lastRecoveryTrigger))
             recoveryFailure?.let { failure -> putAll(failure) }
         },
     )
@@ -114,9 +137,11 @@ class LocalPanelHostService : Service() {
             PersistentForegroundPolicy.Action.START_FOREGROUND ->
                 startForeground(NOTIFICATION_ID, buildNotification(starting = true)).also {
                     recoveryFailure = null
+                    networkRecovery.start()
                     recoveryCoordinator.recoverAfterForegroundStarted()
                 }
             PersistentForegroundPolicy.Action.STOP_FOREGROUND -> {
+                networkRecovery.stop()
                 recoveryCoordinator.cancelPending()
                 recoveryFailure = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -188,6 +213,8 @@ class LocalPanelHostService : Service() {
         .setContentText(
             when {
                 failed -> "本地面板核心恢复失败，请打开应用重试"
+                AndroidResourceProtection.evaluate(AndroidResourceProtection.snapshot(this)).state == "resource_limited" ->
+                    "本地面板运行中，低优先级任务已受资源保护"
                 starting -> "正在恢复本地面板核心"
                 else -> "本地面板与任务调度宿主正在运行"
             }

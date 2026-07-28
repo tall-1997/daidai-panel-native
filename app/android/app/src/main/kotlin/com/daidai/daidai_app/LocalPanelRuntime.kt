@@ -49,7 +49,11 @@ object LocalPanelRuntime {
         "failure_stage" to "",
         "fallback_stage" to reason,
         "message" to "",
-        "foreground_service_enabled" to false,
-        "local_token" to localToken,
-    )
+            "foreground_service_enabled" to false,
+            "scheduler_host_state" to "system_compensation",
+            "scheduler_guarantee_state" to "system_compensation",
+            "scheduler_guarantee_reason" to "kotlin_fallback",
+            "scheduler_intervention" to "",
+            "local_token" to localToken,
+        )
 }
