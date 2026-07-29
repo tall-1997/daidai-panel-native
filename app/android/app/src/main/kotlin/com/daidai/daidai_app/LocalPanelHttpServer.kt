@@ -183,6 +183,7 @@ class LocalPanelHttpServer(
                 .put(JSONObject().put("name", "Android local HTTP API").put("status", "ok"))
                 .put(JSONObject().put("name", "Local management core").put("status", "ok").put("message", "Kotlin fallback is serving local management APIs"))
                 .put(runtimeSmokeItem("Python runtime", pythonSmokeCommand(), "PY_OK"))
+                .put(pythonSeedStatusItem())
                 .put(runtimeSmokeItem("Node runtime", nodeSmokeCommand(), "NODE_OK"))
                 .put(runtimeSmokeItem("TypeScript runtime", typeScriptSmokeCommand(), "TS_OK"))
         )
@@ -196,6 +197,15 @@ class LocalPanelHttpServer(
 
     private fun pythonSmokeCommand(): List<String>? = AndroidPythonRuntime.ensureReady(context)?.let {
         listOf(it.executable, it.home, "-c", "print('PY_OK')")
+    }
+
+    private fun pythonSeedStatusItem(): JSONObject {
+        val status = AndroidPythonRuntime.seedStatus(context)
+        return if (status == "ok") {
+            JSONObject().put("name", "Python seed wheelhouse").put("status", "ok").put("message", "seed dependencies installed")
+        } else {
+            JSONObject().put("name", "Python seed wheelhouse").put("status", "warning").put("message", status)
+        }
     }
 
     private fun nodeSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {

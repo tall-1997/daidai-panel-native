@@ -30,6 +30,15 @@ object AndroidPythonRuntime {
 
     fun depsDir(context: Context): File = File(context.filesDir, "deps/python/$VERSION/site-packages").apply { mkdirs() }
 
+    fun seedStatus(context: Context): String {
+        val deps = depsDir(context)
+        val ready = File(deps, ".daidai-python-seed-ready")
+        if (ready.isFile) return "ok"
+        val failed = File(deps, ".daidai-python-seed-failed.log")
+        if (failed.isFile) return failed.readText().take(500)
+        return "pending"
+    }
+
     private fun copyAssetTree(context: Context, assetPath: String, target: File) {
         val children = context.assets.list(assetPath).orEmpty()
         if (children.isEmpty()) {
@@ -51,34 +60,40 @@ object AndroidPythonRuntime {
         if (marker.isFile) return
         val wheelhouse = File(paths.home, "wheelhouse")
         if (!wheelhouse.isDirectory) return
-        verifyWheelhouse(wheelhouse)
-        runPythonCommand(
-            context,
-            paths,
-            listOf("-m", "ensurepip", "--upgrade"),
-            "Python ensurepip bootstrap failed",
-        )
-        runPythonCommand(
-            context,
-            paths,
-            listOf(
-                "-m",
-                "pip",
-                "install",
-                "--no-index",
-                "--find-links",
-                wheelhouse.absolutePath,
-                "--target",
-                deps.absolutePath,
-                "certifi==2026.5.20",
-                "charset-normalizer==3.4.7",
-                "idna==3.18",
-                "requests==2.34.2",
-                "urllib3==2.7.0",
-            ),
-            "Python seed dependency install failed",
-        )
-        marker.writeText(VERSION)
+        val failureLog = File(deps, ".daidai-python-seed-failed.log")
+        runCatching {
+            verifyWheelhouse(wheelhouse)
+            runPythonCommand(
+                context,
+                paths,
+                listOf("-m", "ensurepip", "--upgrade"),
+                "Python ensurepip bootstrap failed",
+            )
+            runPythonCommand(
+                context,
+                paths,
+                listOf(
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-index",
+                    "--find-links",
+                    wheelhouse.absolutePath,
+                    "--target",
+                    deps.absolutePath,
+                    "certifi==2026.5.20",
+                    "charset-normalizer==3.4.7",
+                    "idna==3.18",
+                    "requests==2.34.2",
+                    "urllib3==2.7.0",
+                ),
+                "Python seed dependency install failed",
+            )
+            marker.writeText(VERSION)
+            if (failureLog.isFile) failureLog.writeText("")
+        }.onFailure { error ->
+            failureLog.writeText(error.message ?: error.javaClass.simpleName)
+        }
     }
 
     private fun runPythonCommand(
