@@ -52,23 +52,46 @@ object AndroidPythonRuntime {
         val wheelhouse = File(paths.home, "wheelhouse")
         if (!wheelhouse.isDirectory) return
         verifyWheelhouse(wheelhouse)
+        runPythonCommand(
+            context,
+            paths,
+            listOf("-m", "ensurepip", "--upgrade"),
+            "Python ensurepip bootstrap failed",
+        )
+        runPythonCommand(
+            context,
+            paths,
+            listOf(
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--find-links",
+                wheelhouse.absolutePath,
+                "--target",
+                deps.absolutePath,
+                "certifi==2026.5.20",
+                "charset-normalizer==3.4.7",
+                "idna==3.18",
+                "requests==2.34.2",
+                "urllib3==2.7.0",
+            ),
+            "Python seed dependency install failed",
+        )
+        marker.writeText(VERSION)
+    }
+
+    private fun runPythonCommand(
+        context: Context,
+        paths: PythonRuntimePaths,
+        args: List<String>,
+        failurePrefix: String,
+    ) {
+        val deps = File(paths.deps).apply { mkdirs() }
         val command = listOf(
             paths.executable,
             paths.home,
-            "-m",
-            "pip",
-            "install",
-            "--no-index",
-            "--find-links",
-            wheelhouse.absolutePath,
-            "--target",
-            deps.absolutePath,
-            "certifi==2026.5.20",
-            "charset-normalizer==3.4.7",
-            "idna==3.18",
-            "requests==2.34.2",
-            "urllib3==2.7.0",
-        )
+        ) + args
         val process = ProcessBuilder(command)
             .redirectErrorStream(true)
             .apply {
@@ -81,8 +104,7 @@ object AndroidPythonRuntime {
             .start()
         val output = process.inputStream.bufferedReader().readText()
         val exit = process.waitFor()
-        check(exit == 0) { "Python seed dependency install failed: $output" }
-        marker.writeText(VERSION)
+        check(exit == 0) { "$failurePrefix: exit=$exit output=${output.ifBlank { "<empty>" }}" }
     }
 
     private fun verifyWheelhouse(wheelhouse: File) {

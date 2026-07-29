@@ -17,7 +17,8 @@
         "name": "pycryptodome",
         "version": "3.23.0",
         "status": "requires-android-wheel",
-        "reason": "pycryptodome contains native extensions and must be provided as a signed Android ABI compatible wheel."
+        "reason": "pycryptodome contains native extensions and must be provided as a signed Android ABI compatible wheel.",
+        "install_policy": "blocked-until-user-authorized-and-sha256-verified"
       }
     ]
   },
