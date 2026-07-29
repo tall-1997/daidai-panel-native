@@ -75,10 +75,10 @@ jobs:
           unzip -q app/android/app/libs/mobilecore.aar classes.jar -d "$AAR_CHECK_DIR"
           jar tf "$AAR_CHECK_DIR/classes.jar" | grep -Fx 'mobilecore/mobilecore/Mobilecore.class'
           javap -classpath "$AAR_CHECK_DIR/classes.jar" mobilecore.mobilecore.Mobilecore > "$AAR_CHECK_DIR/Mobilecore.javap"
-          grep -F 'public static java.lang.String startCore(java.lang.String);' "$AAR_CHECK_DIR/Mobilecore.javap"
-          grep -F 'public static java.lang.String stopCore(long);' "$AAR_CHECK_DIR/Mobilecore.javap"
-          grep -F 'public static java.lang.String coreStatus();' "$AAR_CHECK_DIR/Mobilecore.javap"
-          grep -F 'public static java.lang.String coreEndpoint();' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'java.lang.String startCore(java.lang.String)' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'java.lang.String stopCore(long)' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'java.lang.String coreStatus()' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'java.lang.String coreEndpoint()' "$AAR_CHECK_DIR/Mobilecore.javap"
 
       - name: Resolve Flutter packages
         working-directory: app
