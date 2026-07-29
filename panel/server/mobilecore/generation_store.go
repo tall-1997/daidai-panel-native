@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -219,6 +220,9 @@ func (store *generationStore) ensureTrustedDirectoryComponents(path string, allo
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			if runtime.GOOS == "android" && info.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
 			return fmt.Errorf("untrusted directory component: %s", components[i])
 		}
 	}
@@ -1162,6 +1166,9 @@ func (store *generationStore) ensureRecoveryMetadataNamespace() error {
 func (store *generationStore) ensureDurableDirectory(path string) error {
 	if info, err := store.ops.lstat(path); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			if runtime.GOOS == "android" && info.Mode()&os.ModeSymlink != 0 {
+				return nil
+			}
 			return errors.New("durable namespace path is unsafe")
 		}
 		parent := filepath.Dir(path)

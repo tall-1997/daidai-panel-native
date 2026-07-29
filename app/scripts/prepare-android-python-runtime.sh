@@ -41,6 +41,7 @@ python3 -m pip download \
   idna==3.18 \
   requests==2.34.2 \
   urllib3==2.7.0 \
+  beautifulsoup4==4.13.4 \
   pip==24.0
 
 python3 - "$ASSET_DIR/wheelhouse" <<'PY'

@@ -10,6 +10,7 @@
       { "name": "idna", "version": "3.18", "status": "bundled" },
       { "name": "requests", "version": "2.34.2", "status": "bundled" },
       { "name": "urllib3", "version": "2.7.0", "status": "bundled" },
+      { "name": "beautifulsoup4", "version": "4.13.4", "status": "bundled" },
       { "name": "pip", "version": "24.0", "status": "bundled-wheel", "note": "Runtime ensurepip may provide a newer pip; this wheel is kept for compatibility." }
     ],
     "android_abi_required": [

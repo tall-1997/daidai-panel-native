@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
@@ -63,33 +64,34 @@ object AndroidPythonRuntime {
         val failureLog = File(deps, ".daidai-python-seed-failed.log")
         runCatching {
             verifyWheelhouse(wheelhouse)
-            val pipWheel = wheelhouse.listFiles()
-                ?.firstOrNull { it.name.startsWith("pip-") && it.name.endsWith(".whl") }
-                ?: error("Bundled pip wheel is missing")
-            runPythonCommand(
-                context,
-                paths,
-                listOf(
-                    "-c",
-                    "import sys; sys.path.insert(0, '${pipWheel.absolutePath}'); from pip._internal.cli.main import main; sys.exit(main())",
-                    "install",
-                    "--no-index",
-                    "--find-links",
-                    wheelhouse.absolutePath,
-                    "--target",
-                    deps.absolutePath,
-                    "certifi==2026.5.20",
-                    "charset-normalizer==3.4.7",
-                    "idna==3.18",
-                    "requests==2.34.2",
-                    "urllib3==2.7.0",
-                ),
-                "Python seed dependency install failed",
-            )
+            installWheelhouseByExtraction(wheelhouse, deps)
             marker.writeText(VERSION)
             if (failureLog.isFile) failureLog.writeText("")
         }.onFailure { error ->
             failureLog.writeText(error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun installWheelhouseByExtraction(wheelhouse: File, deps: File) {
+        val wheels = wheelhouse.listFiles { file -> file.isFile && file.name.endsWith(".whl") }.orEmpty()
+        check(wheels.isNotEmpty()) { "Python wheelhouse is empty" }
+        for (wheel in wheels) {
+            ZipFile(wheel).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    val target = File(deps, entry.name).canonicalFile
+                    check(target.path.startsWith(deps.canonicalPath + File.separator)) { "Unsafe wheel entry: ${entry.name}" }
+                    if (entry.isDirectory) {
+                        target.mkdirs()
+                    } else {
+                        target.parentFile?.mkdirs()
+                        zip.getInputStream(entry).use { input ->
+                            target.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+            }
         }
     }
 
