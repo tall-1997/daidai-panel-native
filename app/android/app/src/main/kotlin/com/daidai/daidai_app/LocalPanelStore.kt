@@ -187,19 +187,20 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     }
 
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val segments = session.uri.trim('/').split('/')
-        val id = segments.getOrNull(2)?.toLongOrNull()
-        val action = segments.getOrNull(3)
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val segments = normalizedUri.trim('/').split('/')
+        val id = segments.getOrNull(1)?.toLongOrNull()
+        val action = segments.getOrNull(2)
         return when {
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/tasks/views" ->
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/views" ->
                 ok(JSONObject().put("data", JSONArray()))
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/tasks/cron/templates" ->
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/cron/templates" ->
                 cronTemplates()
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/tasks/cron/parse" ->
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/cron/parse" ->
                 cronParse(body(session))
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/tasks/notification-channels" ->
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/notification-channels" ->
                 ok(JSONObject().put("data", JSONArray()))
-            session.uri.startsWith("/api/tasks/batch/") -> serveTaskBatch(session, action)
+            normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, body(session))
@@ -213,14 +214,27 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
     }
 
-    fun serveEnvs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val segments = session.uri.trim('/').split('/')
-        val id = segments.getOrNull(2)?.toLongOrNull()
-        val action = segments.getOrNull(3)
+    fun serveLogs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val segments = normalizedUri.trim('/').split('/')
+        val id = segments.getOrNull(1)?.toLongOrNull()
         return when {
-            session.method == NanoHTTPD.Method.GET && session.uri.endsWith("/groups") -> envGroups()
-            session.uri.startsWith("/api/envs/batch") -> serveEnvBatch(session, action)
-            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/envs/sort" -> sortEnvs(body(session))
+            session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "stream" -> taskLogStream(id)
+            session.method == NanoHTTPD.Method.GET && id != null -> taskLog(id)
+            session.method == NanoHTTPD.Method.GET -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("page", 1).put("page_size", 0))
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "日志接口尚未实现")
+        }
+    }
+
+    fun serveEnvs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val segments = normalizedUri.trim('/').split('/')
+        val id = segments.getOrNull(1)?.toLongOrNull()
+        val action = segments.getOrNull(2)
+        return when {
+            session.method == NanoHTTPD.Method.GET && normalizedUri.endsWith("/groups") -> envGroups()
+            normalizedUri.startsWith("/envs/batch") -> serveEnvBatch(session, action)
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateEnv(id, body(session))
@@ -281,6 +295,20 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 val logs = JSONArray(cursor.string("logs_json"))
                 for (index in 0 until logs.length()) {
                     lines += "INFO script[$runID][$status] ${logs.optString(index)}"
+                }
+            }
+        }
+        readableDatabase.rawQuery(
+            "SELECT id, name, last_run_status, last_run_logs FROM tasks WHERE last_run_logs <> '[]' ORDER BY updated_at DESC LIMIT 50",
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val taskID = cursor.long("id")
+                val taskName = cursor.string("name")
+                val status = cursor.string("last_run_status").ifBlank { "unknown" }
+                val logs = JSONArray(cursor.string("last_run_logs"))
+                for (index in 0 until logs.length()) {
+                    lines += "INFO task[$taskID][$taskName][$status] ${logs.optString(index)}"
                 }
             }
         }
@@ -1169,16 +1197,51 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             val found = cursor.moveToFirst()
             val status = if (found) cursor.string("last_run_status") else ""
             val logs = if (found) runCatching { JSONArray(cursor.string("last_run_logs")) }.getOrDefault(JSONArray()) else JSONArray()
-            JSONObject().put(
-                "data",
-                JSONObject()
-                    .put("task_id", id)
-                    .put("status", status.ifBlank { "idle" })
-                    .put("content", (0 until logs.length()).joinToString("\n") { logs.optString(it) })
-                    .put("logs", logs)
-            )
+            val content = (0 until logs.length()).joinToString("\n") { logs.optString(it) }
+            val resolvedStatus = status.ifBlank { "idle" }
+            JSONObject()
+                .put("task_id", id)
+                .put("status", resolvedStatus)
+                .put("done", true)
+                .put("content", content)
+                .put("logs", logs)
+                .put(
+                    "data",
+                    JSONObject()
+                        .put("task_id", id)
+                        .put("status", resolvedStatus)
+                        .put("done", true)
+                        .put("content", content)
+                        .put("logs", logs)
+                )
         }
     )
+
+    private fun taskLogStream(id: Long): NanoHTTPD.Response {
+        val logs = readableDatabase.query(
+            "tasks",
+            arrayOf("last_run_logs", "last_run_status"),
+            "id = ?",
+            arrayOf(id.toString()),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) JSONArray().put("Task log not found")
+            else runCatching { JSONArray(cursor.string("last_run_logs")) }.getOrDefault(JSONArray())
+        }
+        val payload = StringBuilder()
+        for (index in 0 until logs.length()) {
+            payload.append("data: ").append(logs.optString(index).replace("\n", "\\n")).append("\n\n")
+        }
+        payload.append("event: done\n")
+        payload.append("data: done\n\n")
+        return NanoHTTPD.newFixedLengthResponse(
+            NanoHTTPD.Response.Status.OK,
+            "text/event-stream; charset=utf-8",
+            payload.toString()
+        )
+    }
 
     private fun taskStats(id: Long): NanoHTTPD.Response = ok(
         JSONObject().put(

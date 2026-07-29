@@ -81,6 +81,9 @@ class LocalPanelHttpServer(
                 session.uri.startsWith("/api/system/backup") || session.uri.startsWith("/api/system/backups") ||
                     session.uri.startsWith("/api/system/restore") -> store.serveBackup(session)
 
+                session.uri.startsWith("/api/logs") || session.uri.startsWith("/api/v1/logs") ->
+                    store.serveLogs(session)
+
                 session.method == Method.GET && session.uri == "/api/system/dashboard" ->
                     jsonResponse(store.dashboard())
 
@@ -90,9 +93,9 @@ class LocalPanelHttpServer(
                 session.method == Method.GET && session.uri == "/api/system/panel-settings" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("panel_title", "呆呆本地面板")))
 
-                session.uri.startsWith("/api/tasks") -> store.serveTasks(session)
-                session.uri.startsWith("/api/scripts") -> store.serveScripts(session)
-                session.uri.startsWith("/api/envs") -> store.serveEnvs(session)
+                session.uri.startsWith("/api/tasks") || session.uri.startsWith("/api/v1/tasks") -> store.serveTasks(session)
+                session.uri.startsWith("/api/scripts") || session.uri.startsWith("/api/v1/scripts") -> store.serveScripts(session)
+                session.uri.startsWith("/api/envs") || session.uri.startsWith("/api/v1/envs") -> store.serveEnvs(session)
                 session.uri.startsWith("/api/deps") || session.uri.startsWith("/api/v1/deps") ->
                     store.serveDependencies(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
