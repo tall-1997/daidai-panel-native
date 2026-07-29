@@ -220,7 +220,7 @@ class LocalPanelHttpServer(
     }
 
     private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, java.io.File(it.modules, "ts-node/dist/bin.js").absolutePath, "--transpile-only", "--compiler-options", "{\"module\":\"CommonJS\"}", "-e", "console.log('TS_OK')")
+        listOf(it.executable, "-e", "const ts=require('typescript');const out=ts.transpileModule(\"const msg:string='TS_OK'; console.log(msg)\",{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;eval(out)")
     }
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {

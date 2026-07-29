@@ -915,7 +915,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.home, file.absolutePath) }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, file.absolutePath) }
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, File(it.modules, "ts-node/dist/bin.js").absolutePath, "--transpile-only", "--compiler-options", "{\"module\":\"CommonJS\"}", file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, "-e", typeScriptEvalCode(), file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }
@@ -927,6 +927,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         if (sample.contains("RUNTIME_STUB_OK")) return false
         return true
     }
+
+    private fun typeScriptEvalCode(): String =
+        "const fs=require('fs');const vm=require('vm');const ts=require('typescript');" +
+            "const file=process.argv[1];const code=fs.readFileSync(file,'utf8');" +
+            "const out=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;" +
+            "vm.runInThisContext(out,{filename:file});"
 
     private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray): LocalScriptResult {
         logs.put("Command: ${command.first().substringAfterLast('/')}")

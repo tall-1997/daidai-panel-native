@@ -8,6 +8,8 @@ import java.util.zip.ZipFile
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
+    private const val ASSET_REVISION = "3.14.6-20260729-r2"
+    private const val SEED_REVISION = "20260729-r3"
     private const val ASSET_ROOT = "python-runtime/$VERSION/prefix"
 
     fun ensureReady(context: Context): PythonRuntimePaths? {
@@ -17,10 +19,10 @@ object AndroidPythonRuntime {
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")
-        if (!marker.isFile) {
+        if (!marker.isFile || marker.readText().trim() != ASSET_REVISION) {
             copyAssetTree(context, ASSET_ROOT, home)
             marker.parentFile?.mkdirs()
-            marker.writeText(VERSION)
+            marker.writeText(ASSET_REVISION)
         }
         val stdlib = File(home, "lib/python$VERSION")
         if (!stdlib.isDirectory) return null
@@ -58,14 +60,14 @@ object AndroidPythonRuntime {
     private fun ensureSeedPackages(context: Context, paths: PythonRuntimePaths) {
         val deps = File(paths.deps).apply { mkdirs() }
         val marker = File(deps, ".daidai-python-seed-ready")
-        if (marker.isFile) return
+        if (marker.isFile && marker.readText().trim() == SEED_REVISION) return
         val wheelhouse = File(paths.home, "wheelhouse")
         if (!wheelhouse.isDirectory) return
         val failureLog = File(deps, ".daidai-python-seed-failed.log")
         runCatching {
             verifyWheelhouse(wheelhouse)
             installWheelhouseByExtraction(wheelhouse, deps)
-            marker.writeText(VERSION)
+            marker.writeText(SEED_REVISION)
             if (failureLog.isFile) failureLog.writeText("")
         }.onFailure { error ->
             failureLog.writeText(error.message ?: error.javaClass.simpleName)
