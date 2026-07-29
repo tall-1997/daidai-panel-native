@@ -140,7 +140,7 @@ var recoveryPublishBoundary = func(string) error { return nil }
 var recoveryProbeBoundary = func(string) error { return nil }
 var recoveryNamespaceSync = platformSyncDirectory
 var recoveryRollbackBoundary = func(string) error { return nil }
-var usePortableMetadataPublish = runtime.GOOS == "android"
+var useAndroidPrivateStorage = runtime.GOOS == "android"
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
@@ -180,6 +180,15 @@ func (store *generationStore) validateRootComponents() error {
 
 func (store *generationStore) ensureTrustedContainer() error {
 	root := store.root
+	if useAndroidPrivateStorage {
+		if err := store.ensureOwnedDirectory(root); err != nil {
+			return fmt.Errorf("generation root is not a trusted directory: %w", err)
+		}
+		if err := store.ensureOwnedDirectory(filepath.Join(root, generationsDirName)); err != nil {
+			return fmt.Errorf("generations container is not a trusted directory: %w", err)
+		}
+		return nil
+	}
 	if err := store.ensureTrustedDirectoryComponents(root, true); err != nil {
 		return err
 	}
@@ -198,6 +207,20 @@ func (store *generationStore) ensureTrustedContainer() error {
 	}
 	if err := store.ensureTrustedDirectoryComponents(container, false); err != nil {
 		return errors.New("generations container is not a trusted directory")
+	}
+	return nil
+}
+
+func (store *generationStore) ensureOwnedDirectory(path string) error {
+	if err := store.ops.mkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	info, err := store.ops.lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("owned path is not a directory")
 	}
 	return nil
 }
@@ -957,7 +980,7 @@ func validManifestPath(path string) bool {
 }
 
 func (store *generationStore) writeAtomic(path string, data []byte, mode fs.FileMode, renameBoundary string) (resultErr error) {
-	if usePortableMetadataPublish {
+	if useAndroidPrivateStorage {
 		return store.writeAtomicPortable(path, data, mode, renameBoundary)
 	}
 	canonical, err := store.canonicalMetadataTarget(path)

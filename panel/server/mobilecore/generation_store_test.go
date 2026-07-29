@@ -56,9 +56,9 @@ func TestPortableMetadataPublishBoundaryFailurePreservesTarget(t *testing.T) {
 }
 
 func TestPortableMetadataPublishBootstrapsEmptyAndroidDataDir(t *testing.T) {
-	original := usePortableMetadataPublish
-	usePortableMetadataPublish = true
-	t.Cleanup(func() { usePortableMetadataPublish = original })
+	original := useAndroidPrivateStorage
+	useAndroidPrivateStorage = true
+	t.Cleanup(func() { useAndroidPrivateStorage = original })
 
 	root := filepath.Join(t.TempDir(), "files", "local-panel")
 	store := newGenerationStore(root, defaultFilesystemOps())
@@ -75,6 +75,32 @@ func TestPortableMetadataPublishBootstrapsEmptyAndroidDataDir(t *testing.T) {
 	}
 	if second != active {
 		t.Fatalf("portable bootstrap created another generation: first=%q second=%q", active, second)
+	}
+}
+
+func TestAndroidPrivateStorageDoesNotInspectSandboxAncestors(t *testing.T) {
+	original := useAndroidPrivateStorage
+	useAndroidPrivateStorage = true
+	t.Cleanup(func() { useAndroidPrivateStorage = original })
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "data", "user", "0", "com.daidai.daidai_app", "files", "local-panel")
+	ops := defaultFilesystemOps()
+	originalLstat := ops.lstat
+	ops.lstat = func(path string) (os.FileInfo, error) {
+		if path != root && path != filepath.Join(root, generationsDirName) && strings.HasPrefix(root, path+string(filepath.Separator)) {
+			return nil, os.ErrPermission
+		}
+		return originalLstat(path)
+	}
+
+	store := newGenerationStore(root, ops)
+	active, err := store.converge()
+	if err != nil {
+		t.Fatalf("Android private storage converge inspected inaccessible ancestor: %v", err)
+	}
+	if filepath.Dir(active) != filepath.Join(root, generationsDirName) {
+		t.Fatalf("active generation path=%q", active)
 	}
 }
 
