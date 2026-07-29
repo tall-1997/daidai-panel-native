@@ -5,12 +5,13 @@ import fi.iki.elonen.NanoHTTPD
 
 object LocalPanelRuntime {
     private var fallbackServer: LocalPanelHttpServer? = null
+    private var lastFallbackReason: String = ""
 
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
         if (coreStatus["phase"] == "ready") return coreStatus
-        return ensureFallbackStarted(context.applicationContext, localToken, coreStatus["failure_stage"]?.toString().orEmpty())
+        return ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
     }
 
     @Synchronized
@@ -28,16 +29,25 @@ object LocalPanelRuntime {
     fun status(localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.status(localToken)
         if (coreStatus["phase"] == "ready") return coreStatus
-        return fallbackServer?.let { fallbackStatus(it, localToken, "go_core_unavailable") } ?: coreStatus
+        return fallbackServer?.let { fallbackStatus(it, localToken, lastFallbackReason.ifBlank { "go_core_unavailable" }) } ?: coreStatus
     }
 
     private fun ensureFallbackStarted(context: Context, localToken: String, reason: String): Map<String, Any> {
+        val normalizedReason = reason.ifBlank { "go_core_unavailable" }
+        lastFallbackReason = normalizedReason
         val existing = fallbackServer
-        if (existing != null) return fallbackStatus(existing, localToken, reason.ifBlank { "go_core_unavailable" })
-        val server = LocalPanelHttpServer(context)
+        if (existing != null) return fallbackStatus(existing, localToken, normalizedReason)
+        val server = LocalPanelHttpServer(context, normalizedReason)
         server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
         fallbackServer = server
-        return fallbackStatus(server, localToken, reason.ifBlank { "go_core_unavailable" })
+        return fallbackStatus(server, localToken, normalizedReason)
+    }
+
+    private fun fallbackReason(status: Map<String, Any>): String {
+        val stage = status["failure_stage"]?.toString().orEmpty().ifBlank { "go_core_unavailable" }
+        val errorType = status["go_core_error_type"]?.toString().orEmpty()
+        val rootType = status["go_core_root_error_type"]?.toString().orEmpty()
+        return listOf(stage, errorType, rootType).filter(String::isNotBlank).joinToString(":")
     }
 
     private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> = mapOf(

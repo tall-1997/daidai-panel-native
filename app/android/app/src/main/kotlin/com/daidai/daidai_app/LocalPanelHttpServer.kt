@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit
 
 class LocalPanelHttpServer(
     private val context: Context,
+    private val goCoreFallbackReason: String = "go_core_unavailable",
     port: Int = findAvailablePort()
 ) : NanoHTTPD("127.0.0.1", port) {
     private val store = LocalPanelStore(context)
@@ -179,8 +180,9 @@ class LocalPanelHttpServer(
     private fun systemHealth(): JSONObject = JSONObject()
         .put(
             "items",
-            JSONArray()
+                JSONArray()
                 .put(JSONObject().put("name", "Android local HTTP API").put("status", "ok"))
+                .put(goCoreHealthItem())
                 .put(JSONObject().put("name", "Local management core").put("status", "ok").put("message", "Kotlin fallback is serving local management APIs"))
                 .put(runtimeSmokeItem("Python runtime", pythonSmokeCommand(), "PY_OK"))
                 .put(pythonSeedStatusItem())
@@ -188,6 +190,11 @@ class LocalPanelHttpServer(
                 .put(runtimeSmokeItem("TypeScript runtime", typeScriptSmokeCommand(), "TS_OK"))
         )
         .put("last_checked_at", java.time.Instant.now().toString())
+
+    private fun goCoreHealthItem(): JSONObject = JSONObject()
+        .put("name", "Embedded Go core")
+        .put("status", "warning")
+        .put("message", goCoreFallbackReason.ifBlank { "go_core_unavailable" })
 
     private fun hasNativeRuntimeEntries(): Boolean = listOf(
         "libpython_exec.so",

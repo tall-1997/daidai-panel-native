@@ -80,6 +80,7 @@ object GoCoreBridge {
         val coreClass = Class.forName(GoCoreReflectionContract.CLASS_NAME)
         coreClass.getMethod(methodName, *parameterTypes).invoke(null, *arguments) as String
     } catch (error: Throwable) {
+        val root = if (error is java.lang.reflect.InvocationTargetException) error.targetException ?: error else error
         val code = when (error) {
             is ClassNotFoundException -> "CORE_CLASS_NOT_FOUND"
             is NoSuchMethodException -> "CORE_METHOD_NOT_FOUND"
@@ -94,6 +95,7 @@ object GoCoreBridge {
             .put("status", "failed")
             .put("errorCode", code)
             .put("errorType", error.javaClass.simpleName)
+            .put("rootErrorType", root.javaClass.simpleName)
             .toString()
     }
 }

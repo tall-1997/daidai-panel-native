@@ -15,7 +15,11 @@ object GoCoreResultMapper {
         if (!result.optBoolean("ok") || !running) {
             val stopped = result.optString("status") == "stopped" &&
                 result.optString("errorCode") in setOf("", "NOT_RUNNING")
-            return if (stopped) stopped() else failed(result.optString("errorCode", "core_failed"))
+            return if (stopped) stopped() else failed(
+                result.optString("errorCode", "core_failed"),
+                result.optString("errorType"),
+                result.optString("rootErrorType"),
+            )
         }
 
         return baseStatus("ready").toMutableMap().apply {
@@ -42,9 +46,11 @@ object GoCoreResultMapper {
 
     private fun stopped(): Map<String, Any> = baseStatus("stopped")
 
-    private fun failed(stage: String): Map<String, Any> = baseStatus("failed").toMutableMap().apply {
+    private fun failed(stage: String, errorType: String = "", rootErrorType: String = ""): Map<String, Any> = baseStatus("failed").toMutableMap().apply {
         this["failure_stage"] = stage.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,64}")) } ?: "core_failed"
         this["message"] = "Embedded core failed"
+        if (errorType.matches(Regex("[A-Za-z0-9_.]{1,96}"))) this["go_core_error_type"] = errorType
+        if (rootErrorType.matches(Regex("[A-Za-z0-9_.]{1,96}"))) this["go_core_root_error_type"] = rootErrorType
     }
 
     private fun baseStatus(phase: String): Map<String, Any> = mapOf(
