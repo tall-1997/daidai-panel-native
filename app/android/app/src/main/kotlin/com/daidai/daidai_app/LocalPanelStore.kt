@@ -25,6 +25,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     null,
     SCHEMA_VERSION
 ) {
+    private val configPrefs by lazy {
+        appContext.getSharedPreferences("daidai-local-configs", Context.MODE_PRIVATE)
+    }
     private data class LocalScriptResult(
         val logs: JSONArray,
         val status: String,
@@ -415,7 +418,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             }
         }
         if (!data.has("allow_unverified_android_abi_wheels")) {
-            data.put("allow_unverified_android_abi_wheels", JSONObject().put("value", "false").put("default_value", "false"))
+            val value = configPrefs.getString("allow_unverified_android_abi_wheels", "false") ?: "false"
+            data.put("allow_unverified_android_abi_wheels", JSONObject().put("value", value).put("default_value", "false"))
+        }
+        if (!data.has("auto_install_deps")) {
+            val value = configPrefs.getString("auto_install_deps", "false") ?: "false"
+            data.put("auto_install_deps", JSONObject().put("value", value).put("default_value", "false"))
         }
         return ok(JSONObject().put("data", data))
     }
@@ -448,6 +456,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             put("updated_at", Instant.now().toString())
         }
         writableDatabase.insertWithOnConflict("local_configs", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        if (key == "allow_unverified_android_abi_wheels" || key == "auto_install_deps") {
+            configPrefs.edit().putString(key, value).apply()
+        }
     }
 
     private fun configValue(key: String, fallback: String): String = readableDatabase.query(
@@ -458,7 +469,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         null,
         null,
         null
-    ).use { cursor -> if (cursor.moveToFirst()) cursor.string("value") else fallback }
+    ).use { cursor ->
+        if (cursor.moveToFirst()) cursor.string("value") else configPrefs.getString(key, fallback) ?: fallback
+    }
 
     private fun configBool(key: String, fallback: Boolean): Boolean = when (configValue(key, if (fallback) "true" else "false").lowercase()) {
         "true", "1", "yes", "on" -> true
@@ -974,6 +987,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             "HOME" to appContext.filesDir.absolutePath,
             "TMPDIR" to appContext.cacheDir.absolutePath,
             "DAIDAI_ANDROID_LOCAL" to "1",
+            "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
+            "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
             "LD_LIBRARY_PATH" to appContext.applicationInfo.nativeLibraryDir.orEmpty(),
             "PYTHONPATH" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
             "PIP_TARGET" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
