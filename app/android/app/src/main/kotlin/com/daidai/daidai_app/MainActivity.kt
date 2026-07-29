@@ -13,6 +13,7 @@ import com.yzq.bsdiff.BsDiffTool
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.Executors
+import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
@@ -248,10 +249,22 @@ class MainActivity : FlutterActivity() {
         "foreground_service_enabled" to false,
     )
 
-    private fun jsonObjectToMap(value: JSONObject): Map<String, Any> =
+    private fun jsonObjectToMap(value: JSONObject): Map<String, Any?> =
         value.keys().asSequence().associateWith { key ->
             when (val item = value.opt(key)) {
-                JSONObject.NULL, null -> ""
+                JSONObject.NULL, null -> null
+                is JSONObject -> jsonObjectToMap(item)
+                is JSONArray -> jsonArrayToList(item)
+                else -> item
+            }
+        }
+
+    private fun jsonArrayToList(value: JSONArray): List<Any?> =
+        (0 until value.length()).map { index ->
+            when (val item = value.opt(index)) {
+                JSONObject.NULL, null -> null
+                is JSONObject -> jsonObjectToMap(item)
+                is JSONArray -> jsonArrayToList(item)
                 else -> item
             }
         }
