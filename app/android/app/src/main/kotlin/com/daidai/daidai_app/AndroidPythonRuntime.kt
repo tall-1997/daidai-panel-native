@@ -8,7 +8,7 @@ import java.util.zip.ZipFile
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
-    private const val ASSET_REVISION = "3.14.6-20260729-r2"
+    private const val ASSET_REVISION = "3.14.6-20260729-r4"
     private const val SEED_REVISION = "20260729-r3"
     private const val ASSET_ROOT = "python-runtime/$VERSION/prefix"
 

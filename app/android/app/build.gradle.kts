@@ -93,6 +93,10 @@ android {
         }
     }
 
+    androidResources {
+        ignoreAssetsPattern = "android-daidai-do-not-ignore-python-stdlib"
+    }
+
     lint {
         disable.add("MissingVersion")
     }
