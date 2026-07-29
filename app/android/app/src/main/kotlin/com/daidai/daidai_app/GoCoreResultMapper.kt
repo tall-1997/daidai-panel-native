@@ -47,7 +47,7 @@ object GoCoreResultMapper {
     private fun stopped(): Map<String, Any> = baseStatus("stopped")
 
     private fun failed(stage: String, errorType: String = "", rootErrorType: String = ""): Map<String, Any> = baseStatus("failed").toMutableMap().apply {
-        this["failure_stage"] = stage.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,64}")) } ?: "core_failed"
+        this["failure_stage"] = stage.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,64}")) } ?: "core_failed"
         this["message"] = "Embedded core failed"
         if (errorType.matches(Regex("[A-Za-z0-9_.]{1,96}"))) this["go_core_error_type"] = errorType
         if (rootErrorType.matches(Regex("[A-Za-z0-9_.]{1,96}"))) this["go_core_root_error_type"] = rootErrorType
