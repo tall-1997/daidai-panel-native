@@ -78,6 +78,7 @@ type result struct {
 	PlatformCapabilities router.CapabilitySnapshot          `json:"platformCapabilities"`
 	SchedulerGuarantee   service.SchedulerGuaranteeSnapshot `json:"schedulerGuarantee"`
 	RuntimeBaseline      service.RuntimeComponentBaseline   `json:"runtimeBaseline"`
+	FailureStage         string                             `json:"failureStage,omitempty"`
 }
 
 type globalState struct {
@@ -192,7 +193,7 @@ func StartCore(optionsJSON string) (response string) {
 	}
 	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
 		logDiagnostic(codeInvalidDataDir, "recovery-namespace")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "recovery-namespace"})
 	}
 	probePath := filepath.Join(parsed.DataDir, recoveryMetadataDirName, recoveryMetadataOpsDirName)
 	if err := probeRecoveryMetadataPlatform(probePath); err != nil {
@@ -208,36 +209,36 @@ func StartCore(optionsJSON string) (response string) {
 		if _, statErr := os.Stat(flatDB); statErr == nil {
 			if err := checkpointFlatDatabase(flatDB); err != nil {
 				logDiagnostic(codeInvalidDataDir, "flat-checkpoint")
-				return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+				return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "flat-checkpoint"})
 			}
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			logDiagnostic(codeInvalidDataDir, "flat-checkpoint")
-			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "flat-checkpoint"})
 		}
 	} else if err != nil {
 		logDiagnostic(codeInvalidDataDir, "active-pointer")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "active-pointer"})
 	}
 	activeDataDir, err := store.converge()
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "recovery-converge")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "recovery-converge"})
 	}
 	if err := createDataLayout(activeDataDir); err != nil {
 		logDiagnostic(codeInvalidDataDir, "layout")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "layout"})
 	}
 	activeID := filepath.Base(activeDataDir)
 	secret, err := loadOrCreateJWTSecret(activeDataDir, store.isInitialBootstrap(activeID))
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "secret")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "secret"})
 	}
 	baseline := generationBaseline{Schema: appboot.SchemaFingerprint(), Runtime: currentRuntimeBaseline}
 	needsMigration, err := store.needsMigration(activeID, baseline)
 	if err != nil {
 		logDiagnostic(codeInvalidDataDir, "generation-baseline")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped", FailureStage: "generation-baseline"})
 	}
 
 	previous := captureGlobals()

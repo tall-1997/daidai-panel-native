@@ -140,6 +140,7 @@ var recoveryPublishBoundary = func(string) error { return nil }
 var recoveryProbeBoundary = func(string) error { return nil }
 var recoveryNamespaceSync = platformSyncDirectory
 var recoveryRollbackBoundary = func(string) error { return nil }
+var usePortableMetadataPublish = runtime.GOOS == "android"
 
 func defaultFilesystemOps() filesystemOps {
 	return filesystemOps{
@@ -956,6 +957,9 @@ func validManifestPath(path string) bool {
 }
 
 func (store *generationStore) writeAtomic(path string, data []byte, mode fs.FileMode, renameBoundary string) (resultErr error) {
+	if usePortableMetadataPublish {
+		return store.writeAtomicPortable(path, data, mode, renameBoundary)
+	}
 	canonical, err := store.canonicalMetadataTarget(path)
 	if err != nil {
 		return err
@@ -1051,6 +1055,49 @@ func (store *generationStore) writeAtomic(path string, data []byte, mode fs.File
 		return err
 	}
 	return store.removeOperation(opDir)
+}
+
+func (store *generationStore) writeAtomicPortable(path string, data []byte, mode fs.FileMode, renameBoundary string) (resultErr error) {
+	if _, err := store.canonicalMetadataTarget(path); err != nil {
+		return err
+	}
+	if err := store.validateMetadataTarget(path); err != nil {
+		return err
+	}
+	temporary, err := randomMetadataPath(filepath.Dir(path), filepath.Base(path)+".android-")
+	if err != nil {
+		return err
+	}
+	file, err := store.ops.openFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			resultErr = errors.Join(resultErr, file.Close())
+		}
+		if err := os.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	closed = true
+	if err := store.ops.boundary(renameBoundary); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	return platformSyncDirectory(filepath.Dir(path))
 }
 
 func (store *generationStore) validateMetadataTarget(path string) error {

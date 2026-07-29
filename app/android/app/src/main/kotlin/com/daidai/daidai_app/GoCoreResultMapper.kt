@@ -16,7 +16,7 @@ object GoCoreResultMapper {
             val stopped = result.optString("status") == "stopped" &&
                 result.optString("errorCode") in setOf("", "NOT_RUNNING")
             return if (stopped) stopped() else failed(
-                result.optString("errorCode", "core_failed"),
+                result.optString("failureStage").ifBlank { result.optString("errorCode", "core_failed") },
                 result.optString("errorType"),
                 result.optString("rootErrorType"),
             )

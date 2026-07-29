@@ -41,4 +41,16 @@ class GoCoreResultMapperTest {
         assertFalse(status.values.any { it.toString().contains("local-token-value") })
         assertFalse(status.values.any { it.toString().contains("/private/path") })
     }
+
+    @Test
+    fun `failure exposes stable diagnostic stage before broad error code`() {
+        val status = GoCoreResultMapper.toStatus(
+            """{"ok":false,"status":"stopped","errorCode":"INVALID_DATA_DIR","failureStage":"recovery-converge"}""",
+            localToken = "local-token-value",
+        )
+
+        assertEquals("failed", status["phase"])
+        assertEquals("recovery-converge", status["failure_stage"])
+        assertFalse(status.containsKey("local_token"))
+    }
 }

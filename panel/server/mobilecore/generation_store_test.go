@@ -12,6 +12,72 @@ import (
 	"testing"
 )
 
+func TestPortableMetadataPublishCreatesAndReplacesTarget(t *testing.T) {
+	root := t.TempDir()
+	store := newGenerationStore(root, defaultFilesystemOps())
+	target := filepath.Join(root, activeGenerationName)
+
+	if err := store.writeAtomicPortable(target, []byte("first\n"), 0o600, "portable-first"); err != nil {
+		t.Fatalf("first portable publish: %v", err)
+	}
+	if err := store.writeAtomicPortable(target, []byte("second\n"), 0o600, "portable-second"); err != nil {
+		t.Fatalf("replace portable publish: %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "second\n" {
+		t.Fatalf("published target data=%q err=%v", data, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, filepath.Base(target)+".android-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("portable temporary files remain: %v err=%v", matches, err)
+	}
+}
+
+func TestPortableMetadataPublishBoundaryFailurePreservesTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, activeGenerationName)
+	writeTestFile(t, target, "old\n")
+	ops := defaultFilesystemOps()
+	ops.boundary = func(point string) error {
+		if point == "portable-failure" {
+			return errors.New("injected boundary failure")
+		}
+		return nil
+	}
+	store := newGenerationStore(root, ops)
+
+	if err := store.writeAtomicPortable(target, []byte("new\n"), 0o600, "portable-failure"); err == nil {
+		t.Fatal("expected portable publish failure")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "old\n" {
+		t.Fatalf("target changed after failed publish: data=%q err=%v", data, err)
+	}
+}
+
+func TestPortableMetadataPublishBootstrapsEmptyAndroidDataDir(t *testing.T) {
+	original := usePortableMetadataPublish
+	usePortableMetadataPublish = true
+	t.Cleanup(func() { usePortableMetadataPublish = original })
+
+	root := filepath.Join(t.TempDir(), "files", "local-panel")
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatalf("portable Android bootstrap: %v", err)
+	}
+	if filepath.Dir(active) != filepath.Join(root, generationsDirName) {
+		t.Fatalf("active generation path=%q", active)
+	}
+	second, err := store.converge()
+	if err != nil {
+		t.Fatalf("portable Android restart: %v", err)
+	}
+	if second != active {
+		t.Fatalf("portable bootstrap created another generation: first=%q second=%q", active, second)
+	}
+}
+
 func TestGenerationStoreImportsFlatDataOnce(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "daidai.db"), "legacy-db")
