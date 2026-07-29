@@ -60,7 +60,7 @@ defineProps<{
         <el-switch v-model="form.allow_unverified_android_abi_wheels" inline-prompt active-text="开" inactive-text="关" />
       </div>
     </div>
-    <span class="form-hint">关闭时阻止默认安装未验证原生 wheel；开启后允许用户授权场景安装 Android ABI wheel。</span>
+    <span class="form-hint">关闭时阻止默认安装未验证原生 wheel；开启后允许从网络源安装未验证 Android ABI wheel 和受限自动化包。</span>
   </el-card>
 </template>
 

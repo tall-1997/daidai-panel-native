@@ -1672,23 +1672,37 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
         if (depType == "python") {
-            if (name.equals("pycryptodome", ignoreCase = true) && !configBool("allow_unverified_android_abi_wheels", false)) {
+            val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
+            if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
                 return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
             }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
-            val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--target", runtime.deps, name)
-            val logs = JSONArray().put("Installing Python dependency: $name")
+            val indexURL = configValue("pip_mirror", "https://pypi.org/simple").ifBlank { "https://pypi.org/simple" }
+            val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--prefer-binary", "--index-url", indexURL, "--target", runtime.deps, name)
+            val logs = JSONArray()
+                .put("Installing Python dependency from network source: $name")
+                .put("pip_index_url=$indexURL")
+                .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
             val result = runLocalProcess(command, AndroidPythonRuntime.depsDir(appContext), logs)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
         if (depType == "nodejs") {
+            val restricted = setOf("@tencent-qqmail/agently-cli", "agent-browser", "clawhub")
+            val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
+            if (restricted.contains(name.lowercase()) && !allowUnverifiedNative) {
+                return "blocked" to "RESTRICTED_NODE_PACKAGE_BLOCKED: enable allow_unverified_android_abi_wheels before installing restricted automation packages"
+            }
             return AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
                 val deps = AndroidNodeRuntime.depsDir(appContext)
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-                val command = listOf(runtime.executable, npm.absolutePath, "install", "--ignore-scripts", "--prefix", deps.absolutePath, name)
-                val logs = JSONArray().put("Installing Node dependency with Termux npm: $name")
+                val registry = configValue("npm_mirror", "https://registry.npmjs.org").ifBlank { "https://registry.npmjs.org" }
+                val command = listOf(runtime.executable, npm.absolutePath, "install", "--ignore-scripts", "--registry", registry, "--prefix", deps.absolutePath, name)
+                val logs = JSONArray()
+                    .put("Installing Node dependency from network source: $name")
+                    .put("npm_registry=$registry")
+                    .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
                 val result = runLocalProcess(command, deps, logs)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode == 0) "installed" to text else "failed" to text

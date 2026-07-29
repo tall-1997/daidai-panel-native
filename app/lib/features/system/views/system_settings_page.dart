@@ -953,7 +953,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                             style: TextStyle(fontSize: 13),
                                           ),
                                           Text(
-                                            '开启后允许授权安装未验证原生 wheel',
+                                            '开启后允许从网络源安装未验证原生 wheel 和受限包',
                                             style: TextStyle(
                                               fontSize: 11,
                                               color: isLight
