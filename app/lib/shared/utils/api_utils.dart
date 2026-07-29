@@ -54,6 +54,9 @@ String extractErrorMessage(dynamic error, String fallback) {
   try {
     final message = (error as dynamic).message;
     if (message is String && message.trim().isNotEmpty) {
+      if (message.contains('Connection refused')) {
+        return '本地面板核心连接被拒绝：Core 端口未监听或启动后退出，请进入健康诊断查看 Go Core/fallback 阶段和 runtime smoke 结果';
+      }
       return message.trim();
     }
   } catch (_) {}

@@ -67,6 +67,19 @@ jobs:
           PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
         run: bash scripts/build-mobile-core-aar.sh
 
+      - name: Verify mobile Core AAR API
+        run: |
+          test -s app/android/app/libs/mobilecore.aar
+          AAR_CHECK_DIR="/tmp/mobilecore-aar-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$AAR_CHECK_DIR"
+          unzip -q app/android/app/libs/mobilecore.aar classes.jar -d "$AAR_CHECK_DIR"
+          jar tf "$AAR_CHECK_DIR/classes.jar" | grep -Fx 'mobilecore/mobilecore/Mobilecore.class'
+          javap -classpath "$AAR_CHECK_DIR/classes.jar" mobilecore.mobilecore.Mobilecore > "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'public static java.lang.String startCore(java.lang.String);' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'public static java.lang.String stopCore(long);' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'public static java.lang.String coreStatus();' "$AAR_CHECK_DIR/Mobilecore.javap"
+          grep -F 'public static java.lang.String coreEndpoint();' "$AAR_CHECK_DIR/Mobilecore.javap"
+
       - name: Resolve Flutter packages
         working-directory: app
         run: flutter pub get
@@ -116,6 +129,15 @@ jobs:
       - name: Verify APK
         run: |
           test -s app/build/app/outputs/flutter-apk/app-release.apk
+          unzip -l app/build/app/outputs/flutter-apk/app-release.apk > /tmp/daidai-apk-files.txt
+          grep -F 'lib/arm64-v8a/libgojni.so' /tmp/daidai-apk-files.txt
+          grep -F 'lib/arm64-v8a/libpython_exec.so' /tmp/daidai-apk-files.txt
+          grep -F 'lib/arm64-v8a/libpython3.14.so' /tmp/daidai-apk-files.txt
+          grep -F 'lib/arm64-v8a/libnode_exec.so' /tmp/daidai-apk-files.txt
+          grep -F 'lib/arm64-v8a/libnode.so' /tmp/daidai-apk-files.txt
+          grep -F 'flutter_assets/assets/manifest.json' /tmp/daidai-apk-files.txt
+          grep -F 'flutter_assets/assets/compatibility.json' /tmp/daidai-apk-files.txt
+          grep -F 'flutter_assets/assets/smoke-evidence.json' /tmp/daidai-apk-files.txt
           VERSION="${GITHUB_REF_NAME:-snapshot}"
           cp app/build/app/outputs/flutter-apk/app-release.apk "daidai-panel-native-${VERSION}-arm64.apk"
           sha256sum "daidai-panel-native-${VERSION}-arm64.apk" > "daidai-panel-native-${VERSION}-arm64.apk.sha256"
