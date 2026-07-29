@@ -48,6 +48,7 @@ func TestCreateTaskDefaultsTimeoutToZero(t *testing.T) {
 
 func TestCreateTaskUsesConfiguredDefaultPythonVersionWhenOmitted(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	t.Setenv("PATH", t.TempDir())
 
 	if err := model.SetConfig("python_default_version", "3.11"); err != nil {
 		t.Fatalf("set default python version: %v", err)

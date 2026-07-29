@@ -102,6 +102,7 @@ func TestManagedPythonVenvDirUsesFlatVersionedPaths(t *testing.T) {
 
 func TestWarmManagedPythonVenvWarmsAllSupportedVersions(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	t.Setenv("PATH", t.TempDir())
 
 	var warmed []string
 	original := warmManagedPythonVenvForVersionFunc
@@ -469,7 +470,7 @@ func TestDefaultPythonVersionFallsBackToActiveSystemPythonOnMagiskRuntime(t *tes
 	testutil.SetupTestEnv(t)
 
 	t.Setenv("DAIDAI_MAGISK_MODULE", "1")
-	t.Setenv("PATH", t.TempDir()+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", t.TempDir())
 
 	fakeDir := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0]
 	// 新版回退探测走 `<binary> --version`（discoverSystemPythonForVersion），
@@ -485,7 +486,7 @@ func TestResolvePythonVersionFromEnvFallsBackToActiveSystemPythonOnMagiskRuntime
 	testutil.SetupTestEnv(t)
 
 	t.Setenv("DAIDAI_MAGISK_MODULE", "1")
-	t.Setenv("PATH", t.TempDir()+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PATH", t.TempDir())
 
 	fakeDir := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0]
 	// 同上：假 python3 按真实 `--version` 输出格式响应，供新版探测识别。
