@@ -1,3 +1,4 @@
+import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipFile
 import java.util.Properties
@@ -168,9 +169,42 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
     }
 }
 
+val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
+    group = "verification"
+    description = "Fails when Android Python launcher or CPython native library is missing or not arm64."
+    doLast {
+        val nativeDir = file("src/main/jniLibs/arm64-v8a")
+        val launcher = file("$nativeDir/libpython_exec.so")
+        val python = file("$nativeDir/libpython3.14.so")
+        check(launcher.isFile) {
+            "Missing Python launcher: ${launcher.path}. Run app/scripts/prepare-android-python-runtime.sh before building."
+        }
+        check(python.isFile) {
+            "Missing CPython shared library: ${python.path}. Run app/scripts/prepare-android-python-runtime.sh before building."
+        }
+        check(isArm64Elf(launcher)) {
+            "Invalid Python launcher ELF architecture: ${launcher.path} must be arm64-v8a."
+        }
+        check(isArm64Elf(python)) {
+            "Invalid CPython ELF architecture: ${python.path} must be arm64-v8a."
+        }
+    }
+}
+
+fun isArm64Elf(file: File): Boolean {
+    val header = file.inputStream().use { input -> ByteArray(20).also { input.read(it) } }
+    if (header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
+        return false
+    }
+    if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
+    val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
+    return machine == 183
+}
+
 tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
+    dependsOn(verifyPythonNativeRuntime)
 }
 
 flutter {
