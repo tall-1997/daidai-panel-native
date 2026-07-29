@@ -33,7 +33,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -67,6 +67,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 labels TEXT NOT NULL DEFAULT '[]',
                 last_run_status TEXT NOT NULL DEFAULT '',
                 last_run_logs TEXT NOT NULL DEFAULT '[]',
+                last_log_id INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""".trimIndent()
@@ -98,11 +99,16 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             )""".trimIndent()
         )
         createScriptRuntimeTables(db)
+        createTaskLogTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createScriptRuntimeTables(db)
         if (oldVersion < 3) db.execSQL("ALTER TABLE tasks ADD COLUMN last_run_logs TEXT NOT NULL DEFAULT '[]'")
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE tasks ADD COLUMN last_log_id INTEGER NOT NULL DEFAULT 0")
+            createTaskLogTables(db)
+        }
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -125,6 +131,23 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 exit_code INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )""".trimIndent()
+        )
+    }
+
+    private fun createTaskLogTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS task_logs_local (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                logs_json TEXT NOT NULL DEFAULT '[]',
+                status INTEGER NOT NULL DEFAULT 2,
+                exit_code INTEGER,
+                duration REAL NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
             )""".trimIndent()
         )
     }
@@ -201,7 +224,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/notification-channels" ->
                 ok(JSONObject().put("data", JSONArray()))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/export" -> exportTasks()
-            session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/import" -> importTasks(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/import" -> importTasks(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
@@ -209,8 +232,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("tasks", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop") ->
                 updateTaskStatus(id, action!!)
-            id != null && session.method == NanoHTTPD.Method.GET && action == "latest-log" -> taskLog(id)
-            id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> taskLog(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "latest-log" -> latestTaskLogResponse(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> liveTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "stats" -> taskStats(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "任务接口尚未实现")
         }
@@ -222,7 +245,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val id = segments.getOrNull(1)?.toLongOrNull()
         return when {
             session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "stream" -> taskLogStream(id)
-            session.method == NanoHTTPD.Method.GET && id != null -> taskLog(id)
+            session.method == NanoHTTPD.Method.GET && id != null -> taskLogByIdJson(id)?.let(::ok)
+                ?: error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
             session.method == NanoHTTPD.Method.GET -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("page", 1).put("page_size", 0))
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "日志接口尚未实现")
         }
@@ -238,7 +262,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export" -> exportEnvs(asObject = true)
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export-all" -> exportEnvs(asObject = false)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/export-files" -> exportEnvFiles(body(session))
-            session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/import" -> importEnvs(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/import" -> importEnvs(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/envs/batch") -> serveEnvBatch(session, action)
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
@@ -800,7 +824,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun scriptCommand(file: File, displayPath: String, languageHint: String): List<String>? {
         val ext = file.extension.lowercase()
         val nativeDir = appContext.applicationInfo.nativeLibraryDir.orEmpty()
-        fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile }?.absolutePath
+        fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile && isRuntimeEntryVerified(it) }?.absolutePath
         return when {
             ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> native("libpython_exec.so")?.let { listOf(it, file.absolutePath) }
@@ -809,6 +833,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }
+    }
+
+    private fun isRuntimeEntryVerified(file: File): Boolean {
+        if (!file.isFile) return false
+        val sample = runCatching { file.inputStream().use { it.readBytes().toString(Charsets.ISO_8859_1) } }.getOrDefault("")
+        if (sample.contains("RUNTIME_STUB_OK")) return false
+        return true
     }
 
     private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray): LocalScriptResult {
@@ -1113,16 +1144,41 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
+            val startedAt = Instant.now()
             val result = runTaskNow(id)
+            val endedAt = Instant.now()
+            val logId = insertTaskLog(id, result, startedAt, endedAt)
             values.clear()
             values.put("status", 1.0)
             values.put("last_run_status", result.status)
             values.put("last_run_logs", result.logs.toString())
+            values.put("last_log_id", logId)
             values.put("updated_at", Instant.now().toString())
             writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
-            return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", result.status).put("logs", result.logs)))
+            return ok(JSONObject().put("message", "任务已执行").put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", result.status).put("log_id", logId).put("logs", result.logs)))
         }
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status)))
+    }
+
+    private fun insertTaskLog(taskId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant): Long {
+        val content = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        val statusCode = when (result.status) {
+            "success" -> 0
+            "running" -> 2
+            else -> 1
+        }
+        val values = ContentValues().apply {
+            put("task_id", taskId)
+            put("content", content)
+            put("logs_json", result.logs.toString())
+            put("status", statusCode)
+            if (result.exitCode == null) putNull("exit_code") else put("exit_code", result.exitCode)
+            put("duration", (endedAt.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0)
+            put("started_at", startedAt.toString())
+            put("ended_at", endedAt.toString())
+            put("created_at", startedAt.toString())
+        }
+        return writableDatabase.insertOrThrow("task_logs_local", null, values)
     }
 
     private fun runTaskNow(id: Long): LocalScriptResult {
@@ -1190,58 +1246,74 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
     }
 
-    private fun taskLog(id: Long): NanoHTTPD.Response = ok(
-        readableDatabase.query(
-            "tasks",
-            arrayOf("last_run_status", "last_run_logs"),
+    private fun latestTaskLogResponse(id: Long): NanoHTTPD.Response {
+        val payload = latestTaskLogJson(id)
+            ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "该任务还没有日志记录")
+        return ok(payload)
+    }
+
+    private fun liveTaskLogResponse(id: Long): NanoHTTPD.Response {
+        val payload = latestTaskLogJson(id)
+            ?: return ok(JSONObject().put("data", JSONObject().put("task_id", id).put("status", 2).put("done", false).put("logs", JSONArray()).put("content", "")))
+        return ok(payload)
+    }
+
+    private fun latestTaskLogJson(taskId: Long): JSONObject? {
+        return readableDatabase.query(
+            "task_logs_local",
+            arrayOf("id", "task_id", "content", "logs_json", "status", "exit_code", "duration", "started_at", "ended_at", "created_at"),
+            "task_id = ?",
+            arrayOf(taskId.toString()),
+            null,
+            null,
+            "id DESC",
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            taskLogJson(cursor)
+        }
+    }
+
+    private fun taskLogByIdJson(logId: Long): JSONObject? {
+        return readableDatabase.query(
+            "task_logs_local",
+            arrayOf("id", "task_id", "content", "logs_json", "status", "exit_code", "duration", "started_at", "ended_at", "created_at"),
             "id = ?",
-            arrayOf(id.toString()),
+            arrayOf(logId.toString()),
             null,
             null,
             null
         ).use { cursor ->
-            val found = cursor.moveToFirst()
-            val status = if (found) cursor.string("last_run_status") else ""
-            val logs = if (found) runCatching { JSONArray(cursor.string("last_run_logs")) }.getOrDefault(JSONArray()) else JSONArray()
-            val content = (0 until logs.length()).joinToString("\n") { logs.optString(it) }
-            val resolvedStatus = status.ifBlank { "idle" }
-            JSONObject()
-                .put("task_id", id)
-                .put("status", resolvedStatus)
-                .put("done", true)
-                .put("content", content)
-                .put("logs", logs)
-                .put(
-                    "data",
-                    JSONObject()
-                        .put("task_id", id)
-                        .put("status", resolvedStatus)
-                        .put("done", true)
-                        .put("content", content)
-                        .put("logs", logs)
-                )
+            if (!cursor.moveToFirst()) return@use null
+            taskLogJson(cursor)
         }
-    )
+    }
+
+    private fun taskLogJson(cursor: Cursor): JSONObject {
+        val logs = runCatching { JSONArray(cursor.string("logs_json")) }.getOrDefault(JSONArray())
+        return JSONObject()
+            .put("id", cursor.long("id"))
+            .put("task_id", cursor.long("task_id"))
+            .put("content", cursor.string("content"))
+            .put("logs", logs)
+            .put("status", cursor.int("status"))
+            .put("exit_code", if (cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) JSONObject.NULL else cursor.int("exit_code"))
+            .put("duration", cursor.double("duration"))
+            .put("started_at", cursor.string("started_at"))
+            .put("ended_at", cursor.string("ended_at"))
+            .put("created_at", cursor.string("created_at"))
+            .let { payload -> JSONObject(payload.toString()).put("data", payload) }
+    }
 
     private fun taskLogStream(id: Long): NanoHTTPD.Response {
-        val logs = readableDatabase.query(
-            "tasks",
-            arrayOf("last_run_logs", "last_run_status"),
-            "id = ?",
-            arrayOf(id.toString()),
-            null,
-            null,
-            null
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) JSONArray().put("Task log not found")
-            else runCatching { JSONArray(cursor.string("last_run_logs")) }.getOrDefault(JSONArray())
-        }
+        val payloadJson = latestTaskLogJson(id)?.optJSONObject("data")
+        val logs = payloadJson?.optJSONArray("logs") ?: JSONArray().put("Task log not found")
         val payload = StringBuilder()
         for (index in 0 until logs.length()) {
             payload.append("data: ").append(logs.optString(index).replace("\n", "\\n")).append("\n\n")
         }
         payload.append("event: done\n")
-        payload.append("data: done\n\n")
+        payload.append("data: finished\n\n")
         return NanoHTTPD.newFixedLengthResponse(
             NanoHTTPD.Response.Status.OK,
             "text/event-stream; charset=utf-8",
@@ -1296,7 +1368,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 errors.put("${item.optString("name", "第 ${index + 1} 条")}: ${error.message ?: "导入失败"}")
             }
         }
-        return ok(JSONObject().put("message", "已导入 $imported 个任务").put("imported", imported).put("errors", errors))
+        return ok(JSONObject().put("message", "已导入 $imported 个任务").put("imported", imported).put("errors", errors).put("data", JSONObject().put("imported", imported).put("errors", errors)))
     }
 
     private fun upsertTask(json: JSONObject) {
@@ -1381,7 +1453,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 errors.put("${item.optString("name", "第 ${index + 1} 条")}: ${error.message ?: "导入失败"}")
             }
         }
-        return ok(JSONObject().put("message", "已导入 $imported 个环境变量").put("imported", imported).put("errors", errors))
+        return ok(JSONObject().put("message", "已导入 $imported 个环境变量").put("imported", imported).put("errors", errors).put("data", JSONObject().put("imported", imported).put("errors", errors)))
     }
 
     private fun upsertEnv(json: JSONObject) {
@@ -1487,8 +1559,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 if (name.isEmpty()) continue
                 val depType = json.optString("type", "nodejs")
                 val runtimeAvailable = when (depType) {
-                    "python" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libpython_exec.so").isFile
-                    "nodejs" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libnode_exec.so").isFile
+                    "python" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libpython_exec.so").let(::isRuntimeEntryVerified)
+                    "nodejs" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libnode_exec.so").let(::isRuntimeEntryVerified)
                     else -> false
                 }
                 val status = if (runtimeAvailable) "installed" else "unavailable"
@@ -1652,6 +1724,18 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val raw = when {
             files["postData"] != null -> files["postData"].orEmpty()
             files["content"] != null -> File(files.getValue("content")).readText()
+            else -> ""
+        }.trim()
+        return if (raw.isEmpty()) JSONObject() else JSONObject(raw)
+    }
+
+    private fun bodyOrUploadedJson(session: NanoHTTPD.IHTTPSession): JSONObject {
+        val files = HashMap<String, String>()
+        session.parseBody(files)
+        val raw = when {
+            files["file"] != null -> File(files.getValue("file")).readText()
+            files["content"] != null -> File(files.getValue("content")).readText()
+            files["postData"] != null -> files["postData"].orEmpty()
             else -> ""
         }.trim()
         return if (raw.isEmpty()) JSONObject() else JSONObject(raw)

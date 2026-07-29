@@ -1,9 +1,11 @@
 package com.daidai.daidai_app
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONObject
 
 object GoCoreBridge {
+    private const val TAG = "GoCoreBridge"
     private const val STOP_TIMEOUT_MILLIS = 3_000L
 
     @Synchronized
@@ -74,10 +76,24 @@ object GoCoreBridge {
         methodName: String,
         parameterTypes: Array<Class<*>>,
         arguments: Array<out Any>,
-    ): String = runCatching {
+    ): String = try {
         val coreClass = Class.forName(GoCoreReflectionContract.CLASS_NAME)
         coreClass.getMethod(methodName, *parameterTypes).invoke(null, *arguments) as String
-    }.getOrElse {
-        """{"ok":false,"running":false,"status":"failed","errorCode":"CORE_UNAVAILABLE"}"""
+    } catch (error: Throwable) {
+        val code = when (error) {
+            is ClassNotFoundException -> "CORE_CLASS_NOT_FOUND"
+            is NoSuchMethodException -> "CORE_METHOD_NOT_FOUND"
+            is UnsatisfiedLinkError -> "CORE_JNI_LOAD_FAILED"
+            is java.lang.reflect.InvocationTargetException -> "CORE_INVOCATION_FAILED"
+            else -> "CORE_UNAVAILABLE"
+        }
+        Log.e(TAG, "Go core invocation failed: method=$methodName code=$code type=${error.javaClass.simpleName}")
+        JSONObject()
+            .put("ok", false)
+            .put("running", false)
+            .put("status", "failed")
+            .put("errorCode", code)
+            .put("errorType", error.javaClass.simpleName)
+            .toString()
     }
 }
