@@ -2,6 +2,7 @@
 set -euo pipefail
 
 NODE_MOBILE_VERSION="${NODE_MOBILE_VERSION:-18.20.4}"
+TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-5.9.3}"
 NODE_ARCHIVE="nodejs-mobile-v${NODE_MOBILE_VERSION}-android.zip"
 NODE_URL="${NODE_URL:-https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v${NODE_MOBILE_VERSION}/${NODE_ARCHIVE}}"
 
@@ -33,7 +34,7 @@ mkdir -p "$ASSET_DIR/lib" "$ASSET_DIR/bin"
 cp -a "$EXTRACT_DIR/include" "$ASSET_DIR/"
 
 if command -v npm >/dev/null 2>&1; then
-  npm install -g --prefix "$ASSET_DIR" --ignore-scripts npm@11.12.1 corepack@0.34.6 typescript ts-node
+  npm install -g --prefix "$ASSET_DIR" --ignore-scripts npm@11.12.1 corepack@0.34.6 "typescript@${TYPESCRIPT_VERSION}" ts-node
 else
   printf 'npm not found on host; TypeScript assets were not installed.\n' >&2
   exit 2
@@ -78,7 +79,7 @@ fi
 chmod 755 "$LAUNCHER_OUT"
 
 MANIFEST_PATH="$APP_ROOT/../runtime/manifest.json"
-python3 - "$MANIFEST_PATH" "$LAUNCHER_OUT" "$NODE_MOBILE_VERSION" <<'PY'
+python3 - "$MANIFEST_PATH" "$LAUNCHER_OUT" "$NODE_MOBILE_VERSION" "$TYPESCRIPT_VERSION" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -87,6 +88,7 @@ import sys
 manifest_path = pathlib.Path(sys.argv[1])
 launcher = pathlib.Path(sys.argv[2])
 version = sys.argv[3]
+typescript_version = sys.argv[4]
 data = json.loads(manifest_path.read_text())
 sha = hashlib.sha256(launcher.read_bytes()).hexdigest()
 components = data.setdefault("components", [])
@@ -102,7 +104,7 @@ components.extend([
     },
     {
         "id": "typescript-stable",
-        "version": "bundled",
+        "version": typescript_version,
         "abi": "arm64-v8a",
         "entrypoint": "libnode_exec.so",
         "sha256": sha,
