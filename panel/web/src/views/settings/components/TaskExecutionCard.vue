@@ -55,8 +55,12 @@ defineProps<{
         <span class="switch-label">自动安装缺失依赖</span>
         <el-switch v-model="form.auto_install_deps" inline-prompt active-text="开" inactive-text="关" />
       </div>
+      <div class="switch-item">
+        <span class="switch-label">允许未验证 Android ABI wheel</span>
+        <el-switch v-model="form.allow_unverified_android_abi_wheels" inline-prompt active-text="开" inactive-text="关" />
+      </div>
     </div>
-    <span class="form-hint">脚本运行失败且检测到缺失依赖时，自动尝试安装后重试</span>
+    <span class="form-hint">关闭时阻止默认安装未验证原生 wheel；开启后允许用户授权场景安装 Android ABI wheel。</span>
   </el-card>
 </template>
 

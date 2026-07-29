@@ -92,6 +92,7 @@ export function useSettingsConfig() {
     random_delay: '',
     random_delay_extensions: '',
     auto_install_deps: true,
+    allow_unverified_android_abi_wheels: false,
     auto_add_cron: true,
     auto_del_cron: true,
     default_cron_rule: '',
@@ -162,6 +163,7 @@ export function useSettingsConfig() {
         random_delay: readConfigString(cfgs, 'random_delay', ''),
         random_delay_extensions: readConfigString(cfgs, 'random_delay_extensions', ''),
         auto_install_deps: readConfigBool(cfgs, 'auto_install_deps', true),
+        allow_unverified_android_abi_wheels: readConfigBool(cfgs, 'allow_unverified_android_abi_wheels', false),
         auto_add_cron: readConfigBool(cfgs, 'auto_add_cron', true),
         auto_del_cron: readConfigBool(cfgs, 'auto_del_cron', true),
         default_cron_rule: readConfigString(cfgs, 'default_cron_rule', ''),
@@ -287,7 +289,7 @@ export function useSettingsConfig() {
   function handleSaveTaskConfig() {
     void saveConfigKeys([
       'max_concurrent_tasks', 'log_retention_days',
-      'max_log_content_size', 'random_delay', 'random_delay_extensions', 'auto_install_deps'
+      'max_log_content_size', 'random_delay', 'random_delay_extensions', 'auto_install_deps', 'allow_unverified_android_abi_wheels'
     ])
   }
 

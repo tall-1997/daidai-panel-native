@@ -7,6 +7,7 @@ export interface SettingsConfigForm {
   random_delay: string
   random_delay_extensions: string
   auto_install_deps: boolean
+  allow_unverified_android_abi_wheels: boolean
   auto_add_cron: boolean
   auto_del_cron: boolean
   default_cron_rule: string

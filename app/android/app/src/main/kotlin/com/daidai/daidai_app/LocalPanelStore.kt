@@ -33,7 +33,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 5
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -100,6 +100,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         )
         createScriptRuntimeTables(db)
         createTaskLogTables(db)
+        createConfigTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -109,6 +110,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             db.execSQL("ALTER TABLE tasks ADD COLUMN last_log_id INTEGER NOT NULL DEFAULT 0")
             createTaskLogTables(db)
         }
+        if (oldVersion < 5) createConfigTables(db)
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -148,6 +150,16 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 started_at TEXT NOT NULL,
                 ended_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
+            )""".trimIndent()
+        )
+    }
+
+    private fun createConfigTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS local_configs (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
             )""".trimIndent()
         )
     }
@@ -378,6 +390,80 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("dependencies", id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖接口尚未实现")
         }
+    }
+
+    fun serveConfigs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val segments = normalizedUri.trim('/').split('/')
+        val key = segments.getOrNull(1)?.trim().orEmpty()
+        return when {
+            session.method == NanoHTTPD.Method.GET && key.isBlank() -> listConfigs()
+            session.method == NanoHTTPD.Method.GET && key.isNotBlank() -> getConfig(key)
+            session.method == NanoHTTPD.Method.POST && key.isBlank() -> setConfig(body(session))
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/configs/batch" -> setConfigs(body(session).optJSONObject("configs") ?: JSONObject())
+            session.method == NanoHTTPD.Method.DELETE && key.isNotBlank() -> deleteConfig(key)
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "配置接口尚未实现")
+        }
+    }
+
+    private fun listConfigs(): NanoHTTPD.Response {
+        val data = JSONObject()
+        readableDatabase.query("local_configs", arrayOf("key", "value"), null, null, null, null, "key ASC").use { cursor ->
+            while (cursor.moveToNext()) {
+                val value = cursor.string("value")
+                data.put(cursor.string("key"), JSONObject().put("value", value).put("default_value", value))
+            }
+        }
+        if (!data.has("allow_unverified_android_abi_wheels")) {
+            data.put("allow_unverified_android_abi_wheels", JSONObject().put("value", "false").put("default_value", "false"))
+        }
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun getConfig(key: String): NanoHTTPD.Response {
+        val value = configValue(key, "")
+        return ok(JSONObject().put("data", JSONObject().put("key", key).put("value", value).put("default_value", value)))
+    }
+
+    private fun setConfig(json: JSONObject): NanoHTTPD.Response {
+        upsertConfig(json.optString("key"), json.optString("value"))
+        return ok(JSONObject().put("message", "配置已保存"))
+    }
+
+    private fun setConfigs(configs: JSONObject): NanoHTTPD.Response {
+        for (key in configs.keys()) upsertConfig(key, configs.optString(key))
+        return ok(JSONObject().put("message", "配置已保存"))
+    }
+
+    private fun deleteConfig(key: String): NanoHTTPD.Response {
+        writableDatabase.delete("local_configs", "key = ?", arrayOf(key))
+        return ok(JSONObject().put("message", "配置已删除"))
+    }
+
+    private fun upsertConfig(key: String, value: String) {
+        require(key.isNotBlank()) { "配置 key 不能为空" }
+        val values = ContentValues().apply {
+            put("key", key)
+            put("value", value)
+            put("updated_at", Instant.now().toString())
+        }
+        writableDatabase.insertWithOnConflict("local_configs", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    private fun configValue(key: String, fallback: String): String = readableDatabase.query(
+        "local_configs",
+        arrayOf("value"),
+        "key = ?",
+        arrayOf(key),
+        null,
+        null,
+        null
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.string("value") else fallback }
+
+    private fun configBool(key: String, fallback: Boolean): Boolean = when (configValue(key, if (fallback) "true" else "false").lowercase()) {
+        "true", "1", "yes", "on" -> true
+        "false", "0", "no", "off" -> false
+        else -> fallback
     }
 
     fun serveBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
@@ -1586,6 +1672,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
         if (depType == "python") {
+            if (name.equals("pycryptodome", ignoreCase = true) && !configBool("allow_unverified_android_abi_wheels", false)) {
+                return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
+            }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--target", runtime.deps, name)
