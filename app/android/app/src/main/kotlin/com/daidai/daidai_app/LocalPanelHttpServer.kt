@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.TimeUnit
 
 class LocalPanelHttpServer(
     private val context: Context,
@@ -176,10 +177,12 @@ class LocalPanelHttpServer(
     private fun systemHealth(): JSONObject = JSONObject()
         .put(
             "items",
-                JSONArray()
+            JSONArray()
                 .put(JSONObject().put("name", "Android local HTTP API").put("status", "ok"))
                 .put(JSONObject().put("name", "Local management core").put("status", "ok").put("message", "Kotlin fallback is serving local management APIs"))
-                .put(JSONObject().put("name", "Native runtime entries").put("status", "warning").put("message", if (hasNativeRuntimeEntries()) "Runtime files are packaged but interpreter smoke is not verified in fallback mode" else "Runtime files are missing"))
+                .put(runtimeSmokeItem("Python runtime", pythonSmokeCommand(), "PY_OK"))
+                .put(runtimeSmokeItem("Node runtime", nodeSmokeCommand(), "NODE_OK"))
+                .put(runtimeSmokeItem("TypeScript runtime", typeScriptSmokeCommand(), "TS_OK"))
         )
         .put("last_checked_at", java.time.Instant.now().toString())
 
@@ -188,6 +191,46 @@ class LocalPanelHttpServer(
         "libnode_exec.so",
         "libshell_exec.so",
     ).any { java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), it).isFile }
+
+    private fun pythonSmokeCommand(): List<String>? = AndroidPythonRuntime.ensureReady(context)?.let {
+        listOf(it.executable, it.home, "-c", "print('PY_OK')")
+    }
+
+    private fun nodeSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
+        listOf(it.executable, "-e", "console.log('NODE_OK')")
+    }
+
+    private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
+        listOf(it.executable, java.io.File(it.modules, "ts-node/dist/bin.js").absolutePath, "-e", "console.log('TS_OK')")
+    }
+
+    private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
+        if (command == null) return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime is not packaged or not executable")
+        return try {
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            val output = StringBuilder()
+            val reader = Thread {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { output.append(it).append('\n') }
+                }
+            }.also { it.start() }
+            val finished = process.waitFor(5, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                reader.join(500)
+                return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime smoke timed out")
+            }
+            reader.join(500)
+            val text = output.toString().trim()
+            if (process.exitValue() == 0 && text.contains(expected)) {
+                JSONObject().put("name", name).put("status", "ok").put("message", text)
+            } else {
+                JSONObject().put("name", name).put("status", "warning").put("message", text.ifBlank { "Runtime smoke failed with exit ${process.exitValue()}" })
+            }
+        } catch (error: Exception) {
+            JSONObject().put("name", name).put("status", "warning").put("message", error.message ?: error.javaClass.simpleName)
+        }
+    }
 
     private fun hasNativeRuntime(name: String): Boolean = java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), name).isFile
 
