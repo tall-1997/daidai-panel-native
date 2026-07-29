@@ -18,8 +18,16 @@ int main(int argc, char **argv) {
     }
 
     const char *home = argv[1];
-    int py_argc = argc - 2;
-    char **py_argv = &argv[2];
+    int py_argc = argc - 1;
+    char **py_argv = calloc((size_t)py_argc + 1, sizeof(char*));
+    if (!py_argv) {
+        fprintf(stderr, "failed to allocate argv\n");
+        return 1;
+    }
+    py_argv[0] = "python";
+    for (int i = 2; i < argc; i++) {
+        py_argv[i - 1] = argv[i];
+    }
 
     PyStatus status;
     PyConfig config;
@@ -29,6 +37,7 @@ int main(int argc, char **argv) {
     if (PyStatus_Exception(status)) {
         print_status(status);
         PyConfig_Clear(&config);
+        free(py_argv);
         return 1;
     }
 
@@ -36,6 +45,7 @@ int main(int argc, char **argv) {
     if (PyStatus_Exception(status)) {
         print_status(status);
         PyConfig_Clear(&config);
+        free(py_argv);
         return 1;
     }
 
@@ -43,9 +53,12 @@ int main(int argc, char **argv) {
     if (PyStatus_Exception(status)) {
         print_status(status);
         PyConfig_Clear(&config);
+        free(py_argv);
         return 1;
     }
 
     PyConfig_Clear(&config);
-    return Py_RunMain();
+    int result = Py_RunMain();
+    free(py_argv);
+    return result;
 }

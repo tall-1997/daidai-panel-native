@@ -915,7 +915,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.home, file.absolutePath) }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, file.absolutePath) }
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, File(it.modules, "ts-node/dist/bin.js").absolutePath, file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, File(it.modules, "ts-node/dist/bin.js").absolutePath, "--transpile-only", file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }

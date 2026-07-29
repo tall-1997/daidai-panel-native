@@ -213,7 +213,7 @@ class LocalPanelHttpServer(
     }
 
     private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, java.io.File(it.modules, "ts-node/dist/bin.js").absolutePath, "-e", "console.log('TS_OK')")
+        listOf(it.executable, java.io.File(it.modules, "ts-node/dist/bin.js").absolutePath, "--transpile-only", "-e", "console.log('TS_OK')")
     }
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
@@ -225,6 +225,9 @@ class LocalPanelHttpServer(
                     environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir.orEmpty()
                     environment()["HOME"] = context.filesDir.absolutePath
                     environment()["TMPDIR"] = context.cacheDir.absolutePath
+                    AndroidNodeRuntime.ensureReady(context)?.let { runtime ->
+                        environment()["NODE_PATH"] = runtime.modules
+                    }
                 }
                 .start()
             val output = StringBuilder()
