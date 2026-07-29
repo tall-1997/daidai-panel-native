@@ -2,6 +2,7 @@ package service
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,29 +42,48 @@ func TestEvaluateDependencyCompatibilityAcceptsSignedNativeAllowlist(t *testing.
 }
 
 func TestEnforceNpmScriptPolicy(t *testing.T) {
-	testutil.SetupTestEnv(t)
-
-	cmd, err := NewNpmInstallCommand("left-pad")
-	if err != nil {
-		t.Fatalf("build npm command: %v", err)
+	cmd := exec.Command("npm", "install", "left-pad")
+	cmd.Env = []string{
+		"PATH=/usr/bin",
+		"npm_config_ignore_scripts=false",
+		"NPM_CONFIG_IGNORE_SCRIPTS=0",
+		"Npm_Config_Ignore_Scripts=yes",
+		"npm_config_ignore_scripts=false",
 	}
-	cmd.Env = append(cmd.Env, "npm_config_ignore_scripts=false")
+
 	EnforceNpmScriptPolicy(cmd)
+	EnforceNpmScriptPolicy(cmd)
+
 	if !stringSliceContains(cmd.Args, "--ignore-scripts") {
 		t.Fatalf("expected --ignore-scripts in args: %v", cmd.Args)
 	}
-	found := false
+	if count := countString(cmd.Args, "--ignore-scripts"); count != 1 {
+		t.Fatalf("expected one --ignore-scripts argument, got %d in %v", count, cmd.Args)
+	}
+
+	policyEntries := 0
 	for _, entry := range cmd.Env {
 		if entry == "npm_config_ignore_scripts=true" {
-			found = true
+			policyEntries++
+			continue
 		}
-		if strings.EqualFold(entry, "npm_config_ignore_scripts=false") {
-			t.Fatalf("stale npm script policy remained in env: %v", cmd.Env)
+		if key, _, ok := strings.Cut(entry, "="); ok && strings.EqualFold(key, "npm_config_ignore_scripts") {
+			t.Fatalf("unexpected npm script policy variant remained in env: %q", entry)
 		}
 	}
-	if !found {
-		t.Fatalf("expected npm_config_ignore_scripts=true in env")
+	if policyEntries != 1 {
+		t.Fatalf("expected one npm_config_ignore_scripts=true entry, got %d in %v", policyEntries, cmd.Env)
 	}
+}
+
+func countString(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
 }
 
 func TestCheckDependencyQuota(t *testing.T) {

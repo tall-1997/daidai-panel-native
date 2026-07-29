@@ -1,12 +1,14 @@
 # Android Modern Full Panel Progress
 
-Updated: 2026-07-28
+Updated: 2026-07-29
 Branch: `main`
 Remote: `origin/main`
 
 ## Current Position
 
-Milestone 4-6 implementation goals are complete or in final rollout on `main`: integration, scheduling/recovery, backup/recovery, and release-evidence work is documented as delivered. Device matrix and long-stability evidence are assigned to user real-device testing before final public replacement release labeling.
+The management Core, route registration, capability dispatch, fallback diagnostic boundary, runtime contracts, and CI gates are implemented in the current working tree. Overall delivery is partially complete: production runtime assets, accepted device smoke, the real-device matrix, Recovery APK, upgrade/recovery proof, and long-stability evidence remain open.
+
+The single release version source is `VERSION.json`: version `0.3.15`, Android version code `30150`. `scripts/version.py` checks derived version fields before release work proceeds.
 
 ## Completed Work
 
@@ -146,33 +148,19 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
 6. Clean shutdown checkpoints and deterministically seals mutable active data; crash recovery falls back to the previous healthy generation when the active seal no longer matches.
 7. `database.EnsureColumns` returns every failed `ALTER TABLE` error through appboot so migration rollback can run.
 
-## Task 1.3 Verification
+## Historical Task 1.3 Verification
 
 - `go test -race ./mobilecore ./database ./appboot -count=1` passed.
 - `go test ./handler ./service -count=1` passed.
 - `go vet ./mobilecore ./router ./handler ./service ./database ./appboot` passed.
-- Task 1.3 is complete; Task 1.4 remains pending.
-
-## Next Actions
-
-1. Fix Milestone 3 review findings on `main`.
-2. Re-run the Milestone 3 exit gate after the review fixes are complete.
-3. Update task status and progress evidence after the re-verification passes.
-
-## Remaining Milestones
-
-### Milestone 1
-
-- Implement Task 1.4 lifecycle-managed Scheduler, Subscription Scheduler, Backup Scheduler, and Log Cleanup.
-- Pass the Milestone 1 exit gate and push.
+- This historical checkpoint covered Task 1.3. Task 1.4 is implemented as recorded in the current Task 1.4 section above.
 
 ### Milestone 2
 
-- Runtime manifest and signed APK ELF packaging scaffolding is complete.
-- Python runtime baseline/smoke-state structure is complete with `PY_OK`/`SSL`/`SQLite`/`venv`/`wheel` check IDs.
-- Node.js and TypeScript smoke-state structure is complete with `CommonJS`/`ESM`/`HTTPS`/`TS_OK`, and npm lifecycle scripts are default-disabled through runtime policy.
-- Shell, Git, and SSH smoke-state structure is complete with default policy wiring for hooks/pager/editor/external filters/credential helper suppression.
-- Yaegi and Go Builder runtime declarations and smoke placeholders are complete, with explicit Go Builder export-only policy markers.
+- Eight runtime IDs use the same manifest, compatibility, smoke-evidence, APK extraction, and device-evidence contracts.
+- Current `runtime/smoke-evidence.json` marks all eight records blocked. Shell, Git, SSH, Yaegi, and Go Builder remain `blocked-placeholder` assets; current Python, Node, and TypeScript records also carry blocked smoke evidence.
+- Core startup preserves the management HTTP Core when runtime components or smoke checks are blocked. Health reports `degraded-ready`, and runtime execution remains fail-closed through the runtime locator.
+- API 28/4K, API 35/4K, and API 35/16K accepted device smoke evidence remains pending.
 - Secret Store now uses local AES-GCM encryption-at-rest with random nonce and 32-byte master key from env or restricted dataDir file (`0600`).
 - Trust authorization now persists to `dataDir/.runtime_trust_authorizations.json` (`0600`) with reload-on-init and observable readiness/error state.
 - Runtime baseline now enforces entrypoint path boundary checks, placeholder digest default-reject policy, and severe-failure startup gate with explicit dev bypass switch.
@@ -181,7 +169,7 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
 
 ### Milestone 3
 
-- Controller status: review remediation in progress; tasks 3.1-3.5 are implementation-complete, with final milestone completion pending review-fix verification.
+- Controller and service paths are implemented. Runtime-backed end-to-end execution remains subject to the blocked runtime baseline and device gates.
 
 - Task 3.1 complete: added persistent `Operation` model/table, `OperationStore` service methods, and migration registration.
 - Task 3.2 complete: added structured `ProcessSupervisor` with argv, env filtering, working-root validation, stdout/stderr streaming, timeout, cancellation, process-group cleanup, and quota fields.
@@ -194,6 +182,9 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
   - `cd /workspace && go run scripts/generate-route-contract.go -check`
 
 ### Milestone 4
+
+- `router.mobileCapabilityMiddleware` allows an `enabled` capability to continue into the registered real Handler. Disabled and undeclared capabilities return the stable `PLATFORM_CAPABILITY` response.
+- Handler/service implementation is present for dependency, Git, subscription, notification, integration, Sponsor, and OpenAPI paths. Runtime-dependent completion remains partial until production assets and device evidence pass.
 
 - Task 4.1 complete: pip/npm dependency operations now return stable compatibility details for unsupported packages, enforce signed native allowlist checks, keep npm lifecycle scripts disabled, stage install attempts, rollback failed or canceled installs, check dependency quota, persist dependency Operations, and recover interrupted operations after restart.
 - Task 4.1 verification attempted: `cd /workspace/panel/server && go test ./service -run 'TestEvaluateDependencyCompatibility|TestEnforceNpmScriptPolicy|TestCheckDependencyQuota|TestPrepareDependencyStaging|TestReconcileDependenciesAfterRestartRecoversInterruptedOperation' -count=1` and `cd /workspace/panel/server && go test ./handler -run 'TestDependencyCreate(ReturnsCompatibilityDetails|PersistsOperation)' -count=1` are blocked by existing `service/notifier.go:278:6: err redeclared in this block` package compile failure outside Task4.1 files; `cd /workspace/panel/server && go test ./model -count=1` passed.
@@ -225,17 +216,16 @@ Milestone 4-6 implementation goals are complete or in final rollout on `main`: i
   - `cd /workspace/panel/server && go test ./service -run 'TestShouldPauseLowPriorityWorkOnlyPausesBackgroundTriggers|TestTaskExecutorFailsCronOperationWhenResourceLimited' -count=1`
   - `cd /workspace/panel/server && go test ./mobilecore -run 'TestStartCoreRejectsInvalidCapabilityVersionAndState|TestStartCorePublishesImmutableCapabilitySnapshot' -count=1`
 - Android unit verification attempted with `cd /workspace/app/android && ./gradlew :app:testDebugUnitTest --tests 'com.daidai.daidai_app.AndroidResourceProtectionTest' --tests 'com.daidai.daidai_app.AndroidSchedulerHostStatusTest'`, but the repository currently has no Gradle wrapper; `gradle` and `kotlinc` are not installed in the execution image.
-- Milestone 5 implementation status: complete on `main`; 24-hour and seven-day scheduling SLO evidence is reserved for user real-device long-stability testing.
+- Kotlin test commands and real-device runs have no accepted pass result recorded in this workspace. Milestone 5 remains partially complete until device recovery and long-stability evidence pass.
 
 ### Milestone 6
 
-- Task 6.1 complete: portable encrypted backup envelope covers AES-256-GCM archive encryption, Argon2id key wrapping, manifest, file hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore.
-- Task 6.2 complete: Recovery APK planning reserves the release version sequence and documents stable Core/runtime denylist plus forward-reading compatibility.
-- Task 6.3 complete: `scripts/generate-release-evidence.go` produces APK SHA-256 evidence, SBOM, third-party license handoff, runtime manifest snapshot, route trace summary, compatibility matrix template, page-size report, and test-report placeholders; CI uploads the full release evidence artifact.
-- Task 6.4 final rollout in progress: 100 Core cycles, API matrix, 24-hour/seven-day stability, low-storage, Doze, restart, process-kill, and upgrade/recovery evidence structures are generated under `release/evidence/` for user real-device testing.
-- Milestone 6 implementation status: final rollout in progress on `main`; device matrix and long-stability records will be completed by user real-device testing before final release publication.
+- Task 6.1 is partially complete: portable backup implementation covers the planned envelope and restore paths; Kotlin and device restore evidence remains open.
+- Task 6.2 remains pending: Recovery metadata and version policy exist, while a separately built, signed, and upgrade-tested Recovery APK is absent from current evidence.
+- Task 6.3 is partially complete: `scripts/generate-release-evidence.go` and CI artifact upload exist; strict runtime, device, Recovery APK, and public re-download records remain open.
+- Task 6.4 is blocked pending real-device records for 100 Core cycles, the API/page-size matrix, 24-hour/seven-day stability, low storage, Doze, restart, process kill, and upgrade/recovery.
 
-## Verification State
+## Current Contract State
 
 Verified Task 1.0 through Task 1.3:
 
@@ -245,17 +235,25 @@ Verified Task 1.0 through Task 1.3:
 - Handler/service baseline was green after flaky command-output fix.
 - Full mobile route and mobile Core race tests passed.
 
-Milestone 2 unified verification completed:
+- Enabled capability dispatch reaches real Handlers.
+- Kotlin fallback serves a diagnostic-only degraded surface and applies the same installation token plus exact loopback Host and Origin boundary.
+- Blocked runtime components produce `degraded-ready`; management APIs remain available and runtime execution remains blocked.
+- The eight-runtime contract is structurally unified. Production assets and device pass evidence remain blocked.
+- No current claim is made that Kotlin tests, Flutter tests, emulator smoke, physical-device smoke, or the real-device matrix passed.
 
-- `cd /workspace/panel/server && go test ./service ./handler ./mobilecore ./appboot ./router ./database -count=1` passed.
-- `cd /workspace/panel/server && go test -race ./mobilecore ./service -count=1` passed.
-- `cd /workspace && go run scripts/generate-route-contract.go -check` passed (`423 routes`).
-- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
-- `GOOS=android GOARCH=arm64 CGO_ENABLED=0 go test -c ./panel/server/mobilecore` passed.
+## CI Order And Gate Difference
 
-Final verification handoff:
+1. Resolve and validate `VERSION.json`.
+2. On tags, validate signing secrets, prepare the keystore, and require a successful same-commit `android-device-smoke.yml` run containing all three matrix IDs with eight passing runtime records each.
+3. Prepare Python and Node runtime inputs; run Go and contract-script tests; verify the generated route contract.
+4. Build and inspect the mobile Core AAR; resolve Flutter packages; run Flutter and Kotlin checks.
+5. Snapshot builds generate local smoke evidence. Both paths verify runtime contracts before APK build; tag verification adds `--strict`.
+6. Build the APK, extract and compare embedded metadata, repeat runtime verification against the APK, then generate hashes, update metadata, and release evidence.
+7. Tags additionally verify the signing certificate and publish the Release; snapshots only upload CI artifacts and may retain blocked runtime evidence.
 
-- Milestone 4-6 implementation status is documented as complete/final rollout on `main`.
-- Release evidence generation was targeted-verified with `go run ./scripts/generate-release-evidence.go --apk app/android/app/src/main/jniLibs/arm64-v8a/libpython_exec.so --version check --output-dir /tmp/opencode/release-evidence-check --git-commit local --actor tall-1997 --repository local/repo`.
-- User real-device testing will complete the API/device matrix, 24-hour and seven-day long-stability runs, 100 Core cycles, low-storage, Doze, restart, process-kill, upgrade, and recovery evidence.
-- Full test suites were not run per user instruction; only targeted release evidence and route-contract verification were executed.
+## Remaining Gates
+
+1. Replace blocked runtime assets and produce accepted eight-runtime smoke evidence.
+2. Complete the real API/page-size device matrix and Kotlin/Flutter/device verification records.
+3. Build, sign, and verify the Recovery APK and its upgrade/recovery sequence.
+4. Complete 100 Core cycles, 24-hour and seven-day scheduling, low-storage, Doze, restart, process-kill, public re-download, and recovery evidence.

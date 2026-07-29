@@ -205,7 +205,10 @@ func CurrentDependencyQuotaDetails() DependencyQuotaDetails {
 
 func ProjectedDependencyQuotaDetails(projectedAdditionalBytes int64) DependencyQuotaDetails {
 	limit := DependencyQuotaLimitBytes()
-	used := directorySize(filepath.Join(config.C.Data.Dir, "deps"))
+	var used int64
+	if config.C != nil {
+		used = directorySize(filepath.Join(config.C.Data.Dir, "deps"))
+	}
 	if projectedAdditionalBytes < 0 {
 		projectedAdditionalBytes = 0
 	}
@@ -256,7 +259,6 @@ func EnforceNpmScriptPolicy(cmd *exec.Cmd) {
 		return
 	}
 	cmd.Env = appendEnvOverride(cmd.Env, "npm_config_ignore_scripts", "true")
-	cmd.Env = appendEnvOverride(cmd.Env, "NPM_CONFIG_IGNORE_SCRIPTS", "true")
 	if !stringSliceContains(cmd.Args, "--ignore-scripts") {
 		cmd.Args = append(cmd.Args, "--ignore-scripts")
 	}

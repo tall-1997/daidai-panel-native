@@ -76,6 +76,14 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
         _go('/login?manual=1');
         return;
       }
+      if (decision.destination == BootEndpointDestination.localRecovery) {
+        _go(
+          authState.status == AuthStatus.authenticated
+              ? '/health-check'
+              : '/login?manual=1',
+        );
+        return;
+      }
       if (decision.destination == BootEndpointDestination.dashboard) {
         try {
           ref.invalidate(dashboardProvider);

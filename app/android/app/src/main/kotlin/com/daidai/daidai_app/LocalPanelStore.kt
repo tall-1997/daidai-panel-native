@@ -37,6 +37,15 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     companion object {
         const val SCHEMA_VERSION = 5
+
+        fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean = when (method to uri) {
+            NanoHTTPD.Method.GET to "/api/system/backups",
+            NanoHTTPD.Method.POST to "/api/system/backup/upload",
+            NanoHTTPD.Method.GET to "/api/system/backup/download",
+            NanoHTTPD.Method.POST to "/api/system/restore",
+            NanoHTTPD.Method.GET to "/api/system/restore/progress" -> true
+            else -> false
+        }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -186,17 +195,6 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
-
-    fun isPublicRequest(session: NanoHTTPD.IHTTPSession): Boolean =
-        session.uri in setOf(
-            "/api/v1/health",
-            "/api/health",
-            "/api/auth/check-init",
-            "/api/auth/init",
-            "/api/auth/login",
-            "/api/auth/refresh",
-            "/api/auth/captcha-config"
-        )
 
     fun isAuthorized(session: NanoHTTPD.IHTTPSession): Boolean {
         val token = bearerToken(session) ?: return false

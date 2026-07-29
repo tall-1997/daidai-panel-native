@@ -77,6 +77,7 @@ type result struct {
 	ProcessRequirement   string                             `json:"processRequirement,omitempty"`
 	PlatformCapabilities router.CapabilitySnapshot          `json:"platformCapabilities"`
 	SchedulerGuarantee   service.SchedulerGuaranteeSnapshot `json:"schedulerGuarantee"`
+	RuntimeBaseline      service.RuntimeComponentBaseline   `json:"runtimeBaseline"`
 }
 
 type globalState struct {
@@ -359,13 +360,6 @@ func StartCore(optionsJSON string) (response string) {
 		}
 		log.Printf("mobilecore: runtime baseline bypassed due to dev flag: %v", runtimeErr)
 	}
-	if service.RuntimeBaselineHasSevereFailure(runtimeBaseline) && !service.AllowRuntimeBaselineFailureBypass() {
-		logDiagnostic(codeBootstrapFailed, "runtime-baseline-gate")
-		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
-			return failure(codeRecoveryFailed, "core recovery failed", result{Status: "stopped"})
-		}
-		return failure(codeBootstrapFailed, "core bootstrap failed", result{Status: "stopped"})
-	}
 	listener, err := listenTCP("tcp", "127.0.0.1:0")
 	if err != nil {
 		logDiagnostic(codeListenFailed, "listen")
@@ -510,6 +504,9 @@ func StartCore(optionsJSON string) (response string) {
 	lifecycle.core = running
 	lifecycle.capabilities = cloneCapabilitySnapshot(parsed.PlatformCapabilities)
 	lifecycle.status = "running"
+	if runtimeBaseline.State == "degraded-ready" {
+		lifecycle.status = "degraded-ready"
+	}
 	lifecycle.errorCode = ""
 	lifecycle.errorText = ""
 	recoveryReady.Store(true)
@@ -641,7 +638,7 @@ func CoreStatus() string {
 func CoreEndpoint() string {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
-	if lifecycle.core == nil || lifecycle.status != "running" {
+	if lifecycle.core == nil || !coreReadyStatus(lifecycle.status) {
 		return ""
 	}
 	return lifecycle.core.endpoint
@@ -871,18 +868,19 @@ func (state *lifecycleState) statusResultLocked() result {
 	}
 	value := result{
 		OK:                 state.errorCode == "",
-		Running:            state.core != nil && status == "running",
+		Running:            state.core != nil && coreReadyStatus(status),
 		Status:             status,
 		ErrorCode:          state.errorCode,
 		Error:              state.errorText,
-		CleanupRequired:    status == "cleanup_required" || state.core != nil && status != "running",
+		CleanupRequired:    status == "cleanup_required" || state.core != nil && !coreReadyStatus(status),
 		ProcessRequirement: `android:process=":panel"`,
 		SchedulerGuarantee: service.CurrentSchedulerGuarantee(),
+		RuntimeBaseline:    service.RuntimeComponentBaselineSnapshot(),
 	}
 	if state.core != nil {
 		value.PlatformCapabilities = cloneCapabilitySnapshot(state.core.capabilities)
 		value.ID = state.core.id
-		if status == "running" {
+		if coreReadyStatus(status) {
 			value.Endpoint = state.core.endpoint
 		}
 	}
@@ -893,6 +891,10 @@ func (state *lifecycleState) statusResultLocked() result {
 		value.PlatformCapabilities = router.CapabilitySnapshot{Version: 1, Capabilities: map[string]router.CapabilityState{}}
 	}
 	return value
+}
+
+func coreReadyStatus(status string) bool {
+	return status == "ready" || status == "degraded-ready" || status == "running"
 }
 
 func normalizeMobileSchedulerGuarantee(snapshot service.SchedulerGuaranteeSnapshot) service.SchedulerGuaranteeSnapshot {

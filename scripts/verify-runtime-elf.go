@@ -24,6 +24,8 @@ type smokeRecord struct {
 	RuntimeID      string       `json:"runtime_id"`
 	Version        string       `json:"version"`
 	Entry          string       `json:"entry"`
+	Status         string       `json:"status"`
+	EvidenceSource string       `json:"evidence_source"`
 	IsolationLevel string       `json:"isolation_level"`
 	TimeoutSeconds int          `json:"timeout_seconds"`
 	Checks         []smokeCheck `json:"checks"`
@@ -33,10 +35,12 @@ type smokeCheck struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	Output string `json:"output"`
+	Reason string `json:"reason"`
 }
 
 type runtimeComponent struct {
 	ID         string `json:"id"`
+	Version    string `json:"version"`
 	Entrypoint string `json:"entrypoint"`
 	SHA256     string `json:"sha256"`
 }
@@ -102,27 +106,32 @@ func main() {
 			failed = true
 			continue
 		}
-		if bytesContains(payload, []byte("RUNTIME_STUB_OK")) {
-			fmt.Fprintf(os.Stderr, "%s is a runtime stub, not a real interpreter\n", component.ID)
-			failed = true
-			continue
-		}
+		stubPlaceholder := bytesContains(payload, []byte("RUNTIME_STUB_OK"))
 		sum := sha256.Sum256(payload)
 		hash := hex.EncodeToString(sum[:])
-		placeholder := strings.HasPrefix(strings.TrimSpace(component.SHA256), "PLACEHOLDER_SHA256_")
-		if placeholder && *strict {
+		hashPlaceholder := strings.HasPrefix(strings.TrimSpace(component.SHA256), "PLACEHOLDER_SHA256_")
+		if hashPlaceholder && *strict {
 			fmt.Fprintf(os.Stderr, "%s has placeholder sha256 in strict mode\n", component.ID)
 			failed = true
 			continue
 		}
-		if !placeholder && !strings.EqualFold(hash, component.SHA256) {
+		if !hashPlaceholder && !strings.EqualFold(hash, component.SHA256) {
 			fmt.Fprintf(os.Stderr, "%s sha256 mismatch: got=%s want=%s\n", component.ID, hash, component.SHA256)
 			failed = true
 			continue
 		}
-		if err := validateSmokeRecord(component, evidenceByRuntime[component.ID]); err != nil {
+		if stubPlaceholder && *strict {
+			fmt.Fprintf(os.Stderr, "%s is blocked: placeholder ELF in strict mode\n", component.ID)
+			failed = true
+			continue
+		}
+		if err := validateSmokeRecord(component, evidenceByRuntime[component.ID], *strict); err != nil {
 			fmt.Fprintf(os.Stderr, "%s smoke evidence invalid: %v\n", component.ID, err)
 			failed = true
+			continue
+		}
+		if stubPlaceholder {
+			fmt.Printf("%s blocked (placeholder ELF: %s)\n", component.ID, component.Entrypoint)
 			continue
 		}
 		fmt.Printf("%s ok (%s)\n", component.ID, component.Entrypoint)
@@ -167,9 +176,12 @@ func readSmokeEvidence(path string) (smokeEvidence, error) {
 	return evidence, nil
 }
 
-func validateSmokeRecord(component runtimeComponent, record smokeRecord) error {
+func validateSmokeRecord(component runtimeComponent, record smokeRecord, strict bool) error {
 	if record.RuntimeID != component.ID {
 		return fmt.Errorf("missing runtime record")
+	}
+	if record.Version != component.Version {
+		return fmt.Errorf("version mismatch")
 	}
 	if record.Entry != component.Entrypoint {
 		return fmt.Errorf("entry mismatch")
@@ -177,10 +189,27 @@ func validateSmokeRecord(component runtimeComponent, record smokeRecord) error {
 	if record.Version == "" || record.IsolationLevel == "" || record.TimeoutSeconds <= 0 || len(record.Checks) == 0 {
 		return fmt.Errorf("incomplete runtime record")
 	}
-	for _, check := range record.Checks {
-		if check.ID == "" || check.Status != "pass" || strings.TrimSpace(check.Output) == "" {
-			return fmt.Errorf("incomplete check %q", check.ID)
+	switch record.Status {
+	case "pass":
+		if record.EvidenceSource != "android-device" {
+			return fmt.Errorf("pass requires android-device evidence")
 		}
+		for _, check := range record.Checks {
+			if check.ID == "" || check.Status != "pass" || strings.TrimSpace(check.Output) == "" {
+				return fmt.Errorf("incomplete pass check %q", check.ID)
+			}
+		}
+	case "blocked":
+		if strict {
+			return fmt.Errorf("blocked in strict mode")
+		}
+		for _, check := range record.Checks {
+			if check.ID == "" || check.Status != "blocked" || strings.TrimSpace(check.Reason) == "" || check.Output != "" {
+				return fmt.Errorf("incomplete blocked check %q", check.ID)
+			}
+		}
+	default:
+		return fmt.Errorf("invalid record status %q", record.Status)
 	}
 	return nil
 }

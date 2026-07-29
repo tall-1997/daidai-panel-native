@@ -10,8 +10,7 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// ── Release signing ──
-// Priority: key.properties file > environment variables > fallback to debug
+// Release signing priority: key.properties, environment variables, then debug for snapshots.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -28,13 +27,18 @@ fun resolveSigningValue(propertyKey: String, envKey: String): String? {
 
 val releaseStoreFile = resolveSigningValue("storeFile", "KEYSTORE_FILE")
 val releaseStorePassword = resolveSigningValue("storePassword", "KEYSTORE_PASSWORD")
-val releaseKeyAlias = resolveSigningValue("keyAlias", "KEY_ALIAS")
-val releaseKeyPassword = resolveSigningValue("keyPassword", "KEY_PASSWORD")
+val releaseKeyAlias = resolveSigningValue("keyAlias", "KEYSTORE_ALIAS")
+val releaseKeyPassword = resolveSigningValue("keyPassword", "KEYSTORE_KEY_PASSWORD")
 val hasReleaseSigning =
     !releaseStoreFile.isNullOrEmpty() &&
         !releaseStorePassword.isNullOrEmpty() &&
         !releaseKeyAlias.isNullOrEmpty() &&
         !releaseKeyPassword.isNullOrEmpty()
+val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
+
+check(!requireReleaseSigning || hasReleaseSigning) {
+    "Release signing is required, but KEYSTORE_FILE, KEYSTORE_PASSWORD, KEYSTORE_ALIAS, or KEYSTORE_KEY_PASSWORD is missing."
+}
 
 android {
     namespace = "com.daidai.daidai_app"
@@ -57,6 +61,7 @@ android {
         applicationId = "com.daidai.daidai_app"
         minSdk = 28
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         ndk {
@@ -107,7 +112,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs("../../../runtime")
+            assets.srcDirs("../../../../runtime")
             assets.srcDirs("src/main/pythonAssets")
             assets.srcDirs("src/main/nodeAssets")
         }
@@ -121,6 +126,9 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
     if (file("libs/mobilecore.aar").exists()) {
         implementation(files("libs/mobilecore.aar"))
     }

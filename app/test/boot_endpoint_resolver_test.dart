@@ -51,6 +51,24 @@ void main() {
     expect(decision.destination, BootEndpointDestination.localRecovery);
   });
 
+  test('degraded managed local exposes its diagnostic session', () async {
+    final decision = await BootEndpointResolver.resolve(
+      authenticated: true,
+      panel: managed,
+      ensureStarted: () async => LocalPanelStatus.fromJson(const {
+        'phase': 'degraded',
+        'base_url': 'http://127.0.0.1:33333',
+        'instance_id': 'kotlin-local-fallback',
+        'local_token': 'memory-token',
+        'failure_stage': 'go_core_start:LinkageError',
+      }),
+    );
+
+    expect(decision.destination, BootEndpointDestination.localRecovery);
+    expect(decision.managedLocal?.panel.url, 'http://127.0.0.1:33333');
+    expect(decision.managedLocal?.localToken, 'memory-token');
+  });
+
   test('authenticated remote keeps dashboard shortcut', () async {
     var ensureCalls = 0;
     final decision = await BootEndpointResolver.resolve(

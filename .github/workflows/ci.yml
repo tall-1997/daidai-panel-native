@@ -1,0 +1,334 @@
+name: PR and Main Quality
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: 1.25.0
+  FLUTTER_VERSION: 3.41.5
+  JAVA_VERSION: '17'
+  GRADLE_VERSION: 9.1.0
+  NODE_VERSION: '20'
+
+jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      route: ${{ steps.filter.outputs.route }}
+      flutter: ${{ steps.filter.outputs.flutter }}
+      kotlin: ${{ steps.filter.outputs.kotlin }}
+      panel_web: ${{ steps.filter.outputs.panel_web }}
+      release_scripts: ${{ steps.filter.outputs.release_scripts }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Classify changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            go:
+              - '.github/workflows/ci.yml'
+              - 'panel/server/**'
+              - 'go.work'
+              - 'go.work.sum'
+            route:
+              - '.github/workflows/ci.yml'
+              - 'panel/server/router/**'
+              - 'panel/server/handler/**'
+              - 'scripts/generate-route-contract.go'
+              - 'contracts/backend-api-mobile.json'
+              - 'go.work'
+              - 'go.work.sum'
+            flutter:
+              - '.github/workflows/ci.yml'
+              - 'app/lib/**'
+              - 'app/test/**'
+              - 'app/pubspec.yaml'
+              - 'app/pubspec.lock'
+              - 'app/analysis_options.yaml'
+            kotlin:
+              - '.github/workflows/ci.yml'
+              - 'app/android/**'
+              - 'app/pubspec.yaml'
+              - 'app/pubspec.lock'
+              - 'app/scripts/build-mobile-core-aar.sh'
+              - 'app/scripts/prepare-android-python-runtime.sh'
+              - 'panel/server/mobilecore/**'
+              - 'panel/server/go.mod'
+              - 'panel/server/go.sum'
+              - 'runtime/manifest.json'
+              - 'runtime/compatibility.json'
+              - 'runtime/smoke-evidence.json'
+            panel_web:
+              - '.github/workflows/ci.yml'
+              - 'panel/web/**'
+            release_scripts:
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/android-release.yml'
+              - '.github/workflows/android-device-smoke.yml'
+              - 'VERSION.json'
+              - 'app/pubspec.yaml'
+              - 'panel/web/package.json'
+              - 'panel/web/package-lock.json'
+              - 'runtime/**'
+              - 'scripts/run-runtime-smoke.go'
+              - 'scripts/run-runtime-smoke_test.go'
+              - 'scripts/verify-runtime-contract.go'
+              - 'scripts/verify-runtime-contract_test.go'
+              - 'scripts/verify-runtime-elf.go'
+              - 'scripts/verify-runtime-elf_test.go'
+              - 'scripts/version.py'
+              - 'scripts/test_version.py'
+              - 'scripts/android-runtime-smoke.py'
+              - 'scripts/test_android_runtime_smoke.py'
+
+  go-quality:
+    name: Go test and vet
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: panel/server
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+
+      - name: Run all Go tests
+        run: go test ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+  go-race:
+    name: Go race critical packages
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: panel/server
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+
+      - name: Run race detector on critical packages
+        run: go test -race -count=1 ./router ./mobilecore ./database
+
+  route-contract:
+    name: Route contract
+    needs: changes
+    if: needs.changes.outputs.route == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+
+      - name: Verify generated route contract
+        run: go run ./scripts/generate-route-contract.go -check
+
+  flutter-quality:
+    name: Flutter analyze and test
+    needs: changes
+    if: needs.changes.outputs.flutter == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter packages
+        run: flutter pub get
+
+      - name: Analyze Flutter source
+        run: flutter analyze
+
+      - name: Run Flutter tests
+        run: flutter test
+
+  kotlin-test:
+    name: Kotlin unit tests
+    needs: changes
+    if: needs.changes.outputs.kotlin == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter packages
+        working-directory: app
+        run: flutter pub get
+
+      - name: Prepare Android Python runtime
+        working-directory: app
+        run: bash scripts/prepare-android-python-runtime.sh
+
+      - name: Build embedded Core AAR
+        working-directory: app
+        env:
+          PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
+        run: bash scripts/build-mobile-core-aar.sh
+
+      - name: Run Kotlin tests
+        working-directory: app
+        run: gradle -p android :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload Kotlin test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-test-reports
+          path: |
+            app/build/app/reports/tests/testDebugUnitTest/
+            app/build/app/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 7
+
+  panel-web:
+    name: Panel Web build
+    needs: changes
+    if: needs.changes.outputs.panel_web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: panel/web
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Install Panel Web dependencies
+        run: npm ci
+
+      - name: Build Panel Web
+        run: npm run build
+
+  release-scripts:
+    name: Release and runtime scripts
+    needs: changes
+    if: needs.changes.outputs.release_scripts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Test release and runtime scripts
+        run: |
+          go test ./scripts/run-runtime-smoke.go ./scripts/run-runtime-smoke_test.go
+          go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
+          go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
+          python3 -m unittest scripts/test_version.py scripts/test_android_runtime_smoke.py
+          python3 scripts/version.py check
+          go run ./scripts/verify-runtime-contract.go
+
+  quality-gate:
+    name: Quality gate
+    if: always()
+    needs:
+      - changes
+      - go-quality
+      - go-race
+      - route-contract
+      - flutter-quality
+      - kotlin-test
+      - panel-web
+      - release-scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all selected quality jobs to pass
+        env:
+          JOB_RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          if [[ " $JOB_RESULTS " == *" failure "* || " $JOB_RESULTS " == *" cancelled "* ]]; then
+            printf 'Quality jobs did not pass: %s\n' "$JOB_RESULTS" >&2
+            exit 1
+          fi
+          printf 'Quality jobs passed or were skipped by path filters: %s\n' "$JOB_RESULTS"

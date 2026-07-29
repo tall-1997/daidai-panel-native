@@ -1,45 +1,87 @@
 {
   "version": "1",
   "updated_at": "2026-07-29T00:00:00Z",
-  "matrix": [
-    "api28-4k",
-    "api35-4k",
-    "api35-16k"
-  ],
+  "matrix": ["api28-4k", "api35-4k", "api35-16k"],
   "records": [
     {
-      "runtime_id": "python-3.12-android-arm64",
+      "runtime_id": "python-3.14-android-arm64",
       "version": "3.14.6",
       "entry": "libpython_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
       "isolation_level": "trusted-runner",
       "timeout_seconds": 10,
-      "checks": [
-        {
-          "id": "PY_OK",
-          "status": "pass",
-          "output": "PY_OK"
-        },
-        {
-          "id": "SSL",
-          "status": "pass",
-          "output": "SSL"
-        },
-        {
-          "id": "SQLite",
-          "status": "pass",
-          "output": "SQLite"
-        },
-        {
-          "id": "venv",
-          "status": "pass",
-          "output": "venv"
-        },
-        {
-          "id": "pip",
-          "status": "pass",
-          "output": "pip"
-        }
-      ]
+      "checks": [{"id": "PY_OK_SSL_SQLITE_VENV_PIP", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "node-lts-android-arm64",
+      "version": "18.20.4",
+      "entry": "libnode_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 10,
+      "checks": [{"id": "COMMONJS_ESM_HTTPS", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "typescript-stable",
+      "version": "5.9.3",
+      "entry": "libnode_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 10,
+      "checks": [{"id": "TS_OK", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "shell-android-arm64",
+      "version": "blocked-placeholder",
+      "entry": "libshell_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "trusted-runner",
+      "timeout_seconds": 10,
+      "checks": [{"id": "SHELL_PIPE_EXIT_STOP", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "git-android-arm64",
+      "version": "blocked-placeholder",
+      "entry": "libgit_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "broker",
+      "timeout_seconds": 30,
+      "checks": [{"id": "GIT_CLONE_FETCH_SPARSE", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "ssh-android-arm64",
+      "version": "blocked-placeholder",
+      "entry": "libssh_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "broker",
+      "timeout_seconds": 30,
+      "checks": [{"id": "SSH_HOSTKEY", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "yaegi-go",
+      "version": "blocked-placeholder",
+      "entry": "libyaegi_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "isolated-worker",
+      "timeout_seconds": 10,
+      "checks": [{"id": "GO_INTERPRET_OK", "status": "blocked", "reason": "runtime-placeholder-elf"}]
+    },
+    {
+      "runtime_id": "go-builder-android-arm64",
+      "version": "blocked-placeholder",
+      "entry": "libgobuilder_exec.so",
+      "status": "blocked",
+      "evidence_source": "none",
+      "isolation_level": "trusted-builder",
+      "timeout_seconds": 60,
+      "checks": [{"id": "GO_BUILD_EXPORT_ONLY", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     }
   ]
 }

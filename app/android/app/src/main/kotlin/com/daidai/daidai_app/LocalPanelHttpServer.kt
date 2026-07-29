@@ -8,14 +8,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class LocalPanelHttpServer(
     private val context: Context,
-    private val goCoreFallbackReason: String = "go_core_unavailable",
+    goCoreFallbackReason: String = "go_core_unavailable",
+    localToken: String,
     port: Int = findAvailablePort()
 ) : NanoHTTPD("127.0.0.1", port) {
     private val store = LocalPanelStore(context)
+    @Volatile
+    private var goCoreFallbackReason = goCoreFallbackReason
+    @Volatile
+    private var localToken = localToken
 
     companion object {
         private fun findAvailablePort(): Int {
@@ -26,47 +33,96 @@ class LocalPanelHttpServer(
                 ServerSocket(0, 0, loopback).use { it.localPort }
             }
         }
+
+        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = when (method to uri) {
+            Method.GET to "/api/v1/health",
+            Method.GET to "/api/health",
+            Method.GET to "/api/local/capabilities",
+            Method.GET to "/api/system/version",
+            Method.GET to "/api/system/public-version",
+            Method.GET to "/api/system/health-check",
+            Method.POST to "/api/system/health-check",
+            Method.GET to "/api/system/info",
+            Method.GET to "/api/android/recovery-metadata",
+            Method.GET to "/api/system/backups",
+            Method.POST to "/api/system/backup/upload",
+            Method.GET to "/api/system/backup/download",
+            Method.POST to "/api/system/restore",
+            Method.GET to "/api/system/restore/progress",
+            Method.GET to "/api/auth/check-init",
+            Method.POST to "/api/auth/init",
+            Method.POST to "/api/auth/login",
+            Method.POST to "/api/auth/refresh",
+            Method.GET to "/api/auth/user",
+            Method.POST to "/api/auth/logout",
+            Method.GET to "/api/auth/captcha-config" -> true
+            else -> false
+        }
+    }
+
+    internal data class RequestBoundary(
+        val authority: String,
+        val origin: String,
+        val localToken: String,
+    ) {
+        fun rejection(headers: Map<String, String>): Response.Status? {
+            if (singleHeader(headers, "host") != authority) return Response.Status.BAD_REQUEST
+            if (singleHeader(headers, "origin") != origin) return Response.Status.FORBIDDEN
+            if (localToken.isEmpty()) return Response.Status.UNAUTHORIZED
+            val suppliedToken = singleHeader(headers, "x-daidai-local-token")
+                ?: return Response.Status.UNAUTHORIZED
+            val matches = MessageDigest.isEqual(
+                localToken.toByteArray(StandardCharsets.UTF_8),
+                suppliedToken.toByteArray(StandardCharsets.UTF_8),
+            )
+            return if (matches) null else Response.Status.UNAUTHORIZED
+        }
+
+        private fun singleHeader(headers: Map<String, String>, name: String): String? =
+            headers.entries.singleOrNull { it.key.equals(name, ignoreCase = true) }?.value
     }
 
     val endpoint: String
         get() = "http://127.0.0.1:$listeningPort"
 
+    internal fun updateBoundary(reason: String, token: String) {
+        goCoreFallbackReason = reason
+        localToken = token
+    }
+
+    fun shutdown() {
+        stop()
+        store.close()
+    }
+
     override fun serve(session: IHTTPSession): Response {
         return try {
+            RequestBoundary(
+                authority = "127.0.0.1:$listeningPort",
+                origin = endpoint,
+                localToken = localToken,
+            ).rejection(session.headers)?.let { status ->
+                return jsonError(status, "Invalid local diagnostic request boundary")
+            }
+            if (!isFallbackRouteAllowed(session.method, session.uri)) {
+                return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")
+            }
             if (session.uri.startsWith("/api/auth")) {
                 return store.serveAuth(session)
-            }
-            if (!store.isPublicRequest(session) && !store.isAuthorized(session)) {
-                return jsonError(Response.Status.UNAUTHORIZED, "本地会话已失效")
             }
             when {
                 session.method == Method.GET &&
                     (session.uri == "/api/v1/health" || session.uri == "/api/health") ->
-                    jsonResponse(JSONObject().put("status", "ok").put("mode", "android_local"))
+                    jsonResponse(JSONObject().put("status", "degraded").put("mode", "diagnostic"))
 
                 session.method == Method.GET && session.uri == "/api/local/capabilities" ->
                     jsonResponse(capabilities())
 
                 session.method == Method.GET && session.uri == "/api/system/version" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName()).put("mode", "android_local")))
+                    jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName()).put("mode", "diagnostic")))
 
                 session.method == Method.GET && session.uri == "/api/system/public-version" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName())))
-
-                session.method == Method.GET && session.uri == "/api/system/machine-code" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-${android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID).orEmpty()}")))
-
-                session.method == Method.GET && session.uri == "/api/system/check-update" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("has_update", false).put("current_version", appVersionName())))
-
-                session.method == Method.GET && session.uri == "/api/system/update-status" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("status", "idle").put("deployment_type", "android_apk")))
-
-                session.method == Method.POST && session.uri == "/api/system/update" ->
-                    jsonResponse(JSONObject().put("message", "Android APK 更新请安装新版 Release 包"))
-
-                session.method == Method.POST && session.uri == "/api/system/restart" ->
-                    jsonResponse(JSONObject().put("message", "Android 本地面板服务保持运行"))
 
                 (session.method == Method.GET || session.method == Method.POST) && session.uri == "/api/system/health-check" ->
                     jsonResponse(systemHealth())
@@ -77,31 +133,7 @@ class LocalPanelHttpServer(
                 session.method == Method.GET && session.uri == "/api/system/info" ->
                     jsonResponse(systemInfo())
 
-                session.method == Method.GET && session.uri == "/api/system/stats" ->
-                    jsonResponse(systemStats())
-
-                session.uri.startsWith("/api/system/backup") || session.uri.startsWith("/api/system/backups") ||
-                    session.uri.startsWith("/api/system/restore") -> store.serveBackup(session)
-
-                session.uri.startsWith("/api/logs") || session.uri.startsWith("/api/v1/logs") ->
-                    store.serveLogs(session)
-
-                session.method == Method.GET && session.uri == "/api/system/dashboard" ->
-                    jsonResponse(store.dashboard())
-
-                session.method == Method.GET && session.uri == "/api/system/panel-log" ->
-                    store.panelLog(session)
-
-                session.method == Method.GET && session.uri == "/api/system/panel-settings" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("panel_title", "呆呆本地面板")))
-
-                session.uri.startsWith("/api/tasks") || session.uri.startsWith("/api/v1/tasks") -> store.serveTasks(session)
-                session.uri.startsWith("/api/scripts") || session.uri.startsWith("/api/v1/scripts") -> store.serveScripts(session)
-                session.uri.startsWith("/api/envs") || session.uri.startsWith("/api/v1/envs") -> store.serveEnvs(session)
-                session.uri.startsWith("/api/deps") || session.uri.startsWith("/api/v1/deps") ->
-                    store.serveDependencies(session)
-                session.uri.startsWith("/api/configs") || session.uri.startsWith("/api/v1/configs") ->
-                    store.serveConfigs(session)
+                LocalPanelStore.isRecoveryRequest(session.method, session.uri) -> store.serveBackup(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
             }
         } catch (error: Exception) {
@@ -110,38 +142,39 @@ class LocalPanelHttpServer(
     }
 
     private fun capabilities(): JSONObject = JSONObject()
-        .put("instance_mode", "android_local")
+        .put("instance_mode", "diagnostic")
+        .put("phase", "degraded")
         .put("platform", "android")
         .put("architecture", android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
-        .put("core_version", "android-local-mvp")
+        .put("core_version", "kotlin-local-fallback")
         .put("schema_version", LocalPanelStore.SCHEMA_VERSION)
         .put(
             "capabilities",
             JSONObject()
-                .put("dashboard", true)
-                .put("tasks", true)
-                .put("envs", true)
-                .put("dependency_install", true)
-                .put("python", true)
-                .put("pip", true)
-                .put("node", hasNativeRuntime("libnode_exec.so"))
-                .put("npm", hasNativeRuntime("libnode_exec.so"))
-                .put("typescript", hasNativeRuntime("libnode_exec.so"))
-                .put("shell", true)
+                .put("dashboard", false)
+                .put("tasks", false)
+                .put("envs", false)
+                .put("dependency_install", false)
+                .put("python", false)
+                .put("pip", false)
+                .put("node", false)
+                .put("npm", false)
+                .put("typescript", false)
+                .put("shell", false)
                 .put("linux_package_manager", false)
-                .put("foreground_scheduler", true)
+                .put("foreground_scheduler", false)
                 .put("exact_cron", false)
-                .put("portable_backup_envelope", true)
+                .put("portable_backup_envelope", false)
                 .put("atomic_restore", true)
                 .put("recovery_apk_metadata", true)
         )
         .put(
             "limits",
             JSONObject()
-                .put("max_log_buffer_bytes", 1024 * 1024)
-                .put("max_concurrent_tasks", 1)
-                .put("runtime_quota_bytes", 1024L * 1024 * 1024)
-                .put("dependency_quota_bytes", 1024L * 1024 * 1024)
+                .put("max_log_buffer_bytes", 0)
+                .put("max_concurrent_tasks", 0)
+                .put("runtime_quota_bytes", 0)
+                .put("dependency_quota_bytes", 0)
         )
 
     private fun systemInfo(): JSONObject {
@@ -181,13 +214,9 @@ class LocalPanelHttpServer(
         .put(
             "items",
                 JSONArray()
-                .put(JSONObject().put("name", "Android local HTTP API").put("status", "ok"))
+                .put(JSONObject().put("name", "Android local diagnostic HTTP API").put("status", "warning"))
                 .put(goCoreHealthItem())
-                .put(JSONObject().put("name", "Local management core").put("status", "ok").put("message", "Kotlin fallback is serving local management APIs"))
-                .put(runtimeSmokeItem("Python runtime", pythonSmokeCommand(), "PY_OK"))
-                .put(pythonSeedStatusItem())
-                .put(runtimeSmokeItem("Node runtime", nodeSmokeCommand(), "NODE_OK"))
-                .put(runtimeSmokeItem("TypeScript runtime", typeScriptSmokeCommand(), "TS_OK"))
+                .put(JSONObject().put("name", "Fallback mode").put("status", "warning").put("message", "Diagnostic and recovery interfaces only"))
         )
         .put("last_checked_at", java.time.Instant.now().toString())
 

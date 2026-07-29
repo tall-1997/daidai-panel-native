@@ -65,7 +65,27 @@ func (defaultRuntimeLocator) Resolve(runtimeID string) (RuntimeExecutable, error
 	baseline := RuntimeComponentBaselineSnapshot()
 	manifest := RuntimeManifest{Components: make([]RuntimeManifestComponent, 0, len(baseline.Components))}
 	for _, component := range baseline.Components {
+		if component.ID == runtimeID && !component.Verified {
+			return RuntimeExecutable{}, runtimeBlockedError(runtimeID, component.Reason)
+		}
 		manifest.Components = append(manifest.Components, RuntimeManifestComponent{ID: component.ID, Entrypoint: component.Entrypoint})
+	}
+	for _, suite := range baseline.SmokeSuites {
+		if suite.RuntimeID != runtimeID {
+			continue
+		}
+		if len(suite.Checks) == 0 {
+			return RuntimeExecutable{}, runtimeBlockedError(runtimeID, "smoke-evidence-missing")
+		}
+		for _, check := range suite.Checks {
+			if check.Status != "pass" {
+				reason := check.Reason
+				if reason == "" {
+					reason = "smoke-" + check.Status
+				}
+				return RuntimeExecutable{}, runtimeBlockedError(runtimeID, reason)
+			}
+		}
 	}
 	if len(manifest.Components) == 0 {
 		manager := NewRuntimeComponentManager(baseline.NativeLibraryDir)
@@ -80,6 +100,13 @@ func (defaultRuntimeLocator) Resolve(runtimeID string) (RuntimeExecutable, error
 		baseline.NativeLibraryDir = manager.nativeLibraryDir
 	}
 	return NewManifestRuntimeLocator(baseline.NativeLibraryDir, manifest).Resolve(runtimeID)
+}
+
+func runtimeBlockedError(runtimeID, reason string) error {
+	if reason == "" {
+		reason = "component-not-verified"
+	}
+	return fmt.Errorf("%w: %s: %s", ErrRuntimeBlocked, runtimeID, reason)
 }
 
 var (

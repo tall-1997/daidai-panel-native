@@ -40,14 +40,16 @@ type RuntimeCompatibility struct {
 }
 
 type RuntimeComponentStatus struct {
-	ID         string `json:"id"`
-	Entrypoint string `json:"entrypoint"`
-	Present    bool   `json:"present"`
-	Verified   bool   `json:"verified"`
-	Reason     string `json:"reason,omitempty"`
+	ID           string `json:"id"`
+	Entrypoint   string `json:"entrypoint"`
+	Present      bool   `json:"present"`
+	Verified     bool   `json:"verified"`
+	FailureClass string `json:"failure_class,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 type RuntimeComponentBaseline struct {
+	State             string                   `json:"state"`
 	ManifestPath      string                   `json:"manifest_path"`
 	CompatibilityPath string                   `json:"compatibility_path"`
 	NativeLibraryDir  string                   `json:"native_library_dir"`
@@ -61,6 +63,11 @@ type RuntimeComponentBaseline struct {
 	TrustAuthorizer   TrustAuthorizerStatus    `json:"trust_authorizer"`
 	TrustRecords      []TrustAuthorization     `json:"trust_records"`
 }
+
+var (
+	ErrRuntimeCoreMetadata = errors.New("runtime core metadata invalid")
+	ErrRuntimeBlocked      = errors.New("runtime blocked")
+)
 
 type RuntimeSmokeEvidence struct {
 	Version   string                       `json:"version"`
@@ -175,34 +182,34 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 	for _, component := range manifest.Components {
 		status := RuntimeComponentStatus{ID: component.ID, Entrypoint: component.Entrypoint}
 		if component.ID == "" || component.Entrypoint == "" {
-			status.Reason = "invalid-manifest-entry"
+			blockRuntimeComponent(&status, "metadata-integrity", "invalid-manifest-entry")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		if _, ok := idSet[component.ID]; !ok {
-			status.Reason = "missing-in-compatibility"
+			blockRuntimeComponent(&status, "compatibility", "missing-in-compatibility")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		if manager.nativeLibraryDir == "" {
-			status.Reason = "native-library-dir-missing"
+			blockRuntimeComponent(&status, "availability", "native-library-dir-missing")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		libraryPath, pathErr := manager.resolveEntrypointPath(component.Entrypoint)
 		if pathErr != nil {
-			status.Reason = "entrypoint-invalid"
+			blockRuntimeComponent(&status, "metadata-integrity", "entrypoint-invalid")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		payload, readErr := os.ReadFile(libraryPath)
 		if readErr != nil {
-			status.Reason = "entrypoint-missing"
+			blockRuntimeComponent(&status, "availability", "entrypoint-missing")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		if err := validateRuntimeELF(payload); err != nil {
-			status.Reason = "entrypoint-invalid-format"
+			blockRuntimeComponent(&status, "asset-integrity", "entrypoint-invalid-format")
 			result.Components = append(result.Components, status)
 			continue
 		}
@@ -210,12 +217,12 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 		sum := sha256.Sum256(payload)
 		hash := hex.EncodeToString(sum[:])
 		if isManifestSHAPlaceholder(component.SHA256) && !allowRuntimePlaceholderHash() {
-			status.Reason = "sha256-placeholder"
+			blockRuntimeComponent(&status, "asset-integrity", "sha256-placeholder")
 			result.Components = append(result.Components, status)
 			continue
 		}
 		if !isManifestSHAPlaceholder(component.SHA256) && !strings.EqualFold(component.SHA256, hash) {
-			status.Reason = "sha256-mismatch"
+			blockRuntimeComponent(&status, "asset-integrity", "sha256-mismatch")
 			result.Components = append(result.Components, status)
 			continue
 		}
@@ -237,9 +244,18 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 		GitSSH:    DefaultGitSSHRuntimePolicy(),
 		GoBuilder: DefaultGoBuilderRuntimePolicy(),
 	}
+	result.State = "ready"
+	if RuntimeBaselineDegraded(result) {
+		result.State = "degraded-ready"
+	}
 
 	setRuntimeComponentBaseline(result)
 	return result, nil
+}
+
+func blockRuntimeComponent(status *RuntimeComponentStatus, failureClass, reason string) {
+	status.FailureClass = failureClass
+	status.Reason = reason
 }
 
 func buildRuntimeSmokeSuites(components []RuntimeComponentStatus) []RuntimeSmokeSuite {
@@ -568,14 +584,14 @@ func SeedRuntimeTrustRecord(source, version, digest string, capabilities []strin
 func (manager *RuntimeComponentManager) readManifest() (RuntimeManifest, error) {
 	payload, err := os.ReadFile(manager.manifestPath)
 	if err != nil {
-		return RuntimeManifest{}, fmt.Errorf("read runtime manifest: %w", err)
+		return RuntimeManifest{}, fmt.Errorf("%w: read runtime manifest: %w", ErrRuntimeCoreMetadata, err)
 	}
 	var manifest RuntimeManifest
 	if err := json.Unmarshal(payload, &manifest); err != nil {
-		return RuntimeManifest{}, fmt.Errorf("decode runtime manifest: %w", err)
+		return RuntimeManifest{}, fmt.Errorf("%w: decode runtime manifest: %w", ErrRuntimeCoreMetadata, err)
 	}
 	if len(manifest.Components) == 0 {
-		return RuntimeManifest{}, errors.New("runtime manifest has no components")
+		return RuntimeManifest{}, fmt.Errorf("%w: runtime manifest has no components", ErrRuntimeCoreMetadata)
 	}
 	return manifest, nil
 }
@@ -583,14 +599,14 @@ func (manager *RuntimeComponentManager) readManifest() (RuntimeManifest, error) 
 func (manager *RuntimeComponentManager) readCompatibility() (RuntimeCompatibility, error) {
 	payload, err := os.ReadFile(manager.compatibilityPath)
 	if err != nil {
-		return RuntimeCompatibility{}, fmt.Errorf("read runtime compatibility: %w", err)
+		return RuntimeCompatibility{}, fmt.Errorf("%w: read runtime compatibility: %w", ErrRuntimeCoreMetadata, err)
 	}
 	var compatibility RuntimeCompatibility
 	if err := json.Unmarshal(payload, &compatibility); err != nil {
-		return RuntimeCompatibility{}, fmt.Errorf("decode runtime compatibility: %w", err)
+		return RuntimeCompatibility{}, fmt.Errorf("%w: decode runtime compatibility: %w", ErrRuntimeCoreMetadata, err)
 	}
 	if len(compatibility.RuntimeIDs) == 0 {
-		return RuntimeCompatibility{}, errors.New("runtime compatibility has no runtime ids")
+		return RuntimeCompatibility{}, fmt.Errorf("%w: runtime compatibility has no runtime ids", ErrRuntimeCoreMetadata)
 	}
 	return compatibility, nil
 }
@@ -651,10 +667,9 @@ func (manager *RuntimeComponentManager) resolveEntrypointPath(entrypoint string)
 	return resolveRuntimeEntrypointPath(manager.nativeLibraryDir, entrypoint)
 }
 
-func RuntimeBaselineHasSevereFailure(baseline RuntimeComponentBaseline) bool {
+func RuntimeBaselineDegraded(baseline RuntimeComponentBaseline) bool {
 	for _, component := range baseline.Components {
-		switch component.Reason {
-		case "invalid-manifest-entry", "missing-in-compatibility", "native-library-dir-missing", "entrypoint-missing", "entrypoint-invalid", "entrypoint-invalid-format", "sha256-mismatch", "sha256-placeholder":
+		if !component.Verified {
 			return true
 		}
 	}

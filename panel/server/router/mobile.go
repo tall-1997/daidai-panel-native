@@ -128,16 +128,16 @@ func mobileCapabilityMiddleware(platform MobilePlatform) gin.HandlerFunc {
 		}
 
 		state := platform.Capability(capability)
-		status := http.StatusConflict
+		if state.State == CapabilityEnabled {
+			c.Next()
+			return
+		}
+
 		reasonCode := state.ReasonCode
 		if reasonCode == "" {
 			reasonCode = "CAPABILITY_DISABLED"
 		}
-		if state.State == CapabilityEnabled {
-			status = http.StatusNotImplemented
-			reasonCode = "ADAPTER_UNAVAILABLE"
-		}
-		c.AbortWithStatusJSON(status, gin.H{
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"errorCode":  "PLATFORM_CAPABILITY",
 			"capability": capability,
 			"state":      state.State,

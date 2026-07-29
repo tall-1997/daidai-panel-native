@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,9 @@ func TestRuntimeComponentManagerDetectsSHA256Mismatch(t *testing.T) {
 	if baseline.Components[0].Reason != "sha256-mismatch" {
 		t.Fatalf("reason=%q want=sha256-mismatch", baseline.Components[0].Reason)
 	}
+	if baseline.Components[0].FailureClass != "asset-integrity" {
+		t.Fatalf("failure class=%q want=asset-integrity", baseline.Components[0].FailureClass)
+	}
 }
 
 func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
@@ -288,30 +292,35 @@ func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
 	}
 }
 
-func TestRuntimeBaselineHasSevereFailureCoversManifestAndNativeDirIssues(t *testing.T) {
+func TestRuntimeBaselineComponentFailuresAreIsolated(t *testing.T) {
 	t.Parallel()
 	baseline := RuntimeComponentBaseline{Components: []RuntimeComponentStatus{{Reason: "invalid-manifest-entry"}}}
-	if !RuntimeBaselineHasSevereFailure(baseline) {
-		t.Fatal("expected invalid-manifest-entry to be severe")
+	if !RuntimeBaselineDegraded(baseline) {
+		t.Fatal("invalid manifest component entry must degrade readiness")
 	}
 	baseline = RuntimeComponentBaseline{Components: []RuntimeComponentStatus{{Reason: "native-library-dir-missing"}}}
-	if !RuntimeBaselineHasSevereFailure(baseline) {
-		t.Fatal("expected native-library-dir-missing to be severe")
+	if !RuntimeBaselineDegraded(baseline) {
+		t.Fatal("missing runtime directory must degrade readiness")
 	}
 }
 
-func TestRuntimeBaselineHasSevereFailureCoversSmokeStates(t *testing.T) {
+func TestRuntimeBaselineSmokeFailuresAreIsolated(t *testing.T) {
 	t.Parallel()
-	if !RuntimeBaselineHasSevereFailure(RuntimeComponentBaseline{}) {
-		t.Fatal("expected empty smoke suites to be severe")
-	}
 	baseline := RuntimeComponentBaseline{SmokeSuites: []RuntimeSmokeSuite{{RuntimeID: "python", Checks: []RuntimeSmokeCheck{{ID: "PY_OK", Status: "failed"}}}}}
-	if !RuntimeBaselineHasSevereFailure(baseline) {
-		t.Fatal("expected failed smoke check to be severe")
+	if !RuntimeBaselineDegraded(baseline) {
+		t.Fatal("failed runtime smoke check must degrade readiness")
 	}
-	baseline = RuntimeComponentBaseline{SmokeSuites: []RuntimeSmokeSuite{{RuntimeID: "python", Checks: []RuntimeSmokeCheck{{ID: "PY_OK", Status: "pass"}}}}}
-	if RuntimeBaselineHasSevereFailure(baseline) {
-		t.Fatal("expected passing smoke checks to be accepted")
+}
+
+func TestRuntimeBaselineErrorClassifiesUnparseableCoreMetadata(t *testing.T) {
+	t.Parallel()
+	manager := &RuntimeComponentManager{
+		manifestPath:      filepath.Join(t.TempDir(), "missing-manifest.json"),
+		compatibilityPath: filepath.Join(t.TempDir(), "missing-compatibility.json"),
+	}
+	_, err := manager.LoadAndValidate()
+	if !errors.Is(err, ErrRuntimeCoreMetadata) {
+		t.Fatalf("error=%v want runtime core metadata classification", err)
 	}
 }
 

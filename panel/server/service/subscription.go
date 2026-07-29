@@ -998,7 +998,11 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 						failed++
 						emit(fmt.Sprintf("[自动更新任务失败] %s: %v", candidate.Name, err))
 					} else {
-						GetSchedulerV2().UpdateJob(existing)
+						if scheduler := GetSchedulerV2(); scheduler != nil {
+							scheduler.UpdateJob(existing)
+						} else {
+							emit(fmt.Sprintf("[调度器未初始化] 任务 %s 已保存，将在调度器启动时加载", candidate.Name))
+						}
 						updated++
 						emit(fmt.Sprintf("[自动更新任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
 					}
@@ -1036,7 +1040,11 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 				emit(fmt.Sprintf("[自动添加任务失败] %s (cron: %s) command=%s err=%v",
 					candidate.Name, candidate.CronExpression, candidate.Command, err))
 			} else {
-				GetSchedulerV2().AddJob(&task)
+				if scheduler := GetSchedulerV2(); scheduler != nil {
+					_ = scheduler.AddJob(&task)
+				} else {
+					emit(fmt.Sprintf("[调度器未初始化] 任务 %s 已保存，将在调度器启动时加载", candidate.Name))
+				}
 				managedByCommand[command] = &task
 				created++
 				emit(fmt.Sprintf("[自动添加任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
@@ -1054,7 +1062,9 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 				continue
 			}
 
-			GetSchedulerV2().RemoveJob(task.ID)
+			if scheduler := GetSchedulerV2(); scheduler != nil {
+				scheduler.RemoveJob(task.ID)
+			}
 			database.DB.Where("task_id = ?", task.ID).Delete(&model.TaskLog{})
 			database.DB.Delete(&task)
 			deleted++

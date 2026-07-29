@@ -114,7 +114,7 @@ func TestMobileCapabilityDefaultsToDisabled(t *testing.T) {
 	}
 }
 
-func TestMobileCapabilityRejectsBeforeDangerousHandler(t *testing.T) {
+func TestMobileCapabilityGateControlsDangerousHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutil.SetupTestEnv(t)
 	accessToken := testutil.MustCreateAccessToken(t, "admin", "admin")
@@ -122,9 +122,12 @@ func TestMobileCapabilityRejectsBeforeDangerousHandler(t *testing.T) {
 		name       string
 		capability CapabilityState
 		wantStatus int
+		wantCalled int
+		wantReason string
 	}{
-		{name: "disabled", capability: CapabilityState{State: CapabilityDisabled}, wantStatus: http.StatusConflict},
-		{name: "enabled without adapter", capability: CapabilityState{State: CapabilityEnabled}, wantStatus: http.StatusNotImplemented},
+		{name: "enabled", capability: CapabilityState{State: CapabilityEnabled}, wantStatus: http.StatusNoContent, wantCalled: 1},
+		{name: "disabled", capability: CapabilityState{State: CapabilityDisabled}, wantStatus: http.StatusConflict, wantReason: "CAPABILITY_DISABLED"},
+		{name: "unsupported", capability: CapabilityState{State: "unsupported", ReasonCode: "PLATFORM_UNSUPPORTED"}, wantStatus: http.StatusConflict, wantReason: "PLATFORM_UNSUPPORTED"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			called := 0
@@ -156,17 +159,23 @@ func TestMobileCapabilityRejectsBeforeDangerousHandler(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Fatalf("status=%d want=%d body=%s", response.Code, test.wantStatus, response.Body.String())
 			}
-			if called != 0 {
-				t.Fatalf("dangerous handler called %d times", called)
+			if called != test.wantCalled {
+				t.Fatalf("dangerous handler called %d times, want %d", called, test.wantCalled)
+			}
+			if test.capability.State == CapabilityEnabled {
+				return
 			}
 			var payload struct {
 				ErrorCode  string `json:"errorCode"`
 				Capability string `json:"capability"`
+				State      string `json:"state"`
+				ReasonCode string `json:"reasonCode"`
 			}
 			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.ErrorCode != "PLATFORM_CAPABILITY" || payload.Capability != CapabilityTaskExecution {
+			if payload.ErrorCode != "PLATFORM_CAPABILITY" || payload.Capability != CapabilityTaskExecution ||
+				payload.State != test.capability.State || payload.ReasonCode != test.wantReason {
 				t.Fatalf("unexpected capability response: %+v", payload)
 			}
 		})
@@ -191,7 +200,7 @@ func TestMobileCapabilityRejectsInvalidJWTBeforeCapabilityDisclosure(t *testing.
 	}
 }
 
-func TestEveryMobileCapabilityRouteAbortsBeforeDangerousHandler(t *testing.T) {
+func TestEveryMobileCapabilityRouteHonorsGateState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutil.SetupTestEnv(t)
 	accessToken := testutil.MustCreateAccessToken(t, "admin", "admin")
@@ -203,9 +212,11 @@ func TestEveryMobileCapabilityRouteAbortsBeforeDangerousHandler(t *testing.T) {
 		name       string
 		capability CapabilityState
 		wantStatus int
+		wantCalled int
 	}{
 		{name: "disabled", capability: CapabilityState{State: CapabilityDisabled}, wantStatus: http.StatusConflict},
-		{name: "enabled", capability: CapabilityState{State: CapabilityEnabled}, wantStatus: http.StatusNotImplemented},
+		{name: "unsupported", capability: CapabilityState{State: "unsupported"}, wantStatus: http.StatusConflict},
+		{name: "enabled", capability: CapabilityState{State: CapabilityEnabled}, wantStatus: http.StatusNoContent, wantCalled: 1},
 	} {
 		for _, route := range capabilityRoutes {
 			route := route
@@ -234,11 +245,14 @@ func TestEveryMobileCapabilityRouteAbortsBeforeDangerousHandler(t *testing.T) {
 				if response.Code != state.wantStatus {
 					t.Fatalf("status=%d want=%d body=%s", response.Code, state.wantStatus, response.Body.String())
 				}
+				if called != state.wantCalled {
+					t.Fatalf("dangerous handler called %d times, want %d", called, state.wantCalled)
+				}
+				if state.capability.State == CapabilityEnabled {
+					return
+				}
 				if !json.Valid(response.Body.Bytes()) {
 					t.Fatalf("invalid JSON: %s", response.Body.String())
-				}
-				if called != 0 {
-					t.Fatalf("dangerous handler called %d times", called)
 				}
 				var payload struct {
 					Capability string `json:"capability"`

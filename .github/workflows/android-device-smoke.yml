@@ -1,0 +1,313 @@
+name: Android ARM64 Device Runtime Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      external_evidence_json:
+        description: Unverified physical-device evidence JSON; imported records remain blocked
+        required: false
+        type: string
+      external_matrix_id:
+        description: Label recorded for unverified external evidence
+        required: false
+        default: physical-device
+        type: string
+      run_physical_device:
+        description: Run on a connected ARM64 device hosted by a self-hosted Android runner
+        required: false
+        default: false
+        type: boolean
+      physical_device_serial:
+        description: Optional adb serial on the self-hosted Android runner
+        required: false
+        type: string
+      physical_expected_api:
+        description: Expected API level for the connected physical device
+        required: false
+        default: '35'
+        type: string
+      physical_expected_page_size:
+        description: Expected page size in bytes for the connected physical device
+        required: false
+        default: '16384'
+        type: choice
+        options:
+          - '4096'
+          - '16384'
+  pull_request:
+    paths:
+      - 'app/android/**'
+      - 'app/scripts/prepare-android-*-runtime.sh'
+      - 'panel/server/**'
+      - 'runtime/**'
+      - 'scripts/android-runtime-smoke.py'
+      - '.github/workflows/android-device-smoke.yml'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.41.5
+  GO_VERSION: 1.25.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: panel/server/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Prepare embedded runtimes and Go Core
+        working-directory: app
+        env:
+          PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
+        run: |
+          bash scripts/prepare-android-python-runtime.sh
+          bash scripts/prepare-android-node-runtime.sh
+          bash scripts/build-mobile-core-aar.sh
+          flutter pub get
+      - name: Build debug application and instrumentation APKs
+        working-directory: app
+        run: flutter build apk --debug --target-platform android-arm64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
+      - name: Verify smoke driver dry-run
+        run: |
+          python3 scripts/android-runtime-smoke.py dry-run \
+            --apk app/build/app/outputs/flutter-apk/app-debug.apk \
+            --test-apk app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --matrix-id api35-4k --expected-api 35 --expected-page-size 4096
+      - name: Test smoke driver
+        run: python3 -m unittest scripts/test_android_runtime_smoke.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-smoke-apks
+          path: |
+            app/build/app/outputs/flutter-apk/app-debug.apk
+            app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  arm64-emulator-4k:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 28
+            matrix_id: api28-4k
+          - api: 35
+            matrix_id: api35-4k
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-runtime-smoke-apks
+          path: smoke-apks
+      - name: Run ARM64 device smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: arm64-v8a
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: >-
+            python3 scripts/android-runtime-smoke.py run
+            --apk smoke-apks/flutter-apk/app-debug.apk
+            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk
+            --matrix-id ${{ matrix.matrix_id }}
+            --expected-api ${{ matrix.api }}
+            --expected-page-size 4096
+            --output evidence/${{ matrix.matrix_id }}.json
+      - name: Verify runtime contract evidence
+        if: always() && hashFiles(format('evidence/{0}.json', matrix.matrix_id)) != ''
+        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/${{ matrix.matrix_id }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-runtime-smoke-${{ matrix.matrix_id }}
+          path: |
+            evidence/${{ matrix.matrix_id }}.json
+            evidence/${{ matrix.matrix_id }}.device.json
+          if-no-files-found: error
+          retention-days: 30
+
+  discover-api35-16k:
+    needs: build
+    runs-on: macos-14
+    outputs:
+      available: ${{ steps.image.outputs.available }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: android-actions/setup-android@v3
+      - id: image
+        name: Discover API 35 ARM64 16K image
+        shell: bash
+        run: |
+          IMAGE='system-images;android-35;google_apis_ps16k;arm64-v8a'
+          if sdkmanager --list | grep -Fq "$IMAGE"; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            python3 scripts/android-runtime-smoke.py blocked \
+              --matrix-id api35-16k \
+              --reason "Android SDK does not publish $IMAGE on this runner" \
+              --output evidence/api35-16k.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.image.outputs.available != 'true'
+        with:
+          name: android-runtime-smoke-api35-16k-blocked
+          path: evidence/api35-16k.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify blocked runtime contract evidence
+        if: steps.image.outputs.available != 'true'
+        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/api35-16k.json
+      - name: Mark unavailable 16K image as blocked gate
+        if: steps.image.outputs.available != 'true'
+        run: |
+          echo 'API 35 ARM64 16K runtime smoke is blocked; see the blocked evidence artifact.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  arm64-emulator-16k:
+    needs: [build, discover-api35-16k]
+    if: needs.discover-api35-16k.outputs.available == 'true'
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-runtime-smoke-apks
+          path: smoke-apks
+      - name: Run API 35 ARM64 16K device smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: arm64-v8a
+          target: google_apis_ps16k
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: >-
+            python3 scripts/android-runtime-smoke.py run
+            --apk smoke-apks/flutter-apk/app-debug.apk
+            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk
+            --matrix-id api35-16k
+            --expected-api 35
+            --expected-page-size 16384
+            --output evidence/api35-16k.json
+      - name: Verify runtime contract evidence
+        if: always() && hashFiles('evidence/api35-16k.json') != ''
+        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/api35-16k.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-runtime-smoke-api35-16k
+          path: |
+            evidence/api35-16k.json
+            evidence/api35-16k.device.json
+          if-no-files-found: error
+          retention-days: 30
+
+  external-device-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.external_evidence_json != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Import external device evidence as unverified blocked evidence
+        env:
+          EXTERNAL_EVIDENCE_JSON: ${{ inputs.external_evidence_json }}
+          EXTERNAL_MATRIX_ID: ${{ inputs.external_matrix_id }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          Path('external-device-evidence.json').write_text(os.environ['EXTERNAL_EVIDENCE_JSON'], encoding='utf-8')
+          PY
+          python3 scripts/android-runtime-smoke.py external \
+            --input external-device-evidence.json \
+            --matrix-id "$EXTERNAL_MATRIX_ID" \
+            --output evidence/external-device.json
+      - name: Verify imported evidence contract
+        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/external-device.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-smoke-external-unverified
+          path: evidence/external-device.json
+          if-no-files-found: error
+          retention-days: 30
+
+  physical-device:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_physical_device
+    needs: build
+    runs-on: [self-hosted, arm64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-runtime-smoke-apks
+          path: smoke-apks
+      - name: Run connected physical-device smoke
+        env:
+          DEVICE_SERIAL: ${{ inputs.physical_device_serial }}
+          EXPECTED_API: ${{ inputs.physical_expected_api }}
+          EXPECTED_PAGE_SIZE: ${{ inputs.physical_expected_page_size }}
+        run: |
+          SERIAL_ARGS=()
+          if [[ -n "$DEVICE_SERIAL" ]]; then
+            SERIAL_ARGS=(--serial "$DEVICE_SERIAL")
+          fi
+          python3 scripts/android-runtime-smoke.py run \
+            --apk smoke-apks/flutter-apk/app-debug.apk \
+            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk \
+            --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
+            --expected-api "$EXPECTED_API" \
+            --expected-page-size "$EXPECTED_PAGE_SIZE" \
+            "${SERIAL_ARGS[@]}" \
+            --output evidence/physical-device.json
+      - name: Verify physical-device runtime contract evidence
+        if: always() && hashFiles('evidence/physical-device.json') != ''
+        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/physical-device.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-runtime-smoke-physical-device
+          path: |
+            evidence/physical-device.json
+            evidence/physical-device.device.json
+          if-no-files-found: error
+          retention-days: 30

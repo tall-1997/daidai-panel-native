@@ -10,14 +10,16 @@ object LocalPanelRuntime {
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
-        if (coreStatus["phase"] == "ready") return coreStatus
+        if (coreStatus["phase"] == "ready") {
+            stopFallback()
+            return coreStatus
+        }
         return ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
     }
 
     @Synchronized
     fun stop(localToken: String): Map<String, Any> {
-        fallbackServer?.stop()
-        fallbackServer = null
+        stopFallback()
         return GoCoreBridge.stop(localToken)
     }
 
@@ -28,17 +30,38 @@ object LocalPanelRuntime {
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.status(localToken)
-        if (coreStatus["phase"] == "ready") return coreStatus
-        return fallbackServer?.let { fallbackStatus(it, localToken, lastFallbackReason.ifBlank { "go_core_unavailable" }) } ?: coreStatus
+        if (coreStatus["phase"] == "ready") {
+            stopFallback()
+            return coreStatus
+        }
+        return fallbackServer?.let { server ->
+            val reason = lastFallbackReason.ifBlank { fallbackReason(coreStatus) }
+            server.updateBoundary(reason, localToken)
+            fallbackStatus(server, localToken, reason)
+        } ?: coreStatus
+    }
+
+    private fun stopFallback() {
+        fallbackServer?.shutdown()
+        fallbackServer = null
+        lastFallbackReason = ""
     }
 
     private fun ensureFallbackStarted(context: Context, localToken: String, reason: String): Map<String, Any> {
         val normalizedReason = reason.ifBlank { "go_core_unavailable" }
         lastFallbackReason = normalizedReason
         val existing = fallbackServer
-        if (existing != null) return fallbackStatus(existing, localToken, normalizedReason)
-        val server = LocalPanelHttpServer(context, normalizedReason)
-        server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+        if (existing != null) {
+            existing.updateBoundary(normalizedReason, localToken)
+            return fallbackStatus(existing, localToken, normalizedReason)
+        }
+        val server = LocalPanelHttpServer(context, normalizedReason, localToken)
+        try {
+            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+        } catch (error: Exception) {
+            server.shutdown()
+            throw error
+        }
         fallbackServer = server
         return fallbackStatus(server, localToken, normalizedReason)
     }
@@ -50,20 +73,24 @@ object LocalPanelRuntime {
         return listOf(stage, errorType, rootType).filter(String::isNotBlank).joinToString(":")
     }
 
-    private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> = mapOf(
-        "phase" to "ready",
-        "base_url" to server.endpoint,
+    private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> =
+        fallbackStatus(server.endpoint, localToken, reason)
+
+    internal fun fallbackStatus(endpoint: String, localToken: String, reason: String): Map<String, Any> = mapOf(
+        "phase" to "degraded",
+        "base_url" to endpoint,
         "instance_id" to "kotlin-local-fallback",
         "core_version" to "kotlin-local-fallback",
         "schema_version" to LocalPanelStore.SCHEMA_VERSION,
-        "failure_stage" to "",
+        "failure_stage" to reason,
         "fallback_stage" to reason,
-        "message" to "",
-            "foreground_service_enabled" to false,
-            "scheduler_host_state" to "system_compensation",
-            "scheduler_guarantee_state" to "system_compensation",
-            "scheduler_guarantee_reason" to "kotlin_fallback",
-            "scheduler_intervention" to "",
-            "local_token" to localToken,
-        )
+        "fallback_mode" to "diagnostic",
+        "message" to "Embedded Go core unavailable; diagnostic recovery endpoint active",
+        "foreground_service_enabled" to false,
+        "scheduler_host_state" to "diagnostic",
+        "scheduler_guarantee_state" to "degraded",
+        "scheduler_guarantee_reason" to "kotlin_fallback",
+        "scheduler_intervention" to "recover_go_core",
+        "local_token" to localToken,
+    )
 }

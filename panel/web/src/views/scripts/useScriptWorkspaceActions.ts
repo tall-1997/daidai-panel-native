@@ -238,9 +238,10 @@ export function useScriptWorkspaceActions({
     for (const file of files) {
       formData.append('file', file)
     }
-    if (files.length === 1) {
-      formData.append('filename', files[0].name)
-      formData.append('filename_b64', btoa(unescape(encodeURIComponent(files[0].name))))
+    const firstFile = files[0]
+    if (files.length === 1 && firstFile) {
+      formData.append('filename', firstFile.name)
+      formData.append('filename_b64', btoa(unescape(encodeURIComponent(firstFile.name))))
     }
     if (uploadDir.value) {
       formData.append('dir', uploadDir.value)

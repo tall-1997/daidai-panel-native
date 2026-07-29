@@ -15,8 +15,31 @@ ManagedLocalPanelResolution resolveManagedLocalPanel(
   LocalPanelStatus status, {
   PanelConfig? existing,
 }) {
+  return _resolveManagedLocalEndpoint(
+    status,
+    existing: existing,
+    allowedPhases: const {LocalPanelPhase.ready},
+  );
+}
+
+ManagedLocalPanelResolution resolveManagedLocalDiagnostic(
+  LocalPanelStatus status, {
+  PanelConfig? existing,
+}) {
+  return _resolveManagedLocalEndpoint(
+    status,
+    existing: existing,
+    allowedPhases: const {LocalPanelPhase.degraded},
+  );
+}
+
+ManagedLocalPanelResolution _resolveManagedLocalEndpoint(
+  LocalPanelStatus status, {
+  required Set<LocalPanelPhase> allowedPhases,
+  PanelConfig? existing,
+}) {
   final endpoint = Uri.tryParse(status.baseUrl);
-  if (status.phase != LocalPanelPhase.ready ||
+  if (!allowedPhases.contains(status.phase) ||
       status.localToken.isEmpty ||
       endpoint == null ||
       endpoint.scheme != 'http' ||
@@ -25,7 +48,7 @@ ManagedLocalPanelResolution resolveManagedLocalPanel(
       (endpoint.path.isNotEmpty && endpoint.path != '/') ||
       endpoint.hasQuery ||
       endpoint.hasFragment) {
-    throw StateError('Managed local panel is unavailable');
+    throw StateError('Managed local endpoint is unavailable');
   }
   return ManagedLocalPanelResolution(
     panel: PanelConfig(

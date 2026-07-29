@@ -32,23 +32,16 @@ func TestReconcileDependenciesAfterRestartResumesRestoreJobs(t *testing.T) {
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	originalInstalled := dependencyInstalledFunc
-	originalReinstallBatch := dependencyReinstallBatchFunc
-	t.Cleanup(func() {
-		dependencyInstalledFunc = originalInstalled
-		dependencyReinstallBatchFunc = originalReinstallBatch
-	})
-
-	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
-		return false
-	}
-
 	var resumed []model.Dependency
-	dependencyReinstallBatchFunc = func(deps []model.Dependency) {
-		resumed = append(resumed, deps...)
+	runner := dependencyReconcileRunner{
+		installed: func(depType, name, pythonVersion string) bool { return false },
+		reinstall: func(deps []model.Dependency) {
+			resumed = append(resumed, deps...)
+		},
+		restartReinstall: func(deps []model.Dependency) {},
 	}
 
-	ReconcileDependenciesAfterRestart()
+	reconcileDependenciesAfterRestart(runner)
 
 	if len(resumed) != 1 {
 		t.Fatalf("expected 1 dependency to resume, got %d", len(resumed))
@@ -82,23 +75,16 @@ func TestReconcileDependenciesAfterRestartReinstallsMissingLinuxDeps(t *testing.
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	originalInstalled := dependencyInstalledFunc
-	originalRestartReinstallBatch := dependencyRestartReinstallBatchFunc
-	t.Cleanup(func() {
-		dependencyInstalledFunc = originalInstalled
-		dependencyRestartReinstallBatchFunc = originalRestartReinstallBatch
-	})
-
-	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
-		return false
-	}
-
 	var resumed []model.Dependency
-	dependencyRestartReinstallBatchFunc = func(deps []model.Dependency) {
-		resumed = append(resumed, deps...)
+	runner := dependencyReconcileRunner{
+		installed: func(depType, name, pythonVersion string) bool { return false },
+		reinstall: func(deps []model.Dependency) {},
+		restartReinstall: func(deps []model.Dependency) {
+			resumed = append(resumed, deps...)
+		},
 	}
 
-	ReconcileDependenciesAfterRestart()
+	reconcileDependenciesAfterRestart(runner)
 
 	if len(resumed) != 1 {
 		t.Fatalf("expected 1 linux dependency to auto-reinstall, got %d", len(resumed))
@@ -132,23 +118,18 @@ func TestReconcileDependenciesAfterRestartMarksLinuxInstalledWhenDetected(t *tes
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	originalInstalled := dependencyInstalledFunc
-	originalReinstallBatch := dependencyReinstallBatchFunc
-	t.Cleanup(func() {
-		dependencyInstalledFunc = originalInstalled
-		dependencyReinstallBatchFunc = originalReinstallBatch
-	})
-
-	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
-		return depType == model.DepTypeLinux && name == "curl"
-	}
-
 	reinstallCalled := false
-	dependencyReinstallBatchFunc = func(deps []model.Dependency) {
-		reinstallCalled = true
+	runner := dependencyReconcileRunner{
+		installed: func(depType, name, pythonVersion string) bool {
+			return depType == model.DepTypeLinux && name == "curl"
+		},
+		reinstall: func(deps []model.Dependency) {
+			reinstallCalled = true
+		},
+		restartReinstall: func(deps []model.Dependency) {},
 	}
 
-	ReconcileDependenciesAfterRestart()
+	reconcileDependenciesAfterRestart(runner)
 
 	if reinstallCalled {
 		t.Fatal("expected no reinstall batch when linux dependency is already detected")

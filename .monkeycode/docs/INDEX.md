@@ -16,10 +16,19 @@
 - 现代版使用 Yaegi 执行受控 Go 源码，并通过 Go 工具链提供模块准备与构建导出；Legacy 版提供实验性的 `go run`、`go test` 和 `go build`。
 - 首版只监听回环地址，局域网访问能力进入后续规划。
 
+## 当前实现状态
+
+- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `0.3.15`，Android version code 为 `30150`。
+- capability 状态为 `enabled` 时，请求进入已注册的真实 Go Handler；禁用或未声明能力返回稳定的 `PLATFORM_CAPABILITY` 结果。
+- Go Core 在运行时组件受阻时保持管理核心可用并报告 `degraded-ready`，运行时执行保持 fail-closed。
+- Kotlin fallback 为 `degraded` 的 diagnostic-only 接口，复用安装级 token，并严格校验回环 Host 与 Origin。
+- 八个 runtime ID 已统一清单、兼容性、smoke、APK 和设备证据契约。当前真实资产与设备 smoke 仍受阻。
+- Recovery APK、真实设备矩阵、升级恢复与长稳证据仍待完成。当前文档不将 Kotlin、Flutter 或设备测试记为已通过。
+
 ## 文档索引
 
-- `ARCHITECTURE.md`：系统边界、组件、数据流和交付结构。
-- `RELEASE_EVIDENCE.md`：Milestone 6 发布证据脚本、产物、CI 上传和长稳证据结构。
+- `ARCHITECTURE.md`：当前系统边界、capability 分派、降级状态、运行时契约和交付结构。
+- `RELEASE_EVIDENCE.md`：snapshot/tag 门禁差异、CI 顺序、发布证据与未完成矩阵。
 - `../specs/android-local-panel/requirements.md`：EARS 格式产品需求与验收标准。
 - `../specs/android-local-panel/design.md`：Android 完整执行版技术设计。
 

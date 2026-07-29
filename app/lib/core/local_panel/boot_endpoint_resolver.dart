@@ -26,6 +26,12 @@ class BootEndpointResolver {
     }
     try {
       final status = await ensureStarted();
+      if (status.phase == LocalPanelPhase.degraded) {
+        return BootEndpointDecision(
+          BootEndpointDestination.localRecovery,
+          managedLocal: resolveManagedLocalDiagnostic(status, existing: panel),
+        );
+      }
       final resolved = resolveManagedLocalPanel(status, existing: panel);
       return BootEndpointDecision(
         authenticated

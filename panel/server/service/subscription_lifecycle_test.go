@@ -99,12 +99,17 @@ func TestPullGitRepoWithCallbackCancelledStagingLeavesActiveVersion(t *testing.T
 
 func TestExecuteSubscriptionPullTracksOperationAndLog(t *testing.T) {
 	root := testutil.SetupTestEnv(t)
+	previousScheduler := globalScheduler
+	globalScheduler = nil
+	t.Cleanup(func() {
+		globalScheduler = previousScheduler
+	})
 	remoteDir := filepath.Join(root, "remote.git")
 	worktreeDir := filepath.Join(root, "worktree")
 
 	runGit(t, root, "init", "--bare", remoteDir)
 	runGit(t, root, "clone", remoteDir, worktreeDir)
-	writeRepoFile(t, filepath.Join(worktreeDir, "repo.js"), "console.log('tracked')\n")
+	writeRepoFile(t, filepath.Join(worktreeDir, "repo.js"), "// cron 0 1 * * *\nconsole.log('tracked')\n")
 	runGit(t, worktreeDir, "add", "repo.js")
 	runGit(t, worktreeDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	runGit(t, worktreeDir, "push", "origin", "HEAD:main")
@@ -114,7 +119,8 @@ func TestExecuteSubscriptionPullTracksOperationAndLog(t *testing.T) {
 		t.Fatalf("create subscription: %v", err)
 	}
 
-	if output, err := ExecuteSubscriptionPull(sub, func(string) {}); err != nil {
+	var emitted []string
+	if output, err := ExecuteSubscriptionPull(sub, func(line string) { emitted = append(emitted, line) }); err != nil {
 		t.Fatalf("execute subscription pull failed: %v\n%s", err, output)
 	}
 
@@ -131,6 +137,17 @@ func TestExecuteSubscriptionPullTracksOperationAndLog(t *testing.T) {
 	}
 	if log.OperationID != op.ID {
 		t.Fatalf("expected log operation_id %q, got %q", op.ID, log.OperationID)
+	}
+
+	var task model.Task
+	if err := database.DB.Where("command = ?", "task op-repo/repo.js").First(&task).Error; err != nil {
+		t.Fatalf("query generated task: %v", err)
+	}
+	if task.Status != model.TaskStatusEnabled {
+		t.Fatalf("expected generated task to remain enabled, got %v", task.Status)
+	}
+	if !strings.Contains(strings.Join(emitted, "\n"), "[调度器未初始化] 任务 repo 已保存，将在调度器启动时加载") {
+		t.Fatalf("expected scheduler fallback to be observable, got logs: %v", emitted)
 	}
 }
 

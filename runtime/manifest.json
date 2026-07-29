@@ -1,14 +1,70 @@
 {
   "version": "1",
-  "updated_at": "2026-07-28T00:00:00Z",
+  "updated_at": "2026-07-29T00:00:00Z",
   "components": [
     {
-      "id": "python-3.12-android-arm64",
+      "id": "python-3.14-android-arm64",
       "version": "3.14.6",
       "abi": "arm64-v8a",
       "entrypoint": "libpython_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
       "capabilities": ["python", "pip", "venv", "ssl", "sqlite"]
+    },
+    {
+      "id": "node-lts-android-arm64",
+      "version": "18.20.4",
+      "abi": "arm64-v8a",
+      "entrypoint": "libnode_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["node", "commonjs", "esm", "https"]
+    },
+    {
+      "id": "typescript-stable",
+      "version": "5.9.3",
+      "abi": "arm64-v8a",
+      "entrypoint": "libnode_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["typescript"]
+    },
+    {
+      "id": "shell-android-arm64",
+      "version": "blocked-placeholder",
+      "abi": "arm64-v8a",
+      "entrypoint": "libshell_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["shell"]
+    },
+    {
+      "id": "git-android-arm64",
+      "version": "blocked-placeholder",
+      "abi": "arm64-v8a",
+      "entrypoint": "libgit_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["git"]
+    },
+    {
+      "id": "ssh-android-arm64",
+      "version": "blocked-placeholder",
+      "abi": "arm64-v8a",
+      "entrypoint": "libssh_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["ssh"]
+    },
+    {
+      "id": "yaegi-go",
+      "version": "blocked-placeholder",
+      "abi": "arm64-v8a",
+      "entrypoint": "libyaegi_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["go-interpret"]
+    },
+    {
+      "id": "go-builder-android-arm64",
+      "version": "blocked-placeholder",
+      "abi": "arm64-v8a",
+      "entrypoint": "libgobuilder_exec.so",
+      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "capabilities": ["go-build-export-only"]
     }
   ]
 }

@@ -7,6 +7,7 @@
 - Android 宿主管理生命周期、前台服务、平台安全存储和系统状态。
 - 运行时通过稳定平台接口接入任务执行器。
 - 上游代码保持低侵入，契约测试作为同步门禁。
+- 管理 Core 与运行时就绪状态分离：运行时组件 blocked 时，Core 以 `degraded-ready` 保留管理能力，执行入口保持 fail-closed。
 
 ## 总体架构
 
@@ -56,6 +57,10 @@ Core.Status() -> health
 
 Core 持有配置、数据库、调度器、执行器和 HTTP Server。数据库初始化、迁移和后台任务启动均返回可处理错误。系统更新、进程退出和宿主资源信息通过平台接口实现。
 
+移动路由注册真实 Auth、Task、Log、Script、Env、Subscription、Notification、Security、System、OpenAPI、Deps、Config、Platform Token、Sponsor 和 Android Runtime Handler。capability middleware 对受控路由执行以下分派：`enabled` 继续进入真实 Handler；disabled 或未声明状态返回稳定的 `PLATFORM_CAPABILITY` 响应。
+
+运行时基线独立汇总八个 runtime ID 的资产完整性与 smoke 状态。任一组件或检查受阻时，Core 状态为 `degraded-ready`，管理 HTTP Core、恢复和诊断仍可用；Runtime Locator 拒绝受阻组件的执行。
+
 ### Android Host
 
 Android Host 提供：
@@ -65,6 +70,8 @@ Android Host 提供：
 - Keystore、私有目录、文件导入导出和本地通知。
 - 电量、温度、存储和网络状态。
 - Core 限次重启与任务中断恢复。
+
+嵌入式 Go Core无法达到 ready 时，Kotlin fallback 仅暴露 health、capability、认证和备份恢复诊断路由，状态为 `degraded`、模式为 `diagnostic`。fallback 与 Go Core 使用同一安装级 local token，并要求精确 `Host=127.0.0.1:<port>`、`Origin=http://127.0.0.1:<port>` 和 `X-Daidai-Local-Token`。
 
 ### Execution Platform
 
@@ -76,6 +83,8 @@ DependencyManager   安装兼容清单内依赖
 ResourceProvider    提供 App 与设备资源状态
 LifecycleHost       接收前台服务和重启请求
 ```
+
+当前八个 runtime ID 已统一到 `runtime/manifest.json`、`runtime/compatibility.json`、`runtime/smoke-evidence.json`、APK 元数据提取和 device smoke evidence。当前 smoke records 全部为 blocked；Shell、Git、SSH、Yaegi 和 Go Builder 仍标记为 `blocked-placeholder`。生产资产与 API 28/4K、API 35/4K、API 35/16K 设备通过证据仍待完成。
 
 ### Flutter Adapter
 
@@ -103,11 +112,23 @@ sequenceDiagram
 
 ## 发布结构
 
-- Modern APK：`minSdk 28`、`compileSdk 35`、`targetSdk 35`，提供完整管理能力、受控运行时、Yaegi Go 源码执行和 Go 工具链构建导出。
+- 单一版本源为 `VERSION.json`，当前版本为 `0.3.15`、Android version code 为 `30150`；`scripts/version.py` 校验派生版本字段。
+- Modern APK：`minSdk 28`、`compileSdk 35`、`targetSdk 35`。当前管理 Core 已接线，完整受控运行时交付仍受真实资产和设备 smoke 门禁约束。
 - Legacy APK：`minSdk 26`、`compileSdk 35`、`targetSdk 28`，增加私有目录 ELF 执行能力以承载实验性的 `go run`、`go test` 和 `go build`，支持 Android 8 至 Android 15 的已验证设备。
 - 每个 Release 分配十位版本代码区间：Modern 使用 `releaseBase + 0`，Legacy 使用 `releaseBase + 1`，基于上一稳定源码构建的 Recovery APK 使用 `releaseBase + 2`。Modern 与 Legacy 通过可移植备份切换；Recovery APK 以更高版本代码覆盖当前故障版本并恢复迁移快照。
 - Legacy 轨道每次发布均验证最新 Android 稳定版的安装能力；系统提高最低可安装 target SDK 后，该轨道停止支持受影响系统版本。
-- GitHub Release 同时发布 Modern、Legacy、Recovery APK、SHA-256、签名指纹、SBOM、第三方许可和版本清单。
+- 当前 CI 生成 Modern APK、SHA-256、更新清单和 release evidence。Recovery APK 的独立构建、签名、上传与升级验证仍待实现和取证。
+
+## CI 门禁
+
+1. 读取并校验 `VERSION.json`。
+2. tag 路径先校验发布签名 secrets、准备 keystore，并要求同 commit 成功的 device smoke workflow，核验三个 matrix ID 各含八项 pass。
+3. 准备 runtime，执行 Go 与契约脚本检查，校验 route contract。
+4. 构建并检查 mobile Core AAR，随后执行 Flutter 与 Kotlin 检查。
+5. snapshot 分支生成本地 smoke evidence；两条路径均在 APK 构建前后校验 runtime contract，tag 增加 `--strict`。
+6. 构建 APK、提取并比对元数据、生成 hash、更新清单和 release evidence。tag 继续校验签名并发布；snapshot 仅上传 CI 产物，可保留 blocked evidence。
+
+当前仓库记录未证明 Kotlin、Flutter、emulator、physical device 或真实设备矩阵已经通过。
 
 ## 安全边界
 

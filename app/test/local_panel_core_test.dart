@@ -153,4 +153,21 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('diagnostic resolver accepts only degraded local endpoint', () {
+    final degraded = LocalPanelStatus.fromJson(const {
+      'phase': 'degraded',
+      'base_url': 'http://127.0.0.1:33333',
+      'instance_id': 'kotlin-local-fallback',
+      'local_token': 'local-token-value',
+    });
+
+    final resolved = resolveManagedLocalDiagnostic(degraded);
+    expect(resolved.panel.url, 'http://127.0.0.1:33333');
+    expect(resolved.localToken, 'local-token-value');
+    expect(
+      () => resolveManagedLocalPanel(degraded),
+      throwsStateError,
+    );
+  });
 }

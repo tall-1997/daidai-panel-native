@@ -27,59 +27,12 @@ class MainActivity : FlutterActivity() {
     private var activityDestroyed = false
     private var localHostEventSink: EventChannel.EventSink? = null
 
-    private var isRootChecked = false
-    private var isRootAvailable = false
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ROOT_CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "isRooted" -> {
-                    result.success(isRooted())
-                }
-                "executeAsRoot" -> {
-                    val command = call.argument<String>("command")
-                    if (command != null) {
-                        val output = executeAsRoot(command)
-                        if (output.isSuccess) {
-                            result.success(output.getOrNull())
-                        } else {
-                            result.error("ROOT_ERROR", output.exceptionOrNull()?.message, null)
-                        }
-                    } else {
-                        result.error("INVALID_ARGS", "Command is required", null)
-                    }
-                }
-                "readFileAsRoot" -> {
-                    val path = call.argument<String>("path")
-                    if (path != null) {
-                        val content = readFileAsRoot(path)
-                        if (content.isSuccess) {
-                            result.success(content.getOrNull())
-                        } else {
-                            result.error("ROOT_ERROR", content.exceptionOrNull()?.message, null)
-                        }
-                    } else {
-                        result.error("INVALID_ARGS", "Path is required", null)
-                    }
-                }
-                "listDirectoryAsRoot" -> {
-                    val path = call.argument<String>("path")
-                    if (path != null) {
-                        val entries = listDirectoryAsRoot(path)
-                        if (entries.isSuccess) {
-                            result.success(entries.getOrNull())
-                        } else {
-                            result.error("ROOT_ERROR", entries.exceptionOrNull()?.message, null)
-                        }
-                    } else {
-                        result.error("INVALID_ARGS", "Path is required", null)
-                    }
-                }
-                else -> {
-                    result.notImplemented()
-                }
+            when (RootMethodChannelPolicy.disposition(call.method)) {
+                RootMethodDisposition.NOT_IMPLEMENTED -> result.notImplemented()
             }
         }
 
@@ -227,25 +180,31 @@ class MainActivity : FlutterActivity() {
                         channelResult.success(status)
                         if (emitAfter) localHostEventSink?.success(status)
                     },
-                    onFailure = {
-                        channelResult.success(localHostFailure())
+                    onFailure = { error ->
+                        channelResult.success(localHostFailure(error))
                     },
                 )
             }
         }
     }
 
-    private fun localHostStatus(raw: String): Map<String, Any?> =
-        jsonObjectToMap(runCatching { JSONObject(raw) }.getOrElse { JSONObject() })
+    private fun localHostStatus(raw: String): Map<String, Any?> = runCatching {
+        jsonObjectToMap(JSONObject(raw))
+    }.getOrElse { error ->
+        localHostFailure(IllegalStateException("Invalid local panel service response", error))
+            .toMutableMap()
+            .apply { this["failure_stage"] = "invalid_service_response" }
+    }
 
-    private fun localHostFailure(): Map<String, Any?> = mapOf(
+    private fun localHostFailure(error: Throwable? = null): Map<String, Any?> = mapOf(
         "phase" to "failed",
         "base_url" to "",
         "instance_id" to "",
         "core_version" to "gomobile",
         "schema_version" to 0,
         "failure_stage" to "binder",
-        "message" to "Embedded core unavailable",
+        "message" to (error?.message?.takeIf(String::isNotBlank) ?: "Local panel service unavailable"),
+        "host_error_type" to (error?.javaClass?.simpleName ?: "Unknown"),
         "foreground_service_enabled" to false,
     )
 
@@ -276,7 +235,7 @@ class MainActivity : FlutterActivity() {
                 localHostEventSink?.success(
                     callResult.fold(
                         onSuccess = ::localHostStatus,
-                        onFailure = { localHostFailure() },
+                        onFailure = { localHostFailure(it) },
                     )
                 )
             }
@@ -340,73 +299,4 @@ class MainActivity : FlutterActivity() {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun isRooted(): Boolean {
-        if (isRootChecked) return isRootAvailable
-
-        isRootChecked = true
-        isRootAvailable = checkRootAccess()
-        return isRootAvailable
-    }
-
-    private fun checkRootAccess(): Boolean {
-        return try {
-            val suPaths = listOf(
-                "/system/bin/su",
-                "/system/xbin/su",
-                "/sbin/su",
-                "/data/local/xbin/su",
-                "/data/local/bin/su",
-                "/system/sd/xbin/su",
-                "/system/bin/failsafe/su",
-                "/data/local/su",
-                "/su/bin/su",
-                "/system/app/Superuser.apk",
-                "/system/app/SuperSU.apk",
-                "/system/app/SuperSU/SuperSU.apk"
-            )
-
-            val suExists = suPaths.any { File(it).exists() }
-            if (suExists) {
-                try {
-                    val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-                    val result = process.inputStream.bufferedReader().readText()
-                    process.waitFor()
-                    result.contains("uid=0")
-                } catch (e: Exception) {
-                    suExists
-                }
-            } else {
-                false
-            }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun executeAsRoot(command: String): Result<String> {
-        return try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-            val output = process.inputStream.bufferedReader().readText()
-            val error = process.errorStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-
-            if (exitCode == 0) {
-                Result.success(output.trim())
-            } else {
-                Result.failure(Exception("Root command failed: $error"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    private fun readFileAsRoot(path: String): Result<String> {
-        return executeAsRoot("cat $path")
-    }
-
-    private fun listDirectoryAsRoot(path: String): Result<List<String>> {
-        return executeAsRoot("ls -la $path").map { output ->
-            output.lines().filter { it.isNotBlank() }
-        }
-    }
 }

@@ -8,20 +8,32 @@ import (
 	"daidai-panel/model"
 )
 
-var dependencyInstalledFunc = DependencyInstalledForPythonVersion
 var dependencyReinstallBatchFunc = reinstallDependenciesAsync
-var dependencyRestartReinstallBatchFunc = reinstallDependenciesAfterRestartAsync
+
+type dependencyReconcileRunner struct {
+	installed        func(depType, name, pythonVersion string) bool
+	reinstall        func([]model.Dependency)
+	restartReinstall func([]model.Dependency)
+}
 
 func ReconcileDependenciesAfterRestart() {
+	reconcileDependenciesAfterRestart(dependencyReconcileRunner{
+		installed:        DependencyInstalledForPythonVersion,
+		reinstall:        reinstallDependenciesAsync,
+		restartReinstall: reinstallDependenciesAfterRestartAsync,
+	})
+}
+
+func reconcileDependenciesAfterRestart(runner dependencyReconcileRunner) {
 	recoverInterruptedDependencyOperations()
 
 	var installed []model.Dependency
-	database.DB.Where("status = ?", model.DepStatusInstalled).Find(&installed)
+	database.DB.Where("status = ?", model.DepStatusInstalled).Order("id ASC").Find(&installed)
 	reinstallAfterRestart := make([]model.Dependency, 0)
 	scheduledRestartReinstallIDs := make(map[uint]struct{})
 
 	for _, dep := range installed {
-		if dependencyInstalledFunc(dep.Type, dep.Name, dep.PythonVersion) {
+		if runner.installed(dep.Type, dep.Name, dep.PythonVersion) {
 			continue
 		}
 
@@ -49,13 +61,8 @@ func ReconcileDependenciesAfterRestart() {
 		log.Printf("dep verify: %s/%s missing after restart, scheduled automatic reinstall", dep.Type, dep.Name)
 	}
 
-	if len(reinstallAfterRestart) > 0 {
-		dependencyRestartReinstallBatchFunc(reinstallAfterRestart)
-		log.Printf("dep verify: scheduled %d missing dependencies for automatic reinstall after restart", len(reinstallAfterRestart))
-	}
-
 	var stale []model.Dependency
-	database.DB.Where("status IN ?", []string{model.DepStatusInstalling, model.DepStatusRemoving}).Find(&stale)
+	database.DB.Where("status IN ?", []string{model.DepStatusQueued, model.DepStatusInstalling, model.DepStatusRemoving}).Order("id ASC").Find(&stale)
 
 	toResume := make([]model.Dependency, 0, len(stale))
 	for _, dep := range stale {
@@ -63,7 +70,7 @@ func ReconcileDependenciesAfterRestart() {
 			continue
 		}
 
-		if dependencyInstalledFunc(dep.Type, dep.Name, dep.PythonVersion) {
+		if runner.installed(dep.Type, dep.Name, dep.PythonVersion) {
 			nextLog := appendDependencyLog(dep.Log, "[启动校验] 检测到依赖已安装，已同步状态为已安装")
 			database.DB.Model(&dep).Updates(map[string]interface{}{
 				"status": model.DepStatusInstalled,
@@ -76,6 +83,13 @@ func ReconcileDependenciesAfterRestart() {
 			continue
 		}
 
+		if shouldResumeRestartReinstall(dep) {
+			reinstallAfterRestart = append(reinstallAfterRestart, dep)
+			scheduledRestartReinstallIDs[dep.ID] = struct{}{}
+			log.Printf("dep verify: %s/%s resumed automatic reinstall after restart", dep.Type, dep.Name)
+			continue
+		}
+
 		if shouldResumeRestoredDependency(dep) {
 			nextLog := appendDependencyLog(dep.Log, "[启动校验] 检测到恢复任务未完成，已在重启后继续安装")
 			database.DB.Model(&dep).Updates(map[string]interface{}{
@@ -84,6 +98,9 @@ func ReconcileDependenciesAfterRestart() {
 			})
 			dep.Log = nextLog
 			toResume = append(toResume, dep)
+			if dep.OperationID != "" {
+				_ = DefaultOperationStore().Unknown(dep.OperationID, "DEPENDENCY_OPERATION_RECOVERED", int64(len(nextLog)))
+			}
 			log.Printf("dep verify: %s/%s was %s, resumed restore install after restart", dep.Type, dep.Name, dep.Status)
 			continue
 		}
@@ -98,8 +115,13 @@ func ReconcileDependenciesAfterRestart() {
 		log.Printf("dep verify: %s/%s was %s, reset to failed", dep.Type, dep.Name, dep.Status)
 	}
 
+	if len(reinstallAfterRestart) > 0 {
+		runner.restartReinstall(reinstallAfterRestart)
+		log.Printf("dep verify: scheduled %d missing dependencies for automatic reinstall after restart", len(reinstallAfterRestart))
+	}
+
 	if len(toResume) > 0 {
-		dependencyReinstallBatchFunc(toResume)
+		runner.reinstall(toResume)
 		log.Printf("dep verify: resumed %d restored dependencies after restart", len(toResume))
 	}
 }
@@ -109,7 +131,7 @@ func recoverInterruptedDependencyOperations() {
 		return
 	}
 	var operations []model.Operation
-	database.DB.Where("kind = ? AND state IN ?", model.OperationKindDependency, []string{model.OperationStatePending, model.OperationStateRunning}).Find(&operations)
+	database.DB.Where("kind = ? AND state IN ?", model.OperationKindDependency, []string{model.OperationStatePending, model.OperationStateRunning}).Order("sequence ASC, id ASC").Find(&operations)
 	store := DefaultOperationStore()
 	for _, op := range operations {
 		var dep model.Dependency
@@ -117,15 +139,23 @@ func recoverInterruptedDependencyOperations() {
 			_ = store.Unknown(op.ID, "DEPENDENCY_OPERATION_ORPHANED", op.LogCursor)
 			continue
 		}
-		if dep.Status != model.DepStatusInstalling && dep.Status != model.DepStatusRemoving && dep.Status != model.DepStatusQueued {
+		switch dep.Status {
+		case model.DepStatusQueued, model.DepStatusInstalling, model.DepStatusRemoving:
 			continue
+		case model.DepStatusInstalled:
+			_ = store.Finish(op.ID, 0, int64(len(dep.Log)))
+		default:
+			_ = store.Unknown(op.ID, "DEPENDENCY_OPERATION_RECOVERED", op.LogCursor)
 		}
-		_ = store.Unknown(op.ID, "DEPENDENCY_OPERATION_RECOVERED", op.LogCursor)
 	}
 }
 
 func shouldResumeRestoredDependency(dep model.Dependency) bool {
 	return dep.Status == model.DepStatusInstalling && strings.Contains(dep.Log, "[恢复备份]")
+}
+
+func shouldResumeRestartReinstall(dep model.Dependency) bool {
+	return dep.Status == model.DepStatusInstalling && strings.Contains(dep.Log, "[启动校验]") && strings.Contains(dep.Log, "自动重新安装")
 }
 
 func appendDependencyLog(existing, line string) string {

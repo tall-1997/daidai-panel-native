@@ -76,7 +76,7 @@ func DiffRoutes(server, mobile []gin.RouteInfo) RouteDiff
 
 ### Task 1.2: Register Full Mobile Route Profile
 
-**Status:** Complete (`1aafcb8`, `7311baf`)
+**Status:** Complete (`1aafcb8`, `7311baf`; an `enabled` capability now continues into the registered real Handler, while disabled or undeclared capabilities return the stable `PLATFORM_CAPABILITY` response)
 
 **Files:**
 - Modify: `panel/server/router/router.go`
@@ -172,46 +172,48 @@ go run scripts/generate-route-contract.go -check
 
 ## Milestone 2: Runtime and Security Baseline
 
+**Milestone Status:** Partially complete. The eight runtime IDs share one manifest, compatibility, smoke-evidence, APK verification, and device-evidence contract. Current smoke evidence is blocked, several entries are placeholder assets, and the API 28/35 4K plus API 35 16K device gate has no accepted pass matrix.
+
 ### Task 2.1: Runtime Manifest and APK Packaging
 
-**Status:** Complete (Critical/Important review remediations merged: placeholder hash default-deny with explicit dev switch, manifest entrypoint boundary validation, severe baseline startup gate)
+**Status:** Partially complete (contract and fail-closed verification are implemented; production ARM64/Bionic assets and strict device evidence remain blocked)
 
 Create `runtime/manifest.json`, `runtime/compatibility.json`, Gradle runtime packaging, final APK ELF checks, and `RuntimeComponentManager`. Package executable entries as `lib<runtime>_exec.so` and resolve them from `nativeLibraryDir`.
 
 ### Task 2.2: Python Runtime
 
-**Status:** Complete (server-side baseline and smoke-state scaffolding)
+**Status:** Partially complete (runtime declaration and smoke contract exist; accepted on-device smoke evidence remains blocked)
 
 Package Android/Bionic CPython, stdlib, SSL, SQLite, pip, venv, CA, and pure-wheel seed. Add offline `PY_OK`, SSL, SQLite, venv, and wheel installation smoke tests.
 
 ### Task 2.3: Node and TypeScript Runtime
 
-**Status:** Complete (Node/TS smoke-state scaffolding and lifecycle-script policy default)
+**Status:** Partially complete (runtime declarations, smoke contracts, and lifecycle-script policy exist; accepted on-device smoke evidence remains blocked)
 
 Package Android Node LTS, npm/npx, CA, TypeScript, and ts-node. Disable lifecycle scripts by default. Add CommonJS, ESM, HTTPS, local tarball, and `TS_OK` tests.
 
 ### Task 2.4: Shell, Git, and SSH Runtime
 
-**Status:** Complete (smoke-state scaffolding and unified Git auth/runtime policy injection across clone/pull/reset)
+**Status:** Partially complete (contracts and Git policy wiring exist; manifest assets are blocked placeholders and device smoke remains blocked)
 
 Package controlled Shell, Git HTTPS, and SSH transport. Disable hooks, pager, editor, external filters, and credential helpers. Test clone/fetch/sparse checkout and Host Key rejection.
 
 ### Task 2.5: Yaegi and Go Builder
 
-**Status:** Complete (runtime declaration and smoke placeholders with Go Builder export-only policy marker)
+**Status:** Partially complete (runtime declarations and export-only contract exist; manifest assets are blocked placeholders and device smoke remains blocked)
 
 Embed Yaegi with a fixed symbol allowlist. Package Go compiler/linker/asm tools as signed APK ELF entries. Build exportable artifacts and prohibit executing generated binaries.
 
 ### Task 2.6: Secret Store and Trust Authorization
 
-**Status:** Complete (local AES-GCM encrypted secret store + persisted trust authorization records with observable readiness state)
+**Status:** Partially complete (Go secret/trust stores and Android Keystore envelope bridge are implemented; Kotlin and device verification evidence remains open)
 
 Implement Android Keystore envelope encryption and source/version/SHA-256/capability authorization records. Add `:runner` trusted process and isolated pure-compute worker.
 
 ### Milestone 2 Exit Gate
 
-- Eight runtime IDs pass offline smoke on API 28/4K, API 35/4K, API 35/16K.
-- Final APK contains signed ARM64/Bionic ELF assets with valid linker dependencies.
+- Eight runtime IDs must pass smoke on API 28/4K, API 35/4K, and API 35/16K; current records are blocked.
+- Final APK must contain production ARM64/Bionic ELF assets with valid linker dependencies; current runtime metadata includes blocked placeholders.
 - Secret values remain encrypted at rest.
 - Runtime baseline and SBOM are pushed to `main`.
 
@@ -262,7 +264,7 @@ Enable Env CRUD/import/export with Secret Store. Enable script tree, upload, sav
 
 ## Milestone 4: Dependencies, Git, Subscriptions, and Integrations
 
-**Milestone Status:** Complete. Dependency, Git, subscription, notification, integration credential, Sponsor, and OpenAPI goals are implemented on `main`.
+**Milestone Status:** Partially complete. Enabled capability routes enter the registered real Handlers and the service/controller wiring exists. Runtime-dependent end-to-end behavior remains blocked by runtime assets and device smoke evidence.
 
 ### Task 4.1: Python and Node Dependency Operations
 
@@ -299,7 +301,7 @@ Enable channels, Android local notification adapter, external webhooks, Platform
 
 ## Milestone 5: Scheduling and Recovery
 
-**Milestone Status:** Complete for implementation. Persistent scheduling, foreground scheduling host, recovery triggers, and resource protection goals are implemented; 24-hour and seven-day real-device long-stability evidence will be completed by user real-device testing.
+**Milestone Status:** Partially complete. Go and Android host paths are present; Kotlin and device execution have no accepted pass evidence, and 24-hour plus seven-day real-device stability gates remain open.
 
 ### Task 5.1: Persistent Schedule Instances
 
@@ -309,19 +311,19 @@ Create unique `taskID + scheduledUTC + expressionHash` records, transactional `p
 
 ### Task 5.2: Foreground Scheduler Host
 
-**Status:** Complete (Android specialUse FGS status, visible stop control, scheduler guarantee payload, and Core capability propagation)
+**Status:** Partially complete (implementation is present; Kotlin and device validation evidence remains open)
 
 Run Core, Scheduler, and active tasks under `specialUse` FGS with visible status and stop controls.
 
 ### Task 5.3: Recovery Triggers
 
-**Status:** Complete (app-start, process-recovery, BOOT_COMPLETED, network-restored, and 15-minute WorkManager reconciliation triggers)
+**Status:** Partially complete (implementation is present; device recovery validation remains open)
 
 Add App-start, process-recovery, `BOOT_COMPLETED`, network-restored, and periodic WorkManager reconciliation.
 
 ### Task 5.4: Resource Protection
 
-**Status:** Complete (battery, thermal, memory, and storage protection states pause low-priority scheduler work with guarantee and intervention guidance)
+**Status:** Partially complete (implementation is present; Kotlin and real-device validation remains open)
 
 Pause low-priority work for battery, thermal, memory, and storage thresholds; expose guarantee states and intervention guidance.
 
@@ -336,29 +338,29 @@ Pause low-priority work for battery, thermal, memory, and storage thresholds; ex
 
 ## Milestone 6: Backup, Recovery, and Final Release
 
-**Milestone Status:** Final rollout in progress. Backup, Recovery APK, release evidence, and final gate documentation goals are implemented; device matrix and long-stability evidence will be completed by user real-device testing before public replacement release labeling.
+**Milestone Status:** Partially complete. Backup and release-evidence code paths exist. A separately built Recovery APK, strict runtime evidence, the real-device matrix, upgrade/recovery installation proof, and long-stability records remain pending.
 
 ### Task 6.1: Portable Backup Envelope
 
-**Status:** Complete (encrypted portable archive, key wrapping, manifest, hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore)
+**Status:** Partially complete (implementation is present; Kotlin and device restore evidence remains open)
 
 Implement AES-256-GCM archive encryption, Argon2id key wrapping, manifest, file hashes, runtime requirements, wrong-password rejection, SAF import/export, and atomic restore.
 
 ### Task 6.2: Recovery APK
 
-**Status:** Complete (reserved release version sequence, Recovery APK path, stable Core/runtime denylist, and forward-reading compatibility)
+**Status:** Pending (metadata and version-sequence policy exist; no separately built, signed, and upgrade-tested Recovery APK is evidenced)
 
-Reserve 10 version codes per release, build `releaseBase + 1` Recovery APK with supported stable Core/runtime denylist and forward-reading compatibility.
+Reserve the documented version-code slot, then build and verify a Recovery APK with supported stable Core/runtime denylist and forward-reading compatibility.
 
 ### Task 6.3: Release Evidence
 
-**Status:** Complete (APK hash, SBOM, licenses, runtime manifest, route trace, compatibility matrix template, page-size report, test-report handoff, and CI evidence artifact upload via `scripts/generate-release-evidence.go`)
+**Status:** Partially complete (evidence generation and CI artifact wiring exist; strict runtime, device, Recovery APK, and public re-download records remain open)
 
 Generate APK, SHA-256, SBOM, third-party licenses, runtime manifest, route trace, compatibility matrix, page-size report, and test reports.
 
 ### Task 6.4: Device and Stability Gate
 
-**Status:** Final rollout in progress (100 Core cycles, API matrix, 24-hour/seven-day stability, storage, Doze, restart, process-kill, and upgrade/recovery evidence structures are generated under `release/evidence/` for user real-device testing)
+**Status:** Blocked pending real-device evidence (the schemas exist; 100 Core cycles, API matrix, 24-hour/seven-day stability, storage, Doze, restart, process-kill, and upgrade/recovery runs remain open)
 
 Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze, restart, process kill, and upgrade/recovery tests.
 

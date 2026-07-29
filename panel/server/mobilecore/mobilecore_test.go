@@ -31,16 +31,17 @@ import (
 )
 
 type testResult struct {
-	OK                   bool                      `json:"ok"`
-	ID                   int64                     `json:"id"`
-	Running              bool                      `json:"running"`
-	Status               string                    `json:"status"`
-	Endpoint             string                    `json:"endpoint"`
-	Error                string                    `json:"error"`
-	ErrorCode            string                    `json:"errorCode"`
-	CleanupRequired      bool                      `json:"cleanupRequired"`
-	ProcessRequirement   string                    `json:"processRequirement"`
-	PlatformCapabilities router.CapabilitySnapshot `json:"platformCapabilities"`
+	OK                   bool                             `json:"ok"`
+	ID                   int64                            `json:"id"`
+	Running              bool                             `json:"running"`
+	Status               string                           `json:"status"`
+	Endpoint             string                           `json:"endpoint"`
+	Error                string                           `json:"error"`
+	ErrorCode            string                           `json:"errorCode"`
+	CleanupRequired      bool                             `json:"cleanupRequired"`
+	ProcessRequirement   string                           `json:"processRequirement"`
+	PlatformCapabilities router.CapabilitySnapshot        `json:"platformCapabilities"`
+	RuntimeBaseline      service.RuntimeComponentBaseline `json:"runtimeBaseline"`
 }
 
 const testLocalToken = "0123456789abcdef0123456789abcdef"
@@ -1338,9 +1339,9 @@ func TestStartCoreRuntimeContainerFailureKeepsStoppedState(t *testing.T) {
 	}
 }
 
-func TestStartCoreBlocksOnRuntimeBaselineSevereFailure(t *testing.T) {
+func TestStartCoreIsDegradedReadyWhenAllEightRuntimesAreBlocked(t *testing.T) {
 	t.Setenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE", "0")
-	nativeDir, manifestPath, compatibilityPath := writeRuntimeFixture(t, strings.Repeat("a", 64))
+	nativeDir, manifestPath, compatibilityPath := writeBlockedRuntimeFixture(t)
 	t.Setenv("DAIDAI_RUNTIME_MANIFEST_PATH", manifestPath)
 	t.Setenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH", compatibilityPath)
 
@@ -1353,6 +1354,35 @@ func TestStartCoreBlocksOnRuntimeBaselineSevereFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := decodeResult(t, StartCore(string(options)))
+	t.Cleanup(func() { _ = StopCore(5000) })
+	if !result.OK || !result.Running || result.CleanupRequired || result.Status != "degraded-ready" {
+		t.Fatalf("unexpected start result: %+v", result)
+	}
+	if len(result.RuntimeBaseline.Components) != 8 || result.RuntimeBaseline.State != "degraded-ready" {
+		t.Fatalf("runtime health missing blocked components: %+v", result.RuntimeBaseline)
+	}
+	status := decodeResult(t, CoreStatus())
+	if !status.OK || !status.Running || status.Status != "degraded-ready" || len(status.RuntimeBaseline.Components) != 8 {
+		t.Fatalf("degraded health snapshot unavailable: %+v", status)
+	}
+	client := localClient()
+	for _, path := range []string{"/api/health", "/api/auth/check-init", "/api/tasks"} {
+		response, err := client.Get(result.Endpoint + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		response.Body.Close()
+		if response.StatusCode >= http.StatusInternalServerError {
+			t.Fatalf("GET %s status=%d", path, response.StatusCode)
+		}
+	}
+}
+
+func TestStartCoreBlocksOnUnparseableRuntimeCoreMetadata(t *testing.T) {
+	t.Setenv("DAIDAI_RUNTIME_ALLOW_BASELINE_FAILURE", "0")
+	t.Setenv("DAIDAI_RUNTIME_MANIFEST_PATH", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("DAIDAI_RUNTIME_COMPATIBILITY_PATH", filepath.Join(t.TempDir(), "missing.json"))
+	result := decodeResult(t, StartCore(`{"dataDir":"`+t.TempDir()+`","localToken":"`+testLocalToken+`"}`))
 	if result.OK || result.ErrorCode != codeBootstrapFailed {
 		t.Fatalf("unexpected start result: %+v", result)
 	}
@@ -1373,7 +1403,7 @@ func TestStartCoreAllowsRuntimeBaselineBypassInDevMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := decodeResult(t, StartCore(string(options)))
-	if !result.OK || result.Status != "running" {
+	if !result.OK || result.Status != "degraded-ready" {
 		t.Fatalf("unexpected start result: %+v", result)
 	}
 	if stopped := decodeResult(t, StopCore(5000)); !stopped.OK {
@@ -1660,6 +1690,30 @@ func writeRuntimeFixture(t *testing.T, runtimeSHA string) (nativeDir, manifestPa
 	compatibilityPath = filepath.Join(root, "compatibility.json")
 	writeFixtureJSON(t, manifestPath, manifest)
 	writeFixtureJSON(t, compatibilityPath, compatibility)
+	return nativeDir, manifestPath, compatibilityPath
+}
+
+func writeBlockedRuntimeFixture(t *testing.T) (nativeDir, manifestPath, compatibilityPath string) {
+	t.Helper()
+	root := t.TempDir()
+	nativeDir = filepath.Join(root, "libs")
+	if err := os.MkdirAll(nativeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime native dir: %v", err)
+	}
+	ids := []string{
+		"python-3.12-android-arm64", "node-lts-android-arm64", "typescript-stable", "shell-android-arm64",
+		"git-android-arm64", "ssh-android-arm64", "yaegi-go", "go-builder-android-arm64",
+	}
+	components := make([]map[string]any, 0, len(ids))
+	for index, id := range ids {
+		components = append(components, map[string]any{
+			"id": id, "abi": "arm64-v8a", "entrypoint": fmt.Sprintf("libruntime_%d_exec.so", index), "sha256": strings.Repeat("a", 64),
+		})
+	}
+	manifestPath = filepath.Join(root, "manifest.json")
+	compatibilityPath = filepath.Join(root, "compatibility.json")
+	writeFixtureJSON(t, manifestPath, map[string]any{"version": "1", "components": components})
+	writeFixtureJSON(t, compatibilityPath, map[string]any{"version": "1", "abi": "arm64-v8a", "runtime_ids": ids})
 	return nativeDir, manifestPath, compatibilityPath
 }
 
