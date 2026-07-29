@@ -88,7 +88,14 @@ jobs:
 
       - name: Build installable release APK
         working-directory: app
-        run: flutter build apk --release --target-platform android-arm64
+        run: |
+          VERSION_NAME="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_REF_TYPE:-}" != "tag" || -z "$VERSION_NAME" || "$VERSION_NAME" == "$GITHUB_REF_NAME" ]]; then
+            VERSION_NAME="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | cut -d+ -f1)"
+          fi
+          flutter build apk --release --target-platform android-arm64 \
+            --build-name "$VERSION_NAME" \
+            --build-number "${GITHUB_RUN_NUMBER:-1}"
 
       - name: Verify runtime ELF manifest and hashes
         run: |

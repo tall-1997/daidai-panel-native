@@ -14,6 +14,8 @@ import java.net.URLDecoder
 import java.time.Instant
 import java.security.SecureRandom
 import java.time.format.DateTimeFormatter
+import java.util.Collections
+import java.util.concurrent.TimeUnit
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -23,8 +25,15 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     null,
     SCHEMA_VERSION
 ) {
+    private data class LocalScriptResult(
+        val logs: JSONArray,
+        val status: String,
+        val done: Boolean,
+        val exitCode: Int?,
+    )
+
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -57,6 +66,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 status REAL NOT NULL DEFAULT 1,
                 labels TEXT NOT NULL DEFAULT '[]',
                 last_run_status TEXT NOT NULL DEFAULT '',
+                last_run_logs TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""".trimIndent()
@@ -92,6 +102,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createScriptRuntimeTables(db)
+        if (oldVersion < 3) db.execSQL("ALTER TABLE tasks ADD COLUMN last_run_logs TEXT NOT NULL DEFAULT '[]'")
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -698,12 +709,20 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val language = json.optString("language", "python")
         val code = json.optString("code")
         val runId = "android-local-${Instant.now().toEpochMilli()}"
-        val logs = JSONArray()
-            .put("Android local fallback accepted run-code ($language)")
-            .put("Bundled Go core will execute scripts when available")
-        if (code.isBlank()) logs.put("No code content was provided")
-        saveScriptRun(runId, "success", logs, true, 0)
-        return ok(JSONObject().put("message", "脚本已启动").put("run_id", runId).put("data", JSONObject().put("run_id", runId).put("status", "success").put("logs", logs).put("done", true).put("exit_code", 0)))
+        if (code.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "运行代码不能为空")
+        val ext = when (language.lowercase()) {
+            "javascript", "node", "nodejs" -> ".js"
+            "typescript" -> ".ts"
+            "shell", "sh", "bash" -> ".sh"
+            "go" -> ".go"
+            else -> ".py"
+        }
+        val temp = File(appContext.cacheDir, "script-runs/$runId$ext").apply { parentFile?.mkdirs() }
+        temp.writeText(code)
+        val result = executeScriptFile(temp, "inline-$language$ext", language)
+        saveScriptRun(runId, result.status, result.logs, result.done, result.exitCode)
+        temp.delete()
+        return ok(scriptRunResponse(runId, result))
     }
 
     private fun runScript(json: JSONObject): NanoHTTPD.Response {
@@ -711,16 +730,129 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val file = scriptFile(path)
         if (!file.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
         val runId = "android-local-${Instant.now().toEpochMilli()}"
-        val logs = JSONArray()
-            .put("Android local fallback accepted script run: $path")
-            .put("Bundled Go core will execute scripts when available")
-        saveScriptRun(runId, "success", logs, true, 0)
-        return ok(
+        val result = executeScriptFile(file, path, json.optString("language"))
+        saveScriptRun(runId, result.status, result.logs, result.done, result.exitCode)
+        return ok(scriptRunResponse(runId, result))
+    }
+
+    private fun scriptRunResponse(runId: String, result: LocalScriptResult): JSONObject = JSONObject()
+        .put("message", "脚本已执行")
+        .put("run_id", runId)
+        .put(
+            "data",
             JSONObject()
-                .put("message", "脚本已启动")
                 .put("run_id", runId)
-                .put("data", JSONObject().put("run_id", runId).put("status", "success").put("logs", logs).put("done", true).put("exit_code", 0))
+                .put("status", result.status)
+                .put("logs", result.logs)
+                .put("done", result.done)
+                .put("exit_code", result.exitCode)
         )
+
+    private fun executeScriptFile(file: File, displayPath: String, languageHint: String = ""): LocalScriptResult {
+        val logs = JSONArray().put("Android local fallback executing script: $displayPath")
+        val command = scriptCommand(file, displayPath, languageHint)
+            ?: return LocalScriptResult(
+                logs.put("Missing Android runtime for script type: ${file.extension.ifBlank { languageHint.ifBlank { "unknown" } }}"),
+                "failed",
+                true,
+                127,
+            )
+
+        return runLocalProcess(command, file.parentFile ?: scriptsRoot(), logs).also { result ->
+            recordDetectedDependencies(result.logs)
+        }
+    }
+
+    private fun scriptCommand(file: File, displayPath: String, languageHint: String): List<String>? {
+        val ext = file.extension.lowercase()
+        val nativeDir = appContext.applicationInfo.nativeLibraryDir.orEmpty()
+        fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile }?.absolutePath
+        return when {
+            ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
+            ext == "py" || languageHint.equals("python", ignoreCase = true) -> native("libpython_exec.so")?.let { listOf(it, file.absolutePath) }
+            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> native("libnode_exec.so")?.let { listOf(it, file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> native("libnode_exec.so")?.let { listOf(it, file.absolutePath) }
+            ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
+            else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
+        }
+    }
+
+    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray): LocalScriptResult {
+        logs.put("Command: ${command.first().substringAfterLast('/')}")
+        return try {
+            val process = ProcessBuilder(command)
+                .directory(workingDir)
+                .redirectErrorStream(true)
+                .apply { environment().putAll(runtimeEnvironment()) }
+                .start()
+            val output = Collections.synchronizedList(mutableListOf<String>())
+            val reader = Thread {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { output += it }
+                }
+            }.also { it.start() }
+            val finished = process.waitFor(60, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                reader.join(1_000)
+                output.forEach { logs.put(it) }
+                logs.put("Script timed out after 60 seconds")
+                LocalScriptResult(logs, "failed", true, 124)
+            } else {
+                reader.join(1_000)
+                output.forEach { logs.put(it) }
+                val exit = process.exitValue()
+                if (exit == 0) logs.put("Script completed successfully") else logs.put("Script failed with exit code $exit")
+                LocalScriptResult(logs, if (exit == 0) "success" else "failed", true, exit)
+            }
+        } catch (error: Exception) {
+            logs.put("Script start failed: ${error.message ?: error.javaClass.simpleName}")
+            LocalScriptResult(logs, "failed", true, 127)
+        }
+    }
+
+    private fun runtimeEnvironment(): MutableMap<String, String> {
+        val env = mutableMapOf(
+            "HOME" to appContext.filesDir.absolutePath,
+            "TMPDIR" to appContext.cacheDir.absolutePath,
+            "DAIDAI_ANDROID_LOCAL" to "1",
+        )
+        readableDatabase.query(
+            "envs",
+            arrayOf("name", "value"),
+            "enabled = 1",
+            null,
+            null,
+            null,
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.string("name").trim()
+                if (name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) env[name] = cursor.string("value")
+            }
+        }
+        return env
+    }
+
+    private fun recordDetectedDependencies(logs: JSONArray) {
+        val missingPython = Regex("ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
+        for (index in 0 until logs.length()) {
+            val match = missingPython.find(logs.optString(index)) ?: continue
+            recordDependency(match.groupValues[1], "python", "missing", "Detected missing Python module during script execution")
+        }
+    }
+
+    private fun recordDependency(name: String, type: String, status: String, log: String) {
+        val now = Instant.now().toString()
+        val values = ContentValues().apply {
+            put("name", name)
+            put("type", type)
+            put("status", status)
+            put("log", log)
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        writableDatabase.insert("dependencies", null, values)
     }
 
     private fun scriptRunLogs(runId: String): NanoHTTPD.Response {
@@ -947,13 +1079,47 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
+            val result = runTaskNow(id)
             values.clear()
             values.put("status", 1.0)
-            values.put("last_run_status", "failed")
+            values.put("last_run_status", result.status)
+            values.put("last_run_logs", result.logs.toString())
             values.put("updated_at", Instant.now().toString())
             writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
+            return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", result.status).put("logs", result.logs)))
         }
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status)))
+    }
+
+    private fun runTaskNow(id: Long): LocalScriptResult {
+        return readableDatabase.query(
+            "tasks",
+            arrayOf("command", "name"),
+            "id = ?",
+            arrayOf(id.toString()),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                return@use LocalScriptResult(JSONArray().put("Task not found"), "failed", true, 404)
+            }
+            val command = cursor.string("command").trim()
+            val path = when {
+                command.startsWith("task ") -> command.removePrefix("task ").trim()
+                command.startsWith("script ") -> command.removePrefix("script ").trim()
+                command.contains("/") || command.contains(".") -> command
+                else -> ""
+            }
+            if (path.isBlank()) {
+                return@use LocalScriptResult(JSONArray().put("Android local fallback only supports task commands in the form: task <script-path>"), "failed", true, 2)
+            }
+            val file = scriptFile(path)
+            if (!file.exists()) {
+                return@use LocalScriptResult(JSONArray().put("Script does not exist: $path"), "failed", true, 404)
+            }
+            executeScriptFile(file, path)
+        }
     }
 
     private fun serveTaskBatch(
@@ -991,14 +1157,27 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     }
 
     private fun taskLog(id: Long): NanoHTTPD.Response = ok(
-        JSONObject().put(
-            "data",
-            JSONObject()
-                .put("task_id", id)
-                .put("status", "failed")
-                .put("content", "Android runtime component is required before task execution")
-                .put("logs", JSONArray().put("Android runtime component is required before task execution"))
-        )
+        readableDatabase.query(
+            "tasks",
+            arrayOf("last_run_status", "last_run_logs"),
+            "id = ?",
+            arrayOf(id.toString()),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            val found = cursor.moveToFirst()
+            val status = if (found) cursor.string("last_run_status") else ""
+            val logs = if (found) runCatching { JSONArray(cursor.string("last_run_logs")) }.getOrDefault(JSONArray()) else JSONArray()
+            JSONObject().put(
+                "data",
+                JSONObject()
+                    .put("task_id", id)
+                    .put("status", status.ifBlank { "idle" })
+                    .put("content", (0 until logs.length()).joinToString("\n") { logs.optString(it) })
+                    .put("logs", logs)
+            )
+        }
     )
 
     private fun taskStats(id: Long): NanoHTTPD.Response = ok(
@@ -1123,12 +1302,22 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 val name = names.optString(index).trim()
                 if (name.isEmpty()) continue
                 val depType = json.optString("type", "nodejs")
-                val log = "Installed in Android local fallback metadata store ($depType). Runtime execution uses bundled Core when available."
+                val runtimeAvailable = when (depType) {
+                    "python" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libpython_exec.so").isFile
+                    "nodejs" -> File(appContext.applicationInfo.nativeLibraryDir.orEmpty(), "libnode_exec.so").isFile
+                    else -> false
+                }
+                val status = if (runtimeAvailable) "installed" else "unavailable"
+                val log = if (runtimeAvailable) {
+                    "Recorded dependency for Android local runtime ($depType). Package manager execution is handled by embedded Core when available."
+                } else {
+                    "Android local runtime for $depType is unavailable in this APK."
+                }
                 val values = ContentValues().apply {
                     put("name", name)
                     put("type", depType)
                     put("python_version", json.optString("python_version"))
-                    put("status", "installed")
+                    put("status", status)
                     put("log", log)
                     put("created_at", now)
                     put("updated_at", now)
@@ -1139,7 +1328,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         } finally {
             writableDatabase.endTransaction()
         }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("status", "installed")))
+        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("status", "recorded")))
     }
 
     private fun dependencyLog(id: Long): NanoHTTPD.Response {
