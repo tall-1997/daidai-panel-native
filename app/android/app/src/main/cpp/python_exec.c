@@ -57,6 +57,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    PyRun_SimpleString(
+        "import os, sys\n"
+        "sys.stdout = os.fdopen(1, 'w', buffering=1, closefd=False)\n"
+        "sys.stderr = os.fdopen(2, 'w', buffering=1, closefd=False)\n"
+    );
+
     PyConfig_Clear(&config);
     int result = Py_RunMain();
     free(py_argv);

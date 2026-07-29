@@ -199,7 +199,13 @@ func StartCore(optionsJSON string) (response string) {
 		}
 	}
 	if _, err := os.Stat(filepath.Join(parsed.DataDir, activeGenerationName)); errors.Is(err, os.ErrNotExist) {
-		if err := checkpointFlatDatabase(filepath.Join(parsed.DataDir, "daidai.db")); err != nil {
+		flatDB := filepath.Join(parsed.DataDir, "daidai.db")
+		if _, statErr := os.Stat(flatDB); statErr == nil {
+			if err := checkpointFlatDatabase(flatDB); err != nil {
+				logDiagnostic(codeInvalidDataDir, "flat-checkpoint")
+				return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
 			logDiagnostic(codeInvalidDataDir, "flat-checkpoint")
 			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
 		}
