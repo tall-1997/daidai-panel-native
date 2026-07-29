@@ -200,6 +200,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 cronParse(body(session))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/notification-channels" ->
                 ok(JSONObject().put("data", JSONArray()))
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/export" -> exportTasks()
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/import" -> importTasks(body(session))
             normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
@@ -233,6 +235,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val action = segments.getOrNull(2)
         return when {
             session.method == NanoHTTPD.Method.GET && normalizedUri.endsWith("/groups") -> envGroups()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export" -> exportEnvs(asObject = true)
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export-all" -> exportEnvs(asObject = false)
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/export-files" -> exportEnvFiles(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/import" -> importEnvs(body(session))
             normalizedUri.startsWith("/envs/batch") -> serveEnvBatch(session, action)
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
@@ -1271,6 +1277,52 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return ok(JSONObject().put("data", JSONObject().put("valid", true).put("expression", expression)))
     }
 
+    private fun exportTasks(): NanoHTTPD.Response = ok(JSONObject().put("data", taskRows()))
+
+    private fun importTasks(json: JSONObject): NanoHTTPD.Response {
+        val tasks = json.optJSONArray("tasks") ?: json.optJSONArray("data") ?: JSONArray()
+        val errors = JSONArray()
+        var imported = 0
+        for (index in 0 until tasks.length()) {
+            val item = tasks.optJSONObject(index)
+            if (item == null) {
+                errors.put("第 ${index + 1} 条任务格式无效")
+                continue
+            }
+            runCatching {
+                upsertTask(item)
+                imported++
+            }.onFailure { error ->
+                errors.put("${item.optString("name", "第 ${index + 1} 条")}: ${error.message ?: "导入失败"}")
+            }
+        }
+        return ok(JSONObject().put("message", "已导入 $imported 个任务").put("imported", imported).put("errors", errors))
+    }
+
+    private fun upsertTask(json: JSONObject) {
+        val now = Instant.now().toString()
+        val name = json.optString("name").trim().ifBlank { "未命名任务" }
+        val values = ContentValues().apply {
+            put("name", name)
+            put("command", json.optString("command"))
+            put("cron_expression", json.optString("cron_expression"))
+            put("task_type", json.optString("task_type", "manual"))
+            put("python_version", json.optString("python_version"))
+            put("status", json.optDouble("status", 1.0))
+            put("labels", (json.optJSONArray("labels") ?: JSONArray()).toString())
+            put("updated_at", now)
+        }
+        val existing = readableDatabase.query("tasks", arrayOf("id"), "name = ?", arrayOf(name), null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.long("id") else 0L
+        }
+        if (existing > 0) {
+            writableDatabase.update("tasks", values, "id = ?", arrayOf(existing.toString()))
+        } else {
+            values.put("created_at", now)
+            writableDatabase.insertOrThrow("tasks", null, values)
+        }
+    }
+
     private fun createEnv(json: JSONObject): NanoHTTPD.Response {
         val now = Instant.now().toString()
         val values = ContentValues().apply {
@@ -1284,6 +1336,75 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
         val id = writableDatabase.insertOrThrow("envs", null, values)
         return ok(JSONObject().put("data", JSONObject().put("id", id)))
+    }
+
+    private fun exportEnvs(asObject: Boolean): NanoHTTPD.Response {
+        val rows = envRows()
+        if (!asObject) return ok(JSONObject().put("data", rows))
+        val data = JSONObject()
+        for (index in 0 until rows.length()) {
+            val item = rows.getJSONObject(index)
+            data.put(item.optString("name"), item.optString("value"))
+        }
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun exportEnvFiles(json: JSONObject): NanoHTTPD.Response {
+        val rows = envRows()
+        val dotenv = StringBuilder()
+        val jsonObject = JSONObject()
+        for (index in 0 until rows.length()) {
+            val item = rows.getJSONObject(index)
+            if (json.optBoolean("enabled_only") && !item.optBoolean("enabled", true)) continue
+            val name = item.optString("name")
+            val value = item.optString("value")
+            dotenv.append(name).append('=').append(value.replace("\n", "\\n")).append('\n')
+            jsonObject.put(name, value)
+        }
+        return ok(JSONObject().put("data", JSONObject().put("env", dotenv.toString()).put("json", jsonObject.toString())))
+    }
+
+    private fun importEnvs(json: JSONObject): NanoHTTPD.Response {
+        val envs = json.optJSONArray("envs") ?: json.optJSONArray("data") ?: JSONArray()
+        val errors = JSONArray()
+        var imported = 0
+        for (index in 0 until envs.length()) {
+            val item = envs.optJSONObject(index)
+            if (item == null) {
+                errors.put("第 ${index + 1} 条变量格式无效")
+                continue
+            }
+            runCatching {
+                upsertEnv(item)
+                imported++
+            }.onFailure { error ->
+                errors.put("${item.optString("name", "第 ${index + 1} 条")}: ${error.message ?: "导入失败"}")
+            }
+        }
+        return ok(JSONObject().put("message", "已导入 $imported 个环境变量").put("imported", imported).put("errors", errors))
+    }
+
+    private fun upsertEnv(json: JSONObject) {
+        val now = Instant.now().toString()
+        val name = json.optString("name").trim()
+        require(name.isNotBlank()) { "变量名不能为空" }
+        val values = ContentValues().apply {
+            put("name", name)
+            put("value", json.optString("value"))
+            put("remarks", json.optString("remarks"))
+            put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
+            put("groups_json", normalizeGroups(json).toString())
+            put("updated_at", now)
+        }
+        val existing = readableDatabase.query("envs", arrayOf("id"), "name = ?", arrayOf(name), null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.long("id") else 0L
+        }
+        if (existing > 0) {
+            writableDatabase.update("envs", values, "id = ?", arrayOf(existing.toString()))
+        } else {
+            values.put("created_at", now)
+            writableDatabase.insertOrThrow("envs", null, values)
+        }
     }
 
     private fun updateEnv(id: Long, json: JSONObject): NanoHTTPD.Response {

@@ -174,9 +174,9 @@ class LocalPanelHttpServer(
     private fun systemHealth(): JSONObject = JSONObject()
         .put(
             "items",
-            JSONArray()
+                JSONArray()
                 .put(JSONObject().put("name", "Android local HTTP API").put("status", "ok"))
-                .put(JSONObject().put("name", "Embedded Go core").put("status", "warning").put("message", "Kotlin fallback is active when Go core is unavailable"))
+                .put(JSONObject().put("name", "Local management core").put("status", "ok").put("message", "Kotlin fallback is serving local management APIs"))
                 .put(JSONObject().put("name", "Native runtime entries").put("status", if (hasNativeRuntimeEntries()) "ok" else "warning"))
         )
         .put("last_checked_at", java.time.Instant.now().toString())
