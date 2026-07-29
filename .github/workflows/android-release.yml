@@ -7,6 +7,16 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_channel:
+        description: Build channel
+        required: true
+        default: snapshot
+        type: choice
+        options:
+          - snapshot
+          - prerelease
+          - stable
 
 permissions:
   contents: read
@@ -58,6 +68,9 @@ jobs:
 
       - name: Resolve and validate release version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_CHANNEL: ${{ inputs.release_channel }}
         shell: bash
         run: |
           python3 scripts/version.py check
@@ -69,8 +82,32 @@ jobs:
           CHANNEL=snapshot
           STRICT=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            CHANNEL=release
-            STRICT=true
+            IS_PRERELEASE="$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+              --jq '.prerelease // false' 2>/dev/null || printf 'false')"
+            if [[ "${IS_PRERELEASE}" == "true" ]]; then
+              CHANNEL=prerelease
+            else
+              CHANNEL=release
+              STRICT=true
+            fi
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            case "${REQUESTED_CHANNEL:-snapshot}" in
+              snapshot)
+                ;;
+              prerelease)
+                CHANNEL=prerelease
+                ;;
+              stable)
+                CHANNEL=release
+                STRICT=true
+                ;;
+              *)
+                printf 'Unsupported release channel: %s\n' "${REQUESTED_CHANNEL}" >&2
+                exit 1
+                ;;
+            esac
           fi
           ARTIFACT_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64"
           EVIDENCE_NAME="release-evidence-${VERSION}-${CHANNEL}"
@@ -88,10 +125,11 @@ jobs:
             printf 'version=%s\n' "${VERSION}"
             printf 'artifact_name=%s\n' "${ARTIFACT_NAME}"
             printf 'evidence_name=%s\n' "${EVIDENCE_NAME}"
+            printf 'strict=%s\n' "${STRICT}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Validate required tag release secrets
-        if: github.ref_type == 'tag'
+        if: steps.version.outputs.strict == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -108,7 +146,7 @@ jobs:
           done
 
       - name: Prepare release signing keystore
-        if: github.ref_type == 'tag'
+        if: steps.version.outputs.strict == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -138,7 +176,7 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Require strict device workflow evidence for tag
-        if: github.ref_type == 'tag'
+        if: steps.version.outputs.strict == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -251,7 +289,7 @@ jobs:
           retention-days: 7
 
       - name: Generate snapshot smoke evidence before APK build
-        if: github.ref_type != 'tag'
+        if: steps.version.outputs.strict != 'true'
         run: go run ./scripts/run-runtime-smoke.go --output ./runtime/smoke-evidence.json
 
       - name: Verify runtime contract before APK build
@@ -301,7 +339,7 @@ jobs:
           sha256sum "${ARTIFACT_NAME}.apk" > "${ARTIFACT_NAME}.apk.sha256"
 
       - name: Verify release APK signing certificate
-        if: github.ref_type == 'tag'
+        if: steps.version.outputs.strict == 'true'
         shell: bash
         run: |
           APK_CERT_SHA256="$(apksigner verify --print-certs "${ARTIFACT_NAME}.apk" \
