@@ -44,6 +44,57 @@ python3 -m pip download \
   beautifulsoup4==4.13.4 \
   pip==24.0
 
+PYYAML_VERSION="6.0.3"
+PYYAML_SDIST="$WORK_DIR/PyYAML-${PYYAML_VERSION}.tar.gz"
+PYYAML_SRC="$WORK_DIR/PyYAML-${PYYAML_VERSION}"
+if [[ ! -s "$PYYAML_SDIST" ]]; then
+  curl -L --fail --connect-timeout 20 --max-time 120 -o "$PYYAML_SDIST" "https://files.pythonhosted.org/packages/source/P/PyYAML/pyyaml-${PYYAML_VERSION}.tar.gz"
+fi
+if [[ ! -d "$PYYAML_SRC" ]]; then
+  tar -xzf "$PYYAML_SDIST" -C "$WORK_DIR"
+fi
+python3 - "$PYYAML_SRC" "$ASSET_DIR/wheelhouse" "$PYYAML_VERSION" <<'PY'
+import base64
+import csv
+import hashlib
+import pathlib
+import sys
+import time
+import zipfile
+
+src = pathlib.Path(sys.argv[1])
+wheelhouse = pathlib.Path(sys.argv[2])
+version = sys.argv[3]
+wheel = wheelhouse / f"PyYAML-{version}-py3-none-any.whl"
+dist = f"PyYAML-{version}.dist-info"
+records = []
+
+def digest(data):
+    raw = hashlib.sha256(data).digest()
+    return "sha256=" + base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+def add_bytes(zf, name, data):
+    info = zipfile.ZipInfo(name, time.localtime()[:6])
+    info.compress_type = zipfile.ZIP_DEFLATED
+    zf.writestr(info, data)
+    records.append([name, digest(data), str(len(data))])
+
+with zipfile.ZipFile(wheel, "w") as zf:
+    lib = src / "lib" / "yaml"
+    for path in sorted(lib.rglob("*")):
+        if path.is_file():
+            add_bytes(zf, str(path.relative_to(src / "lib")), path.read_bytes())
+    add_bytes(zf, f"{dist}/WHEEL", b"Wheel-Version: 1.0\nGenerator: daidai-android-runtime\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+    add_bytes(zf, f"{dist}/METADATA", f"Metadata-Version: 2.1\nName: PyYAML\nVersion: {version}\nSummary: YAML parser and emitter for Python\n".encode())
+    record_name = f"{dist}/RECORD"
+    rows = records + [[record_name, "", ""]]
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerows(rows)
+    zf.writestr(record_name, buf.getvalue().encode())
+PY
+
 python3 - "$ASSET_DIR/wheelhouse" <<'PY'
 import hashlib
 import json
