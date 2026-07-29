@@ -104,6 +104,7 @@ android {
         getByName("main") {
             assets.srcDirs("../../../runtime")
             assets.srcDirs("src/main/pythonAssets")
+            assets.srcDirs("src/main/nodeAssets")
         }
     }
 }

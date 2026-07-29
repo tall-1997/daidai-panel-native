@@ -120,9 +120,9 @@ class LocalPanelHttpServer(
                 .put("dependency_install", true)
                 .put("python", true)
                 .put("pip", true)
-                .put("node", termuxBinary("node") != null)
-                .put("npm", termuxBinary("npm") != null)
-                .put("typescript", termuxBinary("ts-node") != null)
+                .put("node", hasNativeRuntime("libnode_exec.so"))
+                .put("npm", hasNativeRuntime("libnode_exec.so"))
+                .put("typescript", hasNativeRuntime("libnode_exec.so"))
                 .put("shell", true)
                 .put("linux_package_manager", false)
                 .put("foreground_scheduler", true)
@@ -189,10 +189,7 @@ class LocalPanelHttpServer(
         "libshell_exec.so",
     ).any { java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), it).isFile }
 
-    private fun termuxBinary(name: String): String? = listOf(
-        "/data/data/com.termux/files/usr/bin/$name",
-        "/data/user/0/com.termux/files/usr/bin/$name",
-    ).firstOrNull { java.io.File(it).canExecute() }
+    private fun hasNativeRuntime(name: String): Boolean = java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), name).isFile
 
     private fun appVersionName(): String = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)

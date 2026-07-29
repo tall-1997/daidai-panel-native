@@ -50,6 +50,10 @@ jobs:
         working-directory: app
         run: bash scripts/prepare-android-python-runtime.sh
 
+      - name: Prepare Android Node runtime
+        working-directory: app
+        run: bash scripts/prepare-android-node-runtime.sh
+
       - name: Test embedded Go core
         working-directory: panel/server
         run: go test -race ./router ./mobilecore ./database

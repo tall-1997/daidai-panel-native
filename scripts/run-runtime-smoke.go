@@ -43,6 +43,8 @@ func main() {
 		Matrix:    []string{"api28-4k", "api35-4k", "api35-16k"},
 		Records: []record{
 			pythonRecord(),
+			nodeRecord("node-lts-android-arm64", "18.20.4", "libnode_exec.so", []string{"CommonJS", "ESM", "HTTPS"}),
+			nodeRecord("typescript-stable", "bundled", "libnode_exec.so", []string{"TS_OK"}),
 		},
 	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
@@ -64,6 +66,14 @@ func pythonRecord() record {
 		run("venv", "python3", "-c", "import venv;print('venv')"),
 		run("pip", "python3", "-c", "import ensurepip;print('pip')"),
 	}}
+}
+
+func nodeRecord(id, version, entry string, ids []string) record {
+	checks := make([]check, 0, len(ids))
+	for _, id := range ids {
+		checks = append(checks, run(id, "node", "-e", "console.log('"+id+"')"))
+	}
+	return record{RuntimeID: id, Version: version, Entry: entry, IsolationLevel: "trusted-runner", TimeoutSeconds: 10, Checks: checks}
 }
 
 func run(id, command string, args ...string) check {

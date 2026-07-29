@@ -828,8 +828,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return when {
             ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.home, file.absolutePath) }
-            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> termuxBinary("node")?.let { listOf(it, file.absolutePath) }
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> termuxBinary("ts-node")?.let { listOf(it, file.absolutePath) }
+            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, File(it.modules, "ts-node/dist/bin.js").absolutePath, file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }
@@ -840,14 +840,6 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val sample = runCatching { file.inputStream().use { it.readBytes().toString(Charsets.ISO_8859_1) } }.getOrDefault("")
         if (sample.contains("RUNTIME_STUB_OK")) return false
         return true
-    }
-
-    private fun termuxBinary(name: String): String? {
-        val candidates = listOf(
-            "/data/data/com.termux/files/usr/bin/$name",
-            "/data/user/0/com.termux/files/usr/bin/$name",
-        )
-        return candidates.firstOrNull { path -> File(path).canExecute() }
     }
 
     private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray): LocalScriptResult {
@@ -891,7 +883,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             "DAIDAI_ANDROID_LOCAL" to "1",
             "PYTHONPATH" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
             "PIP_TARGET" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
-            "NODE_PATH" to File(appContext.filesDir, "deps/nodejs/lib/node_modules").absolutePath,
+            "NODE_PATH" to listOf(
+                AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
+                File(appContext.filesDir, "deps/nodejs/lib/node_modules").absolutePath,
+            ).filter(String::isNotBlank).joinToString(File.pathSeparator),
         )
         readableDatabase.query(
             "envs",
@@ -1599,14 +1594,15 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
         if (depType == "nodejs") {
-            return termuxBinary("npm")?.let { npm ->
-                val deps = File(appContext.filesDir, "deps/nodejs").apply { mkdirs() }
-                val command = listOf(npm, "install", "--ignore-scripts", "--prefix", deps.absolutePath, name)
+            return AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
+                val deps = AndroidNodeRuntime.depsDir(appContext)
+                val npm = File(runtime.modules, "npm/bin/npm-cli.js")
+                val command = listOf(runtime.executable, npm.absolutePath, "install", "--ignore-scripts", "--prefix", deps.absolutePath, name)
                 val logs = JSONArray().put("Installing Node dependency with Termux npm: $name")
                 val result = runLocalProcess(command, deps, logs)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode == 0) "installed" to text else "failed" to text
-            } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Termux npm is not accessible")
+            } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
         }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
     }
