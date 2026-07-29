@@ -1,2 +1,4 @@
 .worktrees/
 app/.flutter-plugins-dependencies
+__pycache__/
+*.py[cod]
