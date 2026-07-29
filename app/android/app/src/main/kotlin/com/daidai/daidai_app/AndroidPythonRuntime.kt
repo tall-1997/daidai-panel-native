@@ -63,18 +63,15 @@ object AndroidPythonRuntime {
         val failureLog = File(deps, ".daidai-python-seed-failed.log")
         runCatching {
             verifyWheelhouse(wheelhouse)
-            runPythonCommand(
-                context,
-                paths,
-                listOf("-m", "ensurepip", "--upgrade"),
-                "Python ensurepip bootstrap failed",
-            )
+            val pipWheel = wheelhouse.listFiles()
+                ?.firstOrNull { it.name.startsWith("pip-") && it.name.endsWith(".whl") }
+                ?: error("Bundled pip wheel is missing")
             runPythonCommand(
                 context,
                 paths,
                 listOf(
-                    "-m",
-                    "pip",
+                    "-c",
+                    "import sys; sys.path.insert(0, '${pipWheel.absolutePath}'); from pip._internal.cli.main import main; sys.exit(main())",
                     "install",
                     "--no-index",
                     "--find-links",

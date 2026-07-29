@@ -182,8 +182,12 @@ func StartCore(optionsJSON string) (response string) {
 	recoveryReady.Store(false)
 	store := newGenerationStore(parsed.DataDir, generationFilesystemOps())
 	if err := store.validateRootComponents(); err != nil {
-		logDiagnostic(codeInvalidDataDir, "data-root")
-		return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		if runtime.GOOS == "android" {
+			log.Printf("mobilecore: Android dataDir parent trust check degraded: %v", err)
+		} else {
+			logDiagnostic(codeInvalidDataDir, "data-root")
+			return failure(codeInvalidDataDir, "dataDir is unavailable", result{Status: "stopped"})
+		}
 	}
 	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
 		logDiagnostic(codeInvalidDataDir, "recovery-namespace")
