@@ -99,6 +99,8 @@ class LocalPanelHttpServer(
                 session.uri.startsWith("/api/envs") || session.uri.startsWith("/api/v1/envs") -> store.serveEnvs(session)
                 session.uri.startsWith("/api/deps") || session.uri.startsWith("/api/v1/deps") ->
                     store.serveDependencies(session)
+                session.uri.startsWith("/api/configs") || session.uri.startsWith("/api/v1/configs") ->
+                    store.serveConfigs(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
             }
         } catch (error: Exception) {
