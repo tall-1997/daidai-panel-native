@@ -207,7 +207,14 @@ class LocalPanelHttpServer(
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
         if (command == null) return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime is not packaged or not executable")
         return try {
-            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .apply {
+                    environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir.orEmpty()
+                    environment()["HOME"] = context.filesDir.absolutePath
+                    environment()["TMPDIR"] = context.cacheDir.absolutePath
+                }
+                .start()
             val output = StringBuilder()
             val reader = Thread {
                 process.inputStream.bufferedReader().useLines { lines ->

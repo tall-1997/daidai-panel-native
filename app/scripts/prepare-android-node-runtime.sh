@@ -70,6 +70,7 @@ fi
   -I"$EXTRACT_DIR/include/node" \
   "$LAUNCHER_SRC" \
   -L"$JNI_DIR" \
+  -Wl,-rpath,'$ORIGIN' \
   -lnode \
   -ldl -lm \
   -o "$LAUNCHER_OUT"

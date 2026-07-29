@@ -68,6 +68,7 @@ fi
   -I"$PREFIX_DIR/include/python${PYTHON_ABI_VERSION}" \
   "$LAUNCHER_SRC" \
   -L"$JNI_DIR" \
+  -Wl,-rpath,'$ORIGIN' \
   -lpython${PYTHON_ABI_VERSION} \
   -ldl -lm \
   -o "$LAUNCHER_OUT"

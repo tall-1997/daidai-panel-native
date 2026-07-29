@@ -881,6 +881,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             "HOME" to appContext.filesDir.absolutePath,
             "TMPDIR" to appContext.cacheDir.absolutePath,
             "DAIDAI_ANDROID_LOCAL" to "1",
+            "LD_LIBRARY_PATH" to appContext.applicationInfo.nativeLibraryDir.orEmpty(),
             "PYTHONPATH" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
             "PIP_TARGET" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
             "NODE_PATH" to listOf(
