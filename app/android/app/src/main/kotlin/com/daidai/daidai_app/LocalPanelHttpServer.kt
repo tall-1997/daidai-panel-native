@@ -58,6 +58,9 @@ class LocalPanelHttpServer(
                 session.method == Method.GET && session.uri == "/api/system/dashboard" ->
                     jsonResponse(store.dashboard())
 
+                session.method == Method.GET && session.uri == "/api/system/panel-log" ->
+                    store.panelLog(session)
+
                 session.method == Method.GET && session.uri == "/api/system/panel-settings" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("panel_title", "呆呆本地面板")))
 

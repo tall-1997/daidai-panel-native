@@ -238,6 +238,9 @@ export function useScriptWorkspaceActions({
     for (const file of files) {
       formData.append('file', file)
     }
+    if (files.length === 1) {
+      formData.append('filename', files[0].name)
+    }
     if (uploadDir.value) {
       formData.append('dir', uploadDir.value)
     }
