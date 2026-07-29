@@ -240,6 +240,7 @@ export function useScriptWorkspaceActions({
     }
     if (files.length === 1) {
       formData.append('filename', files[0].name)
+      formData.append('filename_b64', btoa(unescape(encodeURIComponent(files[0].name))))
     }
     if (uploadDir.value) {
       formData.append('dir', uploadDir.value)

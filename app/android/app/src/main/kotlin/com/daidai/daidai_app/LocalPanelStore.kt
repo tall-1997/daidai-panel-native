@@ -770,6 +770,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         session.parseBody(files)
         val uploaded = files["file"] ?: files.values.firstOrNull()
         val originalName = firstPresent(
+            decodeBase64Utf8(session.parms["filename_b64"]),
             session.parms["filename"],
             session.parms["file"],
             uploaded?.let { File(it).name }
@@ -1191,6 +1192,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun firstPresent(vararg values: String?): String? = values
         .map { it?.trim().orEmpty() }
         .firstOrNull { it.isNotEmpty() }
+
+    private fun decodeBase64Utf8(value: String?): String? = runCatching {
+        val raw = value?.trim().orEmpty()
+        if (raw.isEmpty()) return@runCatching null
+        String(Base64.decode(raw, Base64.DEFAULT), Charsets.UTF_8)
+    }.getOrNull()
 
     private fun scriptFileJson(path: String, file: File): JSONObject = JSONObject()
         .put("path", path)
