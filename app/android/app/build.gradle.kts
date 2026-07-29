@@ -103,6 +103,7 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("../../../runtime")
+            assets.srcDirs("src/main/pythonAssets")
         }
     }
 }
@@ -159,6 +160,9 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
         }
         check(compatibility.isFile) {
             "Missing runtime/compatibility.json in repository root."
+        }
+        check(rootProject.file("../../runtime/smoke-evidence.json").isFile) {
+            "Missing runtime/smoke-evidence.json in repository root."
         }
     }
 }

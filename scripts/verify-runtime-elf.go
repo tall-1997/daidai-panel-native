@@ -102,6 +102,11 @@ func main() {
 			failed = true
 			continue
 		}
+		if bytesContains(payload, []byte("RUNTIME_STUB_OK")) {
+			fmt.Fprintf(os.Stderr, "%s is a runtime stub, not a real interpreter\n", component.ID)
+			failed = true
+			continue
+		}
 		sum := sha256.Sum256(payload)
 		hash := hex.EncodeToString(sum[:])
 		placeholder := strings.HasPrefix(strings.TrimSpace(component.SHA256), "PLACEHOLDER_SHA256_")
@@ -126,6 +131,25 @@ func main() {
 	if failed {
 		os.Exit(1)
 	}
+}
+
+func bytesContains(payload, marker []byte) bool {
+	if len(marker) == 0 || len(payload) < len(marker) {
+		return false
+	}
+	for i := 0; i <= len(payload)-len(marker); i++ {
+		matched := true
+		for j := range marker {
+			if payload[i+j] != marker[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func readSmokeEvidence(path string) (smokeEvidence, error) {

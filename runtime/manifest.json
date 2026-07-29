@@ -4,67 +4,11 @@
   "components": [
     {
       "id": "python-3.12-android-arm64",
-      "version": "3.12.x",
+      "version": "3.14.6",
       "abi": "arm64-v8a",
       "entrypoint": "libpython_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["python", "pip", "venv"]
-    },
-    {
-      "id": "node-lts-android-arm64",
-      "version": "20.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libnode_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["node", "npm", "npx"]
-    },
-    {
-      "id": "typescript-stable",
-      "version": "5.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libnode_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["typescript", "ts-node"]
-    },
-    {
-      "id": "shell-android-arm64",
-      "version": "1.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libshell_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["shell"]
-    },
-    {
-      "id": "git-android-arm64",
-      "version": "2.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libgit_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["git", "https"]
-    },
-    {
-      "id": "ssh-android-arm64",
-      "version": "9.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libssh_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["ssh", "known-hosts"]
-    },
-    {
-      "id": "yaegi-go",
-      "version": "0.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libyaegi_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["go-interpret"]
-    },
-    {
-      "id": "go-builder-android-arm64",
-      "version": "1.25.x",
-      "abi": "arm64-v8a",
-      "entrypoint": "libgobuilder_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
-      "capabilities": ["go-build-export"]
+      "capabilities": ["python", "pip", "venv", "ssl", "sqlite"]
     }
   ]
 }
