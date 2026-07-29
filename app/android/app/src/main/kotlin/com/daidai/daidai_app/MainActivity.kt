@@ -235,10 +235,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun localHostStatus(raw: String): Map<String, Any> =
+    private fun localHostStatus(raw: String): Map<String, Any?> =
         jsonObjectToMap(runCatching { JSONObject(raw) }.getOrElse { JSONObject() })
 
-    private fun localHostFailure(): Map<String, Any> = mapOf(
+    private fun localHostFailure(): Map<String, Any?> = mapOf(
         "phase" to "failed",
         "base_url" to "",
         "instance_id" to "",
