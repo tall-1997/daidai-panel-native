@@ -21,7 +21,9 @@ object AndroidPythonRuntime {
         }
         val stdlib = File(home, "lib/python$VERSION")
         if (!stdlib.isDirectory) return null
-        return PythonRuntimePaths(executable.absolutePath, home.absolutePath, depsDir(context).absolutePath)
+        val paths = PythonRuntimePaths(executable.absolutePath, home.absolutePath, depsDir(context).absolutePath)
+        ensureSeedPackages(context, paths)
+        return paths
     }
 
     fun depsDir(context: Context): File = File(context.filesDir, "deps/python/$VERSION/site-packages").apply { mkdirs() }
@@ -39,6 +41,45 @@ object AndroidPythonRuntime {
         for (child in children) {
             copyAssetTree(context, "$assetPath/$child", File(target, child))
         }
+    }
+
+    private fun ensureSeedPackages(context: Context, paths: PythonRuntimePaths) {
+        val deps = File(paths.deps).apply { mkdirs() }
+        val marker = File(deps, ".daidai-python-seed-ready")
+        if (marker.isFile) return
+        val wheelhouse = File(paths.home, "wheelhouse")
+        if (!wheelhouse.isDirectory) return
+        val command = listOf(
+            paths.executable,
+            paths.home,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--find-links",
+            wheelhouse.absolutePath,
+            "--target",
+            deps.absolutePath,
+            "certifi==2026.5.20",
+            "charset-normalizer==3.4.7",
+            "idna==3.18",
+            "requests==2.34.2",
+            "urllib3==2.7.0",
+        )
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .apply {
+                environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir.orEmpty()
+                environment()["PYTHONPATH"] = deps.absolutePath
+                environment()["PIP_TARGET"] = deps.absolutePath
+                environment()["HOME"] = context.filesDir.absolutePath
+                environment()["TMPDIR"] = context.cacheDir.absolutePath
+            }
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exit = process.waitFor()
+        check(exit == 0) { "Python seed dependency install failed: $output" }
+        marker.writeText(VERSION)
     }
 }
 

@@ -33,7 +33,7 @@ mkdir -p "$ASSET_DIR/lib" "$ASSET_DIR/bin"
 cp -a "$EXTRACT_DIR/include" "$ASSET_DIR/"
 
 if command -v npm >/dev/null 2>&1; then
-  npm install -g --prefix "$ASSET_DIR" --ignore-scripts typescript ts-node
+  npm install -g --prefix "$ASSET_DIR" --ignore-scripts npm@11.12.1 corepack@0.34.6 typescript ts-node
 else
   printf 'npm not found on host; TypeScript assets were not installed.\n' >&2
   exit 2

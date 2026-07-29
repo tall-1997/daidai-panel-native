@@ -1,0 +1,50 @@
+{
+  "version": "1",
+  "updated_at": "2026-07-29T00:00:00Z",
+  "python": {
+    "runtime": "python-3.14-android-arm64",
+    "seeded_wheelhouse": [
+      { "name": "certifi", "version": "2026.5.20", "status": "bundled" },
+      { "name": "charset-normalizer", "version": "3.4.7", "status": "bundled" },
+      { "name": "idna", "version": "3.18", "status": "bundled" },
+      { "name": "requests", "version": "2.34.2", "status": "bundled" },
+      { "name": "urllib3", "version": "2.7.0", "status": "bundled" },
+      { "name": "pip", "version": "24.0", "status": "bundled-wheel", "note": "Runtime ensurepip may provide a newer pip; this wheel is kept for compatibility." }
+    ],
+    "android_abi_required": [
+      {
+        "name": "pycryptodome",
+        "version": "3.23.0",
+        "status": "requires-android-wheel",
+        "reason": "pycryptodome contains native extensions and must be provided as a signed Android ABI compatible wheel."
+      }
+    ]
+  },
+  "nodejs": {
+    "runtime": "nodejs-mobile-18.20.4-android-arm64",
+    "bundled": [
+      { "name": "corepack", "version": "0.34.6", "status": "covered-by-nodejs-mobile-or-npm" },
+      { "name": "npm", "version": "11.12.1", "status": "target-version" }
+    ],
+    "restricted": [
+      {
+        "name": "@tencent-qqmail/agently-cli",
+        "version": "1.0.6",
+        "status": "requires-user-authorization",
+        "reason": "External automation/agent CLI packages are not installed silently."
+      },
+      {
+        "name": "agent-browser",
+        "version": "0.27.0",
+        "status": "requires-user-authorization",
+        "reason": "Browser automation packages are not installed silently."
+      },
+      {
+        "name": "clawhub",
+        "version": "0.18.0",
+        "status": "requires-user-authorization",
+        "reason": "External agent packages are not installed silently."
+      }
+    ]
+  }
+}

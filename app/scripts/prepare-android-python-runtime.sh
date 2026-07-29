@@ -32,6 +32,16 @@ fi
 
 mkdir -p "$ASSET_DIR/lib"
 cp -a "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}" "$ASSET_DIR/lib/"
+mkdir -p "$ASSET_DIR/wheelhouse"
+python3 -m pip download \
+  --only-binary=:all: \
+  --dest "$ASSET_DIR/wheelhouse" \
+  certifi==2026.5.20 \
+  charset-normalizer==3.4.7 \
+  idna==3.18 \
+  requests==2.34.2 \
+  urllib3==2.7.0 \
+  pip==24.0
 
 find "$PREFIX_DIR/lib" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$JNI_DIR/" \;
 find "$PREFIX_DIR/lib/engines-3" -maxdepth 1 -type f -name '*.so' -exec cp -a {} "$JNI_DIR/" \; 2>/dev/null || true
