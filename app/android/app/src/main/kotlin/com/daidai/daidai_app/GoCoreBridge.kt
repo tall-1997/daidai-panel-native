@@ -2,6 +2,7 @@ package com.daidai.daidai_app
 
 import android.content.Context
 import android.util.Log
+import java.io.File
 import org.json.JSONObject
 
 object GoCoreBridge {
@@ -16,8 +17,9 @@ object GoCoreBridge {
         val runtimeMetadata = AndroidRuntimeMetadataBridge.metadataOptions(context)
         val foregroundActive = LocalPanelHostService.isPersistentSchedulingEnabled(context)
         val hostStatus = AndroidSchedulerHostStatus.status(context, foregroundActive, recoveryTrigger = "app-start")
+        val dataDir = File(context.filesDir, "local-panel").apply { mkdirs() }.canonicalPath
         val options = JSONObject()
-            .put("dataDir", context.filesDir.resolve("local-panel").absolutePath)
+            .put("dataDir", dataDir)
             .put("bindHost", "127.0.0.1")
             .put("port", 0)
             .put("localToken", localToken)
