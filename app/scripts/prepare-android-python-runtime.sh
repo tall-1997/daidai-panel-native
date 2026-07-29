@@ -43,6 +43,37 @@ python3 -m pip download \
   urllib3==2.7.0 \
   pip==24.0
 
+python3 - "$ASSET_DIR/wheelhouse" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+wheelhouse = pathlib.Path(sys.argv[1])
+wheels = []
+for wheel in sorted(wheelhouse.glob("*.whl")):
+    wheels.append({
+        "filename": wheel.name,
+        "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "size": wheel.stat().st_size,
+    })
+
+manifest = {
+    "version": "1",
+    "signature_scope": "apk-signed-asset-sha256",
+    "wheels": wheels,
+    "android_abi_required": [
+        {
+            "name": "pycryptodome",
+            "version": "3.23.0",
+            "status": "requires-android-wheel",
+            "reason": "No signed Android ABI wheel is bundled yet."
+        }
+    ]
+}
+(wheelhouse / "wheelhouse-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+
 find "$PREFIX_DIR/lib" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$JNI_DIR/" \;
 find "$PREFIX_DIR/lib/engines-3" -maxdepth 1 -type f -name '*.so' -exec cp -a {} "$JNI_DIR/" \; 2>/dev/null || true
 find "$PREFIX_DIR/lib/ossl-modules" -maxdepth 1 -type f -name '*.so' -exec cp -a {} "$JNI_DIR/" \; 2>/dev/null || true

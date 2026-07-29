@@ -3,6 +3,7 @@
   "updated_at": "2026-07-29T00:00:00Z",
   "python": {
     "runtime": "python-3.14-android-arm64",
+    "wheelhouse_signature_scope": "apk-signed-asset-sha256",
     "seeded_wheelhouse": [
       { "name": "certifi", "version": "2026.5.20", "status": "bundled" },
       { "name": "charset-normalizer", "version": "3.4.7", "status": "bundled" },

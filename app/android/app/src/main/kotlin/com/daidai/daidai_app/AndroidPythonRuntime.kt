@@ -1,7 +1,9 @@
 package com.daidai.daidai_app
 
 import android.content.Context
+import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
@@ -49,6 +51,7 @@ object AndroidPythonRuntime {
         if (marker.isFile) return
         val wheelhouse = File(paths.home, "wheelhouse")
         if (!wheelhouse.isDirectory) return
+        verifyWheelhouse(wheelhouse)
         val command = listOf(
             paths.executable,
             paths.home,
@@ -80,6 +83,36 @@ object AndroidPythonRuntime {
         val exit = process.waitFor()
         check(exit == 0) { "Python seed dependency install failed: $output" }
         marker.writeText(VERSION)
+    }
+
+    private fun verifyWheelhouse(wheelhouse: File) {
+        val manifest = File(wheelhouse, "wheelhouse-manifest.json")
+        check(manifest.isFile) { "Python wheelhouse manifest is missing" }
+        val json = JSONObject(manifest.readText())
+        val wheels = json.optJSONArray("wheels") ?: error("Python wheelhouse manifest has no wheels")
+        for (index in 0 until wheels.length()) {
+            val item = wheels.getJSONObject(index)
+            val file = File(wheelhouse, item.getString("filename"))
+            check(file.isFile) { "Python wheel missing: ${file.name}" }
+            val expected = item.getString("sha256")
+            val actual = sha256(file)
+            check(expected.equals(actual, ignoreCase = true)) {
+                "Python wheel checksum mismatch: ${file.name}"
+            }
+        }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 }
 
