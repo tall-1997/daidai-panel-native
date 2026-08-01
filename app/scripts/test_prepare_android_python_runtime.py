@@ -114,9 +114,21 @@ class AndroidPythonRuntimeScriptTest(unittest.TestCase):
         self.assertIn('ENSUREPIP_BUNDLED=', script)
         self.assertIn('--no-deps', script)
         self.assertIn('pip==24.0', script)
+        self.assertIn('verify_ensurepip_bundle "$ENSUREPIP_BUNDLED"', script)
         bootstrap = script.index('pip==24.0')
-        validation = script.index('ensurepip bundle is missing')
+        validation = script.index('verify_ensurepip_bundle "$ENSUREPIP_BUNDLED"')
         self.assertLess(bootstrap, validation)
+
+    def test_ensurepip_bundle_validation_expands_globs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bundled = pathlib.Path(temporary)
+            missing = self.run_helper("--verify-ensurepip-bundle", bundled)
+            self.assertNotEqual(0, missing.returncode)
+            self.assertIn("ensurepip bundle is missing", missing.stderr)
+
+            (bundled / "pip-24.0-py3-none-any.whl").write_bytes(b"wheel")
+            present = self.run_helper("--verify-ensurepip-bundle", bundled)
+            self.assertEqual(0, present.returncode, present.stderr)
 
 
 if __name__ == "__main__":

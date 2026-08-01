@@ -39,3 +39,11 @@
   - 所有里程碑任务推进完成后统一审查。
   - 审查合格后再推送、打 tag 并触发 GitHub 构建安装包。
   - 真机验证由用户在 Release 安装包生成后执行。
+
+### GitHub 云端模拟器闭环修复
+- Date: 2026-08-01
+- Context: 用户要求自动使用 GitHub 运行模拟器测试并修复 Android 本机面板
+- Instructions:
+  - Android 本机面板修复需自动触发 GitHub Actions 模拟器测试。
+  - 每轮失败后抓取 workflow 日志、分析运行时报错、修复脚本依赖或面板源码，再推送下一轮验证。
+  - 验收结果需包含 GitHub run、运行日志要点、修复提交和业务功能通过情况。

@@ -51,6 +51,11 @@ verify_sha256() {
   [[ "$actual" == "$expected" ]] || { printf 'SHA-256 mismatch for %s: expected %s, got %s\n' "$path" "$expected" "$actual" >&2; exit 1; }
 }
 
+verify_ensurepip_bundle() {
+  local bundled="$1"
+  compgen -G "$bundled/pip-*-py3-none-any.whl" >/dev/null || { printf 'ensurepip bundle is missing\n' >&2; exit 1; }
+}
+
 generate_metadata() {
   python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
 import hashlib
@@ -174,6 +179,10 @@ case "${1:-}" in
     runtime_digest "${2:?assets path is required}" "${3:?native path is required}"
     exit 0
     ;;
+  --verify-ensurepip-bundle)
+    verify_ensurepip_bundle "${2:?ensurepip bundled path is required}"
+    exit 0
+    ;;
 esac
 
 mkdir -p "$WORK_DIR" "$EXTRACT_DIR" "$JNI_DIR"
@@ -211,7 +220,7 @@ if ! compgen -G "$ENSUREPIP_BUNDLED/pip-*-py3-none-any.whl" >/dev/null; then
   python3 -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --no-deps \
     --dest "$ENSUREPIP_BUNDLED" pip==24.0
 fi
-[[ -f "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/ensurepip/_bundled/"pip-*-py3-none-any.whl ]] || { printf 'ensurepip bundle is missing\n' >&2; exit 1; }
+verify_ensurepip_bundle "$ENSUREPIP_BUNDLED"
 [[ -d "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/venv" ]] || { printf 'venv stdlib is missing\n' >&2; exit 1; }
 
 python3 - "$PREFIX_DIR" <<'PY'
