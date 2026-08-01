@@ -42,7 +42,9 @@ class AndroidRuntimeSmokeTest {
         var failure: Throwable? = null
         try {
             step("core.method_channel.ensure_started") {
-                context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val serviceIntent = Intent(context, LocalPanelHostService::class.java)
+                context.startService(serviceIntent)
+                invokeLocalHost("ensure-started")
                 core = waitForMethodChannelCore()
                 assertCoreReady(core)
                 token = core.getString("local_token")
@@ -152,6 +154,7 @@ class AndroidRuntimeSmokeTest {
         try {
             val callback: (Result<String>) -> Unit = { result = it; latch.countDown() }
             when (method) {
+                "ensure-started" -> client.ensureStarted(callback)
                 "status" -> client.status(callback)
                 "restart" -> client.restart(callback)
                 else -> error("Unsupported local host method: $method")
