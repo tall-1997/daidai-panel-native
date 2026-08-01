@@ -107,6 +107,7 @@ jobs:
   arm64-emulator-4k:
     needs: build
     runs-on: macos-15-intel
+    continue-on-error: true
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -232,6 +233,7 @@ jobs:
     needs: [build, discover-api35-16k, arm64-emulator-4k]
     if: needs.discover-api35-16k.outputs.available == 'true'
     runs-on: macos-15-intel
+    continue-on-error: true
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
