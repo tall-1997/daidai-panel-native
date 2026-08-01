@@ -280,7 +280,11 @@ func (store *generationStore) converge() (string, error) {
 	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
 		return "", err
 	}
-	if err := store.convergeMetadataJournals(); err != nil {
+	if useAndroidPrivateStorage {
+		if err := store.convergeAndroidOperations(); err != nil {
+			return "", err
+		}
+	} else if err := store.convergeMetadataJournals(); err != nil {
 		return "", err
 	}
 	txn, err := store.readTransaction()
@@ -367,7 +371,11 @@ func (store *generationStore) importFlatData() (string, error) {
 	if err := store.ensureRecoveryMetadataNamespace(); err != nil {
 		return "", err
 	}
-	if err := store.convergeMetadataJournals(); err != nil {
+	if !useAndroidPrivateStorage {
+		if err := store.convergeMetadataJournals(); err != nil {
+			return "", err
+		}
+	} else if err := store.convergeAndroidOperations(); err != nil {
 		return "", err
 	}
 	id, err := newGenerationID()
@@ -1174,6 +1182,9 @@ func (store *generationStore) isOwnedProbeNamespace(path string) bool {
 }
 
 func (store *generationStore) ensureRecoveryMetadataNamespace() error {
+	if useAndroidPrivateStorage {
+		return store.ensureAndroidRecoveryMetadataNamespace()
+	}
 	if err := store.ensureDurableDirectory(store.root); err != nil {
 		return err
 	}
@@ -1231,6 +1242,52 @@ func (store *generationStore) ensureRecoveryMetadataNamespace() error {
 		return errors.New("recovery metadata ops is not a trusted directory")
 	}
 	return recoveryNamespaceSync(base)
+}
+
+func (store *generationStore) ensureAndroidRecoveryMetadataNamespace() error {
+	base := filepath.Join(store.root, recoveryMetadataDirName)
+	ops := filepath.Join(base, recoveryMetadataOpsDirName)
+	for _, path := range []string{store.root, base, ops} {
+		if err := store.ensureOwnedDirectory(path); err != nil {
+			return err
+		}
+	}
+	markerPath := filepath.Join(base, recoveryMetadataMarkerName)
+	if info, err := store.ops.lstat(markerPath); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("recovery metadata marker is unsafe")
+		}
+		marker, err := store.ops.readFile(markerPath)
+		if err != nil || string(marker) != recoveryMetadataMarkerValue {
+			return errors.New("recovery metadata marker is invalid")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return store.writeSyncedFileExclusive(markerPath, []byte(recoveryMetadataMarkerValue), 0o600)
+}
+
+func (store *generationStore) convergeAndroidOperations() error {
+	ops := filepath.Join(store.root, recoveryMetadataDirName, recoveryMetadataOpsDirName)
+	entries, err := os.ReadDir(ops)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(ops, entry.Name())
+		info, err := store.ops.lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("unsafe Android recovery operation")
+		}
+		if err := store.ops.removeAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (store *generationStore) ensureDurableDirectory(path string) error {
@@ -1796,6 +1853,9 @@ func (store *generationStore) writeSyncedFile(path string, data []byte, mode fs.
 }
 
 func (store *generationStore) syncDirectory(path string) error {
+	if useAndroidPrivateStorage {
+		return nil
+	}
 	if err := store.ops.boundary("directory-fsync"); err != nil {
 		return err
 	}

@@ -557,9 +557,6 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	if err != nil {
 		return nil, nil, err
 	}
-	if runtime.GOOS != "android" {
-		return runSingleCommandLegacy(cmd, cleanup, timeout, maxLogSize, onOutput, onProcessStart...)
-	}
 	defer cleanup()
 
 	var outputBuilder strings.Builder
@@ -573,7 +570,8 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		if truncated {
 			return
 		}
-		if totalSize >= maxLogSize {
+		remaining := maxLogSize - totalSize
+		if remaining <= 0 {
 			truncated = true
 			msg := "\n[日志已截断，超过最大大小限制]"
 			outputBuilder.WriteString(msg)
@@ -582,10 +580,21 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 			}
 			return
 		}
+		if len(chunk) > remaining {
+			chunk = chunk[:remaining]
+			truncated = true
+		}
 		outputBuilder.WriteString(chunk)
 		totalSize += len(chunk)
 		if onOutput != nil {
 			onOutput(chunk)
+		}
+		if truncated {
+			msg := "\n[日志已截断，超过最大大小限制]"
+			outputBuilder.WriteString(msg)
+			if onOutput != nil {
+				onOutput(msg)
+			}
 		}
 	}
 
@@ -594,13 +603,16 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		timeoutDuration = time.Duration(timeout) * time.Second
 	}
 
+	// Reserve one byte so the runner can observe that output exceeded its limit
+	// and preserve the existing truncation marker and ScriptResult semantics.
+	supervisorOutputLimit := int64(maxLogSize) + 1
 	proc, err := GetProcessSupervisor().Start(context.Background(), ProcessSpec{
 		Argv:        cmd.Args,
 		Env:         cmd.Env,
 		WorkingDir:  cmd.Dir,
 		AllowedRoot: cmd.Dir,
 		Timeout:     timeoutDuration,
-		Quota:       ProcessResourceQuota{MaxOutputBytes: int64(maxLogSize)},
+		Quota:       ProcessResourceQuota{MaxOutputBytes: supervisorOutputLimit},
 	}, func(event ProcessEvent) {
 		emitChunk(string(event.Data))
 	})
@@ -1134,7 +1146,7 @@ func CreateScriptRuntimeCommand(runtimeID, scriptPath string, scriptArgs []strin
 	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
 	cmd := exec.Command(executable.Path, args...)
 	cmd.Dir = workDir
-	cmd.Env = buildBootstrapProcessEnv(envVars)
+	cmd.Env = buildEnv(envVars)
 	setPgid(cmd)
 	return cmd, func() {}, nil
 }

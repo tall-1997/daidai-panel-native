@@ -297,7 +297,11 @@ func (h *DepsHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	database.DB.Model(&dep).Update("status", model.DepStatusRemoving)
+	operationID := createDependencyOperation(dep.ID)
+	database.DB.Model(&dep).Updates(map[string]interface{}{
+		"status":       model.DepStatusRemoving,
+		"operation_id": operationID,
+	})
 
 	go uninstallDependency(dep.ID, dep.Type, dep.Name, dep.PythonVersion)
 
@@ -556,7 +560,7 @@ func (h *DepsHandler) PipList(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	listCmd.Env = pipEnv
+	listCmd.Env = service.ManagedPythonDependencyEnv(pipEnv, pythonVersion)
 	out, err := listCmd.Output()
 	if err != nil {
 		response.InternalError(c, "pip 不可用")
@@ -740,7 +744,7 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 
 	service.SetPgid(cmd)
 
-	pipe, err := cmd.StdoutPipe()
+	pipe, outputWriter, err := os.Pipe()
 	if err != nil {
 		rollbackLog := finishStaging("failed")
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
@@ -753,7 +757,8 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		broadcaster.done()
 		return
 	}
-	cmd.Stderr = cmd.Stdout
+	cmd.Stdout = outputWriter
+	cmd.Stderr = outputWriter
 
 	ctx, cancel := context.WithTimeout(context.Background(), dependencyOperationTimeout)
 	registerDepOperation(id, cancel)
@@ -763,6 +768,8 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	}()
 
 	if err := cmd.Start(); err != nil {
+		_ = outputWriter.Close()
+		_ = pipe.Close()
 		rollbackLog := finishStaging("failed")
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
@@ -774,6 +781,7 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		broadcaster.done()
 		return
 	}
+	_ = outputWriter.Close()
 
 	var logBuf strings.Builder
 	var logMu sync.Mutex
@@ -840,6 +848,7 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		if err := scanner.Err(); err != nil {
 			appendLine("[读取安装输出失败] "+err.Error(), true)
 		}
+		_ = pipe.Close()
 	}()
 
 	waitCh := make(chan error, 1)
@@ -900,11 +909,27 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 		if status == model.DepStatusCancelled {
 			_ = operationStore.Cancel(operationID, "DEPENDENCY_CANCELED", logLen())
 		} else {
-			_ = operationStore.Fail(operationID, nil, "DEPENDENCY_FAILED", logLen())
+			_ = operationStore.Fail(operationID, nil, dependencyFailureCode(logBuf.String()), logLen())
 		}
 	}
 
 	broadcaster.done()
+}
+
+func dependencyFailureCode(logText string) string {
+	lower := strings.ToLower(logText)
+	switch {
+	case strings.Contains(lower, "no space left on device"), strings.Contains(lower, "enospc"):
+		return "DEPENDENCY_NO_SPACE"
+	case strings.Contains(lower, "temporary failure resolving"),
+		strings.Contains(lower, "could not resolve"),
+		strings.Contains(lower, "connection timed out"),
+		strings.Contains(lower, "network is unreachable"),
+		strings.Contains(lower, "failed to fetch"):
+		return "DEPENDENCY_NETWORK_FAILED"
+	default:
+		return "DEPENDENCY_FAILED"
+	}
 }
 
 func buildDependencyFailureHint(logText string) string {
@@ -997,10 +1022,7 @@ func installDependency(id uint, depType, name string) {
 		var err error
 		cmd, err = service.NewNpmInstallCommand(name)
 		if err != nil {
-			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"status": model.DepStatusFailed,
-				"log":    err.Error(),
-			})
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
 		service.EnforceNpmScriptPolicy(cmd)
@@ -1008,13 +1030,10 @@ func installDependency(id uint, depType, name string) {
 		var err error
 		cmd, err = service.NewPipInstallCommandForPythonVersion(pythonVersion, name)
 		if err != nil {
-			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"status": model.DepStatusFailed,
-				"log":    err.Error(),
-			})
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
-		cmd.Env = append(service.PipInstallEnv(service.AppendProxyEnv(os.Environ()), service.CurrentPipMirror()), "TMPDIR=/tmp")
+		cmd.Env = append(service.ManagedPythonDependencyEnv(service.PipInstallEnv(service.AppendProxyEnv(os.Environ()), service.CurrentPipMirror()), pythonVersion), "TMPDIR=/tmp")
 	case model.DepTypeLinux:
 		linuxPackageOperationMu.Lock()
 		defer linuxPackageOperationMu.Unlock()
@@ -1048,6 +1067,20 @@ func installDependency(id uint, depType, name string) {
 	}
 
 	runCmdWithSSE(cmd, id, model.DepStatusInstalled, false)
+}
+
+func failDependencyBeforeRun(id uint, err error, errorCode string) {
+	message := errorCode
+	if err != nil {
+		message = err.Error()
+	}
+	database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status": model.DepStatusFailed,
+		"log":    message,
+	})
+	if operationID, _, _, _ := dependencyOperationContext(id); operationID != "" {
+		_ = service.DefaultOperationStore().Fail(operationID, nil, errorCode, int64(len(message)))
+	}
 }
 
 func createDependencyOperation(id uint) string {
@@ -1099,7 +1132,7 @@ func uninstallDependency(id uint, depType, name, pythonVersion string) {
 			})
 			return
 		}
-		cmd.Env = service.SanitizePipEnv(service.AppendProxyEnv(os.Environ()))
+		cmd.Env = service.ManagedPythonDependencyEnv(service.SanitizePipEnv(service.AppendProxyEnv(os.Environ())), pythonVersion)
 	case model.DepTypeLinux:
 		linuxPackageOperationMu.Lock()
 		defer linuxPackageOperationMu.Unlock()
@@ -1141,7 +1174,7 @@ func forceUninstallDependency(depType, name, pythonVersion string) {
 		if err != nil {
 			return
 		}
-		cmd.Env = service.SanitizePipEnv(service.AppendProxyEnv(os.Environ()))
+		cmd.Env = service.ManagedPythonDependencyEnv(service.SanitizePipEnv(service.AppendProxyEnv(os.Environ())), pythonVersion)
 	case model.DepTypeLinux:
 		linuxPackageOperationMu.Lock()
 		defer linuxPackageOperationMu.Unlock()

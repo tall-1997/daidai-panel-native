@@ -1,7 +1,9 @@
 import java.io.File
 import java.io.FileInputStream
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.Properties
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -181,26 +183,127 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
     }
 }
 
-val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
+val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
     group = "verification"
-    description = "Fails when Android Python launcher or CPython native library is missing or not arm64."
+    description = "Fails when the Android Node, npm, npx, or TypeScript bundle is incomplete or inconsistent."
     doLast {
+        val version = "18.20.4"
+        val npmVersion = "10.9.4"
+        val typescriptVersion = "5.9.3"
         val nativeDir = file("src/main/jniLibs/arm64-v8a")
-        val launcher = file("$nativeDir/libpython_exec.so")
-        val python = file("$nativeDir/libpython3.14.so")
-        check(launcher.isFile) {
-            "Missing Python launcher: ${launcher.path}. Run app/scripts/prepare-android-python-runtime.sh before building."
+        val launcher = file("$nativeDir/libnode_exec.so")
+        val libnode = file("$nativeDir/libnode.so")
+        val assets = file("src/main/nodeAssets/node-runtime/$version/usr")
+        val metadataFile = file("$assets/runtime-metadata.json")
+        val requiredAssets = listOf(
+            "lib/node_modules/npm/package.json",
+            "lib/node_modules/npm/bin/npm-cli.js",
+            "lib/node_modules/npm/bin/npx-cli.js",
+            "lib/node_modules/typescript/package.json",
+            "lib/node_modules/typescript/bin/tsc",
+            "etc/npmrc",
+        )
+        check(launcher.isFile && isArm64Elf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
+            "Missing real ARM64 Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
         }
-        check(python.isFile) {
-            "Missing CPython shared library: ${python.path}. Run app/scripts/prepare-android-python-runtime.sh before building."
+        check(libnode.isFile && isArm64Elf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
+            "Missing real ARM64 libnode.so. Run app/scripts/prepare-android-node-runtime.sh."
         }
-        check(isArm64Elf(launcher)) {
-            "Invalid Python launcher ELF architecture: ${launcher.path} must be arm64-v8a."
+        check(metadataFile.isFile) { "Missing Node runtime metadata: ${metadataFile.path}" }
+        requiredAssets.forEach { relative -> check(file("$assets/$relative").isFile) { "Missing Node runtime asset: $relative" } }
+
+        @Suppress("UNCHECKED_CAST")
+        val metadata = JsonSlurper().parse(metadataFile) as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val npmPackage = JsonSlurper().parse(file("$assets/lib/node_modules/npm/package.json")) as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val typescriptPackage = JsonSlurper().parse(file("$assets/lib/node_modules/typescript/package.json")) as Map<String, Any>
+        check(metadata["node_version"] == version && metadata["npm_version"] == npmVersion && metadata["typescript_version"] == typescriptVersion)
+        check(npmPackage["version"] == npmVersion && typescriptPackage["version"] == typescriptVersion)
+        check(metadata["launcher_sha256"] == sha256(launcher) && metadata["libnode_sha256"] == sha256(libnode))
+        val bundleDigest = MessageDigest.getInstance("SHA-256")
+        requiredAssets.forEach { relative ->
+            bundleDigest.update(relative.toByteArray())
+            bundleDigest.update(0.toByte())
+            bundleDigest.update(file("$assets/$relative").readBytes())
         }
-        check(isArm64Elf(python)) {
-            "Invalid CPython ELF architecture: ${python.path} must be arm64-v8a."
+        check(metadata["bundle_sha256"] == bundleDigest.digest().joinToString("") { "%02x".format(it) })
+        check(metadata["npm_ignore_scripts"] == true && file("$assets/etc/npmrc").readText().lineSequence().any { it == "ignore-scripts=true" })
+        @Suppress("UNCHECKED_CAST")
+        val manifest = JsonSlurper().parse(rootProject.file("../../runtime/manifest.json")) as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val components = manifest["components"] as List<Map<String, Any>>
+        mapOf("node-lts-android-arm64" to version, "typescript-stable" to typescriptVersion).forEach { (id, expectedVersion) ->
+            val component = components.singleOrNull { it["id"] == id }
+            check(component?.get("version") == expectedVersion && component["sha256"] == metadata["launcher_sha256"]) {
+                "$id manifest version or hash mismatch."
+            }
         }
     }
+}
+
+val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
+    group = "verification"
+    description = "Fails when the CPython 3.14 Android ARM64 runtime, stdlib, native dependencies, or wheels are invalid."
+    doLast {
+        val nativeDir = file("src/main/jniLibs/arm64-v8a")
+        val prefix = file("src/main/pythonAssets/python-runtime/3.14/prefix")
+        val stdlib = file("$prefix/lib/python3.14")
+        val wheelhouse = file("$prefix/wheelhouse")
+        val launcher = file("$nativeDir/libpython_exec.so")
+        val python = file("$nativeDir/libpython3.14.so")
+        val requiredAssets = listOf(
+            "ssl.py",
+            "sqlite3/__init__.py",
+            "venv/__init__.py",
+            "ensurepip/__init__.py",
+            "lib-dynload/_ssl.cpython-314-aarch64-linux-android.so",
+            "lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so",
+        )
+        val requiredNativeLibraries = listOf(
+            "libpython3.14.so",
+            "libssl_python.so",
+            "libcrypto_python.so",
+            "libsqlite3_python.so",
+        )
+        check(prefix.isDirectory) { "Missing Python runtime assets. Run app/scripts/prepare-android-python-runtime.sh." }
+        requiredAssets.forEach { relative -> check(file("$stdlib/$relative").isFile) { "Missing Python runtime asset: $relative" } }
+        check(file("$prefix/etc/ssl/certs/cacert.pem").isFile) { "Missing Python CA certificate bundle." }
+        check(file("$prefix/runtime-manifest.json").isFile) { "Missing Python runtime asset manifest." }
+        check(file("$wheelhouse/wheelhouse-manifest.json").isFile) { "Missing Python wheelhouse manifest." }
+        check(fileTree("$stdlib/ensurepip/_bundled").matching { include("pip-*-py3-none-any.whl") }.files.size == 1) {
+            "CPython ensurepip must contain exactly one pure Python pip wheel."
+        }
+        check(launcher.isFile && isArm64Elf(launcher)) { "Python launcher must be an Android ARM64 ELF." }
+        check(launcher.readText(Charsets.ISO_8859_1).contains("libpython3.14.so")) { "Python launcher is not linked to libpython3.14.so." }
+        requiredNativeLibraries.forEach { name ->
+            val library = file("$nativeDir/$name")
+            check(library.isFile && isArm64Elf(library)) { "$name must be an Android ARM64 ELF." }
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val wheelManifest = JsonSlurper().parse(file("$wheelhouse/wheelhouse-manifest.json")) as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val manifestWheels = wheelManifest["wheels"] as? List<Map<String, Any>> ?: error("Python wheelhouse manifest has no wheels.")
+        val expectedWheels = manifestWheels.map { it["filename"] as String }.toSet()
+        val actualWheels = wheelhouse.listFiles { item -> item.isFile && item.extension == "whl" }.orEmpty().map { it.name }.toSet()
+        check(expectedWheels.isNotEmpty() && expectedWheels == actualWheels) { "Python wheelhouse files do not match its manifest." }
+        expectedWheels.forEach { name ->
+            check(isCompatiblePythonWheel(name)) { "Incompatible Python wheel in APK assets: $name" }
+            val metadata = manifestWheels.single { it["filename"] == name }
+            check(metadata["sha256"] == sha256(file("$wheelhouse/$name"))) { "Python wheel checksum mismatch: $name" }
+        }
+        fileTree(prefix).matching { include("**/*.whl") }.files.forEach { wheel ->
+            check(isCompatiblePythonWheel(wheel.name)) { "Incompatible Python wheel in APK assets: ${wheel.path}" }
+        }
+    }
+}
+
+fun isCompatiblePythonWheel(filename: String): Boolean {
+    val lower = filename.lowercase()
+    if (listOf("cp312", "x86_64", "manylinux", "musllinux").any(lower::contains)) return false
+    return lower.endsWith("-py3-none-any.whl") ||
+        Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower)
 }
 
 fun isArm64Elf(file: File): Boolean {
@@ -213,10 +316,24 @@ fun isArm64Elf(file: File): Boolean {
     return machine == 183
 }
 
+fun sha256(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyPythonNativeRuntime)
+    dependsOn(verifyNodeNativeRuntime)
 }
 
 flutter {

@@ -18,6 +18,20 @@ class GoCoreResultMapperTest {
     }
 
     @Test
+    fun `degraded ready keeps embedded management core endpoint`() {
+        val status = GoCoreResultMapper.toStatus(
+            """{"ok":true,"id":8,"running":true,"status":"degraded-ready","endpoint":"http://127.0.0.1:43211","runtimeBaseline":{"state":"degraded-ready"}}""",
+            localToken = "local-token-value",
+        )
+
+        assertEquals("ready", status["phase"])
+        assertEquals("degraded-ready", status["core_status"])
+        assertEquals("http://127.0.0.1:43211", status["base_url"])
+        assertEquals("local-token-value", status["local_token"])
+        assertEquals("{\"state\":\"degraded-ready\"}", status["runtime_baseline"])
+    }
+
+    @Test
     fun `ready result rejects non-loopback endpoint`() {
         val status = GoCoreResultMapper.toStatus(
             """{"ok":true,"running":true,"status":"running","endpoint":"http://192.168.1.2:43210"}""",

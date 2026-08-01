@@ -114,8 +114,10 @@ jobs:
         include:
           - api: 28
             matrix_id: api28-4k
+            target: default
           - api: 35
             matrix_id: api35-4k
+            target: google_apis
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -126,12 +128,18 @@ jobs:
           name: android-runtime-smoke-apks
           path: smoke-apks
       - name: Run ARM64 device smoke
+        id: emulator-smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
           arch: arm64-v8a
-          target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          target: ${{ matrix.target }}
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 8192M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu auto-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
@@ -141,6 +149,28 @@ jobs:
             --expected-api ${{ matrix.api }}
             --expected-page-size 4096
             --output evidence/${{ matrix.matrix_id }}.json
+      - name: Capture emulator failure diagnostics
+        if: failure()
+        run: |
+          python3 scripts/android-runtime-smoke.py diagnose \
+            --matrix-id "${{ matrix.matrix_id }}" \
+            --reason "emulator-or-instrumentation-start-failed" \
+            --output "evidence/${{ matrix.matrix_id }}.diagnostics.json"
+          if [[ ! -f "evidence/${{ matrix.matrix_id }}.json" ]]; then
+            python3 scripts/android-runtime-smoke.py blocked \
+              --matrix-id "${{ matrix.matrix_id }}" \
+              --reason "emulator-or-instrumentation-start-failed;see-diagnostics" \
+              --output "evidence/${{ matrix.matrix_id }}.json"
+          fi
+      - name: Capture final emulator diagnostics and logcat
+        if: always()
+        run: |
+          if [[ ! -f "evidence/${{ matrix.matrix_id }}.diagnostics.json" ]]; then
+            python3 scripts/android-runtime-smoke.py diagnose \
+              --matrix-id "${{ matrix.matrix_id }}" \
+              --reason "post-emulator-run" \
+              --output "evidence/${{ matrix.matrix_id }}.diagnostics.json"
+          fi
       - name: Verify runtime contract evidence
         if: always() && hashFiles(format('evidence/{0}.json', matrix.matrix_id)) != ''
         run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/${{ matrix.matrix_id }}.json
@@ -151,6 +181,8 @@ jobs:
           path: |
             evidence/${{ matrix.matrix_id }}.json
             evidence/${{ matrix.matrix_id }}.device.json
+            evidence/${{ matrix.matrix_id }}.diagnostics.json
+            evidence/${{ matrix.matrix_id }}.logcat.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -210,12 +242,18 @@ jobs:
           name: android-runtime-smoke-apks
           path: smoke-apks
       - name: Run API 35 ARM64 16K device smoke
+        id: emulator-smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: arm64-v8a
           target: google_apis_ps16k
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 8192M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu auto-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
@@ -225,6 +263,28 @@ jobs:
             --expected-api 35
             --expected-page-size 16384
             --output evidence/api35-16k.json
+      - name: Capture emulator failure diagnostics
+        if: failure()
+        run: |
+          python3 scripts/android-runtime-smoke.py diagnose \
+            --matrix-id api35-16k \
+            --reason "emulator-or-instrumentation-start-failed" \
+            --output evidence/api35-16k.diagnostics.json
+          if [[ ! -f evidence/api35-16k.json ]]; then
+            python3 scripts/android-runtime-smoke.py blocked \
+              --matrix-id api35-16k \
+              --reason "emulator-or-instrumentation-start-failed;see-diagnostics" \
+              --output evidence/api35-16k.json
+          fi
+      - name: Capture final emulator diagnostics and logcat
+        if: always()
+        run: |
+          if [[ ! -f evidence/api35-16k.diagnostics.json ]]; then
+            python3 scripts/android-runtime-smoke.py diagnose \
+              --matrix-id api35-16k \
+              --reason "post-emulator-run" \
+              --output evidence/api35-16k.diagnostics.json
+          fi
       - name: Verify runtime contract evidence
         if: always() && hashFiles('evidence/api35-16k.json') != ''
         run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/api35-16k.json
@@ -235,6 +295,8 @@ jobs:
           path: |
             evidence/api35-16k.json
             evidence/api35-16k.device.json
+            evidence/api35-16k.diagnostics.json
+            evidence/api35-16k.logcat.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -302,6 +364,30 @@ jobs:
       - name: Verify physical-device runtime contract evidence
         if: always() && hashFiles('evidence/physical-device.json') != ''
         run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/physical-device.json
+      - name: Capture physical-device failure diagnostics
+        if: failure()
+        env:
+          DEVICE_SERIAL: ${{ inputs.physical_device_serial }}
+          EXPECTED_API: ${{ inputs.physical_expected_api }}
+          EXPECTED_PAGE_SIZE: ${{ inputs.physical_expected_page_size }}
+        run: |
+          SERIAL_ARGS=()
+          if [[ -n "$DEVICE_SERIAL" ]]; then
+            SERIAL_ARGS=(--serial "$DEVICE_SERIAL")
+          fi
+          if [[ ! -f evidence/physical-device.diagnostics.json ]]; then
+            python3 scripts/android-runtime-smoke.py diagnose \
+              --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
+              --reason "physical-device-smoke-failed" \
+              "${SERIAL_ARGS[@]}" \
+              --output evidence/physical-device.diagnostics.json
+          fi
+          if [[ ! -f evidence/physical-device.json ]]; then
+            python3 scripts/android-runtime-smoke.py blocked \
+              --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
+              --reason "physical-device-smoke-failed;see-diagnostics" \
+              --output evidence/physical-device.json
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -309,5 +395,7 @@ jobs:
           path: |
             evidence/physical-device.json
             evidence/physical-device.device.json
+            evidence/physical-device.diagnostics.json
+            evidence/physical-device.logcat.txt
           if-no-files-found: error
           retention-days: 30

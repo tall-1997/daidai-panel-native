@@ -26,6 +26,9 @@ ManagedLocalPanelResolution resolveManagedLocalDiagnostic(
   LocalPanelStatus status, {
   PanelConfig? existing,
 }) {
+  if (status.fallbackMode != 'diagnostic') {
+    throw StateError('Managed local diagnostic endpoint is unavailable');
+  }
   return _resolveManagedLocalEndpoint(
     status,
     existing: existing,

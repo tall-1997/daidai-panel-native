@@ -104,6 +104,67 @@ func TestAndroidPrivateStorageDoesNotInspectSandboxAncestors(t *testing.T) {
 	}
 }
 
+func TestAndroidPrivateStorageRecoversLegacyOperationAndFlatDatabase(t *testing.T) {
+	original := useAndroidPrivateStorage
+	useAndroidPrivateStorage = true
+	t.Cleanup(func() { useAndroidPrivateStorage = original })
+
+	root := filepath.Join(t.TempDir(), "files", "local-panel")
+	writeTestFile(t, filepath.Join(root, "daidai.db"), "legacy-flat-db")
+	operation := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "1785180000000000000-aabbccddeeff0011")
+	writeTestFile(t, filepath.Join(operation, recoveryMetadataNewName), "interrupted-new-state")
+	writeTestFile(t, filepath.Join(operation, "v0.3.18-operation"), "legacy-operation-layout")
+
+	store := newGenerationStore(root, defaultFilesystemOps())
+	active, err := store.converge()
+	if err != nil {
+		t.Fatalf("recover legacy Android operation: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(active, "daidai.db"))
+	if err != nil || string(data) != "legacy-flat-db" {
+		t.Fatalf("restored flat database data=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(operation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy operation remains: %v", err)
+	}
+
+	for attempt := 0; attempt < 100; attempt++ {
+		restarted, err := store.converge()
+		if err != nil {
+			t.Fatalf("restart %d: %v", attempt, err)
+		}
+		if restarted != active {
+			t.Fatalf("restart %d changed generation: got=%q want=%q", attempt, restarted, active)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, generationsDirName))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("generation entries=%v err=%v", entries, err)
+	}
+}
+
+func TestAndroidPrivateStorageRecoversLegacyOperationsWithoutMetadataMarker(t *testing.T) {
+	original := useAndroidPrivateStorage
+	useAndroidPrivateStorage = true
+	t.Cleanup(func() { useAndroidPrivateStorage = original })
+
+	root := filepath.Join(t.TempDir(), "files", "local-panel")
+	operation := filepath.Join(root, recoveryMetadataDirName, recoveryMetadataOpsDirName, "1785180000000000000-aabbccddeeff0011")
+	writeTestFile(t, filepath.Join(operation, "operation"), "legacy")
+
+	active, err := newGenerationStore(root, defaultFilesystemOps()).converge()
+	if err != nil {
+		t.Fatalf("recover markerless Android operation: %v", err)
+	}
+	if filepath.Dir(active) != filepath.Join(root, generationsDirName) {
+		t.Fatalf("active generation path=%q", active)
+	}
+	marker, err := os.ReadFile(filepath.Join(root, recoveryMetadataDirName, recoveryMetadataMarkerName))
+	if err != nil || string(marker) != recoveryMetadataMarkerValue {
+		t.Fatalf("metadata marker=%q err=%v", marker, err)
+	}
+}
+
 func TestGenerationStoreImportsFlatDataOnce(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "daidai.db"), "legacy-db")

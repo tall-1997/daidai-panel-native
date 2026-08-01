@@ -45,6 +45,9 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 		}
 	case model.DepTypePython:
 		pythonVersion = NormalizeDependencyPythonVersion(pythonVersion)
+		if pythonDistributionInstalled(ManagedPythonSitePackagesDir(pythonVersion), name) {
+			return true
+		}
 		candidates := []string{
 			ResolveManagedPipBinaryForPythonVersion(pythonVersion),
 			filepath.Join(ManagedPythonVenvDir(pythonVersion), "bin", "pip"),
@@ -96,6 +99,27 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 		}
 	}
 
+	return false
+}
+
+func pythonDistributionInstalled(sitePackages, name string) bool {
+	entries, err := os.ReadDir(sitePackages)
+	if err != nil {
+		return false
+	}
+	want := canonicalPythonDependencyName(name)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".dist-info") {
+			continue
+		}
+		base := strings.TrimSuffix(entry.Name(), ".dist-info")
+		if index := strings.LastIndex(base, "-"); index > 0 {
+			base = base[:index]
+		}
+		if canonicalPythonDependencyName(base) == want {
+			return true
+		}
+	}
 	return false
 }
 

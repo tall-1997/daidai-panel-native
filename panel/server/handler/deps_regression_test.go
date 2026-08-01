@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,6 +165,93 @@ func TestDependencyRunRestoresStagingWhenCommandStartFails(t *testing.T) {
 	if updated.Status != model.DepStatusFailed || !strings.Contains(updated.Log, "previous target restored") {
 		t.Fatalf("expected failed dependency with staging restore log, got %+v", updated)
 	}
+	assertDependencyOperationTerminal(t, dep.OperationID, model.OperationStateFailed, "DEPENDENCY_START_FAILED")
+}
+
+func TestDependencyCommandPreparationFailureTerminatesOperation(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	if err := os.WriteFile(filepath.Join(config.C.Data.Dir, "deps"), []byte("blocks directory creation"), 0o644); err != nil {
+		t.Fatalf("create blocking file: %v", err)
+	}
+	dep := model.Dependency{Type: model.DepTypeNodeJS, Name: "local-fixture", Status: model.DepStatusInstalling}
+	if err := database.DB.Create(&dep).Error; err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+	dep.OperationID = createDependencyOperation(dep.ID)
+
+	installDependency(dep.ID, dep.Type, dep.Name)
+
+	assertDependencyOperationTerminal(t, dep.OperationID, model.OperationStateFailed, "DEPENDENCY_PREPARE_FAILED")
+}
+
+func TestDependencyDeleteCreatesUninstallOperation(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	dep := model.Dependency{Type: model.DepTypeNodeJS, Name: "missing-local-fixture", Status: model.DepStatusInstalled}
+	if err := database.DB.Create(&dep).Error; err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/v1/deps/%d", dep.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		var operation model.Operation
+		if err := database.DB.Where("kind = ?", model.OperationKindDependency).Order("created_at DESC").First(&operation).Error; err == nil && model.IsOperationTerminalState(operation.State) {
+			if operation.State != model.OperationStateSuccess || operation.EndedAt == nil {
+				t.Fatalf("expected successful uninstall operation, got %+v", operation)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for uninstall operation terminal state")
+}
+
+func TestDependencyNetworkAndNoSpaceFailuresHaveSpecificTerminalCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		message   string
+		errorCode string
+	}{
+		{name: "network", message: "Temporary failure resolving registry.example", errorCode: "DEPENDENCY_NETWORK_FAILED"},
+		{name: "space", message: "No space left on device", errorCode: "DEPENDENCY_NO_SPACE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.SetupTestEnv(t)
+			dep := model.Dependency{Type: model.DepTypeNodeJS, Name: "local-fixture", Status: model.DepStatusInstalling}
+			if err := database.DB.Create(&dep).Error; err != nil {
+				t.Fatalf("create dependency: %v", err)
+			}
+			dep.OperationID = createDependencyOperation(dep.ID)
+			cmd := exec.Command("sh", "-c", "printf '%s\\n' \"$FAILURE\"; exit 1")
+			cmd.Env = append(os.Environ(), "FAILURE="+tc.message)
+
+			runCmdWithSSE(cmd, dep.ID, model.DepStatusInstalled, false)
+
+			assertDependencyOperationTerminal(t, dep.OperationID, model.OperationStateFailed, tc.errorCode)
+		})
+	}
+}
+
+func assertDependencyOperationTerminal(t *testing.T, operationID, state, errorCode string) {
+	t.Helper()
+	var operation model.Operation
+	if err := database.DB.First(&operation, "id = ?", operationID).Error; err != nil {
+		t.Fatalf("load operation: %v", err)
+	}
+	if operation.State != state || operation.ErrorCode != errorCode || operation.EndedAt == nil {
+		var dependency model.Dependency
+		_ = database.DB.Where("operation_id = ?", operationID).First(&dependency).Error
+		t.Fatalf("expected terminal operation %s/%s, got %+v; dependency log: %q", state, errorCode, operation, dependency.Log)
+	}
 }
 
 func performDepsJSONRequest(engine *gin.Engine, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
@@ -268,6 +356,7 @@ func TestBuildDependencyExportLinesUsesExpectedFormat(t *testing.T) {
 
 func TestPythonDependencyCreateInstallsAllPythonVersions(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	installed := make(chan struct{}, 3)
 
 	originalRunner := dependencyInstallRunner
 	defer func() {
@@ -275,6 +364,7 @@ func TestPythonDependencyCreateInstallsAllPythonVersions(t *testing.T) {
 	}()
 	dependencyInstallRunner = func(id uint, depType, name string) {
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("status", model.DepStatusInstalled)
+		installed <- struct{}{}
 	}
 
 	engine := newDepsTestRouter()
@@ -287,6 +377,9 @@ func TestPythonDependencyCreateInstallsAllPythonVersions(t *testing.T) {
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	for range 3 {
+		<-installed
 	}
 
 	var stored []model.Dependency
@@ -331,6 +424,7 @@ func TestPythonDependencyCreateInstallsOnlySingleRuntimeVersion(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	t.Setenv("DAIDAI_PYTHON_RUNTIME_MODE", "single")
 	t.Setenv("DAIDAI_PYTHON_VERSION", "3.12")
+	installed := make(chan struct{}, 1)
 
 	originalRunner := dependencyInstallRunner
 	defer func() {
@@ -338,6 +432,7 @@ func TestPythonDependencyCreateInstallsOnlySingleRuntimeVersion(t *testing.T) {
 	}()
 	dependencyInstallRunner = func(id uint, depType, name string) {
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("status", model.DepStatusInstalled)
+		installed <- struct{}{}
 	}
 
 	engine := newDepsTestRouter()
@@ -351,6 +446,7 @@ func TestPythonDependencyCreateInstallsOnlySingleRuntimeVersion(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
+	<-installed
 
 	var stored []model.Dependency
 	if err := database.DB.Where("type = ? AND name = ?", model.DepTypePython, "requests").Order("python_version ASC").Find(&stored).Error; err != nil {

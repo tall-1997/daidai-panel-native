@@ -109,11 +109,16 @@ class LocalPanelHostService : Service() {
     }
 
     private fun encodeWithState(status: Map<String, Any>): String = GoCoreResultMapper.encode(
-        status.toMutableMap().apply {
-            this["foreground_service_enabled"] = persistentPolicy.foregroundActive
-            putAll(AndroidSchedulerHostStatus.status(applicationContext, persistentPolicy.foregroundActive, lastRecoveryTrigger))
-            recoveryFailure?.let { failure -> putAll(failure) }
-        },
+        mergeLocalPanelHostStatus(
+            coreStatus = status,
+            foregroundServiceEnabled = persistentPolicy.foregroundActive,
+            schedulerStatus = AndroidSchedulerHostStatus.status(
+                applicationContext,
+                persistentPolicy.foregroundActive,
+                lastRecoveryTrigger,
+            ),
+            recoveryFailure = recoveryFailure,
+        ),
     )
 
     @Synchronized
@@ -125,7 +130,10 @@ class LocalPanelHostService : Service() {
 
     @Synchronized
     private fun restorePersistentSelection() {
-        applyPersistentAction(persistentPolicy.update(readPersistentSelection()))
+        val selectionAction = persistentPolicy.update(readPersistentSelection())
+        applyPersistentAction(
+            if (persistentPolicy.enabled) persistentPolicy.recoveryAction() else selectionAction,
+        )
     }
 
     private fun readPersistentSelection(): Boolean =
@@ -163,10 +171,9 @@ class LocalPanelHostService : Service() {
             null
         } else {
             mapOf(
-                "phase" to "failed",
-                "failure_stage" to "persistent_recovery",
-                "message" to "Embedded core recovery failed",
-                "base_url" to "",
+                "recovery_phase" to "failed",
+                "recovery_failure_stage" to "persistent_recovery",
+                "recovery_message" to "Embedded core recovery failed",
             )
         }
         val manager = getSystemService(NotificationManager::class.java)
@@ -241,4 +248,15 @@ class LocalPanelHostService : Service() {
             )
         )
         .build()
+}
+
+internal fun mergeLocalPanelHostStatus(
+    coreStatus: Map<String, Any>,
+    foregroundServiceEnabled: Boolean,
+    schedulerStatus: Map<String, Any>,
+    recoveryFailure: Map<String, Any>?,
+): Map<String, Any> = coreStatus.toMutableMap().apply {
+    this["foreground_service_enabled"] = foregroundServiceEnabled
+    putAll(schedulerStatus)
+    recoveryFailure?.filterKeys { it.startsWith("recovery_") }?.let(::putAll)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,7 @@ const (
 	DependencyReasonNativeUnsupported  = "NATIVE_NOT_ALLOWLISTED"
 	DependencyReasonSourceUnsigned     = "SOURCE_REQUIRES_SIGNED_AUTHORIZATION"
 	DependencyReasonQuotaExceeded      = "DEPENDENCY_QUOTA_EXCEEDED"
+	DependencyReasonAndroidEquivalent  = "ANDROID_EQUIVALENT_REQUIRED"
 
 	DefaultDependencyQuotaBytes          int64 = 1024 * 1024 * 1024
 	DefaultDependencyInstallReserveBytes int64 = 64 * 1024 * 1024
@@ -43,6 +45,7 @@ type DependencyCompatibilityDetails struct {
 	AllowlistSource  string                 `json:"allowlist_source,omitempty"`
 	AllowlistSHA256  string                 `json:"allowlist_sha256,omitempty"`
 	CompatibilityKey string                 `json:"compatibility_key"`
+	Capability       string                 `json:"capability,omitempty"`
 }
 
 type DependencyQuotaDetails struct {
@@ -100,6 +103,10 @@ var knownNodeNativeDependencies = map[string][]string{
 }
 
 func EvaluateDependencyCompatibility(depType, packageName, pythonVersion string) DependencyCompatibilityDetails {
+	return evaluateDependencyCompatibilityForPlatform(depType, packageName, pythonVersion, runtime.GOOS, os.Geteuid())
+}
+
+func evaluateDependencyCompatibilityForPlatform(depType, packageName, pythonVersion, goos string, euid int) DependencyCompatibilityDetails {
 	packageName = strings.TrimSpace(packageName)
 	runtime := ""
 	if depType == model.DepTypePython {
@@ -125,6 +132,14 @@ func EvaluateDependencyCompatibility(depType, packageName, pythonVersion string)
 		details.Status = DependencyCompatibilityUnsupported
 		details.ReasonCode = DependencyReasonInvalidSpec
 		details.Message = "dependency package spec contains unsupported shell metacharacters or is empty"
+		return details
+	}
+	if depType == model.DepTypeLinux && goos == "android" && euid != 0 {
+		details.Status = DependencyCompatibilityUnsupported
+		details.ReasonCode = DependencyReasonAndroidEquivalent
+		details.Capability = "android-equivalent"
+		details.Message = "普通非 Root Android 应用进程不能执行 apt 或其他系统包管理器；请使用 Android SDK/API 等价能力"
+		details.Alternatives = linuxAndroidAlternatives(packageName)
 		return details
 	}
 
@@ -173,6 +188,24 @@ func EvaluateDependencyCompatibility(depType, packageName, pythonVersion string)
 		}
 	}
 	return details
+}
+
+func linuxAndroidAlternatives(packageName string) []string {
+	switch strings.ToLower(strings.TrimSpace(packageName)) {
+	case "curl", "wget":
+		return []string{"使用应用内 HTTP 客户端", "使用 Python urllib 或 Node.js fetch"}
+	case "openssl":
+		return []string{"使用 Android Keystore", "使用 Java Security API"}
+	case "sqlite", "sqlite3":
+		return []string{"使用 Android SQLite API", "使用应用内数据库能力"}
+	default:
+		return []string{"使用 Android SDK/API 等价能力", "将该工作负载迁移到具备 Linux 用户空间的服务端任务"}
+	}
+}
+
+func ManagedPythonSitePackagesDir(pythonVersion string) string {
+	pythonVersion = NormalizePythonVersionOrDefault(pythonVersion)
+	return filepath.Join(ManagedPythonVenvDir(pythonVersion), "lib", "python"+pythonVersion, "site-packages")
 }
 
 func (d DependencyCompatibilityDetails) Supported() bool {
@@ -303,7 +336,7 @@ func RollbackDependencyInstall(depType, name, pythonVersion string) string {
 	case model.DepTypePython:
 		cmd, err = NewPipUninstallCommandForPythonVersion(pythonVersion, name, "--no-deps")
 		if err == nil {
-			cmd.Env = SanitizePipEnv(AppendProxyEnv(os.Environ()))
+			cmd.Env = ManagedPythonDependencyEnv(SanitizePipEnv(AppendProxyEnv(os.Environ())), pythonVersion)
 		}
 	default:
 		return "[rollback] no rollback required for dependency type " + depType

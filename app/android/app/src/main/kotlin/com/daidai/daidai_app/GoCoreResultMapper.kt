@@ -7,7 +7,8 @@ object GoCoreResultMapper {
     fun toStatus(raw: String, localToken: String): Map<String, Any> {
         val result = runCatching { JSONObject(raw) }.getOrNull()
             ?: return failed("invalid_result")
-        val running = result.optBoolean("running") && result.optString("status") == "running"
+        val coreStatus = result.optString("status")
+        val running = result.optBoolean("running") && coreStatus in setOf("running", "ready", "degraded-ready")
         val endpoint = result.optString("endpoint")
         if (running && !isStrictLoopback(endpoint)) {
             return failed("invalid_endpoint")
@@ -26,6 +27,10 @@ object GoCoreResultMapper {
             this["base_url"] = endpoint
             this["instance_id"] = result.optLong("id").toString()
             this["local_token"] = localToken
+            this["core_status"] = coreStatus
+            result.optJSONObject("runtimeBaseline")?.let {
+                this["runtime_baseline"] = it.toString()
+            }
             result.optJSONObject("platformCapabilities")?.let {
                 this["platform_capabilities"] = it.toString()
             }

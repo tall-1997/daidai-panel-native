@@ -994,7 +994,11 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
                 File(appContext.filesDir, "deps/nodejs/lib/node_modules").absolutePath,
             ).filter(String::isNotBlank).joinToString(File.pathSeparator),
+            "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
         )
+        AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
+            env["NPM_CONFIG_GLOBALCONFIG"] = File(runtime.home, "etc/npmrc").absolutePath
+        }
         readableDatabase.query(
             "envs",
             arrayOf("name", "value"),

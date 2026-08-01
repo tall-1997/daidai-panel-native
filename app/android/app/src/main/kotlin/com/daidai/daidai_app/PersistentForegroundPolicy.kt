@@ -8,7 +8,12 @@ class PersistentForegroundPolicy(initiallyEnabled: Boolean) {
     var foregroundActive: Boolean = false
         private set
 
-    fun recoveryAction(): Action = reconcile()
+    fun recoveryAction(): Action = if (enabled) {
+        foregroundActive = true
+        Action.START_FOREGROUND
+    } else {
+        reconcile()
+    }
 
     fun update(value: Boolean): Action {
         enabled = value

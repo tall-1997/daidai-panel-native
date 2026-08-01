@@ -160,6 +160,7 @@ void main() {
       'base_url': 'http://127.0.0.1:33333',
       'instance_id': 'kotlin-local-fallback',
       'local_token': 'local-token-value',
+      'fallback_mode': 'diagnostic',
     });
 
     final resolved = resolveManagedLocalDiagnostic(degraded);
@@ -167,6 +168,16 @@ void main() {
     expect(resolved.localToken, 'local-token-value');
     expect(
       () => resolveManagedLocalPanel(degraded),
+      throwsStateError,
+    );
+    expect(
+      () => resolveManagedLocalDiagnostic(
+        LocalPanelStatus.fromJson(const {
+          'phase': 'degraded',
+          'base_url': 'http://127.0.0.1:44444',
+          'local_token': 'local-token-value',
+        }),
+      ),
       throwsStateError,
     );
   });

@@ -4,12 +4,11 @@ import android.content.Context
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
-    private const val ASSET_REVISION = "3.14.6-20260729-r4"
-    private const val SEED_REVISION = "20260729-r4"
     private const val ASSET_ROOT = "python-runtime/$VERSION/prefix"
 
     fun ensureReady(context: Context): PythonRuntimePaths? {
@@ -19,15 +18,18 @@ object AndroidPythonRuntime {
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")
-        if (!marker.isFile || marker.readText().trim() != ASSET_REVISION) {
+        val assetManifest = readAssetManifest(context)
+        val assetRevision = assetManifest.getString("asset_revision")
+        if (!marker.isFile || marker.readText().trim() != assetRevision || !runtimeLooksComplete(home)) {
+            home.deleteRecursively()
             copyAssetTree(context, ASSET_ROOT, home)
             marker.parentFile?.mkdirs()
-            marker.writeText(ASSET_REVISION)
+            marker.writeText(assetRevision)
         }
         val stdlib = File(home, "lib/python$VERSION")
         if (!stdlib.isDirectory) return null
         val paths = PythonRuntimePaths(executable.absolutePath, home.absolutePath, depsDir(context).absolutePath)
-        ensureSeedPackages(context, paths)
+        ensureSeedPackages(context, paths, assetRevision)
         return paths
     }
 
@@ -57,41 +59,50 @@ object AndroidPythonRuntime {
         }
     }
 
-    private fun ensureSeedPackages(context: Context, paths: PythonRuntimePaths) {
+    private fun ensureSeedPackages(context: Context, paths: PythonRuntimePaths, revision: String) {
         val deps = File(paths.deps).apply { mkdirs() }
         val marker = File(deps, ".daidai-python-seed-ready")
-        if (marker.isFile && marker.readText().trim() == SEED_REVISION) return
+        if (marker.isFile && marker.readText().trim() == revision) return
         val wheelhouse = File(paths.home, "wheelhouse")
         if (!wheelhouse.isDirectory) return
         val failureLog = File(deps, ".daidai-python-seed-failed.log")
         runCatching {
             verifyWheelhouse(wheelhouse)
-            installWheelhouseByExtraction(wheelhouse, deps)
-            marker.writeText(SEED_REVISION)
+            installWheelhouse(context, paths, wheelhouse, deps)
+            marker.writeText(revision)
             if (failureLog.isFile) failureLog.writeText("")
         }.onFailure { error ->
             failureLog.writeText(error.message ?: error.javaClass.simpleName)
         }
     }
 
-    private fun installWheelhouseByExtraction(wheelhouse: File, deps: File) {
-        val wheels = wheelhouse.listFiles { file -> file.isFile && file.name.endsWith(".whl") }.orEmpty()
+    private fun installWheelhouse(context: Context, paths: PythonRuntimePaths, wheelhouse: File, deps: File) {
+        val wheels = verifiedWheels(wheelhouse)
         check(wheels.isNotEmpty()) { "Python wheelhouse is empty" }
-        for (wheel in wheels) {
-            ZipFile(wheel).use { zip ->
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
-                    val target = File(deps, entry.name).canonicalFile
-                    check(target.path.startsWith(deps.canonicalPath + File.separator)) { "Unsafe wheel entry: ${entry.name}" }
-                    if (entry.isDirectory) {
-                        target.mkdirs()
-                    } else {
-                        target.parentFile?.mkdirs()
-                        zip.getInputStream(entry).use { input ->
-                            target.outputStream().use { output -> input.copyTo(output) }
-                        }
-                    }
+        val pipWheel = wheels.singleOrNull { it.name.startsWith("pip-") }
+            ?: error("Python wheelhouse has no pip bootstrap wheel")
+        extractBootstrapWheel(pipWheel, deps)
+        runPythonCommand(
+            context,
+            paths,
+            listOf("-m", "pip", "install", "--no-index", "--no-deps", "--only-binary=:all:", "--target", deps.absolutePath) +
+                wheels.filter { it != pipWheel }.map(File::getAbsolutePath),
+            "Offline Python wheel installation failed",
+        )
+    }
+
+    private fun extractBootstrapWheel(wheel: File, targetRoot: File) {
+        ZipFile(wheel).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                val target = File(targetRoot, entry.name).canonicalFile
+                check(target.path.startsWith(targetRoot.canonicalPath + File.separator)) { "Unsafe wheel entry: ${entry.name}" }
+                if (entry.isDirectory) {
+                    target.mkdirs()
+                } else {
+                    target.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
                 }
             }
         }
@@ -119,7 +130,11 @@ object AndroidPythonRuntime {
             }
             .start()
         val output = process.inputStream.bufferedReader().readText()
-        val exit = process.waitFor()
+        check(process.waitFor(120, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            "$failurePrefix: timed out"
+        }
+        val exit = process.exitValue()
         check(exit == 0) { "$failurePrefix: exit=$exit output=${output.ifBlank { "<empty>" }}" }
     }
 
@@ -128,9 +143,12 @@ object AndroidPythonRuntime {
         check(manifest.isFile) { "Python wheelhouse manifest is missing" }
         val json = JSONObject(manifest.readText())
         val wheels = json.optJSONArray("wheels") ?: error("Python wheelhouse manifest has no wheels")
+        val expectedNames = mutableSetOf<String>()
         for (index in 0 until wheels.length()) {
             val item = wheels.getJSONObject(index)
             val file = File(wheelhouse, item.getString("filename"))
+            check(isCompatibleWheel(file.name)) { "Incompatible Python wheel: ${file.name}" }
+            expectedNames += file.name
             check(file.isFile) { "Python wheel missing: ${file.name}" }
             val expected = item.getString("sha256")
             val actual = sha256(file)
@@ -138,6 +156,35 @@ object AndroidPythonRuntime {
                 "Python wheel checksum mismatch: ${file.name}"
             }
         }
+        val actualNames = wheelhouse.listFiles { file -> file.isFile && file.extension == "whl" }.orEmpty().mapTo(mutableSetOf()) { it.name }
+        check(actualNames == expectedNames) { "Python wheelhouse contains unmanifested wheels" }
+    }
+
+    private fun verifiedWheels(wheelhouse: File): List<File> {
+        verifyWheelhouse(wheelhouse)
+        return wheelhouse.listFiles { file -> file.isFile && file.extension == "whl" }.orEmpty().sortedBy { it.name }
+    }
+
+    internal fun isCompatibleWheel(filename: String): Boolean {
+        val lower = filename.lowercase()
+        if ("x86_64" in lower || "cp312" in lower || "manylinux" in lower || "musllinux" in lower) return false
+        return lower.endsWith("-py3-none-any.whl") ||
+            Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower)
+    }
+
+    private fun readAssetManifest(context: Context): JSONObject =
+        context.assets.open("$ASSET_ROOT/runtime-manifest.json").bufferedReader().use { JSONObject(it.readText()) }
+
+    private fun runtimeLooksComplete(home: File): Boolean {
+        val stdlib = File(home, "lib/python$VERSION")
+        return File(stdlib, "ssl.py").isFile &&
+            File(stdlib, "sqlite3").isDirectory &&
+            File(stdlib, "venv").isDirectory &&
+            File(stdlib, "ensurepip").isDirectory &&
+            File(stdlib, "lib-dynload/_ssl.cpython-314-aarch64-linux-android.so").isFile &&
+            File(stdlib, "lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so").isFile &&
+            File(home, "etc/ssl/certs/cacert.pem").isFile &&
+            File(home, "wheelhouse/wheelhouse-manifest.json").isFile
     }
 
     private fun sha256(file: File): String {

@@ -1,12 +1,57 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
+
+func TestReconcileDependenciesAfterRestartKeepsPrivateDependenciesInstalled(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	pythonVersion := "3.11"
+	pythonDistInfo := filepath.Join(ManagedPythonSitePackagesDir(pythonVersion), "offline_fixture-1.0.0.dist-info")
+	nodePackage := filepath.Join(config.C.Data.Dir, "deps", "nodejs", "node_modules", "offline-fixture")
+	for _, dir := range []string{pythonDistInfo, nodePackage} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create private dependency fixture: %v", err)
+		}
+	}
+	dependencies := []model.Dependency{
+		{Type: model.DepTypePython, Name: "offline-fixture", PythonVersion: pythonVersion, Status: model.DepStatusInstalled},
+		{Type: model.DepTypeNodeJS, Name: "offline-fixture", Status: model.DepStatusInstalled},
+	}
+	if err := database.DB.Create(&dependencies).Error; err != nil {
+		t.Fatalf("create dependencies: %v", err)
+	}
+
+	reinstallCalls := 0
+	runner := dependencyReconcileRunner{
+		installed: DependencyInstalledForPythonVersion,
+		reinstall: func(deps []model.Dependency) { reinstallCalls += len(deps) },
+		restartReinstall: func(deps []model.Dependency) {
+			reinstallCalls += len(deps)
+		},
+	}
+	reconcileDependenciesAfterRestart(runner)
+
+	if reinstallCalls != 0 {
+		t.Fatalf("expected private dependencies to survive restart, got %d reinstall calls", reinstallCalls)
+	}
+	var stored []model.Dependency
+	if err := database.DB.Order("id ASC").Find(&stored).Error; err != nil {
+		t.Fatalf("load dependencies: %v", err)
+	}
+	for _, dep := range stored {
+		if dep.Status != model.DepStatusInstalled {
+			t.Fatalf("expected installed status after restart, got %+v", dep)
+		}
+	}
+}
 
 func TestReconcileDependenciesAfterRestartRecoversInterruptedOperation(t *testing.T) {
 	testutil.SetupTestEnv(t)

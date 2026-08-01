@@ -288,7 +288,9 @@ func NewPipCommandForPythonVersion(pythonVersion string, args []string) (*exec.C
 	if err != nil {
 		return nil, err
 	}
-	return spec.command(args), nil
+	cmd := spec.command(args)
+	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	return cmd, nil
 }
 
 func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*exec.Cmd, error) {
@@ -296,7 +298,16 @@ func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*e
 	if err != nil {
 		return nil, err
 	}
-	return spec.command(BuildPipInstallArgs(spec.extraFlags, packageName)), nil
+	target := ManagedPythonSitePackagesDir(pythonVersion)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return nil, fmt.Errorf("创建 Python 私有依赖目录失败: %w", err)
+	}
+	args := BuildPipInstallArgs(spec.extraFlags, packageName)
+	args = removeString(args, "--user")
+	args = append(args[:1], append([]string{"--target", target, "--only-binary=:all:"}, args[1:]...)...)
+	cmd := spec.command(args)
+	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	return cmd, nil
 }
 
 func NewPipInstallCommandForPythonVersionWithFlags(pythonVersion, packageName string, extraFlags []string) (*exec.Cmd, error) {
@@ -304,7 +315,26 @@ func NewPipInstallCommandForPythonVersionWithFlags(pythonVersion, packageName st
 	if err != nil {
 		return nil, err
 	}
-	return spec.command(BuildPipInstallArgs(extraFlags, packageName)), nil
+	target := ManagedPythonSitePackagesDir(pythonVersion)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return nil, fmt.Errorf("创建 Python 私有依赖目录失败: %w", err)
+	}
+	args := BuildPipInstallArgs(extraFlags, packageName)
+	args = removeString(args, "--user")
+	args = append(args[:1], append([]string{"--target", target, "--only-binary=:all:"}, args[1:]...)...)
+	cmd := spec.command(args)
+	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	return cmd, nil
+}
+
+func removeString(values []string, target string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func NewPipUninstallCommandForPythonVersion(pythonVersion, packageName string, extraOptions ...string) (*exec.Cmd, error) {
@@ -312,7 +342,28 @@ func NewPipUninstallCommandForPythonVersion(pythonVersion, packageName string, e
 	if err != nil {
 		return nil, err
 	}
-	return spec.command(BuildPipUninstallArgs(spec.extraFlags, packageName, extraOptions...)), nil
+	cmd := spec.command(BuildPipUninstallArgs(spec.extraFlags, packageName, extraOptions...))
+	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	return cmd, nil
+}
+
+func ManagedPythonDependencyEnv(base []string, pythonVersion string) []string {
+	if len(base) == 0 {
+		base = os.Environ()
+	}
+	target := ManagedPythonSitePackagesDir(pythonVersion)
+	existing := ""
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(key, "PYTHONPATH") {
+			existing = value
+		}
+	}
+	value := target
+	if strings.TrimSpace(existing) != "" {
+		value += string(os.PathListSeparator) + existing
+	}
+	return appendEnvOverride(base, "PYTHONPATH", value)
 }
 
 // BuildPipInstallArgs 把 install 子命令、附加 flag、包名拼成完整的 args。

@@ -61,12 +61,28 @@ void main() {
         'instance_id': 'kotlin-local-fallback',
         'local_token': 'memory-token',
         'failure_stage': 'go_core_start:LinkageError',
+        'fallback_mode': 'diagnostic',
       }),
     );
 
     expect(decision.destination, BootEndpointDestination.localRecovery);
     expect(decision.managedLocal?.panel.url, 'http://127.0.0.1:33333');
     expect(decision.managedLocal?.localToken, 'memory-token');
+  });
+
+  test('degraded core status cannot expose its endpoint as fallback', () async {
+    final decision = await BootEndpointResolver.resolve(
+      authenticated: true,
+      panel: managed,
+      ensureStarted: () async => LocalPanelStatus.fromJson(const {
+        'phase': 'degraded',
+        'base_url': 'http://127.0.0.1:44444',
+        'local_token': 'memory-token',
+      }),
+    );
+
+    expect(decision.destination, BootEndpointDestination.localRecovery);
+    expect(decision.managedLocal, isNull);
   });
 
   test('authenticated remote keeps dashboard shortcut', () async {

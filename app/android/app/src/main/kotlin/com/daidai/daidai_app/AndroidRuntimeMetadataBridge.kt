@@ -2,6 +2,10 @@ package com.daidai.daidai_app
 
 import android.content.Context
 import java.io.File
+import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 object AndroidRuntimeMetadataBridge {
     private val ASSET_NAMES = mapOf(
@@ -15,9 +19,22 @@ object AndroidRuntimeMetadataBridge {
         return ASSET_NAMES.mapValues { (_, assetName) ->
             val output = File(outputDir, assetName)
             context.assets.open(assetName).use { input ->
-                output.outputStream().use { outputStream -> input.copyTo(outputStream) }
+                copyAtomically(input, output)
             }
             output.absolutePath
+        }
+    }
+
+    internal fun copyAtomically(input: InputStream, output: File) {
+        val staging = Files.createTempFile(output.parentFile.toPath(), "${output.name}.", ".tmp")
+        try {
+            Files.newOutputStream(staging).use { outputStream ->
+                input.copyTo(outputStream)
+                outputStream.flush()
+            }
+            Files.move(staging, output.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(staging)
         }
     }
 }

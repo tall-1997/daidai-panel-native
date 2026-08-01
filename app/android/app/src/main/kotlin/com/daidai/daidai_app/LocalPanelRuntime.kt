@@ -10,7 +10,7 @@ object LocalPanelRuntime {
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
-        if (coreStatus["phase"] == "ready") {
+        if (!requiresFallback(coreStatus)) {
             stopFallback()
             return coreStatus
         }
@@ -30,7 +30,7 @@ object LocalPanelRuntime {
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
         val coreStatus = GoCoreBridge.status(localToken)
-        if (coreStatus["phase"] == "ready") {
+        if (!requiresFallback(coreStatus)) {
             stopFallback()
             return coreStatus
         }
@@ -72,6 +72,8 @@ object LocalPanelRuntime {
         val rootType = status["go_core_root_error_type"]?.toString().orEmpty()
         return listOf(stage, errorType, rootType).filter(String::isNotBlank).joinToString(":")
     }
+
+    internal fun requiresFallback(status: Map<String, Any>): Boolean = status["phase"] != "ready"
 
     private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> =
         fallbackStatus(server.endpoint, localToken, reason)

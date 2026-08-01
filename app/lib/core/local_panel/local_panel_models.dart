@@ -10,6 +10,7 @@ class LocalPanelStatus {
   final String message;
   final bool foregroundServiceEnabled;
   final String localToken;
+  final String fallbackMode;
 
   const LocalPanelStatus({
     this.phase = LocalPanelPhase.stopped,
@@ -21,6 +22,7 @@ class LocalPanelStatus {
     this.message = '',
     this.foregroundServiceEnabled = false,
     this.localToken = '',
+    this.fallbackMode = '',
   });
 
   factory LocalPanelStatus.fromJson(Map<String, dynamic> json) {
@@ -38,6 +40,7 @@ class LocalPanelStatus {
       foregroundServiceEnabled:
           json['foreground_service_enabled'] == true,
       localToken: json['local_token']?.toString() ?? '',
+      fallbackMode: json['fallback_mode']?.toString() ?? '',
     );
   }
 }

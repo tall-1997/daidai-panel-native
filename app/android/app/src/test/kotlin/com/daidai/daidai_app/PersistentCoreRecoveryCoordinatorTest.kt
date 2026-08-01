@@ -32,6 +32,23 @@ class PersistentCoreRecoveryCoordinatorTest {
     }
 
     @Test
+    fun `repeated recovery action is idempotent while recovery is pending`() {
+        val runner = FakeCoreRecoveryTaskRunner()
+        var starts = 0
+        val coordinator = PersistentCoreRecoveryCoordinator(
+            runner = runner,
+            runtime = { starts++; mapOf("phase" to "ready") },
+            onResult = {},
+        )
+
+        assertTrue(coordinator.recoverAfterForegroundStarted())
+        assertFalse(coordinator.recoverAfterForegroundStarted())
+        runner.runPending()
+
+        assertEquals(1, starts)
+    }
+
+    @Test
     fun `close suppresses late recovery result`() {
         val runner = FakeCoreRecoveryTaskRunner()
         var completed = false

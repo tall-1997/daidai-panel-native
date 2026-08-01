@@ -27,10 +27,11 @@ class PersistentForegroundPolicyTest {
     }
 
     @Test
-    fun `repeated recreation recovery is idempotent within process`() {
+    fun `each recovery request idempotently retriggers foreground recovery`() {
         val policy = PersistentForegroundPolicy(initiallyEnabled = true)
 
         assertEquals(PersistentForegroundPolicy.Action.START_FOREGROUND, policy.recoveryAction())
-        assertEquals(PersistentForegroundPolicy.Action.NONE, policy.recoveryAction())
+        assertEquals(PersistentForegroundPolicy.Action.START_FOREGROUND, policy.recoveryAction())
+        assertTrue(policy.foregroundActive)
     }
 }
