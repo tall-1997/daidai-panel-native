@@ -330,6 +330,26 @@ def fail_device_run(args, device, reason):
     raise RuntimeError(f"runtime smoke blocked: {reason}; evidence written to {args.output}")
 
 
+def pre_diagnose(args):
+    d = {
+        "schema_version": 1,
+        "matrix_id": args.matrix_id,
+        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "commands": [
+            safe_command(args.adb, args.serial, "shell", "dumpsys", "activity", "processes"),
+            safe_command(args.adb, args.serial, "shell", "dumpsys", "meminfo"),
+            safe_command(args.adb, args.serial, "shell", "ls", "-la", "/data/tombstones/", timeout=15),
+            safe_command(args.adb, args.serial, "shell", "cat", "/proc/version"),
+            safe_command(args.adb, args.serial, "shell", "getprop", "ro.dalvik.vm.native.bridge"),
+            safe_command(args.adb, args.serial, "shell", "getprop", "ro.product.cpu.abilist64"),
+            safe_command(args.adb, args.serial, "shell", "getprop", "ro.product.cpu.abilist32"),
+            safe_command(args.adb, args.serial, "shell", "pm", "list", "packages", "daidai"),
+        ],
+    }
+    write_json(args.output, d)
+    return 0
+
+
 def diagnose(args):
     diagnostics = collect_diagnostics(args.adb, args.serial, args.matrix_id, args.reason)
     write_json(args.output, diagnostics)
@@ -373,13 +393,18 @@ def parser():
     diagnose_parser.add_argument("--serial", default="")
     diagnose_parser.add_argument("--adb", default="adb")
     diagnose_parser.add_argument("--output", type=pathlib.Path, required=True)
+    pre_diag_parser = sub.add_parser("pre-diagnose")
+    pre_diag_parser.add_argument("--matrix-id", required=True)
+    pre_diag_parser.add_argument("--serial", default="")
+    pre_diag_parser.add_argument("--adb", default="adb")
+    pre_diag_parser.add_argument("--output", type=pathlib.Path, required=True)
     return root
 
 
 def main():
     args = parser().parse_args()
     try:
-        return {"run": run, "dry-run": dry_run, "blocked": blocked, "external": external, "diagnose": diagnose}[args.operation](args)
+        return {"run": run, "dry-run": dry_run, "blocked": blocked, "external": external, "diagnose": diagnose, "pre-diagnose": pre_diagnose}[args.operation](args)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
         print(f"android runtime smoke: {error}", file=sys.stderr)
         return 1

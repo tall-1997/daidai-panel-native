@@ -7,7 +7,14 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.Process
 import androidx.core.app.NotificationCompat
+import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class LocalPanelHostService : Service() {
     companion object {
@@ -58,19 +65,39 @@ class LocalPanelHostService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        recoveryCoordinator = PersistentCoreRecoveryCoordinator(
-            runner = ExecutorCoreRecoveryTaskRunner(),
-            runtime = { LocalPanelRuntime.ensureStarted(applicationContext, localToken) },
-            onResult = ::handleRecoveryResult,
-        )
-        networkRecovery = LocalPanelNetworkRecovery(applicationContext) {
-            lastRecoveryTrigger = "network"
-            LocalPanelRecoveryTriggers.reconcileWhenNetworkRestored(applicationContext)
+        runCatching {
+            val crashDir = File(filesDir, "panel-crash-logs")
+            crashDir.mkdirs()
+            val pid = Process.myPid()
+            val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+            val marker = File(crashDir, "oncreate-${pid}-${timestamp}.started")
+            marker.writeText("pid=${pid};process=${System.getProperty("os.arch", "unknown")};started_at=${System.currentTimeMillis()}")
         }
-        persistentPolicy = PersistentForegroundPolicy(readPersistentSelection())
-        applyPersistentAction(persistentPolicy.recoveryAction())
-        LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
+        try {
+            createNotificationChannel()
+            recoveryCoordinator = PersistentCoreRecoveryCoordinator(
+                runner = ExecutorCoreRecoveryTaskRunner(),
+                runtime = { LocalPanelRuntime.ensureStarted(applicationContext, localToken) },
+                onResult = ::handleRecoveryResult,
+            )
+            networkRecovery = LocalPanelNetworkRecovery(applicationContext) {
+                lastRecoveryTrigger = "network"
+                LocalPanelRecoveryTriggers.reconcileWhenNetworkRestored(applicationContext)
+            }
+            persistentPolicy = PersistentForegroundPolicy(readPersistentSelection())
+            applyPersistentAction(persistentPolicy.recoveryAction())
+            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
+        } catch (error: Throwable) {
+            runCatching {
+                val crashDir = File(filesDir, "panel-crash-logs")
+                crashDir.mkdirs()
+                val sw = StringWriter()
+                error.printStackTrace(PrintWriter(sw))
+                val log = File(crashDir, "oncreate-crash-${Process.myPid()}.txt")
+                log.writeText("type=${error.javaClass.name}\nmessage=${error.message}\n${sw}")
+            }
+            throw error
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

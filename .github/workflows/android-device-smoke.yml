@@ -145,9 +145,16 @@ jobs:
           heap-size: 512M
           disk-size: 8192M
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -verbose
           disable-animations: true
+          pre-emulator-launch-script: |
+            adb kill-server 2>/dev/null || true
+            adb start-server
           script: >-
+            python3 scripts/android-runtime-smoke.py pre-diagnose
+            --matrix-id ${{ matrix.matrix_id }}
+            --output evidence/${{ matrix.matrix_id }}.pre-diag.json
+            &&
             python3 scripts/android-runtime-smoke.py run
             --apk smoke-apks/flutter-apk/app-debug.apk
             --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk

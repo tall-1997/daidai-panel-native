@@ -159,5 +159,25 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
             SMOKE.collect_diagnostics = original
 
 
+    def test_pre_diagnose_writes_baseline_json(self):
+        original = SMOKE.safe_command
+        SMOKE.safe_command = lambda *args, **kwargs: {"return_code": 0, "stdout": "ok", "stderr": ""}
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                args = type("Args", (), {
+                    "adb": "adb",
+                    "serial": "",
+                    "matrix_id": "api35-x64",
+                    "output": root / "pre-diag.json",
+                })()
+                self.assertEqual(0, SMOKE.pre_diagnose(args))
+                diag = json.loads(args.output.read_text())
+                self.assertEqual("api35-x64", diag["matrix_id"])
+                self.assertEqual(8, len(diag["commands"]))
+        finally:
+            SMOKE.safe_command = original
+
+
 if __name__ == "__main__":
     unittest.main()
