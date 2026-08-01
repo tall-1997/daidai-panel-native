@@ -115,10 +115,10 @@ jobs:
         include:
           - api: 34
             matrix_id: api34-x64
-            target: google_apis
+            target: default
           - api: 35
             matrix_id: api35-x64
-            target: google_apis
+            target: default
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
