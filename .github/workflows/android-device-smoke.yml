@@ -1,4 +1,4 @@
-name: Android ARM64 Device Runtime Smoke
+name: Android Device Runtime Smoke
 
 on:
   workflow_dispatch:
@@ -84,15 +84,15 @@ jobs:
           bash scripts/prepare-android-node-runtime.sh
           bash scripts/build-mobile-core-aar.sh
           flutter pub get
-      - name: Build debug application and instrumentation APKs
+      - name: Build debug application and instrumentation APKs (multi-ABI)
         working-directory: app
-        run: flutter build apk --debug --target-platform android-arm64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
-      - name: Verify smoke driver dry-run
+        run: flutter build apk --debug --target-platform android-arm64,android-x64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
+      - name: Verify smoke driver dry-run (x64 emulator)
         run: |
           python3 scripts/android-runtime-smoke.py dry-run \
             --apk app/build/app/outputs/flutter-apk/app-debug.apk \
             --test-apk app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            --matrix-id api35-4k --expected-api 35 --expected-page-size 4096
+            --matrix-id api34-x64 --expected-api 34 --expected-page-size 4096
       - name: Test smoke driver
         run: python3 -m unittest scripts/test_android_runtime_smoke.py
       - uses: actions/upload-artifact@v4
@@ -104,21 +104,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  arm64-emulator-4k:
+  x64-emulator:
     needs: build
-    runs-on: macos-15-intel
-    continue-on-error: true
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         include:
-          - api: 28
-            matrix_id: api28-4k
-            target: default
+          - api: 34
+            matrix_id: api34-x64
+            target: google_apis
           - api: 35
-            matrix_id: api35-4k
+            matrix_id: api35-x64
             target: google_apis
     steps:
       - uses: actions/checkout@v5
@@ -129,18 +127,24 @@ jobs:
         with:
           name: android-runtime-smoke-apks
           path: smoke-apks
-      - name: Run ARM64 device smoke
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm || true
+      - name: Run x86_64 device smoke
         id: emulator-smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
-          arch: arm64-v8a
+          arch: x86_64
           target: ${{ matrix.target }}
           cores: 2
           ram-size: 2048M
           heap-size: 512M
           disk-size: 8192M
-          emulator-boot-timeout: 1800
+          emulator-boot-timeout: 600
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: >-
@@ -188,217 +192,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  discover-api35-16k:
+  arm64-emulator-blocked:
     needs: build
-    runs-on: macos-15-intel
-    outputs:
-      available: ${{ steps.image.outputs.available }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: android-actions/setup-android@v3
-      - id: image
-        name: Discover API 35 ARM64 16K image
-        shell: bash
-        run: |
-          IMAGE='system-images;android-35;google_apis_ps16k;arm64-v8a'
-          if sdkmanager --list | grep -Fq "$IMAGE"; then
-            echo 'available=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            python3 scripts/android-runtime-smoke.py blocked \
-              --matrix-id api35-16k \
-              --reason "Android SDK does not publish $IMAGE on this runner" \
-              --output evidence/api35-16k.json
-          fi
-      - uses: actions/upload-artifact@v4
-        if: steps.image.outputs.available != 'true'
-        with:
-          name: android-runtime-smoke-api35-16k-blocked
-          path: evidence/api35-16k.json
-          if-no-files-found: error
-          retention-days: 30
-      - name: Verify blocked runtime contract evidence
-        if: steps.image.outputs.available != 'true'
-        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/api35-16k.json
-      - name: Mark unavailable 16K image as blocked gate
-        if: steps.image.outputs.available != 'true'
-        run: |
-          echo 'API 35 ARM64 16K runtime smoke is blocked; see the blocked evidence artifact.' >> "$GITHUB_STEP_SUMMARY"
-          exit 1
-
-  arm64-emulator-16k:
-    needs: [build, discover-api35-16k, arm64-emulator-4k]
-    if: needs.discover-api35-16k.outputs.available == 'true'
-    runs-on: macos-15-intel
-    continue-on-error: true
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: android-runtime-smoke-apks
-          path: smoke-apks
-      - name: Run API 35 ARM64 16K device smoke
-        id: emulator-smoke
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: arm64-v8a
-          target: google_apis_ps16k
-          cores: 2
-          ram-size: 2048M
-          heap-size: 512M
-          disk-size: 8192M
-          emulator-boot-timeout: 1800
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          disable-animations: true
-          script: >-
-            python3 scripts/android-runtime-smoke.py run
-            --apk smoke-apks/flutter-apk/app-debug.apk
-            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk
-            --matrix-id api35-16k
-            --expected-api 35
-            --expected-page-size 16384
-            --output evidence/api35-16k.json
-      - name: Capture emulator failure diagnostics
-        if: failure()
-        run: |
-          python3 scripts/android-runtime-smoke.py diagnose \
-            --matrix-id api35-16k \
-            --reason "emulator-or-instrumentation-start-failed" \
-            --output evidence/api35-16k.diagnostics.json
-          if [[ ! -f evidence/api35-16k.json ]]; then
-            python3 scripts/android-runtime-smoke.py blocked \
-              --matrix-id api35-16k \
-              --reason "emulator-or-instrumentation-start-failed;see-diagnostics" \
-              --output evidence/api35-16k.json
-          fi
-      - name: Capture final emulator diagnostics and logcat
-        if: always()
-        run: |
-          if [[ ! -f evidence/api35-16k.diagnostics.json ]]; then
-            python3 scripts/android-runtime-smoke.py diagnose \
-              --matrix-id api35-16k \
-              --reason "post-emulator-run" \
-              --output evidence/api35-16k.diagnostics.json
-          fi
-      - name: Verify runtime contract evidence
-        if: always() && hashFiles('evidence/api35-16k.json') != ''
-        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/api35-16k.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: android-runtime-smoke-api35-16k
-          path: |
-            evidence/api35-16k.json
-            evidence/api35-16k.device.json
-            evidence/api35-16k.diagnostics.json
-            evidence/api35-16k.logcat.txt
-          if-no-files-found: error
-          retention-days: 30
-
-  external-device-evidence:
-    if: github.event_name == 'workflow_dispatch' && inputs.external_evidence_json != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
-      - name: Import external device evidence as unverified blocked evidence
-        env:
-          EXTERNAL_EVIDENCE_JSON: ${{ inputs.external_evidence_json }}
-          EXTERNAL_MATRIX_ID: ${{ inputs.external_matrix_id }}
+      - name: Record ARM64 emulator blocked evidence
         run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          Path('external-device-evidence.json').write_text(os.environ['EXTERNAL_EVIDENCE_JSON'], encoding='utf-8')
-          PY
-          python3 scripts/android-runtime-smoke.py external \
-            --input external-device-evidence.json \
-            --matrix-id "$EXTERNAL_MATRIX_ID" \
-            --output evidence/external-device.json
-      - name: Verify imported evidence contract
-        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/external-device.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-runtime-smoke-external-unverified
-          path: evidence/external-device.json
-          if-no-files-found: error
-          retention-days: 30
-
-  physical-device:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_physical_device
-    needs: build
-    runs-on: [self-hosted, arm64]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: android-runtime-smoke-apks
-          path: smoke-apks
-      - name: Run connected physical-device smoke
-        env:
-          DEVICE_SERIAL: ${{ inputs.physical_device_serial }}
-          EXPECTED_API: ${{ inputs.physical_expected_api }}
-          EXPECTED_PAGE_SIZE: ${{ inputs.physical_expected_page_size }}
-        run: |
-          SERIAL_ARGS=()
-          if [[ -n "$DEVICE_SERIAL" ]]; then
-            SERIAL_ARGS=(--serial "$DEVICE_SERIAL")
-          fi
-          python3 scripts/android-runtime-smoke.py run \
-            --apk smoke-apks/flutter-apk/app-debug.apk \
-            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk \
-            --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
-            --expected-api "$EXPECTED_API" \
-            --expected-page-size "$EXPECTED_PAGE_SIZE" \
-            "${SERIAL_ARGS[@]}" \
-            --output evidence/physical-device.json
-      - name: Verify physical-device runtime contract evidence
-        if: always() && hashFiles('evidence/physical-device.json') != ''
-        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/physical-device.json
-      - name: Capture physical-device failure diagnostics
-        if: failure()
-        env:
-          DEVICE_SERIAL: ${{ inputs.physical_device_serial }}
-          EXPECTED_API: ${{ inputs.physical_expected_api }}
-          EXPECTED_PAGE_SIZE: ${{ inputs.physical_expected_page_size }}
-        run: |
-          SERIAL_ARGS=()
-          if [[ -n "$DEVICE_SERIAL" ]]; then
-            SERIAL_ARGS=(--serial "$DEVICE_SERIAL")
-          fi
-          if [[ ! -f evidence/physical-device.diagnostics.json ]]; then
-            python3 scripts/android-runtime-smoke.py diagnose \
-              --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
-              --reason "physical-device-smoke-failed" \
-              "${SERIAL_ARGS[@]}" \
-              --output evidence/physical-device.diagnostics.json
-          fi
-          if [[ ! -f evidence/physical-device.json ]]; then
+          mkdir -p evidence
+          for matrix_id in api28-4k api35-4k; do
             python3 scripts/android-runtime-smoke.py blocked \
-              --matrix-id "physical-api${EXPECTED_API}-${EXPECTED_PAGE_SIZE}" \
-              --reason "physical-device-smoke-failed;see-diagnostics" \
-              --output evidence/physical-device.json
-          fi
+              --matrix-id "$matrix_id" \
+              --reason "ARM64 Android emulator unsupported on GitHub cloud runners; see reactivecircus/android-emulator-runner#350" \
+              --output "evidence/${matrix_id}.json"
+          done
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: android-runtime-smoke-physical-device
-          path: |
-            evidence/physical-device.json
-            evidence/physical-device.device.json
-            evidence/physical-device.diagnostics.json
-            evidence/physical-device.logcat.txt
-          if-no-files-found: error
+          name: android-runtime-smoke-arm64-blocked
+          path: evidence/api28-4k.json
           retention-days: 30

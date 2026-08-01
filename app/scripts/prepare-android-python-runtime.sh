@@ -6,6 +6,9 @@ PYTHON_ABI_VERSION="${PYTHON_ABI_VERSION:-3.14}"
 PYTHON_ARCHIVE="python-${PYTHON_VERSION}-aarch64-linux-android.tar.gz"
 PYTHON_URL="${PYTHON_URL:-https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_ARCHIVE}}"
 PYTHON_ARCHIVE_SHA256="${PYTHON_ARCHIVE_SHA256:-38bbe77d3167b5cd554e03b1021324926f09f3825202b065951dd7638e9c37e5}"
+PYTHON_X64_ARCHIVE="python-${PYTHON_VERSION}-x86_64-linux-android.tar.gz"
+PYTHON_X64_URL="${PYTHON_X64_URL:-https://www.python.org/ftp/python/${PYTHON_VERSION}/${PYTHON_X64_ARCHIVE}}"
+PYTHON_X64_ARCHIVE_SHA256="${PYTHON_X64_ARCHIVE_SHA256:-}"
 ASSET_REVISION="${PYTHON_ASSET_REVISION:-${PYTHON_VERSION}-android-arm64-r1}"
 
 APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,6 +20,7 @@ PREFIX_DIR="$EXTRACT_DIR/prefix"
 STAGE_DIR="$WORK_DIR/stage-prefix"
 ASSET_DIR="${PYTHON_ASSET_DIR:-$ANDROID_APP_DIR/src/main/pythonAssets/python-runtime/${PYTHON_ABI_VERSION}/prefix}"
 JNI_DIR="${PYTHON_JNI_DIR:-$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a}"
+JNI_X64_DIR="${PYTHON_JNI_X64_DIR:-$ANDROID_APP_DIR/src/main/jniLibs/x86_64}"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/python_exec.c"
 LAUNCHER_OUT="$JNI_DIR/libpython_exec.so"
 RUNTIME_DIR="${PYTHON_METADATA_DIR:-$APP_ROOT/../runtime}"
@@ -363,4 +367,104 @@ for source in stage_jni.iterdir():
 PY
 
 generate_metadata "$ASSET_DIR" "$JNI_DIR" "$RUNTIME_DIR" "$PYTHON_VERSION" "$ASSET_REVISION"
+
+if [[ -n "${PYTHON_X64_URL:-}" ]]; then
+  X64_WORK_DIR="$WORK_DIR/x86_64"
+  X64_ARCHIVE_PATH="$X64_WORK_DIR/$PYTHON_X64_ARCHIVE"
+  X64_EXTRACT_DIR="$X64_WORK_DIR/extracted"
+  X64_PREFIX_DIR="$X64_EXTRACT_DIR/prefix"
+
+  mkdir -p "$X64_WORK_DIR" "$JNI_X64_DIR"
+
+  if [[ ! -s "$X64_ARCHIVE_PATH" ]]; then
+    curl -L --fail --connect-timeout 20 --max-time 240 -o "$X64_ARCHIVE_PATH.part" "$PYTHON_X64_URL"
+    mv "$X64_ARCHIVE_PATH.part" "$X64_ARCHIVE_PATH"
+  fi
+
+  if [[ -n "${PYTHON_X64_ARCHIVE_SHA256:-}" ]]; then
+    verify_sha256 "$X64_ARCHIVE_PATH" "$PYTHON_X64_ARCHIVE_SHA256"
+  else
+    printf 'Skipping SHA-256 verification for x86_64 Python (no checksum configured).\n' >&2
+  fi
+
+  python3 - "$X64_ARCHIVE_PATH" "$X64_EXTRACT_DIR" <<'PY'
+import pathlib, shutil, sys, tarfile
+archive, destination = map(pathlib.Path, sys.argv[1:])
+shutil.rmtree(destination, ignore_errors=True)
+destination.mkdir(parents=True)
+with tarfile.open(archive) as source:
+    for member in source.getmembers():
+        target = (destination / member.name).resolve()
+        if not target.is_relative_to(destination.resolve()):
+            raise SystemExit(f"unsafe archive entry: {member.name}")
+    source.extractall(destination, filter="data")
+PY
+
+  [[ -f "$X64_PREFIX_DIR/lib/libpython${PYTHON_ABI_VERSION}.so" ]] || { printf 'x86_64 libpython is missing\n' >&2; exit 1; }
+
+  python3 - "$X64_PREFIX_DIR" <<'PY'
+import pathlib, struct, sys
+root = pathlib.Path(sys.argv[1])
+for path in root.rglob("*.so"):
+    header = path.read_bytes()[:20]
+    if len(header) < 20 or header[:4] != b"\x7fELF" or header[4:6] != b"\x02\x01":
+        continue
+    machine = struct.unpack("<H", header[18:20])[0]
+    if machine != 62:
+        raise SystemExit(f"non-x86_64 ELF in Android Python x64 archive: {path}")
+PY
+
+  X64_STAGE_JNI_DIR="$X64_WORK_DIR/stage-jni"
+  python3 - "$X64_PREFIX_DIR/lib" "$X64_STAGE_JNI_DIR" <<'PY'
+import pathlib, shutil, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+shutil.rmtree(target, ignore_errors=True)
+target.mkdir(parents=True, exist_ok=True)
+names = {path.name for path in source.glob("*.so*") if path.is_file()}
+for directory in (source / "engines-3", source / "ossl-modules"):
+    if directory.is_dir():
+        names.update(path.name for path in directory.glob("*.so") if path.is_file())
+for name in names:
+    candidates = list(source.glob(name)) + list((source / "engines-3").glob(name)) + list((source / "ossl-modules").glob(name))
+    if candidates:
+        shutil.copy2(candidates[0], target / name)
+PY
+
+  X64_CLANG=""
+  for candidate in \
+    "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang" \
+    "${ANDROID_NDK_ROOT:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang" \
+    "${ANDROID_HOME:-}/ndk/"*/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android28-clang; do
+    if [[ -x "$candidate" ]]; then X64_CLANG="$candidate"; break; fi
+  done
+
+  if [[ -z "$X64_CLANG" ]]; then
+    printf 'Android NDK x86_64 clang not found; skipping x86_64 Python launcher.\n' >&2
+  else
+    X64_LAUNCHER_OUT="$JNI_X64_DIR/libpython_exec.so"
+    "$X64_CLANG" -fPIE -pie -Wl,-z,relro,-z,now -Wl,-rpath,'$ORIGIN' \
+      -I"$X64_PREFIX_DIR/include/python${PYTHON_ABI_VERSION}" "$LAUNCHER_SRC" -L"$X64_STAGE_JNI_DIR" \
+      -lpython${PYTHON_ABI_VERSION} -ldl -lm -llog -o "$X64_LAUNCHER_OUT"
+    chmod 755 "$X64_LAUNCHER_OUT"
+
+    python3 - "$X64_LAUNCHER_OUT" "$X64_STAGE_JNI_DIR/libpython${PYTHON_ABI_VERSION}.so" <<'PY'
+import pathlib, struct, subprocess, sys
+for path in map(pathlib.Path, sys.argv[1:]):
+    header = path.read_bytes()[:20]
+    if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack("<H", header[18:20])[0] != 62:
+        raise SystemExit(f"expected Android x86_64 ELF: {path}")
+dynamic = subprocess.run(["readelf", "-d", sys.argv[1]], check=True, capture_output=True, text=True).stdout
+if "libpython3.14.so" not in dynamic:
+    raise SystemExit("Python x86_64 launcher is not linked to libpython3.14.so")
+PY
+
+    for source in "$X64_STAGE_JNI_DIR"/*; do
+      if [[ -f "$source" ]]; then
+        cp "$source" "$JNI_X64_DIR/"
+      fi
+    done
+    printf 'Prepared CPython %s Android x86_64 JNI libs.\n' "$PYTHON_VERSION"
+  fi
+fi
+
 printf 'Prepared CPython %s Android ARM64 runtime (%s).\n' "$PYTHON_VERSION" "$ASSET_REVISION"

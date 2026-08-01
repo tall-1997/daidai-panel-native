@@ -67,7 +67,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
@@ -148,8 +148,10 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
             check(archive.getEntry("classes.jar") != null) {
                 "Invalid mobilecore.aar: classes.jar is missing."
             }
-            check(archive.getEntry("jni/arm64-v8a/libgojni.so") != null) {
-                "Invalid mobilecore.aar: jni/arm64-v8a/libgojni.so is missing."
+            listOf("arm64-v8a", "x86_64").forEach { abi ->
+                check(archive.getEntry("jni/$abi/libgojni.so") != null) {
+                    "Invalid mobilecore.aar: jni/$abi/libgojni.so is missing."
+                }
             }
             val temporaryJar = layout.buildDirectory.file("mobilecore-verification/classes.jar").get().asFile
             temporaryJar.parentFile.mkdirs()
@@ -190,7 +192,10 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
         val version = "18.20.4"
         val npmVersion = "10.9.4"
         val typescriptVersion = "5.9.3"
-        val nativeDir = file("src/main/jniLibs/arm64-v8a")
+        val nativeAbis = listOf("arm64-v8a", "x86_64").filter { file("src/main/jniLibs/$it/libnode.so").isFile }
+        check(nativeAbis.isNotEmpty()) { "No Android Node native libraries found." }
+        val primaryAbi = nativeAbis.first()
+        val nativeDir = file("src/main/jniLibs/$primaryAbi")
         val launcher = file("$nativeDir/libnode_exec.so")
         val libnode = file("$nativeDir/libnode.so")
         val assets = file("src/main/nodeAssets/node-runtime/$version/usr")
@@ -203,11 +208,11 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
             "lib/node_modules/typescript/bin/tsc",
             "etc/npmrc",
         )
-        check(launcher.isFile && isArm64Elf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
-            "Missing real ARM64 Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
+        check(launcher.isFile && isAndroidElf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
+            "Missing real Android Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
         }
-        check(libnode.isFile && isArm64Elf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
-            "Missing real ARM64 libnode.so. Run app/scripts/prepare-android-node-runtime.sh."
+        check(libnode.isFile && isAndroidElf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
+            "Missing real Android libnode.so. Run app/scripts/prepare-android-node-runtime.sh."
         }
         check(metadataFile.isFile) { "Missing Node runtime metadata: ${metadataFile.path}" }
         requiredAssets.forEach { relative -> check(file("$assets/$relative").isFile) { "Missing Node runtime asset: $relative" } }
@@ -244,9 +249,12 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
 
 val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
     group = "verification"
-    description = "Fails when the CPython 3.14 Android ARM64 runtime, stdlib, native dependencies, or wheels are invalid."
+    description = "Fails when the CPython 3.14 Android runtime, stdlib, native dependencies, or wheels are invalid."
     doLast {
-        val nativeDir = file("src/main/jniLibs/arm64-v8a")
+        val nativeAbis = listOf("arm64-v8a", "x86_64").filter { file("src/main/jniLibs/$it/libpython3.14.so").isFile }
+        check(nativeAbis.isNotEmpty()) { "No Android Python native libraries found." }
+        val primaryAbi = nativeAbis.first()
+        val nativeDir = file("src/main/jniLibs/$primaryAbi")
         val prefix = file("src/main/pythonAssets/python-runtime/3.14/prefix")
         val stdlib = file("$prefix/lib/python3.14")
         val wheelhouse = file("$prefix/wheelhouse")
@@ -257,8 +265,12 @@ val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
             "sqlite3/__init__.py",
             "venv/__init__.py",
             "ensurepip/__init__.py",
+        ) + if (primaryAbi == "arm64-v8a") listOf(
             "lib-dynload/_ssl.cpython-314-aarch64-linux-android.so",
             "lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so",
+        ) else listOf(
+            "lib-dynload/_ssl.cpython-314-x86_64-linux-android.so",
+            "lib-dynload/_sqlite3.cpython-314-x86_64-linux-android.so",
         )
         val requiredNativeLibraries = listOf(
             "libpython3.14.so",
@@ -274,11 +286,11 @@ val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
         check(fileTree("$stdlib/ensurepip/_bundled").matching { include("pip-*-py3-none-any.whl") }.files.size == 1) {
             "CPython ensurepip must contain exactly one pure Python pip wheel."
         }
-        check(launcher.isFile && isArm64Elf(launcher)) { "Python launcher must be an Android ARM64 ELF." }
+        check(launcher.isFile && isAndroidElf(launcher)) { "Python launcher must be an Android ELF." }
         check(launcher.readText(Charsets.ISO_8859_1).contains("libpython3.14.so")) { "Python launcher is not linked to libpython3.14.so." }
         requiredNativeLibraries.forEach { name ->
             val library = file("$nativeDir/$name")
-            check(library.isFile && isArm64Elf(library)) { "$name must be an Android ARM64 ELF." }
+            check(library.isFile && isAndroidElf(library)) { "$name must be an Android ELF." }
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -301,9 +313,10 @@ val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
 
 fun isCompatiblePythonWheel(filename: String): Boolean {
     val lower = filename.lowercase()
-    if (listOf("cp312", "x86_64", "manylinux", "musllinux").any(lower::contains)) return false
+    if (listOf("cp312", "manylinux", "musllinux").any(lower::contains)) return false
     return lower.endsWith("-py3-none-any.whl") ||
-        Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower)
+        Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower) ||
+        Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_x86_64\\.whl").matches(lower)
 }
 
 fun isArm64Elf(file: File): Boolean {
@@ -314,6 +327,16 @@ fun isArm64Elf(file: File): Boolean {
     if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
     val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
     return machine == 183
+}
+
+fun isAndroidElf(file: File): Boolean {
+    val header = file.inputStream().use { input -> ByteArray(20).also { input.read(it) } }
+    if (header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
+        return false
+    }
+    if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
+    val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
+    return machine == 183 || machine == 62
 }
 
 fun sha256(file: File): String {

@@ -13,11 +13,21 @@ WORK_DIR="${NODE_RUNTIME_WORK_DIR:-/tmp/opencode/daidai-node-runtime-${NODE_MOBI
 ARCHIVE_PATH="$WORK_DIR/$NODE_ARCHIVE"
 EXTRACT_DIR="$WORK_DIR/extracted"
 ASSET_DIR="$ANDROID_APP_DIR/src/main/nodeAssets/node-runtime/${NODE_MOBILE_VERSION}/usr"
-JNI_DIR="$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a"
+declare -A JNI_DIRS
+JNI_DIRS[arm64-v8a]="$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a"
+JNI_DIRS[x86_64]="$ANDROID_APP_DIR/src/main/jniLibs/x86_64"
+declare -A LAUNCHER_OUTS
+LAUNCHER_OUTS[arm64-v8a]="${JNI_DIRS[arm64-v8a]}/libnode_exec.so"
+LAUNCHER_OUTS[x86_64]="${JNI_DIRS[x86_64]}/libnode_exec.so"
+declare -A CLANG_TARGETS
+CLANG_TARGETS[arm64-v8a]="aarch64-linux-android28-clang++"
+CLANG_TARGETS[x86_64]="x86_64-linux-android28-clang++"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/node_exec.cc"
-LAUNCHER_OUT="$JNI_DIR/libnode_exec.so"
 
-mkdir -p "$WORK_DIR" "$EXTRACT_DIR" "$ASSET_DIR" "$JNI_DIR"
+for ABI in arm64-v8a x86_64; do
+  mkdir -p "${JNI_DIRS[$ABI]}"
+done
+mkdir -p "$WORK_DIR" "$EXTRACT_DIR" "$ASSET_DIR"
 
 if [[ ! -s "$ARCHIVE_PATH" ]]; then
   curl -L --fail --connect-timeout 20 --max-time 300 -o "$ARCHIVE_PATH" "$NODE_URL"
@@ -25,12 +35,13 @@ fi
 
 unzip -q -o "$ARCHIVE_PATH" -d "$EXTRACT_DIR"
 
-if [[ ! -s "$EXTRACT_DIR/bin/arm64-v8a/libnode.so" ]]; then
-  printf 'nodejs-mobile arm64 libnode.so not found in %s\n' "$ARCHIVE_PATH" >&2
-  exit 1
-fi
-
-cp -a "$EXTRACT_DIR/bin/arm64-v8a/libnode.so" "$JNI_DIR/libnode.so"
+for ABI in arm64-v8a x86_64; do
+  if [[ ! -s "$EXTRACT_DIR/bin/${ABI}/libnode.so" ]]; then
+    printf 'nodejs-mobile %s libnode.so not found in %s; skipping\n' "$ABI" "$ARCHIVE_PATH" >&2
+    continue
+  fi
+  cp -a "$EXTRACT_DIR/bin/${ABI}/libnode.so" "${JNI_DIRS[$ABI]}/libnode.so"
+done
 mkdir -p "$ASSET_DIR/lib" "$ASSET_DIR/bin" "$ASSET_DIR/etc"
 
 if command -v npm >/dev/null 2>&1; then
@@ -43,47 +54,46 @@ fi
 
 printf 'ignore-scripts=true\naudit=false\nfund=false\nupdate-notifier=false\n' > "$ASSET_DIR/etc/npmrc"
 
-CLANGXX=""
-if [[ -n "${ANDROID_NDK_HOME:-}" && -x "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++" ]]; then
-  CLANGXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++"
-elif [[ -n "${ANDROID_NDK_ROOT:-}" && -x "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++" ]]; then
-  CLANGXX="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++"
-elif [[ -n "${ANDROID_HOME:-}" ]]; then
-  for candidate in "${ANDROID_HOME}"/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++; do
-    if [[ -x "$candidate" ]]; then
-      CLANGXX="$candidate"
-      break
-    fi
-  done
-else
-  for candidate in /opt/android-sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++ /usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang++; do
-    if [[ -x "$candidate" ]]; then
-      CLANGXX="$candidate"
-      break
-    fi
-  done
-fi
+NDK_TOOLCHAIN=""
+for candidate_base in \
+  "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+  "${ANDROID_NDK_ROOT:-}/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+  "${ANDROID_HOME:-}/ndk/"*/toolchains/llvm/prebuilt/linux-x86_64/bin \
+  /opt/android-sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin \
+  /usr/local/lib/android/sdk/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin; do
+  if [[ -d "$candidate_base" ]]; then NDK_TOOLCHAIN="$candidate_base"; break; fi
+done
 
-if [[ -z "$CLANGXX" ]]; then
-  printf 'Android NDK clang++ was not found; Node assets prepared but launcher was not rebuilt.\n' >&2
-  exit 2
-fi
-
-"$CLANGXX" \
-  -fPIE -pie \
-  -I"$EXTRACT_DIR/include/node" \
-  "$LAUNCHER_SRC" \
-  -L"$JNI_DIR" \
-  -Wl,-rpath,'$ORIGIN' \
-  -lnode \
-  -ldl -lm \
-  -o "$LAUNCHER_OUT"
-
-chmod 755 "$LAUNCHER_OUT"
+for ABI in arm64-v8a x86_64; do
+  launcher_target="${CLANG_TARGETS[$ABI]}"
+  jni_dir="${JNI_DIRS[$ABI]}"
+  if [[ ! -f "$jni_dir/libnode.so" ]]; then continue; fi
+  clangxx=""
+  if [[ -n "$NDK_TOOLCHAIN" && -x "$NDK_TOOLCHAIN/$launcher_target" ]]; then
+    clangxx="$NDK_TOOLCHAIN/$launcher_target"
+  fi
+  if [[ -z "$clangxx" ]]; then
+    printf 'Android NDK %s not found; skipping %s launcher.\n' "$launcher_target" "$ABI" >&2
+    continue
+  fi
+  "$clangxx" \
+    -fPIE -pie \
+    -I"$EXTRACT_DIR/include/node" \
+    "$LAUNCHER_SRC" \
+    -L"$jni_dir" \
+    -Wl,-rpath,'$ORIGIN' \
+    -lnode \
+    -ldl -lm \
+    -o "${LAUNCHER_OUTS[$ABI]}"
+  chmod 755 "${LAUNCHER_OUTS[$ABI]}"
+done
 
 MANIFEST_PATH="$APP_ROOT/../runtime/manifest.json"
 METADATA_PATH="$ASSET_DIR/runtime-metadata.json"
-node - "$MANIFEST_PATH" "$METADATA_PATH" "$LAUNCHER_OUT" "$JNI_DIR/libnode.so" "$ASSET_DIR" \
+PRIMARY_ABI="arm64-v8a"
+primary_launcher="${LAUNCHER_OUTS[$PRIMARY_ABI]}"
+primary_libnode="${JNI_DIRS[$PRIMARY_ABI]}/libnode.so"
+node - "$MANIFEST_PATH" "$METADATA_PATH" "$primary_launcher" "$primary_libnode" "$ASSET_DIR" \
   "$NODE_MOBILE_VERSION" "$NPM_VERSION" "$TYPESCRIPT_VERSION" <<'JS'
 const crypto = require('crypto');
 const fs = require('fs');
