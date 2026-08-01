@@ -71,6 +71,8 @@ jobs:
               - 'app/pubspec.lock'
               - 'app/scripts/build-mobile-core-aar.sh'
               - 'app/scripts/prepare-android-python-runtime.sh'
+              - 'app/scripts/prepare-android-node-runtime.sh'
+              - 'app/scripts/verify-android-node-runtime.sh'
               - 'panel/server/mobilecore/**'
               - 'panel/server/go.mod'
               - 'panel/server/go.sum'
@@ -236,6 +238,10 @@ jobs:
       - name: Prepare Android Python runtime
         working-directory: app
         run: bash scripts/prepare-android-python-runtime.sh
+
+      - name: Prepare Android Node runtime
+        working-directory: app
+        run: bash scripts/prepare-android-node-runtime.sh
 
       - name: Build embedded Core AAR
         working-directory: app
