@@ -110,6 +110,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - api: 34
@@ -145,7 +146,7 @@ jobs:
           heap-size: 512M
           disk-size: 8192M
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -verbose
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           pre-emulator-launch-script: |
             adb kill-server 2>/dev/null || true
@@ -184,6 +185,19 @@ jobs:
               --reason "post-emulator-run" \
               --output "evidence/${{ matrix.matrix_id }}.diagnostics.json"
           fi
+      - name: Collect panel crash logs
+        if: always()
+        run: |
+          mkdir -p evidence
+          adb -s emulator-5554 shell 'run-as com.daidai.daidai_app ls files/panel-crash-logs/' 2>/dev/null | while read f; do
+            adb -s emulator-5554 shell "run-as com.daidai.daidai_app cat files/panel-crash-logs/$f" > "evidence/panel-crash-$f" 2>/dev/null || true
+          done || true
+          adb -s emulator-5554 shell 'run-as com.daidai.daidai_app ls files/panel-crash-logs/' 2>/dev/null | while read f; do
+            adb -s emulator-5554 shell "run-as com.daidai.daidai_app:panel cat files/panel-crash-logs/$f" > "evidence/panel2-crash-$f" 2>/dev/null || true
+          done || true
+          adb -s emulator-5554 shell 'find /data/tombstones -type f -name "tombstone_*" 2>/dev/null | head -5' | while read ts; do
+            adb -s emulator-5554 shell "cat $ts" > "evidence/$(basename $ts).txt" 2>/dev/null || true
+          done || true
       - name: Verify runtime contract evidence
         if: always() && hashFiles(format('evidence/{0}.json', matrix.matrix_id)) != ''
         run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/${{ matrix.matrix_id }}.json
@@ -196,7 +210,11 @@ jobs:
             evidence/${{ matrix.matrix_id }}.device.json
             evidence/${{ matrix.matrix_id }}.diagnostics.json
             evidence/${{ matrix.matrix_id }}.logcat.txt
-          if-no-files-found: error
+            evidence/${{ matrix.matrix_id }}.pre-diag.json
+            evidence/panel-crash-*
+            evidence/panel2-crash-*
+            evidence/tombstone_*.txt
+          if-no-files-found: warn
           retention-days: 30
 
   arm64-emulator-blocked:
