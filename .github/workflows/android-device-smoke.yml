@@ -134,12 +134,12 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: arm64-v8a
           target: ${{ matrix.target }}
-          cores: 4
+          cores: 2
           ram-size: 4096M
           heap-size: 512M
           disk-size: 8192M
-          emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu auto-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-boot-timeout: 1800
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -accel off -no-metrics
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
@@ -248,12 +248,12 @@ jobs:
           api-level: 35
           arch: arm64-v8a
           target: google_apis_ps16k
-          cores: 4
+          cores: 2
           ram-size: 4096M
           heap-size: 512M
           disk-size: 8192M
-          emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu auto-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-boot-timeout: 1800
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -accel off -no-metrics
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
