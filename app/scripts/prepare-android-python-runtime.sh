@@ -205,6 +205,12 @@ PY
 [[ -f "$PREFIX_DIR/lib/libpython${PYTHON_ABI_VERSION}.so" ]] || { printf 'libpython is missing\n' >&2; exit 1; }
 [[ -f "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/lib-dynload/_ssl.cpython-314-aarch64-linux-android.so" ]] || { printf 'CPython 3.14 Android SSL module is missing\n' >&2; exit 1; }
 [[ -f "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so" ]] || { printf 'CPython 3.14 Android SQLite module is missing\n' >&2; exit 1; }
+ENSUREPIP_BUNDLED="$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/ensurepip/_bundled"
+mkdir -p "$ENSUREPIP_BUNDLED"
+if ! compgen -G "$ENSUREPIP_BUNDLED/pip-*-py3-none-any.whl" >/dev/null; then
+  python3 -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --no-deps \
+    --dest "$ENSUREPIP_BUNDLED" pip==24.0
+fi
 [[ -f "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/ensurepip/_bundled/"pip-*-py3-none-any.whl ]] || { printf 'ensurepip bundle is missing\n' >&2; exit 1; }
 [[ -d "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/venv" ]] || { printf 'venv stdlib is missing\n' >&2; exit 1; }
 

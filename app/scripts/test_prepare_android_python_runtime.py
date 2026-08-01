@@ -109,6 +109,15 @@ class AndroidPythonRuntimeScriptTest(unittest.TestCase):
             changed = self.run_helper("--runtime-digest", assets, native)
             self.assertNotEqual(first.stdout, changed.stdout)
 
+    def test_prepare_script_bootstraps_missing_ensurepip_bundle(self):
+        script = SCRIPT.read_text()
+        self.assertIn('ENSUREPIP_BUNDLED=', script)
+        self.assertIn('--no-deps', script)
+        self.assertIn('pip==24.0', script)
+        bootstrap = script.index('pip==24.0')
+        validation = script.index('ensurepip bundle is missing')
+        self.assertLess(bootstrap, validation)
+
 
 if __name__ == "__main__":
     unittest.main()
