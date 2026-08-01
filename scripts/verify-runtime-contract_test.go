@@ -53,6 +53,31 @@ func TestStrictModeRejectsBlockedRecords(t *testing.T) {
 	assertErrorContains(t, errs, "blocked in strict mode")
 }
 
+func TestReadContractAcceptsGeneratedRuntimeMetadataExtensions(t *testing.T) {
+	root := t.TempDir()
+	contract := validTestContract(t)
+	contract.Manifest.Components[0].PythonTag = "cp314"
+	contract.Manifest.Components[0].RuntimeSHA256 = strings.Repeat("1", 64)
+	contract.Manifest.Components[0].ArtifactCount = 1
+	contract.Manifest.Components[0].AssetRevision = "3.14.6-android-arm64-r1"
+	contract.Manifest.Components[0].Artifacts = []runtimeArtifact{{Path: "assets/runtime.py", SHA256: strings.Repeat("2", 64), Size: 42}}
+	contract.Compatibility.PythonWheelPolicy = map[string]any{"python_tag": "cp314", "offline": []any{"py3-none-any"}}
+	manifestPath := filepath.Join(root, "manifest.json")
+	compatibilityPath := filepath.Join(root, "compatibility.json")
+	smokePath := filepath.Join(root, "smoke-evidence.json")
+	writeJSONFile(t, manifestPath, contract.Manifest)
+	writeJSONFile(t, compatibilityPath, contract.Compatibility)
+	writeJSONFile(t, smokePath, contract.Smoke)
+
+	decoded, err := readContract(manifestPath, compatibilityPath, smokePath)
+	if err != nil {
+		t.Fatalf("readContract() error = %v", err)
+	}
+	if decoded.Manifest.Components[0].PythonTag != "cp314" || decoded.Manifest.Components[0].ArtifactCount != 1 {
+		t.Fatalf("generated runtime metadata was not decoded: %#v", decoded.Manifest.Components[0])
+	}
+}
+
 func TestValidateAPKChecksMetadataAndManifestEntrypoints(t *testing.T) {
 	contract := validTestContract(t)
 	apkPath := filepath.Join(t.TempDir(), "app.apk")
@@ -130,6 +155,17 @@ func validTestContract(t *testing.T) runtimeContract {
 func writeTestAPK(t *testing.T, path string, contract runtimeContract, includeAllEntries bool) {
 	t.Helper()
 	writeTestAPKWithMetadataAndEntries(t, path, contract, contract, includeAllEntries)
+}
+
+func writeJSONFile(t *testing.T, path string, value any) {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeTestAPKWithMetadata(t *testing.T, path string, entries runtimeContract, metadata runtimeContract) {

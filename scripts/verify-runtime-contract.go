@@ -39,21 +39,33 @@ type runtimeManifest struct {
 }
 
 type runtimeComponent struct {
-	ID           string   `json:"id"`
-	Version      string   `json:"version"`
-	ABI          string   `json:"abi"`
-	Entrypoint   string   `json:"entrypoint"`
-	SHA256       string   `json:"sha256"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	ID             string            `json:"id"`
+	Version        string            `json:"version"`
+	ABI            string            `json:"abi"`
+	PythonTag      string            `json:"python_tag,omitempty"`
+	Entrypoint     string            `json:"entrypoint"`
+	SHA256         string            `json:"sha256"`
+	RuntimeSHA256  string            `json:"runtime_sha256,omitempty"`
+	ArtifactCount  int               `json:"artifact_count,omitempty"`
+	AssetRevision  string            `json:"asset_revision,omitempty"`
+	Capabilities   []string          `json:"capabilities,omitempty"`
+	Artifacts      []runtimeArtifact `json:"artifacts,omitempty"`
+}
+
+type runtimeArtifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
 }
 
 type compatibilityMatrix struct {
-	Version        string                 `json:"version"`
-	UpdatedAt      string                 `json:"updated_at,omitempty"`
-	ABI            string                 `json:"abi"`
-	RequiredChecks []string               `json:"required_checks,omitempty"`
-	RuntimeIDs     []string               `json:"runtime_ids"`
-	Runtimes       []compatibilityRuntime `json:"runtimes"`
+	Version           string                 `json:"version"`
+	UpdatedAt         string                 `json:"updated_at,omitempty"`
+	ABI               string                 `json:"abi"`
+	RequiredChecks    []string               `json:"required_checks,omitempty"`
+	RuntimeIDs        []string               `json:"runtime_ids"`
+	PythonWheelPolicy map[string]any         `json:"python_wheel_policy,omitempty"`
+	Runtimes          []compatibilityRuntime `json:"runtimes"`
 }
 
 type compatibilityRuntime struct {
