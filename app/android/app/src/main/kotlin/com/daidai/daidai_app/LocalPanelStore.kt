@@ -1040,6 +1040,27 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 .put("exit_code", result.exitCode)
         )
 
+    private fun executeShellCommand(command: String): LocalScriptResult {
+        val logs = JSONArray().put("Android local fallback executing shell command: $command")
+        val parts = command.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        if (parts.isEmpty()) {
+            return LocalScriptResult(logs.put("Empty command"), "failed", true, 1)
+        }
+        val pb = ProcessBuilder(listOf("sh", "-c", command))
+        pb.directory(appContext.filesDir)
+        pb.redirectErrorStream(true)
+        return try {
+            val process = pb.start()
+            val output = process.inputStream.bufferedReader().readText()
+            output.split("\n").takeLast(100).forEach { logs.put(it) }
+            val code = process.waitFor()
+            val status = if (code == 0) "success" else "failed"
+            LocalScriptResult(logs, status, true, code)
+        } catch (e: Exception) {
+            LocalScriptResult(logs.put("Execution error: ${e.message}"), "failed", true, 1)
+        }
+    }
+
     private fun executeScriptFile(file: File, displayPath: String, languageHint: String = ""): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
@@ -1461,7 +1482,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 else -> ""
             }
             if (path.isBlank()) {
-                return@use LocalScriptResult(JSONArray().put("Android local fallback only supports task commands in the form: task <script-path>"), "failed", true, 2)
+                // Execute raw shell command directly
+                return@use executeShellCommand(command)
             }
             val file = scriptFile(path)
             if (!file.exists()) {
