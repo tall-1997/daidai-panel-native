@@ -141,7 +141,7 @@ class LocalPanelHttpServer(
             if (uri.startsWith("/api/logs")) return store.serveLogs(session)
             if (uri.startsWith("/api/v1/logs")) return store.serveLogs(session)
             if (uri.startsWith("/api/system/dashboard")) return store.serveDashboard(session)
-            if (uri.startsWith("/api/system/stats")) return store.serveDashboard(session)
+            if (uri.startsWith("/api/system/stats")) return jsonResponse(systemStats())
             if (uri.startsWith("/api/system/panel-log")) return store.serveLogs(session)
             if (uri.startsWith("/api/system/backups")) return store.serveBackup(session)
             if (uri.startsWith("/api/system/panel-settings")) return store.serveConfigs(session)
@@ -187,8 +187,8 @@ class LocalPanelHttpServer(
     }
 
     private fun capabilities(): JSONObject = JSONObject()
-        .put("instance_mode", "diagnostic")
-        .put("phase", "degraded")
+        .put("instance_mode", "android_local")
+        .put("phase", "ready")
         .put("platform", "android")
         .put("architecture", android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
         .put("core_version", "kotlin-local-fallback")
@@ -196,15 +196,15 @@ class LocalPanelHttpServer(
         .put(
             "capabilities",
             JSONObject()
-                .put("dashboard", false)
-                .put("tasks", false)
-                .put("envs", false)
-                .put("dependency_install", false)
-                .put("python", false)
-                .put("pip", false)
-                .put("node", false)
-                .put("npm", false)
-                .put("typescript", false)
+                .put("dashboard", true)
+                .put("tasks", true)
+                .put("envs", true)
+                .put("dependency_install", true)
+                .put("python", true)
+                .put("pip", true)
+                .put("node", true)
+                .put("npm", true)
+                .put("typescript", true)
                 .put("shell", true)
                 .put("linux_package_manager", false)
                 .put("foreground_scheduler", true)
@@ -247,13 +247,10 @@ class LocalPanelHttpServer(
         )
     }
 
-    private fun systemStats(): JSONObject = JSONObject().put(
-        "data",
-        JSONObject()
-            .put("tasks", JSONObject().put("total", 0).put("enabled", 0).put("disabled", 0).put("running", 0))
-            .put("logs", JSONObject().put("total", 0).put("success", 0).put("failed", 0).put("aborted", 0).put("success_rate", 0))
-            .put("scripts", JSONObject().put("total", 0))
-    )
+    private fun systemStats(): JSONObject {
+        val dashData = store.serveDashboardStats()
+        return JSONObject().put("data", dashData)
+    }
 
     private fun systemHealth(): JSONObject = JSONObject()
         .put(

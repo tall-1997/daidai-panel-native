@@ -580,6 +580,39 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return ok(JSONObject().put("data", data))
     }
 
+    
+fun serveDashboardStats(): JSONObject {
+    
+    val taskCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val envCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val scriptCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM scripts", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val logCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val successCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 1", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val failedCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 2", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    
+    val successRate = if (logCount > 0) (successCount * 100 / logCount) else 0
+    
+    return JSONObject()
+    
+        .put("tasks", JSONObject().put("total", taskCount).put("enabled", taskCount).put("disabled", 0).put("running", 0))
+    
+        .put("logs", JSONObject().put("total", logCount).put("success", successCount).put("failed", failedCount).put("aborted", 0).put("success_rate", successRate))
+    
+        .put("scripts", JSONObject().put("total", scriptCount))
+    
+        .put("envs", JSONObject().put("total", envCount))
+    
+        .put("deps", JSONObject().put("total", depCount))
+    
+}
+
 
 
     // ===== Subscriptions (Android local) =====
