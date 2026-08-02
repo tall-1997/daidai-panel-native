@@ -114,6 +114,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         createTaskLogTables(db)
         createConfigTables(db)
     }
+        ensureDefaultAdmin(db)
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createScriptRuntimeTables(db)
@@ -175,6 +176,38 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             )""".trimIndent()
         )
     }
+
+
+    private fun ensureDefaultAdmin(db: SQLiteDatabase) {
+        val salt = ByteArray(16).also(SecureRandom()::nextBytes)
+        val now = Instant.now().toString()
+        val values = ContentValues().apply {
+            put("username", "admin")
+            put("password_hash", hashPassword("admin123", salt))
+            put("password_salt", Base64.encodeToString(salt, Base64.NO_WRAP))
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        db.insertWithOnConflict("local_users", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+
+    // App runtime log file for device testing
+    private val appLogFile by lazy {
+        File(appContext.filesDir, "app-runtime.log").also { f ->
+            f.writeText("=== daidai-panel-native runtime log ===" + "
+")
+        }
+    }
+
+    fun appLog(tag: String, message: String) {
+        synchronized(appLogFile) {
+            appLogFile.appendText(Instant.now().toString() + " [" + tag + "] " + message + "
+")
+        }
+    }
+
+    fun readAppLog(): String = appLogFile.readText()
 
     fun serveAuth(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         return when {

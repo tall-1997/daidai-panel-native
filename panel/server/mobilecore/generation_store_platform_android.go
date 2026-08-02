@@ -94,7 +94,50 @@ func platformRemoveMetadata(target, quarantine string, _ metadataState) error {
 	return os.Remove(quarantine)
 }
 
-func platformProbeRecoveryMetadata(string) error { return nil }
+func platformProbeRecoveryMetadata(ops string) error {
+	id, err := newGenerationID()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(ops, id)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return err
+	}
+	cleanup := func() error { return cleanupProbeOperation(ops, dir) }
+	if err := platformSyncDirectory(ops); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	first := filepath.Join(dir, recoveryMetadataNewName)
+	second := filepath.Join(dir, "publish-state")
+	target := filepath.Join(dir, recoveryMetadataOldName)
+	if err := os.WriteFile(first, []byte("first"), 0o600); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	if err := recoveryProbeBoundary("probe-after-first-link"); err != nil {
+		return err
+	}
+	if err := os.WriteFile(second, []byte("second"), 0o600); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	if err := platformSyncDirectory(dir); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	if err := os.Rename(first, target); err != nil {
+		return errors.Join(err, cleanup())
+	}
+	x, err := os.ReadFile(target)
+	if err != nil {
+		return errors.Join(err, cleanup())
+	}
+	y, err := os.ReadFile(second)
+	if err != nil {
+		return errors.Join(err, cleanup())
+	}
+	if string(x) != "first" || string(y) != "second" {
+		return errors.Join(errors.New("recovery probe content mismatch"), cleanup())
+	}
+	return cleanup()
+}
 
 func platformFileLinkCount(string, fs.FileInfo) (uint64, error) { return 1, nil }
 
