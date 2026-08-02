@@ -196,7 +196,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     // App runtime log file for device testing
     private val appLogFile by lazy {
         File(appContext.filesDir, "app-runtime.log").also { f ->
-            f.writeText("=== daidai-panel-native runtime log ===" + "\n")
+            f.writeText("=== daidai-panel-native runtime log ===\n")
         }
     }
 
@@ -528,18 +528,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         if (session.method != NanoHTTPD.Method.GET) {
             return error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "GET only")
         }
-        val taskCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks", null).use {
-            it.moveToFirst(); it.getLong(0)
-        }
-        val envCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use {
-            it.moveToFirst(); it.getLong(0)
-        }
-        val depCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM local_dependencies", null).use {
-            it.moveToFirst(); it.getLong(0)
-        }
-        val subCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use {
-            it.moveToFirst(); it.getLong(0)
-        }
+        val taskCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val envCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val subCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val data = JSONObject().apply {
             put("mode", "android_local")
             put("version", "0.3.15")
@@ -548,8 +540,6 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             put("envs", envCount)
             put("deps", depCount)
             put("subscriptions", subCount)
-            put("hostname", configValue("hostname", "android-device"))
-            put("platform", "arm64-v8a")
         }
         return ok(JSONObject().put("data", data))
     }
@@ -577,7 +567,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val uri = session.uri ?: ""
         return when {
             session.method == NanoHTTPD.Method.GET && uri == "/api/subscriptions" -> listSubscriptions()
-            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(body(session).toString())
+            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(readBody(session))
             session.method == NanoHTTPD.Method.DELETE && uri.startsWith("/api/subscriptions/") -> deleteSubscription(uri)
             session.method == NanoHTTPD.Method.PUT && uri.startsWith("/api/subscriptions/refresh/") -> refreshSubscription(uri)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
@@ -598,6 +588,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             }
         }
         return ok(JSONObject().put("data", rows))
+    }
+
+    private fun readBody(session: NanoHTTPD.IHTTPSession): String {
+        val body = HashMap<String, String>()
+        try { session.parseBody(body) } catch (_: Exception) { }
+        return body["postData"] ?: ""
     }
 
     private fun addSubscription(body: String): NanoHTTPD.Response {
