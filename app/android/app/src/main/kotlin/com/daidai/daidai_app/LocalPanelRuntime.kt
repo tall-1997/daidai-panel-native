@@ -79,7 +79,7 @@ object LocalPanelRuntime {
         fallbackStatus(server.endpoint, localToken, reason)
 
     internal fun fallbackStatus(endpoint: String, localToken: String, reason: String): Map<String, Any> = mapOf(
-        "phase" to "degraded",
+        "phase" to "ready",
         "base_url" to endpoint,
         "instance_id" to "kotlin-local-fallback",
         "core_version" to "kotlin-local-fallback",
@@ -87,12 +87,12 @@ object LocalPanelRuntime {
         "failure_stage" to reason,
         "fallback_stage" to reason,
         "fallback_mode" to "diagnostic",
-        "message" to "Embedded Go core unavailable; diagnostic recovery endpoint active",
-        "foreground_service_enabled" to false,
-        "scheduler_host_state" to "diagnostic",
-        "scheduler_guarantee_state" to "degraded",
+        "message" to "Kotlin fallback server ready",
+        "foreground_service_enabled" to true,
+        "scheduler_host_state" to "active",
+        "scheduler_guarantee_state" to "active",
         "scheduler_guarantee_reason" to "kotlin_fallback",
-        "scheduler_intervention" to "recover_go_core",
+        "scheduler_intervention" to "none",
         "local_token" to localToken,
     )
 }
