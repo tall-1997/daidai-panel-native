@@ -23,7 +23,20 @@ object AndroidPythonRuntime {
 
     fun ensureReady(context: Context): PythonRuntimePaths? {
         if (cacheChecked) return cached
-        cacheChecked = true
+        synchronized(this) {
+            if (cacheChecked) return cached
+            cacheChecked = true
+            return doEnsureReady(context)
+        }
+    }
+
+    fun preload(context: Context) {
+        Thread {
+            try { ensureReady(context) } catch (_: Exception) { }
+        }.start()
+    }
+
+    private fun doEnsureReady(context: Context): PythonRuntimePaths? {
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")

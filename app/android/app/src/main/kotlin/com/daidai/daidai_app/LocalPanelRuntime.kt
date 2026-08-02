@@ -7,14 +7,21 @@ object LocalPanelRuntime {
     private var fallbackServer: LocalPanelHttpServer? = null
     private var lastFallbackReason: String = ""
 
+    @Volatile
+    private var cachedResult: Map<String, Any>? = null
+
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
+        cachedResult?.let { return it }
         val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
-        if (!requiresFallback(coreStatus)) {
+        val result = if (!requiresFallback(coreStatus)) {
             stopFallback()
-            return coreStatus
+            coreStatus
+        } else {
+            ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
         }
-        return ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
+        cachedResult = result
+        return result
     }
 
     @Synchronized
@@ -29,6 +36,7 @@ object LocalPanelRuntime {
 
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
+        cachedResult?.let { return it }
         val coreStatus = GoCoreBridge.status(localToken)
         if (!requiresFallback(coreStatus)) {
             stopFallback()

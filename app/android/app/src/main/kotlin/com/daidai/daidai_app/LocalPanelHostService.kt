@@ -75,6 +75,13 @@ class LocalPanelHostService : Service() {
         }
         try {
             createNotificationChannel()
+            // Initialize panel runtime in background to avoid blocking UI
+            Thread {
+                try {
+                    AndroidPythonRuntime.preload(applicationContext)
+                    LocalPanelRuntime.ensureStarted(applicationContext, localToken)
+                } catch (_: Exception) { }
+            }.start()
             recoveryCoordinator = PersistentCoreRecoveryCoordinator(
                 runner = ExecutorCoreRecoveryTaskRunner(),
                 runtime = { LocalPanelRuntime.ensureStarted(applicationContext, localToken) },
