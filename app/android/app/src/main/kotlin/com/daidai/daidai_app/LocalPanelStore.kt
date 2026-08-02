@@ -196,15 +196,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     // App runtime log file for device testing
     private val appLogFile by lazy {
         File(appContext.filesDir, "app-runtime.log").also { f ->
-            f.writeText("=== daidai-panel-native runtime log ===" + "
-")
+            f.writeText("=== daidai-panel-native runtime log ===" + "\n")
         }
     }
 
     fun appLog(tag: String, message: String) {
         synchronized(appLogFile) {
-            appLogFile.appendText(Instant.now().toString() + " [" + tag + "] " + message + "
-")
+            appLogFile.appendText(Instant.now().toString() + " [" + tag + "] " + message + "\n")
         }
     }
 
@@ -553,7 +551,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             put("hostname", configValue("hostname", "android-device"))
             put("platform", "arm64-v8a")
         }
-        return success(JSONObject().put("data", data))
+        return ok(JSONObject().put("data", data))
     }
 
 
@@ -579,7 +577,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val uri = session.uri ?: ""
         return when {
             session.method == NanoHTTPD.Method.GET && uri == "/api/subscriptions" -> listSubscriptions()
-            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(body(session))
+            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(body(session).toString())
             session.method == NanoHTTPD.Method.DELETE && uri.startsWith("/api/subscriptions/") -> deleteSubscription(uri)
             session.method == NanoHTTPD.Method.PUT && uri.startsWith("/api/subscriptions/refresh/") -> refreshSubscription(uri)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
@@ -599,7 +597,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 put("updated_at", cursor.string("updated_at"))
             }
         }
-        return success(JSONObject().put("data", rows))
+        return ok(JSONObject().put("data", rows))
     }
 
     private fun addSubscription(body: String): NanoHTTPD.Response {
@@ -612,7 +610,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
         val id = writableDatabase.insert("local_subscriptions", null, values)
         return if (id > 0) {
-            success(JSONObject().put("data", JSONObject().put("id", id)))
+            ok(JSONObject().put("data", JSONObject().put("id", id)))
         } else {
             error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "add failed")
         }
@@ -621,13 +619,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun deleteSubscription(uri: String): NanoHTTPD.Response {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
         writableDatabase.delete("local_subscriptions", "id = ?", arrayOf(id.toString()))
-        return success(JSONObject().put("data", JSONObject().put("deleted", id)))
+        return ok(JSONObject().put("data", JSONObject().put("deleted", id)))
     }
 
     private fun refreshSubscription(uri: String): NanoHTTPD.Response {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
         writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync = datetime('now'), updated_at = datetime('now') WHERE id = ?", arrayOf(id.toString()))
-        return success(JSONObject().put("data", JSONObject().put("refreshed", id).put("last_sync", System.currentTimeMillis().toString())))
+        return ok(JSONObject().put("data", JSONObject().put("refreshed", id).put("last_sync", System.currentTimeMillis().toString())))
     }
 
 
