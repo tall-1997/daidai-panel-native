@@ -1125,7 +1125,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
-                logs.put("Missing Android runtime for script type: ${file.extension.ifBlank { languageHint.ifBlank { "unknown" } }}"),
+                logs.put("Python runtime not available on this device. Android local fallback supports shell (.sh) scripts only. To run Python scripts, install Python runtime or use a device with Python support."),
                 "failed",
                 true,
                 127,
@@ -1142,7 +1142,19 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile && isRuntimeEntryVerified(it) }?.absolutePath
         return when {
             ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
-            ext == "py" || languageHint.equals("python", ignoreCase = true) -> AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.home, file.absolutePath) }
+            ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
+                val pyRuntime = AndroidPythonRuntime.ensureReady(appContext)
+                if (pyRuntime != null) {
+                    listOf(pyRuntime.executable, pyRuntime.home, file.absolutePath)
+                } else {
+                    val sysPy = try {
+                        val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
+                        p.waitFor()
+                        if (p.exitValue() == 0) p.inputStream.bufferedReader().readText().trim() else null
+                    } catch (_: Exception) { null }
+                    if (sysPy != null) listOf(sysPy, file.absolutePath) else null
+                }
+            }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, file.absolutePath) }
             ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, "-e", typeScriptEvalCode(), file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }

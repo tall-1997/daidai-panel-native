@@ -18,7 +18,7 @@ object AndroidPythonRuntime {
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")
-        val assetManifest = readAssetManifest(context)
+        val assetManifest = try { readAssetManifest(context) } catch (_: Exception) { return null }
         val assetRevision = assetManifest.getString("asset_revision")
         if (!marker.isFile || marker.readText().trim() != assetRevision || !runtimeLooksComplete(home)) {
             home.deleteRecursively()
