@@ -55,7 +55,25 @@ class LocalPanelHttpServer(
             Method.POST to "/api/auth/refresh",
             Method.GET to "/api/auth/user",
             Method.POST to "/api/auth/logout",
-            Method.GET to "/api/auth/captcha-config" -> true
+                    Method.GET to "/api/auth/captcha-config",
+            Method.GET to "/api/system/dashboard",
+            Method.GET to "/api/system/stats",
+            Method.POST to "/api/system/backup",
+            Method.GET to "/api/system/machine-code",
+            Method.GET to "/api/system/check-update",
+            Method.GET to "/api/system/panel-log",
+            Method.GET to "/api/tasks", Method.POST to "/api/tasks",
+            Method.GET to "/api/v1/tasks", Method.POST to "/api/v1/tasks",
+            Method.GET to "/api/envs", Method.POST to "/api/envs",
+            Method.GET to "/api/v1/envs", Method.POST to "/api/v1/envs",
+            Method.GET to "/api/deps", Method.POST to "/api/deps",
+            Method.GET to "/api/v1/deps", Method.POST to "/api/v1/deps",
+            Method.GET to "/api/configs", Method.GET to "/api/v1/configs",
+            Method.GET to "/api/logs", Method.GET to "/api/v1/logs",
+            Method.GET to "/api/scripts/tree", Method.GET to "/api/scripts/content",
+            Method.PUT to "/api/scripts/content", Method.POST to "/api/scripts/directory",
+            Method.GET to "/api/subscriptions", Method.POST to "/api/subscriptions",
+            Method.GET to "/api/system/panel-settings" -> true
             else -> false
         }
     }
@@ -132,6 +150,16 @@ class LocalPanelHttpServer(
 
                 session.method == Method.GET && session.uri == "/api/system/info" ->
                     jsonResponse(systemInfo())
+
+                session.uri.startsWith("/api/tasks") -> store.serveTasks(session)
+                session.uri.startsWith("/api/envs") -> store.serveEnvs(session)
+                session.uri.startsWith("/api/deps") -> store.serveDependencies(session)
+                session.uri.startsWith("/api/configs") -> store.serveConfigs(session)
+                session.uri.startsWith("/api/scripts") -> store.serveScripts(session)
+                session.uri.startsWith("/api/subscriptions") -> store.serveSubscriptions(session)
+                session.uri.startsWith("/api/logs") -> store.serveLogs(session)
+                session.uri.startsWith("/api/system/dashboard") -> store.serveDashboard(session)
+                session.uri.startsWith("/api/system/stats") -> store.serveDashboard(session)
 
                 LocalPanelStore.isRecoveryRequest(session.method, session.uri) -> store.serveBackup(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
