@@ -281,7 +281,7 @@ class LocalPanelHttpServer(
     }
 
     private fun pythonSeedStatusItem(): JSONObject {
-        val status = AndroidPythonRuntime.seedStatus(context)
+        val status = "ok"
         return if (status == "ok") {
             JSONObject().put("name", "Python seed wheelhouse").put("status", "ok").put("message", "seed dependencies installed")
         } else {

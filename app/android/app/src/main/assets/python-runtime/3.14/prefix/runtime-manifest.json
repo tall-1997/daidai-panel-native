@@ -1,0 +1,13 @@
+﻿{
+  "asset_revision": "termux-3.14.6-1",
+  "runtime": {
+    "version": "3.14.6",
+    "platform": "android-arm64",
+    "prefix": "python-runtime/3.14/prefix",
+    "archive": "python-runtime/3.14/python-runtime.zip",
+    "executable": "bin/python3.14",
+    "stdlib": "lib/python3.14",
+    "site_packages": "lib/python3.14/site-packages",
+    "pip_available": true
+  }
+}

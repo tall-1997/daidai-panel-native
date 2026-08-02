@@ -1,208 +1,98 @@
 package com.daidai.daidai_app
 
 import android.content.Context
-import org.json.JSONObject
 import java.io.File
-import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
-import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
+import org.json.JSONObject
 
 object AndroidPythonRuntime {
     private const val VERSION = "3.14"
-    private const val ASSET_ROOT = "python-runtime/$VERSION/prefix"
+    private const val ASSET_ARCHIVE = "python-runtime/3.14/python-runtime.zip"
+    private const val ASSET_MANIFEST = "python-runtime/3.14/prefix/runtime-manifest.json"
+
+    data class PythonRuntimePaths(
+        val executable: String,
+        val home: String,
+        val stdlib: String,
+        val sitePackages: String,
+        val wrapperScript: String = "",
+    )
+
+    private var cached: PythonRuntimePaths? = null
+    private var cacheChecked = false
 
     fun ensureReady(context: Context): PythonRuntimePaths? {
-        val nativeDir = context.applicationInfo.nativeLibraryDir.orEmpty()
-        val executable = File(nativeDir, "libpython_exec.so")
-        if (!executable.isFile || !executable.canExecute()) return null
+        if (cacheChecked) return cached
+        cacheChecked = true
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")
-        val assetManifest = try { readAssetManifest(context) } catch (_: Exception) { return null }
-        val assetRevision = assetManifest.getString("asset_revision")
-        if (!marker.isFile || marker.readText().trim() != assetRevision || !runtimeLooksComplete(home)) {
-            home.deleteRecursively()
-            copyAssetTree(context, ASSET_ROOT, home)
-            marker.parentFile?.mkdirs()
-            marker.writeText(assetRevision)
-        }
-        val stdlib = File(home, "lib/python$VERSION")
-        if (!stdlib.isDirectory) return null
-        val paths = PythonRuntimePaths(executable.absolutePath, home.absolutePath, depsDir(context).absolutePath)
-        ensureSeedPackages(context, paths, assetRevision)
-        return paths
-    }
 
-    fun depsDir(context: Context): File = File(context.filesDir, "deps/python/$VERSION/site-packages").apply { mkdirs() }
-
-    fun seedStatus(context: Context): String {
-        val deps = depsDir(context)
-        val ready = File(deps, ".daidai-python-seed-ready")
-        if (ready.isFile) return "ok"
-        val failed = File(deps, ".daidai-python-seed-failed.log")
-        if (failed.isFile) return failed.readText().take(500)
-        return "pending"
-    }
-
-    private fun copyAssetTree(context: Context, assetPath: String, target: File) {
-        val children = context.assets.list(assetPath).orEmpty()
-        if (children.isEmpty()) {
-            target.parentFile?.mkdirs()
-            context.assets.open(assetPath).use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+        if (!marker.exists() || !File(home, "bin/python3.14").isFile) {
+            try {
+                extractZipAsset(context, home)
+                marker.writeText("ready")
+            } catch (e: Exception) {
+                return null
             }
-            return
         }
-        target.mkdirs()
-        for (child in children) {
-            copyAssetTree(context, "$assetPath/$child", File(target, child))
-        }
-    }
 
-    private fun ensureSeedPackages(context: Context, paths: PythonRuntimePaths, revision: String) {
-        val deps = File(paths.deps).apply { mkdirs() }
-        val marker = File(deps, ".daidai-python-seed-ready")
-        if (marker.isFile && marker.readText().trim() == revision) return
-        val wheelhouse = File(paths.home, "wheelhouse")
-        if (!wheelhouse.isDirectory) return
-        val failureLog = File(deps, ".daidai-python-seed-failed.log")
-        runCatching {
-            verifyWheelhouse(wheelhouse)
-            installWheelhouse(context, paths, wheelhouse, deps)
-            marker.writeText(revision)
-            if (failureLog.isFile) failureLog.writeText("")
-        }.onFailure { error ->
-            failureLog.writeText(error.message ?: error.javaClass.simpleName)
-        }
-    }
+        // Use libpylauncher.so from nativeLibraryDir - it's a PIE executable with exec permission
+        val nativeDir = context.applicationInfo.nativeLibraryDir.orEmpty()
+        val launcherExe = File(nativeDir, "libpylauncher.so")
+        if (!launcherExe.isFile) return null
 
-    private fun installWheelhouse(context: Context, paths: PythonRuntimePaths, wheelhouse: File, deps: File) {
-        val wheels = verifiedWheels(wheelhouse)
-        check(wheels.isNotEmpty()) { "Python wheelhouse is empty" }
-        val pipWheel = wheels.singleOrNull { it.name.startsWith("pip-") }
-            ?: error("Python wheelhouse has no pip bootstrap wheel")
-        extractBootstrapWheel(pipWheel, deps)
-        runPythonCommand(
-            context,
-            paths,
-            listOf("-m", "pip", "install", "--no-index", "--no-deps", "--only-binary=:all:", "--target", deps.absolutePath) +
-                wheels.filter { it != pipWheel }.map(File::getAbsolutePath),
-            "Offline Python wheel installation failed",
+        val libDir = File(home, "lib")
+
+        // Create wrapper script
+        val wrapper = File(home, "bin/python3.14-wrapper.sh")
+        wrapper.writeText(
+            "#!/system/bin/sh\n" +
+            "export LD_LIBRARY_PATH=\"$libDir:$nativeDir:\$LD_LIBRARY_PATH\"\n" +
+            "export PYTHONHOME=\"$home\"\n" +
+            "export PYTHONPATH=\"$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages\"\n" +
+            "export HOME=\"$home\"\n" +
+            "exec \"$launcherExe\" \"\$@\"\n"
         )
+
+        cached = PythonRuntimePaths(
+            executable = "/system/bin/sh",
+            home = home.absolutePath,
+            stdlib = File(home, "lib/python3.14").absolutePath,
+            sitePackages = File(home, "lib/python3.14/site-packages").absolutePath,
+            wrapperScript = wrapper.absolutePath,
+        )
+        return cached
     }
 
-    private fun extractBootstrapWheel(wheel: File, targetRoot: File) {
-        ZipFile(wheel).use { zip ->
-            val entries = zip.entries()
-            while (entries.hasMoreElements()) {
-                val entry = entries.nextElement()
-                val target = File(targetRoot, entry.name).canonicalFile
-                check(target.path.startsWith(targetRoot.canonicalPath + File.separator)) { "Unsafe wheel entry: ${entry.name}" }
-                if (entry.isDirectory) {
-                    target.mkdirs()
-                } else {
-                    target.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
+    private fun extractZipAsset(context: Context, dest: File) {
+        dest.mkdirs()
+        context.assets.open(ASSET_ARCHIVE).use { input ->
+            ZipInputStream(input).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val outFile = File(dest, entry.name)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        java.io.FileOutputStream(outFile).use { fos ->
+                            val buf = ByteArray(8192)
+                            var len: Int
+                            while (zis.read(buf).also { len = it } > 0) {
+                                fos.write(buf, 0, len)
+                            }
+                        }
+                    }
+                    entry = zis.nextEntry
                 }
             }
         }
     }
 
-    private fun runPythonCommand(
-        context: Context,
-        paths: PythonRuntimePaths,
-        args: List<String>,
-        failurePrefix: String,
-    ) {
-        val deps = File(paths.deps).apply { mkdirs() }
-        val command = listOf(
-            paths.executable,
-            paths.home,
-        ) + args
-        val process = ProcessBuilder(command)
-            .redirectErrorStream(true)
-            .apply {
-                environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir.orEmpty()
-                environment()["PYTHONPATH"] = deps.absolutePath
-                environment()["PIP_TARGET"] = deps.absolutePath
-                environment()["HOME"] = context.filesDir.absolutePath
-                environment()["TMPDIR"] = context.cacheDir.absolutePath
-            }
-            .start()
-        val output = process.inputStream.bufferedReader().readText()
-        check(process.waitFor(120, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            "$failurePrefix: timed out"
+    private fun readAssetManifest(context: Context): JSONObject {
+        return context.assets.open(ASSET_MANIFEST).use { input ->
+            JSONObject(input.bufferedReader().readText())
         }
-        val exit = process.exitValue()
-        check(exit == 0) { "$failurePrefix: exit=$exit output=${output.ifBlank { "<empty>" }}" }
-    }
-
-    private fun verifyWheelhouse(wheelhouse: File) {
-        val manifest = File(wheelhouse, "wheelhouse-manifest.json")
-        check(manifest.isFile) { "Python wheelhouse manifest is missing" }
-        val json = JSONObject(manifest.readText())
-        val wheels = json.optJSONArray("wheels") ?: error("Python wheelhouse manifest has no wheels")
-        val expectedNames = mutableSetOf<String>()
-        for (index in 0 until wheels.length()) {
-            val item = wheels.getJSONObject(index)
-            val file = File(wheelhouse, item.getString("filename"))
-            check(isCompatibleWheel(file.name)) { "Incompatible Python wheel: ${file.name}" }
-            expectedNames += file.name
-            check(file.isFile) { "Python wheel missing: ${file.name}" }
-            val expected = item.getString("sha256")
-            val actual = sha256(file)
-            check(expected.equals(actual, ignoreCase = true)) {
-                "Python wheel checksum mismatch: ${file.name}"
-            }
-        }
-        val actualNames = wheelhouse.listFiles { file -> file.isFile && file.extension == "whl" }.orEmpty().mapTo(mutableSetOf()) { it.name }
-        check(actualNames == expectedNames) { "Python wheelhouse contains unmanifested wheels" }
-    }
-
-    private fun verifiedWheels(wheelhouse: File): List<File> {
-        verifyWheelhouse(wheelhouse)
-        return wheelhouse.listFiles { file -> file.isFile && file.extension == "whl" }.orEmpty().sortedBy { it.name }
-    }
-
-    internal fun isCompatibleWheel(filename: String): Boolean {
-        val lower = filename.lowercase()
-        if ("x86_64" in lower || "cp312" in lower || "manylinux" in lower || "musllinux" in lower) return false
-        return lower.endsWith("-py3-none-any.whl") ||
-            Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower)
-    }
-
-    private fun readAssetManifest(context: Context): JSONObject =
-        context.assets.open("$ASSET_ROOT/runtime-manifest.json").bufferedReader().use { JSONObject(it.readText()) }
-
-    private fun runtimeLooksComplete(home: File): Boolean {
-        val stdlib = File(home, "lib/python$VERSION")
-        return File(stdlib, "ssl.py").isFile &&
-            File(stdlib, "sqlite3").isDirectory &&
-            File(stdlib, "venv").isDirectory &&
-            File(stdlib, "ensurepip").isDirectory &&
-            File(stdlib, "lib-dynload/_ssl.cpython-314-aarch64-linux-android.so").isFile &&
-            File(stdlib, "lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so").isFile &&
-            File(home, "etc/ssl/certs/cacert.pem").isFile &&
-            File(home, "wheelhouse/wheelhouse-manifest.json").isFile
-    }
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            while (true) {
-                val read = input.read(buffer)
-                if (read <= 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 }
-
-data class PythonRuntimePaths(
-    val executable: String,
-    val home: String,
-    val deps: String,
-)

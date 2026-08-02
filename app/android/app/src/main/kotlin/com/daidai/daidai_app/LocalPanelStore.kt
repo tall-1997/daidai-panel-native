@@ -1145,7 +1145,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
                 val pyRuntime = AndroidPythonRuntime.ensureReady(appContext)
                 if (pyRuntime != null) {
-                    listOf(pyRuntime.executable, pyRuntime.home, file.absolutePath)
+                    listOf(pyRuntime.executable, pyRuntime.wrapperScript, file.absolutePath)
                 } else {
                     val sysPy = try {
                         val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
@@ -1217,8 +1217,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
             "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
             "LD_LIBRARY_PATH" to appContext.applicationInfo.nativeLibraryDir.orEmpty(),
-            "PYTHONPATH" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
-            "PIP_TARGET" to AndroidPythonRuntime.depsDir(appContext).absolutePath,
+            "PYTHONPATH" to File(appContext.filesDir, "deps/python").absolutePath,
+            "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
             "NODE_PATH" to listOf(
                 AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
                 File(appContext.filesDir, "deps/nodejs/lib/node_modules").absolutePath,
@@ -1941,12 +1941,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val indexURL = configValue("pip_mirror", "https://pypi.org/simple").ifBlank { "https://pypi.org/simple" }
-            val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--prefer-binary", "--index-url", indexURL, "--target", runtime.deps, name)
+            val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--prefer-binary", "--index-url", indexURL, "--target", runtime.sitePackages, name)
             val logs = JSONArray()
                 .put("Installing Python dependency from network source: $name")
                 .put("pip_index_url=$indexURL")
                 .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
-            val result = runLocalProcess(command, AndroidPythonRuntime.depsDir(appContext), logs)
+            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python"), logs)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
