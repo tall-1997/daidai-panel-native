@@ -163,6 +163,7 @@ bundled = os.path.join(home, 'lib', 'python3.14', 'ensurepip', '_bundled')
 
 os.makedirs(site_packages, exist_ok=True)
 
+# Install pip from local wheel (fast, no network)
 wheels = glob.glob(os.path.join(bundled, 'pip*.whl'))
 if wheels:
     print(f"Installing pip from {wheels[0]}")
@@ -191,7 +192,7 @@ else:
             pb.redirectErrorStream(true)
             val process = pb.start()
             process.inputStream.bufferedReader().readText()
-            process.waitFor()
+            process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
         } catch (_: Exception) { }
     }
 }

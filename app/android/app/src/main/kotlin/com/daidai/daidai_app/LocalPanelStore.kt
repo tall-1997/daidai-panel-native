@@ -1907,19 +1907,26 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val names = json.optJSONArray("names") ?: JSONArray()
         val now = Instant.now().toString()
         val ids = JSONArray()
+        val statuses = JSONArray()
+        // Install deps OUTSIDE transaction to avoid deadlock
+        val results = ArrayList<Triple<String, String, Pair<String, String>>>()
+        for (index in 0 until names.length()) {
+            val name = names.optString(index).trim()
+            if (name.isEmpty()) continue
+            val depType = json.optString("type", "nodejs")
+            val installResult = installDependencyForFallback(depType, name)
+            results.add(Triple(name, depType, installResult))
+            statuses.put(JSONObject().put("name", name).put("status", installResult.first).put("log", installResult.second.substring(0, Math.min(500, installResult.second.length))))
+        }
         writableDatabase.beginTransaction()
         try {
-            for (index in 0 until names.length()) {
-                val name = names.optString(index).trim()
-                if (name.isEmpty()) continue
-                val depType = json.optString("type", "nodejs")
-                val installResult = installDependencyForFallback(depType, name)
+            for (triple in results) {
                 val values = ContentValues().apply {
-                    put("name", name)
-                    put("type", depType)
+                    put("name", triple.first)
+                    put("type", triple.second)
                     put("python_version", json.optString("python_version"))
-                    put("status", installResult.first)
-                    put("log", installResult.second)
+                    put("status", triple.third.first)
+                    put("log", triple.third.second)
                     put("created_at", now)
                     put("updated_at", now)
                 }
@@ -1929,7 +1936,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         } finally {
             writableDatabase.endTransaction()
         }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("status", "recorded")))
+        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
     }
 
     private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
@@ -1940,13 +1947,14 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
-            val indexURL = configValue("pip_mirror", "https://pypi.org/simple").ifBlank { "https://pypi.org/simple" }
-            val command = listOf(runtime.executable, runtime.wrapperScript, "-m", "pip", "install", "--no-input", "--prefer-binary", "--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org", "--target", runtime.sitePackages, name)
+            val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
+            installScript.parentFile?.mkdirs()
+            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(['install', '--no-input', '--prefer-binary', '--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org', '--target', sp, sys.argv[1]])\nsys.exit(result)\n")
+
+            val command = listOf(runtime.executable, runtime.wrapperScript, installScript.absolutePath, name)
             val logs = JSONArray()
-                .put("Installing Python dependency from network source: $name")
-                .put("pip_index_url=$indexURL")
-                .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
-            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python"), logs)
+                .put("Installing Python dependency: " + name)
+            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
