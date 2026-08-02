@@ -9,8 +9,28 @@ object GoCoreBridge {
     private const val TAG = "GoCoreBridge"
     private const val STOP_TIMEOUT_MILLIS = 3_000L
 
+    private fun isAndroidPlatformCompatible(): Boolean {
+        return android.os.Build.VERSION.SDK_INT < 36
+    }
+
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
+        if (!isAndroidPlatformCompatible()) {
+            Log.w(TAG, "Go core unsupported on Android SDK ${android.os.Build.VERSION.SDK_INT} (>=36)")
+            return mapOf(
+                "phase" to "failed",
+                "base_url" to "",
+                "instance_id" to "",
+                "core_version" to "gomobile",
+                "schema_version" to 0,
+                "failure_stage" to "CORE_PLATFORM_INCOMPATIBLE",
+                "go_core_error_type" to "AndroidSdkVersion",
+                "go_core_root_error_type" to "SELinuxLinkRestriction",
+                "message" to "Embedded Go core requires Android <=15 (SDK <36); use Kotlin fallback",
+                "foreground_service_enabled" to false,
+            )
+        }
+
         val current = status(localToken)
         if (current["phase"] == "ready") return current
 
