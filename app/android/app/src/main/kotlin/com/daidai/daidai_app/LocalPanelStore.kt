@@ -1517,9 +1517,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun insertTaskLog(taskId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant): Long {
         val content = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         val statusCode = when (result.status) {
-            "success" -> 0
-            "running" -> 2
-            else -> 1
+            "success" -> 1
+            "failed" -> 2
+            "running" -> 3
+            else -> 0
         }
         val values = ContentValues().apply {
             put("task_id", taskId)
@@ -1652,6 +1653,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             .put("content", cursor.string("content"))
             .put("logs", logs)
             .put("status", cursor.int("status"))
+            .put("run_status", when (cursor.int("status")) { 1 -> "success"; 2 -> "failed"; 3 -> "running"; 0 -> "pending"; else -> "unknown" })
             .put("exit_code", if (cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) JSONObject.NULL else cursor.int("exit_code"))
             .put("duration", cursor.double("duration"))
             .put("started_at", cursor.string("started_at"))
