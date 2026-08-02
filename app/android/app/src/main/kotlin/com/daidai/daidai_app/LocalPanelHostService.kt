@@ -44,7 +44,7 @@ class LocalPanelHostService : Service() {
     private var destroyed = false
     private val binder = object : ILocalPanelService.Stub() {
         override fun ensureStarted(): String = encodeWithState(
-            recordCoreResult(LocalPanelRuntime.ensureStarted(applicationContext, localToken)),
+            recordCoreResult(LocalPanelRuntime.tryEnsureStarted(applicationContext, localToken)),
         )
 
         override fun status(): String = encodeWithState(

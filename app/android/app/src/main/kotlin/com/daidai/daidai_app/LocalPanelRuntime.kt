@@ -9,19 +9,43 @@ object LocalPanelRuntime {
 
     @Volatile
     private var cachedResult: Map<String, Any>? = null
+    @Volatile
+    private var initializing = false
+
+    fun tryEnsureStarted(context: Context, localToken: String): Map<String, Any> {
+        cachedResult?.let { return it }
+        if (initializing) {
+            return mapOf(
+                "phase" to "starting",
+                "base_url" to "",
+                "instance_id" to "",
+                "core_version" to "",
+                "schema_version" to 0,
+                "message" to "Panel is starting in background",
+                "foreground_service_enabled" to true,
+                "local_token" to localToken,
+            )
+        }
+        return ensureStarted(context, localToken)
+    }
 
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
         cachedResult?.let { return it }
-        val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
-        val result = if (!requiresFallback(coreStatus)) {
-            stopFallback()
-            coreStatus
-        } else {
-            ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
+        initializing = true
+        try {
+            val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
+            val result = if (!requiresFallback(coreStatus)) {
+                stopFallback()
+                coreStatus
+            } else {
+                ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
+            }
+            cachedResult = result
+            return result
+        } finally {
+            initializing = false
         }
-        cachedResult = result
-        return result
     }
 
     @Synchronized
