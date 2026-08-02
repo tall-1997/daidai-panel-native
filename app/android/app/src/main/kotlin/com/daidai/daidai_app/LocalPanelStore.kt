@@ -292,13 +292,14 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
-            id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, body(session))
+            id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, try { body(session) } catch (_: Exception) { JSONObject() })
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("tasks", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop") ->
                 updateTaskStatus(id, action!!)
             id != null && session.method == NanoHTTPD.Method.GET && (action == "latest-log" || action == "log") -> latestTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> liveTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "stats" -> taskStats(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == null -> taskDetail(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "任务接口尚未实现")
         }
     }
@@ -348,7 +349,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
-            id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateEnv(id, body(session))
+            id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateEnv(id, try { body(session) } catch (_: Exception) { JSONObject() })
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("envs", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") ->
                 updateEnvEnabled(id, action == "enable")
@@ -362,7 +363,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return when {
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/tree" -> scriptTree()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts" -> paginated("scripts", scriptRows())
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/content" -> scriptContent(session.parms["path"].orEmpty())
+            session.method == NanoHTTPD.Method.GET && normalizedUri.startsWith("/scripts/content") -> scriptContent(session.parms["path"].orEmpty())
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/download" -> downloadScript(session)
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/scripts/content" -> saveScriptContent(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/directory" -> createScriptDirectory(body(session))
@@ -697,6 +698,7 @@ fun serveDashboardStats(): JSONObject {
             put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
             put("type", json.optString("type", "public-remote"))
         }
+        ensureSubscriptionsTable(writableDatabase)
         val id = writableDatabase.insert("local_subscriptions", null, values)
         return if (id > 0) {
             ok(JSONObject().put("data", JSONObject().put("id", id)))
@@ -1501,6 +1503,29 @@ fun serveDashboardStats(): JSONObject {
         }
         val id = writableDatabase.insertOrThrow("tasks", null, values)
         return ok(JSONObject().put("data", JSONObject().put("id", id)))
+    }
+
+    private fun taskDetail(id: Long): NanoHTTPD.Response {
+        val cursor = readableDatabase.query("tasks", null, "id = ?", arrayOf(id.toString()), null, null, null)
+        return if (cursor.moveToFirst()) {
+            val data = JSONObject().apply {
+                put("id", cursor.long("id"))
+                put("name", cursor.string("name"))
+                put("command", cursor.string("command"))
+                put("task_type", cursor.string("task_type"))
+                put("status", cursor.double("status"))
+                put("cron_expression", cursor.string("cron_expression"))
+                put("python_version", cursor.string("python_version"))
+                put("labels", cursor.string("labels"))
+                put("created_at", cursor.string("created_at"))
+                put("updated_at", cursor.string("updated_at"))
+            }
+            cursor.close()
+            ok(JSONObject().put("data", data))
+        } else {
+            cursor.close()
+            error(NanoHTTPD.Response.Status.NOT_FOUND, "task not found")
+        }
     }
 
     private fun updateTask(id: Long, json: JSONObject): NanoHTTPD.Response {
