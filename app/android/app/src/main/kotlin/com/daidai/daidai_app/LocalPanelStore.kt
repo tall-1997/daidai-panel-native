@@ -1908,7 +1908,6 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val now = Instant.now().toString()
         val ids = JSONArray()
         val statuses = JSONArray()
-        // Install deps OUTSIDE transaction to avoid deadlock
         val results = ArrayList<Triple<String, String, Pair<String, String>>>()
         for (index in 0 until names.length()) {
             val name = names.optString(index).trim()
@@ -1918,13 +1917,18 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             results.add(Triple(name, depType, installResult))
             statuses.put(JSONObject().put("name", name).put("status", installResult.first).put("log", installResult.second.substring(0, Math.min(500, installResult.second.length))))
         }
+        val installedPkgs = if (results.any { it.second == "python" && it.third.first == "installed" }) {
+            queryPipInstalledPackages()
+        } else { emptyMap() }
         writableDatabase.beginTransaction()
         try {
             for (triple in results) {
+                val ver = installedPkgs[triple.first.lowercase()] ?: ""
                 val values = ContentValues().apply {
                     put("name", triple.first)
                     put("type", triple.second)
-                    put("python_version", json.optString("python_version"))
+                    put("python_version", if (triple.second == "python") "3.14" else json.optString("python_version"))
+                    put("version", ver)
                     put("status", triple.third.first)
                     put("log", triple.third.second)
                     put("created_at", now)
@@ -1932,11 +1936,71 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 }
                 ids.put(writableDatabase.insertOrThrow("dependencies", null, values))
             }
+            if (installedPkgs.isNotEmpty()) {
+                val existingNames = results.map { it.first.lowercase() }.toSet()
+                val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
+                for ((pkgName, pkgVer) in installedPkgs) {
+                    if (pkgName in existingNames || pkgName in skipNames) continue
+                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "name = ?", arrayOf(pkgName), null, null, null)
+                    val exists = cursor.count > 0
+                    cursor.close()
+                    if (!exists) {
+                        val values = ContentValues().apply {
+                            put("name", pkgName)
+                            put("type", "python")
+                            put("python_version", "3.14")
+                            put("version", pkgVer)
+                            put("status", "installed")
+                            put("log", "Auto-installed as sub-dependency")
+                            put("created_at", now)
+                            put("updated_at", now)
+                        }
+                        writableDatabase.insertWithOnConflict("dependencies", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                    }
+                }
+            }
             writableDatabase.setTransactionSuccessful()
         } finally {
             writableDatabase.endTransaction()
         }
         return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
+    }
+
+    private fun queryPipInstalledPackages(): Map<String, String> {
+        val runtime = AndroidPythonRuntime.ensureReady(appContext) ?: return emptyMap()
+        val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_list.py")
+        script.parentFile?.mkdirs()
+        val pyCode = listOf(
+            "import sys,os,json",
+            "sp=os.path.join(os.environ.get('PYTHONHOME',''),'lib/python3.14/site-packages')",
+            "sys.path.insert(0,sp)",
+            "from pip._internal.cli.main import main as pip_main",
+            "import io",
+            "old=sys.stdout",
+            "sys.stdout=io.StringIO()",
+            "try:",
+            "    pip_main(['list','--format=json'])",
+            "except: pass",
+            "out=sys.stdout.getvalue()",
+            "sys.stdout=old",
+            "print(out)"
+        ).joinToString("\n")
+        script.writeText(pyCode)
+        val command = listOf(runtime.executable, runtime.wrapperScript, script.absolutePath)
+        val logs = JSONArray()
+        val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs)
+        val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        return try {
+            val start = text.indexOf("[")
+            val end = text.lastIndexOf("]") + 1
+            if (start >= 0 && end > start) {
+                val pkgs = org.json.JSONArray(text.substring(start, end))
+                (0 until pkgs.length()).associate { i ->
+                    val pkg = pkgs.getJSONObject(i)
+                    pkg.getString("name").lowercase() to pkg.getString("version")
+                }
+            } else { emptyMap() }
+        } catch (_: Exception) { emptyMap() }
     }
 
     private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
