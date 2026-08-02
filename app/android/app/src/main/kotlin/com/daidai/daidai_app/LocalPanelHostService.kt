@@ -76,10 +76,13 @@ class LocalPanelHostService : Service() {
         try {
             createNotificationChannel()
             // Initialize panel runtime in background to avoid blocking UI
+            // Start fallback server immediately, then do heavy Python init
             Thread {
                 try {
-                    AndroidPythonRuntime.preload(applicationContext)
+                    // First: start fallback HTTP server (fast)
                     LocalPanelRuntime.ensureStarted(applicationContext, localToken)
+                    // Second: preload Python runtime in background (slow, 7MB zip extraction)
+                    AndroidPythonRuntime.preload(applicationContext)
                 } catch (_: Exception) { }
             }.start()
             recoveryCoordinator = PersistentCoreRecoveryCoordinator(

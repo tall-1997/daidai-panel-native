@@ -15,16 +15,11 @@ object LocalPanelRuntime {
     fun tryEnsureStarted(context: Context, localToken: String): Map<String, Any> {
         cachedResult?.let { return it }
         if (initializing) {
-            return mapOf(
-                "phase" to "starting",
-                "base_url" to "",
-                "instance_id" to "",
-                "core_version" to "",
-                "schema_version" to 0,
-                "message" to "Panel is starting in background",
-                "foreground_service_enabled" to true,
-                "local_token" to localToken,
-            )
+            // Return ready with fallback endpoint immediately so Flutter UI can connect
+            // while Python runtime continues initializing in background
+            val fallbackPort = 5700
+            val endpoint = "http://127.0.0.1:$fallbackPort"
+            return fallbackStatus(endpoint, localToken, "background_init")
         }
         return ensureStarted(context, localToken)
     }

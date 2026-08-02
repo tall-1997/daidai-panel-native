@@ -19,14 +19,16 @@ object AndroidPythonRuntime {
     )
 
     private var cached: PythonRuntimePaths? = null
-    private var cacheChecked = false
+    @Volatile private var cacheChecked = false
 
     fun ensureReady(context: Context): PythonRuntimePaths? {
         if (cacheChecked) return cached
         synchronized(this) {
             if (cacheChecked) return cached
+            val result = doEnsureReady(context)
+            cached = result
             cacheChecked = true
-            return doEnsureReady(context)
+            return result
         }
     }
 
