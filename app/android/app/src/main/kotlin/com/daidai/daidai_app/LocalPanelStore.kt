@@ -115,6 +115,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         createConfigTables(db)
         ensureDefaultAdmin(db)
         ensureSubscriptionsTable(db)
+        ensureDefaultDeps(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -179,6 +180,22 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     }
 
 
+    private fun listUsers(): NanoHTTPD.Response {
+        val rows = JSONArray()
+        readableDatabase.query("local_users", arrayOf("id", "username", "created_at", "updated_at"), null, null, null, null, "id ASC").use { cursor ->
+            while (cursor.moveToNext()) {
+                rows.put(JSONObject().apply {
+                    put("id", cursor.long("id"))
+                    put("username", cursor.string("username"))
+                    put("created_at", cursor.string("created_at"))
+                    put("updated_at", cursor.string("updated_at"))
+                    put("role", "admin")
+                })
+            }
+        }
+        return ok(JSONObject().put("data", rows).put("total", rows.length()))
+    }
+
     private fun ensureDefaultAdmin(db: SQLiteDatabase) {
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val now = Instant.now().toString()
@@ -224,6 +241,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 authenticated(session) { ok(JSONObject().put("message", "ok")) }
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/captcha-config" ->
                 ok(JSONObject().put("data", JSONObject().put("enabled", false).put("configured", true)))
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/users" -> listUsers()
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> listUsers()
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
@@ -277,7 +296,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("tasks", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop") ->
                 updateTaskStatus(id, action!!)
-            id != null && session.method == NanoHTTPD.Method.GET && action == "latest-log" -> latestTaskLogResponse(id)
+            id != null && session.method == NanoHTTPD.Method.GET && (action == "latest-log" || action == "log") -> latestTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> liveTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "stats" -> taskStats(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "任务接口尚未实现")
@@ -292,7 +311,24 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "stream" -> taskLogStream(id)
             session.method == NanoHTTPD.Method.GET && id != null -> taskLogByIdJson(id)?.let(::ok)
                 ?: error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
-            session.method == NanoHTTPD.Method.GET -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("page", 1).put("page_size", 0))
+            session.method == NanoHTTPD.Method.GET -> {
+                val taskLogs = JSONArray()
+                readableDatabase.query("task_logs_local", arrayOf("id", "task_id", "status", "content", "duration", "started_at", "ended_at", "created_at"), null, null, null, null, "id DESC", "50").use { cursor ->
+                    while (cursor.moveToNext()) {
+                        taskLogs.put(JSONObject().apply {
+                            put("id", cursor.long("id"))
+                            put("task_id", cursor.long("task_id"))
+                            put("status", cursor.int("status"))
+                            put("content", cursor.string("content"))
+                            put("duration", cursor.getDouble(cursor.getColumnIndexOrThrow("duration")))
+                            put("started_at", cursor.string("started_at"))
+                            put("ended_at", cursor.string("ended_at"))
+                            put("created_at", cursor.string("created_at"))
+                        })
+                    }
+                }
+                ok(JSONObject().put("data", taskLogs).put("total", taskLogs.length()).put("page", 1).put("page_size", taskLogs.length()))
+            }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "日志接口尚未实现")
         }
     }
@@ -402,7 +438,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return when {
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtimes" -> pythonRuntimes()
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/python-runtime-default" ->
-                ok(JSONObject().put("data", JSONObject().put("version", body(session).optString("version", "3.12"))))
+                ok(JSONObject().put("data", JSONObject().put("version", body(session).optString("version", "3.14"))))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/pip" -> ok(JSONArray())
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/npm" ->
                 ok(JSONObject().put("dependencies", JSONObject()))
@@ -530,7 +566,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         }
         val taskCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val envCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
-        val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val subCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val data = JSONObject().apply {
             put("mode", "android_local")
@@ -547,6 +583,30 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
 
     // ===== Subscriptions (Android local) =====
+
+    private fun ensureDefaultDeps(db: SQLiteDatabase) {
+        val defaults = arrayOf(
+            arrayOf("python", "python", "3.14", "installed"),
+            arrayOf("shell", "shell", "android-16", "installed"),
+            arrayOf("node", "node", "lts", "installed"),
+            arrayOf("git", "git", "android", "installed"),
+            arrayOf("ssh", "ssh", "android", "installed")
+        )
+        val now = java.time.Instant.now().toString()
+        for (dep in defaults) {
+            val values = ContentValues().apply {
+                put("name", dep[0])
+                put("type", dep[1])
+                put("python_version", dep[2])
+                put("version", dep[2])
+                put("status", dep[3])
+                put("log", "Android local runtime: " + dep[0] + " " + dep[2])
+                put("created_at", now)
+                put("updated_at", now)
+            }
+            db.insertWithOnConflict("dependencies", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+        }
+    }
 
     private fun ensureSubscriptionsTable(db: SQLiteDatabase) {
         db.execSQL("""
@@ -1425,7 +1485,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
             val startedAt = Instant.now()
+            appLog("Task", "Running task $id")
             val result = runTaskNow(id)
+            appLog("Task", "Task $id result: ${result.status} exit=${result.exitCode}")
             val endedAt = Instant.now()
             val logId = insertTaskLog(id, result, startedAt, endedAt)
             values.clear()
@@ -1977,13 +2039,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     private fun pythonRuntimes(): NanoHTTPD.Response = ok(
         JSONObject()
-            .put("default_version", "3.12")
+            .put("default_version", "3.14")
             .put(
                 "data",
                 JSONArray().put(
                     JSONObject()
-                        .put("version", "3.12")
-                        .put("label", "Python 3.12")
+                        .put("version", "3.14")
+                        .put("label", "Python 3.14")
                         .put("default", true)
                         .put("available", true)
                         .put("venv_healthy", true)

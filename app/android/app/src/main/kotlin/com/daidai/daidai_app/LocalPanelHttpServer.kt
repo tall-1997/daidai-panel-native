@@ -73,7 +73,8 @@ class LocalPanelHttpServer(
             Method.GET to "/api/scripts/tree", Method.GET to "/api/scripts/content",
             Method.PUT to "/api/scripts/content", Method.POST to "/api/scripts/directory",
             Method.GET to "/api/subscriptions", Method.POST to "/api/subscriptions",
-            Method.GET to "/api/system/panel-settings" -> true
+            Method.GET to "/api/system/panel-settings",
+            Method.GET to "/api/auth/users", Method.GET to "/api/auth/user-list" -> true
             else -> uri.startsWith("/api/tasks") || uri.startsWith("/api/v1/tasks") ||
                     uri.startsWith("/api/envs") || uri.startsWith("/api/v1/envs") ||
                     uri.startsWith("/api/deps") || uri.startsWith("/api/v1/deps") ||
