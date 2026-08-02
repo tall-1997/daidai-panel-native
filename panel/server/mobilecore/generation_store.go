@@ -1878,3 +1878,37 @@ func newGenerationID() (string, error) {
 	}
 	return fmt.Sprintf("%d-%s", time.Now().UTC().UnixNano(), hex.EncodeToString(random)), nil
 }
+
+
+func cleanupProbeOperation(ops, dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{recoveryMetadataNewName: true, "publish-state": true, recoveryMetadataOldName: true}
+	for _, e := range entries {
+		if !allowed[e.Name()] {
+			return errors.New("unknown recovery probe slot")
+		}
+	}
+	var result error
+	for _, name := range []string{recoveryMetadataNewName, "publish-state", recoveryMetadataOldName} {
+		if err := recoveryProbeBoundary("probe-remove-" + name); err != nil {
+			result = errors.Join(err, result)
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+		result = errors.Join(result, platformSyncDirectory(dir))
+	}
+	if result != nil {
+		return result
+	}
+	if err := recoveryProbeBoundary("probe-remove-directory"); err != nil {
+		return err
+	}
+	if err := os.Remove(dir); err != nil {
+		return err
+	}
+	return platformSyncDirectory(ops)
+}

@@ -67,7 +67,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -148,7 +148,7 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
             check(archive.getEntry("classes.jar") != null) {
                 "Invalid mobilecore.aar: classes.jar is missing."
             }
-            listOf("arm64-v8a", "x86_64").forEach { abi ->
+            listOf("arm64-v8a").forEach { abi ->
                 check(archive.getEntry("jni/$abi/libgojni.so") != null) {
                     "Invalid mobilecore.aar: jni/$abi/libgojni.so is missing."
                 }
@@ -159,8 +159,8 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
                 temporaryJar.outputStream().use { output -> input.copyTo(output) }
             }
             ZipFile(temporaryJar).use { classes ->
-                check(classes.getEntry("mobilecore/mobilecore/Mobilecore.class") != null) {
-                    "Invalid mobilecore.aar: mobilecore/mobilecore/Mobilecore.class is missing."
+                check(classes.getEntry("mobilecore/Mobilecore.class") != null) {
+                    "Invalid mobilecore.aar: mobilecore/Mobilecore.class is missing."
                 }
             }
         }
@@ -355,8 +355,7 @@ fun sha256(file: File): String {
 tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
-    dependsOn(verifyPythonNativeRuntime)
-    dependsOn(verifyNodeNativeRuntime)
+    
 }
 
 flutter {

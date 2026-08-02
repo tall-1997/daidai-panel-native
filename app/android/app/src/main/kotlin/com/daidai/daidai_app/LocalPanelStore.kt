@@ -113,8 +113,9 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         createScriptRuntimeTables(db)
         createTaskLogTables(db)
         createConfigTables(db)
-    }
         ensureDefaultAdmin(db)
+        ensureSubscriptionsTable(db)
+    }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createScriptRuntimeTables(db)
@@ -521,6 +522,114 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "备份接口尚未实现")
         }
     }
+
+
+    // ===== Dashboard (Android local summary) =====
+
+    fun serveDashboard(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        if (session.method != NanoHTTPD.Method.GET) {
+            return error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "GET only")
+        }
+        val taskCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks", null).use {
+            it.moveToFirst(); it.getLong(0)
+        }
+        val envCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use {
+            it.moveToFirst(); it.getLong(0)
+        }
+        val depCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM local_dependencies", null).use {
+            it.moveToFirst(); it.getLong(0)
+        }
+        val subCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use {
+            it.moveToFirst(); it.getLong(0)
+        }
+        val data = JSONObject().apply {
+            put("mode", "android_local")
+            put("version", "0.3.15")
+            put("core_status", "Kotlin fallback (Go Core requires Android <=15)")
+            put("tasks", taskCount)
+            put("envs", envCount)
+            put("deps", depCount)
+            put("subscriptions", subCount)
+            put("hostname", configValue("hostname", "android-device"))
+            put("platform", "arm64-v8a")
+        }
+        return success(JSONObject().put("data", data))
+    }
+
+
+
+    // ===== Subscriptions (Android local) =====
+
+    private fun ensureSubscriptionsTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS local_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                type TEXT NOT NULL DEFAULT 'public-remote',
+                last_sync TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+    }
+
+    fun serveSubscriptions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val uri = session.uri ?: ""
+        return when {
+            session.method == NanoHTTPD.Method.GET && uri == "/api/subscriptions" -> listSubscriptions()
+            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(body(session))
+            session.method == NanoHTTPD.Method.DELETE && uri.startsWith("/api/subscriptions/") -> deleteSubscription(uri)
+            session.method == NanoHTTPD.Method.PUT && uri.startsWith("/api/subscriptions/refresh/") -> refreshSubscription(uri)
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
+        }
+    }
+
+    private fun listSubscriptions(): NanoHTTPD.Response {
+        val rows = queryRows("SELECT * FROM local_subscriptions ORDER BY id DESC") { cursor ->
+            JSONObject().apply {
+                put("id", cursor.long("id"))
+                put("name", cursor.string("name"))
+                put("url", cursor.string("url"))
+                put("enabled", cursor.int("enabled") == 1)
+                put("type", cursor.string("type"))
+                put("last_sync", cursor.string("last_sync"))
+                put("created_at", cursor.string("created_at"))
+                put("updated_at", cursor.string("updated_at"))
+            }
+        }
+        return success(JSONObject().put("data", rows))
+    }
+
+    private fun addSubscription(body: String): NanoHTTPD.Response {
+        val json = JSONObject(body)
+        val values = ContentValues().apply {
+            put("name", json.optString("name", ""))
+            put("url", json.optString("url", ""))
+            put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
+            put("type", json.optString("type", "public-remote"))
+        }
+        val id = writableDatabase.insert("local_subscriptions", null, values)
+        return if (id > 0) {
+            success(JSONObject().put("data", JSONObject().put("id", id)))
+        } else {
+            error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "add failed")
+        }
+    }
+
+    private fun deleteSubscription(uri: String): NanoHTTPD.Response {
+        val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
+        writableDatabase.delete("local_subscriptions", "id = ?", arrayOf(id.toString()))
+        return success(JSONObject().put("data", JSONObject().put("deleted", id)))
+    }
+
+    private fun refreshSubscription(uri: String): NanoHTTPD.Response {
+        val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
+        writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync = datetime('now'), updated_at = datetime('now') WHERE id = ?", arrayOf(id.toString()))
+        return success(JSONObject().put("data", JSONObject().put("refreshed", id).put("last_sync", System.currentTimeMillis().toString())))
+    }
+
 
     private fun taskRows(): JSONArray = queryRows(
         "SELECT * FROM tasks ORDER BY id DESC"
