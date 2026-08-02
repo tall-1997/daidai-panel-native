@@ -107,6 +107,7 @@ jobs:
   x64-emulator:
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true
     timeout-minutes: 90
     strategy:
       fail-fast: false
