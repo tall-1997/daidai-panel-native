@@ -1125,7 +1125,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
-                logs.put("Python runtime not available on this device. Android local fallback supports shell (.sh) scripts only. To run Python scripts, install Python runtime or use a device with Python support."),
+                logs.put("Runtime not available for script type: ${file.extension.ifBlank { languageHint.ifBlank { "unknown" } }}. Supported: .sh (shell), .py (python), .js (node)."),
                 "failed",
                 true,
                 127,
@@ -1155,8 +1155,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                     if (sysPy != null) listOf(sysPy, file.absolutePath) else null
                 }
             }
-            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, file.absolutePath) }
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, "-e", typeScriptEvalCode(), file.absolutePath) }
+            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", typeScriptEvalCode(), file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }
@@ -2032,12 +2032,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 val deps = AndroidNodeRuntime.depsDir(appContext)
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
                 val registry = configValue("npm_mirror", "https://registry.npmjs.org").ifBlank { "https://registry.npmjs.org" }
-                val command = listOf(runtime.executable, npm.absolutePath, "install", "--ignore-scripts", "--registry", registry, "--prefix", deps.absolutePath, name)
+                val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "install", "--ignore-scripts", "--registry", registry, "--prefix", deps.absolutePath, name)
                 val logs = JSONArray()
                     .put("Installing Node dependency from network source: $name")
                     .put("npm_registry=$registry")
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
-                val result = runLocalProcess(command, deps, logs)
+                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode == 0) "installed" to text else "failed" to text
             } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
