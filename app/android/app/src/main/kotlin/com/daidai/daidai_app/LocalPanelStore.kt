@@ -1189,12 +1189,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                     lines.forEach { output += it }
                 }
             }.also { it.start() }
-            val finished = process.waitFor(60, TimeUnit.SECONDS)
+            val finished = process.waitFor(300, TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
                 reader.join(1_000)
                 output.forEach { logs.put(it) }
-                logs.put("Script timed out after 60 seconds")
+                logs.put("Script timed out after 300 seconds")
                 LocalScriptResult(logs, "failed", true, 124)
             } else {
                 reader.join(1_000)
@@ -1941,7 +1941,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val indexURL = configValue("pip_mirror", "https://pypi.org/simple").ifBlank { "https://pypi.org/simple" }
-            val command = listOf(runtime.executable, runtime.home, "-m", "pip", "install", "--no-input", "--prefer-binary", "--index-url", indexURL, "--target", runtime.sitePackages, name)
+            val command = listOf(runtime.executable, runtime.wrapperScript, "-m", "pip", "install", "--no-input", "--prefer-binary", "--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org", "--target", runtime.sitePackages, name)
             val logs = JSONArray()
                 .put("Installing Python dependency from network source: $name")
                 .put("pip_index_url=$indexURL")
