@@ -34,53 +34,7 @@ class LocalPanelHttpServer(
             }
         }
 
-        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = when (method to uri) {
-            Method.GET to "/api/v1/health",
-            Method.GET to "/api/health",
-            Method.GET to "/api/local/capabilities",
-            Method.GET to "/api/system/version",
-            Method.GET to "/api/system/public-version",
-            Method.GET to "/api/system/health-check",
-            Method.POST to "/api/system/health-check",
-            Method.GET to "/api/system/info",
-            Method.GET to "/api/android/recovery-metadata",
-            Method.GET to "/api/system/backups",
-            Method.POST to "/api/system/backup/upload",
-            Method.GET to "/api/system/backup/download",
-            Method.POST to "/api/system/restore",
-            Method.GET to "/api/system/restore/progress",
-            Method.GET to "/api/auth/check-init",
-            Method.POST to "/api/auth/init",
-            Method.POST to "/api/auth/login",
-            Method.POST to "/api/auth/refresh",
-            Method.GET to "/api/auth/user",
-            Method.POST to "/api/auth/logout",
-                    Method.GET to "/api/auth/captcha-config",
-            Method.GET to "/api/system/dashboard",
-            Method.GET to "/api/system/stats",
-            Method.POST to "/api/system/backup",
-            Method.GET to "/api/system/machine-code",
-            Method.GET to "/api/system/check-update",
-            Method.GET to "/api/system/panel-log",
-            Method.GET to "/api/tasks", Method.POST to "/api/tasks",
-            Method.GET to "/api/v1/tasks", Method.POST to "/api/v1/tasks",
-            Method.GET to "/api/envs", Method.POST to "/api/envs",
-            Method.GET to "/api/v1/envs", Method.POST to "/api/v1/envs",
-            Method.GET to "/api/deps", Method.POST to "/api/deps",
-            Method.GET to "/api/v1/deps", Method.POST to "/api/v1/deps",
-            Method.GET to "/api/configs", Method.GET to "/api/v1/configs",
-            Method.GET to "/api/logs", Method.GET to "/api/v1/logs",
-            Method.GET to "/api/scripts/tree", Method.GET to "/api/scripts/content",
-            Method.PUT to "/api/scripts/content", Method.POST to "/api/scripts/directory",
-            Method.GET to "/api/subscriptions", Method.POST to "/api/subscriptions",
-            Method.GET to "/api/system/panel-settings",
-            Method.GET to "/api/auth/users", Method.GET to "/api/auth/user-list" -> true
-            else -> uri.startsWith("/api/tasks") || uri.startsWith("/api/v1/tasks") ||
-                    uri.startsWith("/api/envs") || uri.startsWith("/api/v1/envs") ||
-                    uri.startsWith("/api/deps") || uri.startsWith("/api/v1/deps") ||
-                    uri.startsWith("/api/scripts") || uri.startsWith("/api/subscriptions") ||
-                    uri.startsWith("/api/logs") || uri.startsWith("/api/v1/logs")
-        }
+        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = uri.startsWith("/api/")
     }
 
     internal data class RequestBoundary(
@@ -143,7 +97,7 @@ class LocalPanelHttpServer(
             if (uri.startsWith("/api/system/dashboard")) return store.serveDashboard(session)
             if (uri.startsWith("/api/system/stats")) return jsonResponse(systemStats())
             if (uri.startsWith("/api/system/panel-log")) return store.serveLogs(session)
-            if (uri.startsWith("/api/system/backups")) return store.serveBackup(session)
+            if (uri.startsWith("/api/system/backups") || uri.startsWith("/api/system/backup") || uri.startsWith("/api/system/restore")) return store.serveBackup(session)
             if (uri.startsWith("/api/system/panel-settings")) return store.serveConfigs(session)
             if (uri.startsWith("/api/system/machine-code")) return jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-local")).put("status", "ok"))
             if (uri.startsWith("/api/system/check-update")) return jsonResponse(JSONObject().put("data", JSONObject().put("latest", "0.3.15").put("current", "0.3.15")).put("status", "ok"))
@@ -177,6 +131,8 @@ class LocalPanelHttpServer(
                 session.uri.startsWith("/api/scripts") -> store.serveScripts(session)
                 session.uri.startsWith("/api/subscriptions") -> store.serveSubscriptions(session)
                 session.uri.startsWith("/api/logs") -> store.serveLogs(session)
+                session.uri.startsWith("/api/events") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
+                session.uri.startsWith("/api/sse") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
 
                 LocalPanelStore.isRecoveryRequest(session.method, session.uri) -> store.serveBackup(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
