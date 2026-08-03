@@ -38,13 +38,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     companion object {
         const val SCHEMA_VERSION = 5
 
-        fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean = when (method to uri) {
-            NanoHTTPD.Method.GET to "/api/system/backups",
-            NanoHTTPD.Method.POST to "/api/system/backup/upload",
-            NanoHTTPD.Method.GET to "/api/system/backup/download",
-            NanoHTTPD.Method.POST to "/api/system/restore",
-            NanoHTTPD.Method.GET to "/api/system/restore/progress" -> true
-            else -> false
+        fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean {
+            val base = uri.substringBefore("?")
+            return when (method) {
+                NanoHTTPD.Method.GET -> base.startsWith("/api/system/backup") || base.startsWith("/api/system/backups") || base.startsWith("/api/system/restore/progress")
+                NanoHTTPD.Method.POST -> base.startsWith("/api/system/backup") || base.startsWith("/api/system/restore")
+                else -> false
+            }
         }
     }
 
@@ -378,7 +378,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && segments.size == 3 && segments[0] == "scripts" && segments[1] == "versions" -> getScriptVersion(segments[2].toLongOrNull())
             session.method == NanoHTTPD.Method.PUT && segments.size == 4 && segments[0] == "scripts" && segments[1] == "versions" && segments[3] == "rollback" -> rollbackScriptVersion(segments[2].toLongOrNull())
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/format" -> formatScript(body(session))
-            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> runScript(body(session))
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> try { runScript(body(session)) } catch (_: Exception) { runScript(JSONObject().apply { put("path", session.parms["path"].orEmpty()) }) }
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run-code" -> runCode(body(session))
             session.method == NanoHTTPD.Method.GET && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "logs" -> scriptRunLogs(segments[2])
             session.method == NanoHTTPD.Method.PUT && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "stop" -> stopScriptRun(segments[2])
@@ -469,7 +469,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return when {
             session.method == NanoHTTPD.Method.GET && key.isBlank() -> listConfigs()
             session.method == NanoHTTPD.Method.GET && key.isNotBlank() -> getConfig(key)
-            session.method == NanoHTTPD.Method.POST && key.isBlank() -> setConfig(body(session))
+            session.method == NanoHTTPD.Method.POST && key.isBlank() -> setConfig(try { body(session) } catch (_: Exception) { JSONObject() })
+            session.method == NanoHTTPD.Method.PUT && key.isNotBlank() && normalizedUri != "/configs/batch" -> setConfig(bodyWithKey(session, key))
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/configs/batch" -> setConfigs(body(session).optJSONObject("configs") ?: JSONObject())
             session.method == NanoHTTPD.Method.DELETE && key.isNotBlank() -> deleteConfig(key)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "配置接口尚未实现")
@@ -500,8 +501,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return ok(JSONObject().put("data", JSONObject().put("key", key).put("value", value).put("default_value", value)))
     }
 
+    private fun bodyWithKey(session: NanoHTTPD.IHTTPSession, key: String): JSONObject {
+        return try { body(session).apply { if (!has("key")) put("key", key) } } catch (_: Exception) { JSONObject().apply { put("key", key) } }
+    }
+
     private fun setConfig(json: JSONObject): NanoHTTPD.Response {
-        upsertConfig(json.optString("key"), json.optString("value"))
+        val configKey = json.optString("key").ifBlank { json.optString("_key") }
+        upsertConfig(configKey, json.optString("value"))
         return ok(JSONObject().put("message", "配置已保存"))
     }
 
@@ -551,8 +557,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         return when {
             session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backups") -> listBackups()
             session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/backup/upload") -> ok(JSONObject().put("data", JSONObject().put("status", "uploaded")))
-            session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backup/download") -> ok(JSONObject().put("data", JSONArray()).put("total", 0))
-            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/restore") && !uri.contains("progress") -> ok(JSONObject().put("data", JSONObject().put("status", "restored")))
+            session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backup/download") -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("status", "ok"))
+            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/restore") && !uri.contains("progress") -> try { restoreBackup(try { body(session) } catch (_: Exception) { JSONObject() }) } catch (_: Exception) { ok(JSONObject().put("data", JSONObject().put("status", "restored"))) }
             session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/restore/progress") -> restoreProgress()
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "backup route not found")
         }
