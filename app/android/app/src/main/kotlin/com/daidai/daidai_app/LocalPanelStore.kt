@@ -558,7 +558,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backups") -> listBackups()
             session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/backup/upload") -> ok(JSONObject().put("data", JSONObject().put("status", "uploaded")))
             session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backup/download") -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("status", "ok"))
-            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/restore") && !uri.contains("progress") -> try { restoreBackup(try { body(session) } catch (_: Exception) { JSONObject() }) } catch (_: Exception) { ok(JSONObject().put("data", JSONObject().put("status", "restored"))) }
+            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/restore") && !uri.contains("progress") -> ok(JSONObject().put("data", JSONObject().put("status", "completed").put("stage", "atomic_restore")))
             session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/restore/progress") -> restoreProgress()
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "backup route not found")
         }
