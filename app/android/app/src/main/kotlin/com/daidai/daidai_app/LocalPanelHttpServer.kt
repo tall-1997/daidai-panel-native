@@ -19,6 +19,7 @@ class LocalPanelHttpServer(
     port: Int = findAvailablePort()
 ) : NanoHTTPD("127.0.0.1", port) {
     private val store = LocalPanelStore(context)
+    private val cronScheduler = AndroidFallbackCronScheduler(store)
     @Volatile
     private var goCoreFallbackReason = goCoreFallbackReason
     @Volatile
@@ -60,7 +61,10 @@ class LocalPanelHttpServer(
         localToken = token
     }
 
+    internal fun startScheduler() = cronScheduler.start()
+
     fun shutdown() {
+        cronScheduler.close()
         stop()
         store.close()
     }
@@ -80,8 +84,14 @@ class LocalPanelHttpServer(
             if (session.uri.startsWith("/api/auth")) {
                 return store.serveAuth(session)
             }
+            if (session.uri.startsWith("/api/security")) {
+                return store.serveSecurity(session)
+            }
             // Route dispatch for all store-backed endpoints
             val uri = session.uri ?: ""
+            if (uri.startsWith("/api/users") || uri.startsWith("/api/v1/users")) return store.serveUsers(session, if (uri.startsWith("/api/v1")) "/api/v1/users" else "/api/users")
+            if (listOf("/api/ssh-keys","/api/v1/ssh-keys","/api/platform-tokens","/api/v1/platform-tokens","/api/open-api","/api/v1/open-api","/api/sponsors","/api/v1/sponsors").any(uri::startsWith)) return store.serveManagement(session)
+            if (uri.startsWith("/api/notifications") || uri.startsWith("/api/v1/notifications")) return store.serveNotifications(session)
             if (uri.startsWith("/api/tasks")) return store.serveTasks(session)
             if (uri.startsWith("/api/v1/tasks")) return store.serveTasks(session)
             if (uri.startsWith("/api/envs")) return store.serveEnvs(session)
@@ -97,8 +107,11 @@ class LocalPanelHttpServer(
             if (uri.startsWith("/api/system/dashboard")) return store.serveDashboard(session)
             if (uri.startsWith("/api/system/stats")) return jsonResponse(systemStats())
             if (uri.startsWith("/api/system/panel-log")) return store.serveLogs(session)
-            if (uri.startsWith("/api/system/backups") || uri.startsWith("/api/system/backup") || uri.startsWith("/api/system/restore")) return store.serveBackup(session)
+            if (LocalPanelStore.isRecoveryRequest(session.method, uri)) return store.serveBackup(session)
             if (uri.startsWith("/api/system/panel-settings")) return store.serveConfigs(session)
+            if (uri == "/api/system/config-script" || uri == "/api/v1/system/config-script") return store.serveConfigScript(session)
+            if (uri.startsWith("/api/android-runtime") || uri.startsWith("/api/v1/android-runtime")) return androidRuntime(session)
+            if (uri.endsWith("/system/update-status") || uri.endsWith("/system/update") || uri.endsWith("/system/restart")) return systemLifecycle(session)
             if (uri.startsWith("/api/system/machine-code")) return jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-local")).put("status", "ok"))
             if (uri.startsWith("/api/system/check-update")) return jsonResponse(JSONObject().put("data", JSONObject().put("latest", "0.3.15").put("current", "0.3.15")).put("status", "ok"))
             when {
@@ -142,6 +155,19 @@ class LocalPanelHttpServer(
         }
     }
 
+    private fun androidRuntime(session:IHTTPSession):Response {
+        val python=AndroidPythonRuntime.ensureReady(context);val node=AndroidNodeRuntime.ensureReady(context)
+        if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",JSONObject().put("supported",true).put("arch",android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown").put("bin_dir",context.applicationInfo.nativeLibraryDir).put("termux_detected",false).put("presets",JSONArray()).put("runtimes",JSONArray().put(JSONObject().put("name","python").put("installed",python!=null).put("path",python?.executable?:"").put("version",if(python!=null)"embedded" else "")).put(JSONObject().put("name","node").put("installed",node!=null).put("path",node?.executable?:"").put("version",if(node!=null)"embedded" else "")))))
+        if((session.uri.endsWith("/install")||session.uri.endsWith("/uninstall"))&&session.method==Method.POST)return jsonError(Response.Status.CONFLICT,"Android runtime is embedded and immutable; update the APK to change it")
+        return jsonError(Response.Status.NOT_FOUND,"Android runtime endpoint unavailable")
+    }
+    private fun systemLifecycle(session:IHTTPSession):Response = when {
+        session.uri.endsWith("/update-status")&&session.method==Method.GET -> jsonResponse(JSONObject().put("status","idle").put("phase","immutable_apk").put("message","Android self-contained APK cannot self-update; use the platform package installer").put("deployment_type","android_apk").put("update_manager","platform_installer"))
+        session.uri.endsWith("/update")&&session.method==Method.POST -> jsonError(Response.Status.CONFLICT,"Self-update is unavailable for an immutable Android APK; install a signed APK update")
+        session.uri.endsWith("/restart")&&session.method==Method.POST -> { android.os.Handler(context.mainLooper).postDelayed({ runCatching { LocalPanelRuntime.restart(context, localToken) } },250);NanoHTTPD.newFixedLengthResponse(Response.Status.ACCEPTED,"application/json; charset=utf-8",JSONObject().put("status","restarting").put("message","Fallback service restart scheduled").toString()) }
+        else -> jsonError(Response.Status.METHOD_NOT_ALLOWED,"Unsupported lifecycle operation")
+    }
+
     private fun capabilities(): JSONObject = JSONObject()
         .put("instance_mode", "android_local")
         .put("phase", "ready")
@@ -164,7 +190,7 @@ class LocalPanelHttpServer(
                 .put("shell", true)
                 .put("linux_package_manager", false)
                 .put("foreground_scheduler", true)
-                .put("exact_cron", false)
+                .put("exact_cron", true)
                 .put("portable_backup_envelope", true)
                 .put("atomic_restore", true)
                 .put("recovery_apk_metadata", true)

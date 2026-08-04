@@ -61,6 +61,8 @@ class ThemeSettingsPage extends ConsumerWidget {
                 currentValue: settings.blurIntensity,
                 onChanged: (value) =>
                     ref.read(appStyleProvider.notifier).setBlurIntensity(value),
+                onChangeEnd: (_) =>
+                    ref.read(appStyleProvider.notifier).flushBlurIntensity(),
               ),
             ),
           ],
@@ -123,7 +125,9 @@ class _ThemeModeSelector extends ConsumerWidget {
                     _modeLabel(mode),
                     style: TextStyle(
                       fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                       color: isSelected
                           ? AppColors.primary
                           : (isLight ? AppColors.slate500 : AppColors.slate400),
@@ -251,11 +255,13 @@ class _BlurIntensitySlider extends StatelessWidget {
   final bool isLight;
   final double currentValue;
   final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
 
   const _BlurIntensitySlider({
     required this.isLight,
     required this.currentValue,
     required this.onChanged,
+    required this.onChangeEnd,
   });
 
   @override
@@ -274,11 +280,10 @@ class _BlurIntensitySlider extends StatelessWidget {
               value: (currentValue / 20).clamp(0.0, 1.0),
               layout: LiquidGlassSliderLayout(width: constraints.maxWidth),
               activeColor: AppColors.primary,
-              inactiveColor: isLight
-                  ? AppColors.slate200
-                  : AppColors.slate700,
+              inactiveColor: isLight ? AppColors.slate200 : AppColors.slate700,
               pixelRatio: 0.8,
               onChanged: (value) => onChanged((value * 20).roundToDouble()),
+              onChangeEnd: (value) => onChangeEnd((value * 20).roundToDouble()),
             ),
           ),
         ),

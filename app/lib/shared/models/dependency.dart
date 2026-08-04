@@ -7,6 +7,10 @@ class Dependency {
   final String status;
   final String? remark;
   final String? log;
+  final String operationId;
+  final int? exitCode;
+  final String errorCode;
+  final Map<String, dynamic> compatibilityDetails;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -19,6 +23,10 @@ class Dependency {
     this.status = 'installed',
     this.remark,
     this.log,
+    this.operationId = '',
+    this.exitCode,
+    this.errorCode = '',
+    this.compatibilityDetails = const {},
     required this.createdAt,
     required this.updatedAt,
   });
@@ -27,8 +35,13 @@ class Dependency {
   bool get isInstalling => status == 'installing';
   bool get isRemoving => status == 'removing';
   bool get isInstalled => status == 'installed';
-  bool get isFailed => status == 'failed';
-  bool get isCancelled => status == 'cancelled';
+  bool get isFailed => const {
+    'failed',
+    'unsupported',
+    'unavailable',
+    'blocked',
+  }.contains(status);
+  bool get isCancelled => status == 'cancelled' || status == 'canceled';
   bool get isBusy => isInstalling || isRemoving || isQueued;
 
   String get statusText {
@@ -41,10 +54,19 @@ class Dependency {
         return '卸载中';
       case 'failed':
         return '失败';
+      case 'unsupported':
+        return '不支持';
+      case 'unavailable':
+        return '不可用';
+      case 'blocked':
+        return '已阻止';
       case 'cancelled':
+      case 'canceled':
         return '已取消';
-      default:
+      case 'installed':
         return '已安装';
+      default:
+        return '状态未知';
     }
   }
 
@@ -58,6 +80,10 @@ class Dependency {
       status: json['status']?.toString() ?? 'installed',
       remark: json['remark']?.toString(),
       log: json['log']?.toString(),
+      operationId: json['operation_id']?.toString() ?? '',
+      exitCode: _nullableInt(json['exit_code']),
+      errorCode: json['error_code']?.toString() ?? '',
+      compatibilityDetails: _map(json['compatibility_details']),
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       updatedAt: _date(json['updated_at']) ?? DateTime.now(),
     );
@@ -71,10 +97,25 @@ class Dependency {
     'remark': remark,
     'status': status,
     'log': log,
+    'operation_id': operationId,
+    'exit_code': exitCode,
+    'error_code': errorCode,
+    'compatibility_details': compatibilityDetails,
   };
 }
 
-int _int(dynamic value) => (value is num) ? value.toInt() : 0;
+int _int(dynamic value) => _nullableInt(value) ?? 0;
+
+int? _nullableInt(dynamic value) {
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '');
+}
+
+Map<String, dynamic> _map(dynamic value) {
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) return Map<String, dynamic>.from(value);
+  return const {};
+}
 
 DateTime? _date(dynamic value) {
   if (value is String && value.isNotEmpty) {

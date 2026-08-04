@@ -51,12 +51,11 @@ class _MorePageState extends ConsumerState<MorePage> {
           _updateInfo = info;
           _checking = false;
         });
-        final availability = info == null
-            ? null
-            : classifyAppUpdate(info);
+        final availability = info == null ? null : classifyAppUpdate(info);
         if (availability == AppUpdateAvailability.updateAvailable && !silent) {
           AppUpdateService.showUpdateDialog(context, info!);
-        } else if (availability == AppUpdateAvailability.installerMissing && !silent) {
+        } else if (availability == AppUpdateAvailability.installerMissing &&
+            !silent) {
           AppGlassNotice.show(
             context,
             '发现新版本，但 Release 缺少可用的 Android 安装包',
@@ -133,7 +132,13 @@ class _MorePageState extends ConsumerState<MorePage> {
             isLight: isLight,
             onTap: () => context.go('/envs'),
           ),
-          if(user?.isOperator==true)_SettingsItem(icon:Icons.tune_outlined,title:'环境变量高级工具',isLight:isLight,onTap:()=>context.push('/env-tools')),
+          if (user?.isOperator == true)
+            _SettingsItem(
+              icon: Icons.tune_outlined,
+              title: '环境变量高级工具',
+              isLight: isLight,
+              onTap: () => context.push('/env-tools'),
+            ),
           _SettingsItem(
             icon: Icons.notifications_none,
             title: '消息通知',
@@ -193,10 +198,30 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.push('/ssh-keys'),
             ),
-            _SettingsItem(icon: Icons.token_outlined,title:'平台令牌',isLight:isLight,onTap:()=>context.push('/platform-tokens')),
-            _SettingsItem(icon:Icons.terminal_outlined,title:'高级配置脚本',isLight:isLight,onTap:()=>context.push('/config-script')),
-            _SettingsItem(icon:Icons.android_outlined,title:'Android 运行时',isLight:isLight,onTap:()=>context.push('/android-runtime')),
-            _SettingsItem(icon:Icons.list_alt_outlined,title:'系统依赖清单',isLight:isLight,onTap:()=>context.push('/installed-packages')),
+            _SettingsItem(
+              icon: Icons.token_outlined,
+              title: '平台令牌',
+              isLight: isLight,
+              onTap: () => context.push('/platform-tokens'),
+            ),
+            _SettingsItem(
+              icon: Icons.terminal_outlined,
+              title: '高级配置脚本',
+              isLight: isLight,
+              onTap: () => context.push('/config-script'),
+            ),
+            _SettingsItem(
+              icon: Icons.android_outlined,
+              title: 'Android 运行时',
+              isLight: isLight,
+              onTap: () => context.push('/android-runtime'),
+            ),
+            _SettingsItem(
+              icon: Icons.list_alt_outlined,
+              title: '系统依赖清单',
+              isLight: isLight,
+              onTap: () => context.push('/installed-packages'),
+            ),
             _SettingsItem(
               icon: Icons.settings,
               title: '系统设置',
@@ -220,6 +245,12 @@ class _MorePageState extends ConsumerState<MorePage> {
               title: '面板日志',
               isLight: isLight,
               onTap: () => context.push('/panel-log'),
+            ),
+            _SettingsItem(
+              icon: Icons.backup_outlined,
+              title: '备份与恢复',
+              isLight: isLight,
+              onTap: () => context.push('/backup'),
             ),
             _SettingsItem(
               icon: Icons.api,
@@ -284,18 +315,18 @@ class _MorePageState extends ConsumerState<MorePage> {
           GestureDetector(
             onTap: () => _logout(context, ref),
             child: AppCard(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    child: Center(
-                      child: Text(
-                        '退出登录',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.red500,
-                        ),
-                      ),
-                    ),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Center(
+                child: Text(
+                  '退出登录',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.red500,
                   ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -521,37 +552,39 @@ class _MorePageState extends ConsumerState<MorePage> {
                   borderRadius: 10,
                   performanceMode: true,
                   child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '仓库信息',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: isLight ? AppColors.slate700 : AppColors.slate200,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '仓库信息',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: isLight
+                              ? AppColors.slate700
+                              : AppColors.slate200,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    _RepoInfoRow(
-                      label: '当前仓库',
-                      url: 'github.com/tall-1997/daidai-flutter',
-                      isLight: isLight,
-                      icon: Icons.folder_outlined,
-                    ),
-                    const SizedBox(height: 8),
-                    _RepoInfoRow(
-                      label: '上游仓库',
-                      url: 'github.com/linzixuanzz/Dumb-Panel-APP',
-                      isLight: isLight,
-                      icon: Icons.arrow_circle_up_outlined,
-                    ),
-                    const SizedBox(height: 8),
-                    _RepoInfoRow(
-                      label: '后端仓库',
-                      url: 'github.com/linzixuanzz/daidai-panel',
-                      isLight: isLight,
-                      icon: Icons.dns_outlined,
-                    ),
+                      const SizedBox(height: 10),
+                      _RepoInfoRow(
+                        label: '当前仓库',
+                        url: 'github.com/tall-1997/daidai-flutter',
+                        isLight: isLight,
+                        icon: Icons.folder_outlined,
+                      ),
+                      const SizedBox(height: 8),
+                      _RepoInfoRow(
+                        label: '上游仓库',
+                        url: 'github.com/linzixuanzz/Dumb-Panel-APP',
+                        isLight: isLight,
+                        icon: Icons.arrow_circle_up_outlined,
+                      ),
+                      const SizedBox(height: 8),
+                      _RepoInfoRow(
+                        label: '后端仓库',
+                        url: 'github.com/linzixuanzz/daidai-panel',
+                        isLight: isLight,
+                        icon: Icons.dns_outlined,
+                      ),
                     ],
                   ),
                 ),
@@ -620,8 +653,6 @@ class _SettingsItem extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
-
     final rowContent = Row(
       children: [
         Icon(
@@ -633,10 +664,7 @@ class _SettingsItem extends ConsumerWidget {
         Expanded(
           child: Text(
             title,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
           ),
         ),
         if (trailing != null) ...[trailing!, const SizedBox(width: 8)],

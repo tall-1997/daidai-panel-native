@@ -1,17 +1,18 @@
 enum DependencyOperationState {
-  queued,
+  pending,
   running,
-  succeeded,
+  success,
   failed,
-  cancelled,
-  timedOut,
+  aborted,
+  unknown,
+  canceled,
 }
 
 class DependencyOperation {
   final String id;
   final String kind;
   final DependencyOperationState state;
-  final String stage;
+  final String phase;
   final double progress;
   final bool cancellable;
   final int sequence;
@@ -22,8 +23,8 @@ class DependencyOperation {
   const DependencyOperation({
     required this.id,
     required this.kind,
-    this.state = DependencyOperationState.queued,
-    this.stage = '',
+    this.state = DependencyOperationState.pending,
+    this.phase = '',
     this.progress = 0,
     this.cancellable = false,
     this.sequence = 0,
@@ -33,10 +34,11 @@ class DependencyOperation {
   });
 
   bool get terminal => switch (state) {
-    DependencyOperationState.succeeded ||
+    DependencyOperationState.success ||
     DependencyOperationState.failed ||
-    DependencyOperationState.cancelled ||
-    DependencyOperationState.timedOut => true,
+    DependencyOperationState.aborted ||
+    DependencyOperationState.unknown ||
+    DependencyOperationState.canceled => true,
     _ => false,
   };
 
@@ -46,14 +48,14 @@ class DependencyOperation {
         ? rawProgress.toDouble()
         : double.tryParse(rawProgress?.toString() ?? '') ?? 0;
     return DependencyOperation(
-      id: json['id']?.toString() ?? '',
+      id: (json['id'] ?? json['operation_id'])?.toString() ?? '',
       kind: json['kind']?.toString() ?? '',
       state: DependencyOperationState.values.firstWhere(
-        (state) => state.name == json['state']?.toString(),
-        orElse: () => DependencyOperationState.failed,
+        (state) => state.name == json['state']?.toString().toLowerCase(),
+        orElse: () => DependencyOperationState.unknown,
       ),
-      stage: json['stage']?.toString() ?? '',
-      progress: parsedProgress.clamp(0, 1).toDouble(),
+      phase: (json['phase'] ?? json['stage'])?.toString() ?? '',
+      progress: parsedProgress.clamp(0, 100).toDouble(),
       cancellable: json['cancellable'] == true,
       sequence: _int(json['sequence']),
       exitCode: _nullableInt(json['exit_code']),

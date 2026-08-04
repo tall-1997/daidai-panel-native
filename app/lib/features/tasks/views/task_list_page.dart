@@ -113,9 +113,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     AppGlassNotice.show(context, message);
   }
 
-  Future<void> _handleTaskTransferAction(
-    _TaskTransferAction? action,
-  ) async {
+  Future<void> _handleTaskTransferAction(_TaskTransferAction? action) async {
     if (action == null || _taskTransferBusy) {
       return;
     }
@@ -288,10 +286,21 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('批量删除任务'),
         content: Text('确定要删除选中的 $count 个任务吗？此操作不可恢复。'),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogContext, false)),
-          AppGlassDialogAction(label: '删除', onPressed: () => Navigator.pop(dialogContext, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogContext, false),
+              ),
+              AppGlassDialogAction(
+                label: '删除',
+                onPressed: () => Navigator.pop(dialogContext, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     return confirmed == true;
@@ -434,9 +443,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           ? data
                 .whereType<Map>()
                 .map(
-                  (item) => _TaskLogFile.fromJson(
-                    Map<String, dynamic>.from(item),
-                  ),
+                  (item) =>
+                      _TaskLogFile.fromJson(Map<String, dynamic>.from(item)),
                 )
                 .toList()
           : <_TaskLogFile>[];
@@ -776,10 +784,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
     final compactLayout = MediaQuery.sizeOf(context).width < 380;
-    final hasActiveFilters = state.keyword.trim().isNotEmpty ||
+    final hasActiveFilters =
+        state.keyword.trim().isNotEmpty ||
         state.statusFilter != null ||
         state.labelFilter != null;
-    
+
     _collectKnownGroups(state.tasks);
     final groupedTasks = _sortGroupsByOrder(_groupTasks(state.tasks));
     final taskRows = <_TaskListRow>[];
@@ -826,16 +835,37 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                             return;
                           }
                           final views = ref.read(taskViewProvider).items;
-                          final view = views.where((item) => item.id == id).firstOrNull;
-                          ref.read(taskProvider.notifier).setView(view?.filters, view?.sortRules);
+                          final view = views
+                              .where((item) => item.id == id)
+                              .firstOrNull;
+                          ref
+                              .read(taskProvider.notifier)
+                              .setView(view?.filters, view?.sortRules);
                         },
                         itemBuilder: (_) => [
-                          const PopupMenuItem<int?>(value: null, child: Text('全部任务')),
-                          ...ref.watch(taskViewProvider).items.where((v) => !v.hidden).map((v) => PopupMenuItem<int?>(value: v.id, child: Text(v.name))),
+                          const PopupMenuItem<int?>(
+                            value: null,
+                            child: Text('全部任务'),
+                          ),
+                          ...ref
+                              .watch(taskViewProvider)
+                              .items
+                              .where((v) => !v.hidden)
+                              .map(
+                                (v) => PopupMenuItem<int?>(
+                                  value: v.id,
+                                  child: Text(v.name),
+                                ),
+                              ),
                           const PopupMenuDivider(),
-                          const PopupMenuItem<int?>(value: -1, child: Text('管理视图')),
+                          const PopupMenuItem<int?>(
+                            value: -1,
+                            child: Text('管理视图'),
+                          ),
                         ],
-                        child: const _TaskGlassIconTarget(icon: Icons.view_list_outlined),
+                        child: const _TaskGlassIconTarget(
+                          icon: Icons.view_list_outlined,
+                        ),
                       ),
                       if (!_taskSortMode)
                         _TaskHeaderChipButton(
@@ -885,27 +915,27 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 child: TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
-                  hintText: '搜索任务名称或命令...',
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: AppColors.slate400,
-                  ),
-                  isDense: true,
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(
-                            Icons.clear,
-                            size: 16,
-                            color: AppColors.slate400,
-                          ),
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                            ref.read(taskProvider.notifier).setKeyword('');
-                          },
-                        )
-                      : null,
+                    hintText: '搜索任务名称或命令...',
+                    prefixIcon: const Icon(
+                      Icons.search,
+                      size: 18,
+                      color: AppColors.slate400,
+                    ),
+                    isDense: true,
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(
+                              Icons.clear,
+                              size: 16,
+                              color: AppColors.slate400,
+                            ),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                              ref.read(taskProvider.notifier).setKeyword('');
+                            },
+                          )
+                        : null,
                   ),
                   style: const TextStyle(fontSize: 14),
                   onChanged: _onSearchChanged,
@@ -923,22 +953,22 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   itemCount: _taskStatusFilters.length,
                   separatorBuilder: (_, index) => const SizedBox(width: 8),
                   itemBuilder: (_, index) {
-                  final filter = _taskStatusFilters[index];
-                  final selected = state.statusFilter == filter.value;
-                   return AppLiquidGlassChoiceChip(
-                     label: filter.label,
-                     selected: selected,
-                     onSelected: (_) {
-                       if (_selectionMode) _setSelectionMode(false);
-                      if (_scrollController.hasClients &&
-                          _scrollController.offset > 0) {
-                        _scrollController.jumpTo(0);
-                      }
-                      ref
-                          .read(taskProvider.notifier)
-                          .setStatusFilter(filter.value);
-                    },
-                   );
+                    final filter = _taskStatusFilters[index];
+                    final selected = state.statusFilter == filter.value;
+                    return AppLiquidGlassChoiceChip(
+                      label: filter.label,
+                      selected: selected,
+                      onSelected: (_) {
+                        if (_selectionMode) _setSelectionMode(false);
+                        if (_scrollController.hasClients &&
+                            _scrollController.offset > 0) {
+                          _scrollController.jumpTo(0);
+                        }
+                        ref
+                            .read(taskProvider.notifier)
+                            .setStatusFilter(filter.value);
+                      },
+                    );
                   },
                 ),
               ),
@@ -1295,11 +1325,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       }
     } catch (e) {
       if (mounted) {
-        AppGlassNotice.show(
-          context,
-          '重命名分组失败',
-          type: AppGlassNoticeType.error,
-        );
+        AppGlassNotice.show(context, '重命名分组失败', type: AppGlassNoticeType.error);
       }
     }
   }
@@ -1345,11 +1371,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       }
     } catch (e) {
       if (mounted) {
-        AppGlassNotice.show(
-          context,
-          '删除分组失败',
-          type: AppGlassNoticeType.error,
-        );
+        AppGlassNotice.show(context, '删除分组失败', type: AppGlassNoticeType.error);
       }
     }
   }
@@ -1382,21 +1404,24 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 shrinkWrap: true,
                 itemCount: ungroupedTasks.length,
                 itemBuilder: (ctx, i) {
-                final task = ungroupedTasks[i];
-                return CheckboxListTile(
-                  value: selected.contains(task.id),
-                  title: Text(task.name, style: const TextStyle(fontSize: 14)),
-                  dense: true,
-                  onChanged: (v) {
-                    setDialogState(() {
-                      if (v == true) {
-                        selected.add(task.id);
-                      } else {
-                        selected.remove(task.id);
-                      }
-                    });
-                  },
-                );
+                  final task = ungroupedTasks[i];
+                  return CheckboxListTile(
+                    value: selected.contains(task.id),
+                    title: Text(
+                      task.name,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    dense: true,
+                    onChanged: (v) {
+                      setDialogState(() {
+                        if (v == true) {
+                          selected.add(task.id);
+                        } else {
+                          selected.remove(task.id);
+                        }
+                      });
+                    },
+                  );
                 },
               ),
             ),
@@ -1466,48 +1491,48 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 maxHeight: MediaQuery.sizeOf(ctx).height * 0.6,
               ),
               child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: nameController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: '分组名称',
-                    hintText: '输入新分组的名称',
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: '分组名称',
+                      hintText: '输入新分组的名称',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  '选择要加入的任务:',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: ungroupedTasks.length,
-                    itemBuilder: (ctx, i) {
-                      final task = ungroupedTasks[i];
-                      return CheckboxListTile(
-                        value: selected.contains(task.id),
-                        title: Text(
-                          task.name,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                        dense: true,
-                        onChanged: (v) {
-                          setDialogState(() {
-                            if (v == true) {
-                              selected.add(task.id);
-                            } else {
-                              selected.remove(task.id);
-                            }
-                          });
-                        },
-                      );
-                    },
+                  const SizedBox(height: 16),
+                  const Text(
+                    '选择要加入的任务:',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: ungroupedTasks.length,
+                      itemBuilder: (ctx, i) {
+                        final task = ungroupedTasks[i];
+                        return CheckboxListTile(
+                          value: selected.contains(task.id),
+                          title: Text(
+                            task.name,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          dense: true,
+                          onChanged: (v) {
+                            setDialogState(() {
+                              if (v == true) {
+                                selected.add(task.id);
+                              } else {
+                                selected.remove(task.id);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1590,9 +1615,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             clipBehavior: Clip.hardEdge,
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
             itemCount: groups.length,
-            onReorder: (oldIndex, newIndex) {
+            onReorderItem: (oldIndex, newIndex) {
               setState(() {
-                if (newIndex > oldIndex) newIndex--;
                 final item = groups.removeAt(oldIndex);
                 groups.insert(newIndex, item);
                 _groupOrder = groups.map((g) => g.key).toList();
@@ -1649,7 +1673,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       clipBehavior: Clip.hardEdge,
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
       itemCount: tasks.length,
-      onReorder: (oldIndex, newIndex) {
+      onReorderItem: (oldIndex, newIndex) {
         // 只先调整本地顺序，等用户点击“完成”后再统一保存到后端，避免拖一下就请求多次。
         ref.read(taskProvider.notifier).reorderLocalTasks(oldIndex, newIndex);
         setState(() => _taskOrderDirty = true);
@@ -1712,7 +1736,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     final runningCount = group.tasks.where((task) => task.isRunning).length;
     final isUngrouped = group.key.isEmpty;
     final currentState = ref.read(taskProvider);
-    final canModifyGroup = currentState.keyword.trim().isEmpty &&
+    final canModifyGroup =
+        currentState.keyword.trim().isEmpty &&
         currentState.statusFilter == null &&
         currentState.labelFilter == null;
 
@@ -1834,9 +1859,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       isLight: isLight,
       selectionMode: _selectionMode,
       selected: _selectedTaskIds.contains(task.id),
-      onTap: () => _selectionMode
-          ? _toggleTaskSelection(task.id)
-          : _openLatestLog(task),
+      onTap: () =>
+          _selectionMode ? _toggleTaskSelection(task.id) : _openLatestLog(task),
       onLongPress: () {
         HapticFeedback.mediumImpact();
         _toggleTaskSelection(task.id);
@@ -1949,10 +1973,7 @@ class _TaskInfoDialogContent extends StatelessWidget {
   final List<String> lines;
   final String emptyText;
 
-  const _TaskInfoDialogContent({
-    required this.lines,
-    required this.emptyText,
-  });
+  const _TaskInfoDialogContent({required this.lines, required this.emptyText});
 
   @override
   Widget build(BuildContext context) {
@@ -2254,164 +2275,163 @@ class _TaskCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-                Row(
-                  children: [
-                    if (selectionMode) ...[
-                      SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: Checkbox(
-                          value: selected,
-                          onChanged: (_) => onSelectedChanged(),
-                          activeColor: AppColors.primary,
-                          visualDensity: VisualDensity.compact,
-                          materialTapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: dotColor,
-                        shape: BoxShape.circle,
-                        boxShadow: task.isRunning || hasFailure
-                            ? [
-                                BoxShadow(
-                                  color: dotColor.withAlpha(140),
-                                  blurRadius: 8,
-                                ),
-                              ]
-                            : null,
+              Row(
+                children: [
+                  if (selectionMode) ...[
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: Checkbox(
+                        value: selected,
+                        onChanged: (_) => onSelectedChanged(),
+                        activeColor: AppColors.primary,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                    if (!selectionMode)
-                      PopupMenuButton<_TaskItemAction>(
-                        tooltip: '任务操作',
-                        padding: EdgeInsets.zero,
-                        onSelected: onAction,
-                        itemBuilder: (_) => [
-                          PopupMenuItem(
-                            value: _TaskItemAction.toggleEnabled,
-                            child: Text(task.isDisabled ? '启用' : '禁用'),
-                          ),
-                          PopupMenuItem(
-                            value: _TaskItemAction.togglePinned,
-                            child: Text(task.isPinned ? '取消置顶' : '置顶'),
-                          ),
-                          const PopupMenuItem(
-                            value: _TaskItemAction.copy,
-                            child: Text('复制任务'),
-                          ),
-                          const PopupMenuItem(
-                            value: _TaskItemAction.stats,
-                            child: Text('任务统计'),
-                          ),
-                          const PopupMenuItem(
-                            value: _TaskItemAction.logFiles,
-                            child: Text('日志文件'),
-                          ),
-                          const PopupMenuItem(
-                            value: _TaskItemAction.edit,
-                            child: Text('编辑任务'),
-                          ),
-                          const PopupMenuItem(
-                            value: _TaskItemAction.delete,
-                            child: Text(
-                              '删除任务',
-                              style: TextStyle(color: AppColors.red500),
-                            ),
-                          ),
-                        ],
-                        child: const _TaskGlassIconTarget(
-                          icon: Icons.more_vert,
-                          compact: true,
-                        ),
-                      ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        task.name,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (task.isPinned)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 6),
-                        child: Icon(
-                          Icons.push_pin,
-                          size: 14,
-                          color: AppColors.amber500,
-                        ),
-                      ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _statusBg(),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: _statusFg().withAlpha(isLight ? 36 : 48),
-                        ),
-                      ),
-                      child: Text(
-                        _statusLabel(),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: _statusFg(),
-                        ),
-                      ),
-                    ),
+                    const SizedBox(width: 8),
                   ],
-                ),
-                const SizedBox(height: 10),
-                _TaskScheduleSummary(
-                  taskType: task.taskType,
-                  taskTypeLabel: _taskTypeLabel(),
-                  expressions: _scheduleExpressions(),
-                  isLight: isLight,
-                ),
-                if (labels.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _TaskSubscriptionSummary(labels: labels, isLight: isLight),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      boxShadow: task.isRunning || hasFailure
+                          ? [
+                              BoxShadow(
+                                color: dotColor.withAlpha(140),
+                                blurRadius: 8,
+                              ),
+                            ]
+                          : null,
+                    ),
+                  ),
+                  if (!selectionMode)
+                    PopupMenuButton<_TaskItemAction>(
+                      tooltip: '任务操作',
+                      padding: EdgeInsets.zero,
+                      onSelected: onAction,
+                      itemBuilder: (_) => [
+                        PopupMenuItem(
+                          value: _TaskItemAction.toggleEnabled,
+                          child: Text(task.isDisabled ? '启用' : '禁用'),
+                        ),
+                        PopupMenuItem(
+                          value: _TaskItemAction.togglePinned,
+                          child: Text(task.isPinned ? '取消置顶' : '置顶'),
+                        ),
+                        const PopupMenuItem(
+                          value: _TaskItemAction.copy,
+                          child: Text('复制任务'),
+                        ),
+                        const PopupMenuItem(
+                          value: _TaskItemAction.stats,
+                          child: Text('任务统计'),
+                        ),
+                        const PopupMenuItem(
+                          value: _TaskItemAction.logFiles,
+                          child: Text('日志文件'),
+                        ),
+                        const PopupMenuItem(
+                          value: _TaskItemAction.edit,
+                          child: Text('编辑任务'),
+                        ),
+                        const PopupMenuItem(
+                          value: _TaskItemAction.delete,
+                          child: Text(
+                            '删除任务',
+                            style: TextStyle(color: AppColors.red500),
+                          ),
+                        ),
+                      ],
+                      child: const _TaskGlassIconTarget(
+                        icon: Icons.more_vert,
+                        compact: true,
+                      ),
+                    ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      task.name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (task.isPinned)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 6),
+                      child: Icon(
+                        Icons.push_pin,
+                        size: 14,
+                        color: AppColors.amber500,
+                      ),
+                    ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _statusBg(),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: _statusFg().withAlpha(isLight ? 36 : 48),
+                      ),
+                    ),
+                    child: Text(
+                      _statusLabel(),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: _statusFg(),
+                      ),
+                    ),
+                  ),
                 ],
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _bottomText(),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: hasFailure
-                              ? AppColors.red500
-                              : (isLight
-                                    ? AppColors.slate400
-                                    : AppColors.slate500),
-                        ),
+              ),
+              const SizedBox(height: 10),
+              _TaskScheduleSummary(
+                taskType: task.taskType,
+                taskTypeLabel: _taskTypeLabel(),
+                expressions: _scheduleExpressions(),
+                isLight: isLight,
+              ),
+              if (labels.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _TaskSubscriptionSummary(labels: labels, isLight: isLight),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _bottomText(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: hasFailure
+                            ? AppColors.red500
+                            : (isLight
+                                  ? AppColors.slate400
+                                  : AppColors.slate500),
                       ),
                     ),
-                    if (!selectionMode)
-                      _TaskPrimaryActionButton(
-                        label: task.isRunning ? '停止' : '运行',
-                        icon: task.isRunning
-                            ? Icons.stop_rounded
-                            : Icons.play_arrow_rounded,
-                        color: primaryColor,
-                        onTap: task.isRunning ? onStop : onRun,
-                      ),
-                  ],
-                ),
+                  ),
+                  if (!selectionMode)
+                    _TaskPrimaryActionButton(
+                      label: task.isRunning ? '停止' : '运行',
+                      icon: task.isRunning
+                          ? Icons.stop_rounded
+                          : Icons.play_arrow_rounded,
+                      color: primaryColor,
+                      onTap: task.isRunning ? onStop : onRun,
+                    ),
+                ],
+              ),
             ],
           ),
         ),
@@ -2565,7 +2585,6 @@ class _TaskSubscriptionSummary extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
     final visibleLabels = labels.take(3).toList();
 
     return Padding(
@@ -2808,7 +2827,7 @@ class _MetaChip extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    
+
     final accent = active ? AppColors.primary : AppColors.slate500;
     final background = accent.withAlpha(isLight ? 14 : 24);
     final foreground = active
@@ -2858,31 +2877,27 @@ class _TaskHeaderChipButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
     return AppLiquidGlassSurface(
       onTap: onTap,
       borderRadius: 16,
       performanceMode: true,
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 8 : 12,
-        vertical: 7,
-      ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16, color: AppColors.slate400),
-            if (!compact) ...[
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: AppColors.slate400),
+          if (!compact) ...[
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
               ),
-            ],
+            ),
           ],
-        ),
+        ],
+      ),
     );
   }
 }
@@ -2960,21 +2975,21 @@ class _TaskBatchActionButton extends StatelessWidget {
       selected: enabled,
       performanceMode: true,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: foregroundColor),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: foregroundColor,
-                fontWeight: FontWeight.w600,
-              ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: foregroundColor),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: foregroundColor,
+              fontWeight: FontWeight.w600,
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3439,8 +3454,9 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
 
   void _sendTaskCompletionNotification(int taskId, String data) async {
     if (data == 'reconnect') return;
-    final enabled = await LocalNotificationService()
-        .getChannelEnabled(NotificationChannel.task);
+    final enabled = await LocalNotificationService().getChannelEnabled(
+      NotificationChannel.task,
+    );
     if (!enabled) return;
     final title = widget.taskName?.trim().isNotEmpty == true
         ? widget.taskName!
@@ -3611,10 +3627,7 @@ class _GroupPopupMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(),
-      child: const _TaskGlassIconTarget(
-        icon: Icons.more_vert,
-        compact: true,
-      ),
+      child: const _TaskGlassIconTarget(icon: Icons.more_vert, compact: true),
       itemBuilder: (ctx) => [
         if (!isUngrouped && onRename != null)
           const PopupMenuItem(value: 'rename', child: Text('重命名分组')),

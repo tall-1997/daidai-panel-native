@@ -25,11 +25,13 @@ class AppCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
+    final performanceMode =
+        stableForScrolling || Scrollable.maybeOf(context) != null;
     Widget card = LiquidGlassLens(
       style: appLiquidGlassStyle(
         isLight: isLight,
         borderRadius: borderRadius,
-        performanceMode: stableForScrolling,
+        performanceMode: performanceMode,
       ),
       child: Padding(
         padding: padding ?? const EdgeInsets.all(16),
@@ -77,7 +79,8 @@ class AppListTile extends ConsumerWidget {
         child: ListTile(
           leading: Icon(icon, size: 20),
           title: Text(title),
-          trailing: trailing ??
+          trailing:
+              trailing ??
               Icon(
                 Icons.chevron_right,
                 size: 18,
@@ -86,7 +89,7 @@ class AppListTile extends ConsumerWidget {
           onTap: onTap,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
-            ),
+          ),
         ),
       ),
     );
@@ -218,9 +221,7 @@ class AppLiquidGlassInput extends StatelessWidget {
           ),
           iconButtonTheme: IconButtonThemeData(
             style: ButtonStyle(
-              backgroundColor: const WidgetStatePropertyAll(
-                Colors.transparent,
-              ),
+              backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
               foregroundColor: WidgetStatePropertyAll(
                 theme.colorScheme.onSurfaceVariant,
               ),
@@ -318,10 +319,7 @@ class AppLiquidGlassButton extends StatelessWidget {
             child: SizedBox(
               width: 18,
               height: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: color,
-              ),
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
             ),
           ),
         ),
@@ -635,10 +633,6 @@ Color glassCardColor({
       : (darkColor ?? AppColors.darkSurface);
 }
 
-Color glassFillColor({
-  required bool isLight,
-}) {
-  return isLight
-      ? AppColors.lightSurfaceMuted
-      : AppColors.darkSurfaceMuted;
+Color glassFillColor({required bool isLight}) {
+  return isLight ? AppColors.lightSurfaceMuted : AppColors.darkSurfaceMuted;
 }

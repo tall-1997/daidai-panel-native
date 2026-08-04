@@ -74,11 +74,31 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
 
     return LiquidGlassBottomNavBar(
       items: const [
-        LiquidGlassTabBarItem(icon: Icons.space_dashboard_outlined, selectedIcon: Icons.space_dashboard, label: '主页'),
-        LiquidGlassTabBarItem(icon: Icons.schedule_outlined, selectedIcon: Icons.schedule, label: '任务'),
-        LiquidGlassTabBarItem(icon: Icons.terminal_outlined, selectedIcon: Icons.terminal, label: '日志'),
-        LiquidGlassTabBarItem(icon: Icons.key_outlined, selectedIcon: Icons.key, label: '变量'),
-        LiquidGlassTabBarItem(icon: Icons.menu_outlined, selectedIcon: Icons.menu, label: '更多'),
+        LiquidGlassTabBarItem(
+          icon: Icons.space_dashboard_outlined,
+          selectedIcon: Icons.space_dashboard,
+          label: '主页',
+        ),
+        LiquidGlassTabBarItem(
+          icon: Icons.schedule_outlined,
+          selectedIcon: Icons.schedule,
+          label: '任务',
+        ),
+        LiquidGlassTabBarItem(
+          icon: Icons.terminal_outlined,
+          selectedIcon: Icons.terminal,
+          label: '日志',
+        ),
+        LiquidGlassTabBarItem(
+          icon: Icons.key_outlined,
+          selectedIcon: Icons.key,
+          label: '变量',
+        ),
+        LiquidGlassTabBarItem(
+          icon: Icons.menu_outlined,
+          selectedIcon: Icons.menu,
+          label: '更多',
+        ),
       ],
       selectedIndex: idx,
       onChanged: _onTabSelected,
@@ -149,9 +169,8 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
-        errorBuilder: (_, _, _) => Container(
-          color: Theme.of(context).scaffoldBackgroundColor,
-        ),
+        errorBuilder: (_, _, _) =>
+            Container(color: Theme.of(context).scaffoldBackgroundColor),
       );
       if (blur > 0) {
         backgroundWidget = SizedBox.expand(
@@ -174,8 +193,9 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
         backgroundWidget = imageWidget;
       }
     } else {
-      backgroundWidget =
-          Container(color: Theme.of(context).scaffoldBackgroundColor);
+      backgroundWidget = Container(
+        color: Theme.of(context).scaffoldBackgroundColor,
+      );
     }
 
     return PopScope<void>(
@@ -183,8 +203,8 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       onPopInvokedWithResult: (didPop, _) => _handleBackPress(didPop),
       child: LiquidGlassScaffold(
         pixelRatio: 0.65,
-        realTimeCapture: true,
-        useSync: false,
+        realTimeCapture: false,
+        useSync: true,
         safeArea: true,
         body: LiquidGlassView(
           pixelRatio: 0.7,

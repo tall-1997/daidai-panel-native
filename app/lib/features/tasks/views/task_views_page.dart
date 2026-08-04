@@ -41,34 +41,63 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
         builder: (ctx, setDialogState) => AlertDialog(
           title: Text(view == null ? '新建视图' : '编辑视图'),
           content: SingleChildScrollView(
-            child: Column(children: [
-              TextField(controller: name, decoration: const InputDecoration(labelText: '名称')),
-              TextField(controller: filters, maxLines: 3, decoration: const InputDecoration(labelText: '筛选规则 JSON')),
-              TextField(controller: sortRules, maxLines: 3, decoration: const InputDecoration(labelText: '排序规则 JSON')),
-              SwitchListTile(value: hidden, title: const Text('隐藏视图'), onChanged: (value) => setDialogState(() => hidden = value)),
-            ]),
+            child: Column(
+              children: [
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: '名称'),
+                ),
+                TextField(
+                  controller: filters,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: '筛选规则 JSON'),
+                ),
+                TextField(
+                  controller: sortRules,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: '排序规则 JSON'),
+                ),
+                SwitchListTile(
+                  value: hidden,
+                  title: const Text('隐藏视图'),
+                  onChanged: (value) => setDialogState(() => hidden = value),
+                ),
+              ],
+            ),
           ),
           actions: [
-            AppLiquidGlassDialogActions(actions: [
-              AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
-              AppGlassDialogAction(label: '保存', onPressed: () => Navigator.pop(ctx, true)),
-            ]),
+            AppLiquidGlassDialogActions(
+              actions: [
+                AppGlassDialogAction(
+                  label: '取消',
+                  onPressed: () => Navigator.pop(ctx, false),
+                ),
+                AppGlassDialogAction(
+                  label: '保存',
+                  onPressed: () => Navigator.pop(ctx, true),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
     if (save != true || !mounted) return;
-    if (name.text.trim().isEmpty || !_validRules(filters.text) || !_validRules(sortRules.text)) {
+    if (name.text.trim().isEmpty ||
+        !_validRules(filters.text) ||
+        !_validRules(sortRules.text)) {
       AppGlassNotice.show(context, '名称不能为空，筛选和排序规则必须是 JSON 数组');
       return;
     }
-    await ref.read(taskViewProvider.notifier).save(
-      id: view?.id,
-      name: name.text.trim(),
-      filters: filters.text,
-      sortRules: sortRules.text,
-      hidden: hidden,
-    );
+    await ref
+        .read(taskViewProvider.notifier)
+        .save(
+          id: view?.id,
+          name: name.text.trim(),
+          filters: filters.text,
+          sortRules: sortRules.text,
+          hidden: hidden,
+        );
   }
 
   Future<void> _delete(TaskView view) async {
@@ -78,14 +107,25 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
         title: const Text('删除任务视图'),
         content: Text('确定删除「${view.name}」吗？'),
         actions: [
-          AppLiquidGlassDialogActions(actions: [
-            AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
-            AppGlassDialogAction(label: '删除', variant: AppLiquidGlassButtonVariant.danger, onPressed: () => Navigator.pop(ctx, true)),
-          ]),
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(ctx, false),
+              ),
+              AppGlassDialogAction(
+                label: '删除',
+                variant: AppLiquidGlassButtonVariant.danger,
+                onPressed: () => Navigator.pop(ctx, true),
+              ),
+            ],
+          ),
         ],
       ),
     );
-    if (confirmed == true) await ref.read(taskViewProvider.notifier).delete(view.id);
+    if (confirmed == true) {
+      await ref.read(taskViewProvider.notifier).delete(view.id);
+    }
   }
 
   @override
@@ -93,7 +133,10 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
     final state = ref.watch(taskViewProvider);
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(title: const Text('任务视图'), actions: [AppGlassIconButton(icon: Icons.add, onTap: () => _edit())]),
+      appBar: AppBar(
+        title: const Text('任务视图'),
+        actions: [AppGlassIconButton(icon: Icons.add, onTap: () => _edit())],
+      ),
       body: AppAsyncState(
         loading: state.loading,
         error: state.error,
@@ -101,9 +144,8 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
         emptyText: '暂无任务视图',
         onRetry: () => ref.read(taskViewProvider.notifier).load(),
         child: ReorderableListView(
-          onReorder: (oldIndex, newIndex) {
+          onReorderItem: (oldIndex, newIndex) {
             final views = [...state.items];
-            if (newIndex > oldIndex) newIndex--;
             views.insert(newIndex, views.removeAt(oldIndex));
             ref.read(taskViewProvider.notifier).reorder(views);
           },
@@ -117,7 +159,10 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
                   title: Text(view.name),
                   subtitle: Text(view.hidden ? '已隐藏' : '可见'),
                   onTap: () => _edit(view),
-                  trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _delete(view)),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _delete(view),
+                  ),
                 ),
               ),
           ],

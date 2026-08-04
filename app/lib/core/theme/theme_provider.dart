@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,6 +29,9 @@ class AppStyleSettings {
 }
 
 class AppStyleNotifier extends StateNotifier<AppStyleSettings> {
+  Timer? _blurSaveDebounce;
+  double? _pendingBlurIntensity;
+
   AppStyleNotifier() : super(const AppStyleSettings()) {
     _load();
   }
@@ -60,17 +65,37 @@ class AppStyleNotifier extends StateNotifier<AppStyleSettings> {
     }
   }
 
-  Future<void> setBlurIntensity(double value) async {
+  void setBlurIntensity(double value) {
+    if (state.blurIntensity == value) return;
     state = state.copyWith(blurIntensity: value);
+    _pendingBlurIntensity = value;
+    _blurSaveDebounce?.cancel();
+    _blurSaveDebounce = Timer(const Duration(milliseconds: 250), () {
+      unawaited(flushBlurIntensity());
+    });
+  }
+
+  Future<void> flushBlurIntensity() async {
+    _blurSaveDebounce?.cancel();
+    _blurSaveDebounce = null;
+    final value = _pendingBlurIntensity;
+    if (value == null) return;
+    _pendingBlurIntensity = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('blur_intensity', value);
+  }
+
+  @override
+  void dispose() {
+    unawaited(flushBlurIntensity());
+    super.dispose();
   }
 }
 
 final appStyleProvider =
     StateNotifierProvider<AppStyleNotifier, AppStyleSettings>((ref) {
-  return AppStyleNotifier();
-});
+      return AppStyleNotifier();
+    });
 
 // 兼容旧代码
 final themeProvider = Provider<ThemeMode>((ref) {

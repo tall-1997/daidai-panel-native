@@ -1,7 +1,11 @@
 package com.daidai.daidai_app
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -10,12 +14,17 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.URI
 import java.net.URLDecoder
 import java.time.Instant
 import java.security.SecureRandom
 import java.time.format.DateTimeFormatter
 import java.util.Collections
 import java.util.concurrent.TimeUnit
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -28,7 +37,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private val configPrefs by lazy {
         appContext.getSharedPreferences("daidai-local-configs", Context.MODE_PRIVATE)
     }
-    private data class LocalScriptResult(
+    private val runningTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
+
+    internal data class LocalScriptResult(
         val logs: JSONArray,
         val status: String,
         val done: Boolean,
@@ -36,13 +48,14 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 5
+        const val SCHEMA_VERSION = 10
 
         fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean {
-            val base = uri.substringBefore("?")
+            val base = uri.substringBefore("?").trimEnd('/')
             return when (method) {
-                NanoHTTPD.Method.GET -> base.startsWith("/api/system/backup") || base.startsWith("/api/system/backups") || base.startsWith("/api/system/restore/progress")
-                NanoHTTPD.Method.POST -> base.startsWith("/api/system/backup") || base.startsWith("/api/system/restore")
+                NanoHTTPD.Method.GET -> base == "/api/system/backups" || base == "/api/system/backup/download" || base == "/api/system/restore/progress"
+                NanoHTTPD.Method.POST -> base == "/api/system/backup" || base == "/api/system/backup/upload" || base == "/api/system/restore"
+                NanoHTTPD.Method.DELETE -> base == "/api/system/backup"
                 else -> false
             }
         }
@@ -75,6 +88,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
                 cron_expression TEXT NOT NULL DEFAULT '',
                 task_type TEXT NOT NULL DEFAULT 'manual',
                 python_version TEXT NOT NULL DEFAULT '',
+                task_before TEXT NOT NULL DEFAULT '',
+                task_after TEXT NOT NULL DEFAULT '',
                 status REAL NOT NULL DEFAULT 1,
                 labels TEXT NOT NULL DEFAULT '[]',
                 last_run_status TEXT NOT NULL DEFAULT '',
@@ -113,8 +128,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         createScriptRuntimeTables(db)
         createTaskLogTables(db)
         createConfigTables(db)
+        createNotificationTables(db)
         ensureDefaultAdmin(db)
         ensureSubscriptionsTable(db)
+        createFallbackCoreTables(db)
+        createManagementTables(db)
+        createSecurityTables(db)
         ensureDefaultDeps(db)
     }
 
@@ -126,6 +145,40 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             createTaskLogTables(db)
         }
         if (oldVersion < 5) createConfigTables(db)
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE tasks ADD COLUMN task_before TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE tasks ADD COLUMN task_after TEXT NOT NULL DEFAULT ''")
+        }
+        if (oldVersion < 7) createNotificationTables(db)
+        if (oldVersion < 8) createFallbackCoreTables(db)
+        if (oldVersion < 9) createManagementTables(db)
+        if (oldVersion < 10) createSecurityTables(db)
+    }
+
+    private fun createFallbackCoreTables(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS task_views (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, filters TEXT NOT NULL DEFAULT '[]', sort_rules TEXT NOT NULL DEFAULT '[]', hidden INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS subscription_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, subscription_id INTEGER NOT NULL, level TEXT NOT NULL DEFAULT 'info', message TEXT NOT NULL, created_at TEXT NOT NULL)""")
+        runCatching { db.execSQL("ALTER TABLE tasks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0") }
+    }
+
+    private fun createManagementTables(db: SQLiteDatabase) {
+        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'") }
+        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1") }
+        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''") }
+        db.execSQL("""CREATE TABLE IF NOT EXISTS ssh_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, private_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS platform_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, platform_id INTEGER NOT NULL, name TEXT NOT NULL, token TEXT NOT NULL, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, app_key TEXT NOT NULL UNIQUE, secret TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '', rate_limit INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, method TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status_code INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
+        val now = Instant.now().toString()
+        db.execSQL("INSERT INTO platforms(name,label,icon,created_at,updated_at) SELECT 'github','GitHub','',?,? WHERE NOT EXISTS(SELECT 1 FROM platforms WHERE name='github')", arrayOf(now, now))
+    }
+
+    private fun createSecurityTables(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_login_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL, message TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, access_token TEXT NOT NULL UNIQUE, ip TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_ip_whitelist (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL UNIQUE, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -169,6 +222,22 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         )
     }
 
+    private fun createNotificationTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS notification_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""".trimIndent()
+        )
+        val now = Instant.now().toString()
+        db.execSQL("INSERT INTO notification_channels(name,type,config,enabled,created_at,updated_at) SELECT 'Android 本地通知','android_local','{}',1,?,? WHERE NOT EXISTS (SELECT 1 FROM notification_channels WHERE type='android_local')", arrayOf(now, now))
+    }
+
     private fun createConfigTables(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS local_configs (
@@ -182,14 +251,15 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     private fun listUsers(): NanoHTTPD.Response {
         val rows = JSONArray()
-        readableDatabase.query("local_users", arrayOf("id", "username", "created_at", "updated_at"), null, null, null, null, "id ASC").use { cursor ->
+        readableDatabase.query("local_users", arrayOf("id", "username", "role", "enabled", "created_at", "updated_at"), null, null, null, null, "id ASC").use { cursor ->
             while (cursor.moveToNext()) {
                 rows.put(JSONObject().apply {
                     put("id", cursor.long("id"))
                     put("username", cursor.string("username"))
                     put("created_at", cursor.string("created_at"))
                     put("updated_at", cursor.string("updated_at"))
-                    put("role", "admin")
+                    put("role", cursor.string("role"))
+                    put("enabled", cursor.int("enabled") != 0)
                 })
             }
         }
@@ -232,20 +302,155 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/init" ->
                 initializeAdmin(body(session))
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/login" ->
-                login(body(session))
+                login(session, body(session))
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/refresh" ->
                 refresh(session)
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user" ->
                 authenticated(session) { ok(JSONObject().put("data", userJson())) }
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/logout" ->
-                authenticated(session) { ok(JSONObject().put("message", "ok")) }
+                authenticated(session) { revokeAccessToken(bearerToken(session), "logout"); ok(JSONObject().put("message", "ok")) }
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/captcha-config" ->
                 ok(JSONObject().put("data", JSONObject().put("enabled", false).put("configured", true)))
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/users" -> listUsers()
+            session.uri.startsWith("/api/auth/users") -> serveUsers(session, "/api/auth/users")
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> listUsers()
+            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/password" -> changeOwnPassword(body(session))
+            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/username" -> changeOwnUsername(body(session))
+            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/avatar" -> uploadAvatar(session)
+            session.method == NanoHTTPD.Method.DELETE && session.uri == "/api/auth/avatar" -> deleteAvatar()
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
+
+    fun serveSecurity(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        if (!isAuthorized(session)) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val uri = session.uri.trimEnd('/')
+        val tail = uri.removePrefix("/api/security/")
+        val parts = tail.split('/').filter(String::isNotBlank)
+        return when {
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/login-logs" -> listSecurityLogs(session, "security_login_logs")
+            session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/login-logs" -> {
+                val deleted = writableDatabase.delete("security_login_logs", null, null)
+                audit(session, "login_logs.clear", "deleted=$deleted")
+                ok(JSONObject().put("message", "登录日志已清理").put("deleted", deleted))
+            }
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/sessions" -> listSecuritySessions(session)
+            session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/sessions/others" -> revokeOtherSessions(session)
+            session.method == NanoHTTPD.Method.DELETE && parts.firstOrNull() == "sessions" && parts.getOrNull(1)?.toLongOrNull() != null -> revokeSession(session, parts[1].toLong())
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/ip-whitelist" -> listIpWhitelist()
+            session.method == NanoHTTPD.Method.POST && uri == "/api/security/ip-whitelist" -> createIpWhitelist(session, body(session))
+            parts.firstOrNull() == "ip-whitelist" && parts.getOrNull(1)?.toLongOrNull() != null -> mutateIpWhitelist(session, parts[1].toLong(), parts.getOrNull(2))
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/login-stats" -> loginStats()
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/audit-logs" -> listSecurityLogs(session, "security_audit_logs")
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/2fa/status" -> twoFaUnsupported()
+            (session.method == NanoHTTPD.Method.POST && (uri == "/api/security/2fa/setup" || uri == "/api/security/2fa/verify" || uri == "/api/security/2fa")) ||
+                (session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/2fa") -> twoFaUnavailable()
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "安全接口不存在")
+        }
+    }
+
+    private fun listSecurityLogs(session: NanoHTTPD.IHTTPSession, table: String): NanoHTTPD.Response {
+        val page = (session.parameters["page"]?.firstOrNull()?.toIntOrNull() ?: 1).coerceAtLeast(1)
+        val size = (session.parameters["page_size"]?.firstOrNull()?.toIntOrNull() ?: 100).coerceIn(1, 200)
+        val username = session.parameters["username"]?.firstOrNull()?.trim().orEmpty()
+        val where = if (username.isNotEmpty()) " WHERE username = ?" else ""
+        val args = if (username.isNotEmpty()) arrayOf(username) else emptyArray()
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM $table$where", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        val rows = JSONArray()
+        readableDatabase.rawQuery("SELECT * FROM $table$where ORDER BY id DESC LIMIT ? OFFSET ?", args + arrayOf(size.toString(), ((page - 1) * size).toString())).use { c ->
+            while (c.moveToNext()) rows.put(JSONObject().apply {
+                put("id", c.long("id")); put("username", c.string("username")); put("ip", c.string("ip")); put("created_at", c.string("created_at"))
+                if (table == "security_login_logs") { put("status", c.int("status")); put("message", c.string("message")); put("client_name", c.string("client_name")); put("user_agent", c.string("user_agent")) }
+                else { put("action", c.string("action")); put("detail", c.string("detail")) }
+            })
+        }
+        return ok(JSONObject().put("data", rows).put("total", total).put("page", page).put("page_size", size))
+    }
+
+    private fun listSecuritySessions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val current = bearerToken(session)
+        val rows = queryRows("SELECT id,username,access_token,ip,client_name,user_agent,created_at,expires_at FROM security_sessions ORDER BY id DESC") { c ->
+            JSONObject().put("id", c.long("id")).put("username", c.string("username")).put("ip", c.string("ip"))
+                .put("client_name", c.string("client_name")).put("user_agent", c.string("user_agent"))
+                .put("created_at", c.string("created_at")).put("expires_at", c.string("expires_at")).put("current", c.string("access_token") == current)
+        }
+        return ok(JSONObject().put("data", rows).put("total", rows.length()))
+    }
+
+    private fun revokeOtherSessions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val token = bearerToken(session).orEmpty()
+        val deleted = writableDatabase.delete("security_sessions", "access_token <> ?", arrayOf(token))
+        audit(session, "sessions.revoke_others", "deleted=$deleted")
+        return ok(JSONObject().put("message", "其他会话已撤销").put("deleted", deleted))
+    }
+
+    private fun revokeSession(session: NanoHTTPD.IHTTPSession, id: Long): NanoHTTPD.Response {
+        val token = readableDatabase.query("security_sessions", arrayOf("access_token"), "id=?", arrayOf(id.toString()), null, null, null).use { if (it.moveToFirst()) it.getString(0) else null }
+            ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "会话不存在")
+        val deleted = writableDatabase.delete("security_sessions", "id=?", arrayOf(id.toString()))
+        writableDatabase.delete("local_sessions", "access_token=?", arrayOf(token))
+        if (deleted == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "会话不存在")
+        audit(session, "session.revoke", "id=$id")
+        return ok(JSONObject().put("message", "会话已撤销").put("id", id))
+    }
+
+    private fun listIpWhitelist(): NanoHTTPD.Response {
+        val rows = queryRows("SELECT id,ip,remarks,enabled,created_at,updated_at FROM security_ip_whitelist ORDER BY id") { c ->
+            JSONObject().put("id", c.long("id")).put("ip", c.string("ip")).put("remarks", c.string("remarks")).put("enabled", c.int("enabled") != 0).put("created_at", c.string("created_at")).put("updated_at", c.string("updated_at"))
+        }
+        return ok(JSONObject().put("data", rows).put("total", rows.length()))
+    }
+
+    private fun createIpWhitelist(session: NanoHTTPD.IHTTPSession, json: JSONObject): NanoHTTPD.Response {
+        val ip = json.optString("ip").trim()
+        if (ip.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "IP 地址不能为空")
+        val now = Instant.now().toString()
+        return try {
+            val id = writableDatabase.insertOrThrow("security_ip_whitelist", null, ContentValues().apply { put("ip", ip); put("remarks", json.optString("remarks")); put("enabled", if (json.optBoolean("enabled", true)) 1 else 0); put("created_at", now); put("updated_at", now) })
+            audit(session, "ip_whitelist.create", "id=$id ip=$ip")
+            ok(JSONObject().put("data", JSONObject().put("id", id).put("ip", ip)))
+        } catch (_: Exception) { error(NanoHTTPD.Response.Status.CONFLICT, "IP 已存在") }
+    }
+
+    private fun mutateIpWhitelist(session: NanoHTTPD.IHTTPSession, id: Long, action: String?): NanoHTTPD.Response {
+        if (session.method == NanoHTTPD.Method.DELETE && action == null) {
+            val deleted = writableDatabase.delete("security_ip_whitelist", "id=?", arrayOf(id.toString()))
+            if (deleted == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "白名单不存在")
+            audit(session, "ip_whitelist.delete", "id=$id")
+            return ok(JSONObject().put("message", "已删除").put("id", id))
+        }
+        if ((session.method == NanoHTTPD.Method.POST || session.method == NanoHTTPD.Method.PUT) && (action == "enable" || action == "disable")) {
+            val enabled = action == "enable"
+            val changed = writableDatabase.update("security_ip_whitelist", ContentValues().apply { put("enabled", if (enabled) 1 else 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+            if (changed == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "白名单不存在")
+            audit(session, "ip_whitelist.$action", "id=$id")
+            return ok(JSONObject().put("data", JSONObject().put("id", id).put("enabled", enabled)))
+        }
+        if (session.method == NanoHTTPD.Method.PUT && action == null) {
+            val json = body(session); val values = ContentValues().apply { if (json.has("ip")) put("ip", json.optString("ip").trim()); if (json.has("remarks")) put("remarks", json.optString("remarks")); if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0); put("updated_at", Instant.now().toString()) }
+            val changed = writableDatabase.update("security_ip_whitelist", values, "id=?", arrayOf(id.toString()))
+            if (changed == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "白名单不存在")
+            audit(session, "ip_whitelist.update", "id=$id")
+            return ok(JSONObject().put("data", JSONObject().put("id", id)))
+        }
+        return error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "不支持的白名单操作")
+    }
+
+    private fun loginStats(): NanoHTTPD.Response {
+        fun n(where: String) = readableDatabase.rawQuery("SELECT COUNT(*) FROM security_login_logs WHERE $where", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        return ok(JSONObject().put("data", JSONObject().put("total", n("1=1")).put("success", n("status=0")).put("failed", n("status<>0")).put("today", n("date(created_at)=date('now')")).put("today_success", n("status=0 AND date(created_at)=date('now')")).put("today_failed", n("status<>0 AND date(created_at)=date('now')"))))
+    }
+
+    private fun twoFaUnsupported(): NanoHTTPD.Response = ok(JSONObject().put("data", JSONObject().put("enabled", false).put("supported", false).put("reason", "Kotlin fallback 尚未实现真实 TOTP；不会报告为已启用")))
+    private fun twoFaUnavailable(): NanoHTTPD.Response = NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.CONFLICT, "application/json; charset=utf-8", JSONObject().put("error", "当前 Kotlin fallback 不支持真实 TOTP").put("supported", false).put("enabled", false).toString())
+
+    private fun audit(session: NanoHTTPD.IHTTPSession, action: String, detail: String) {
+        val username = currentUsername(session)
+        writableDatabase.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", action); put("detail", detail); put("created_at", Instant.now().toString()) })
+    }
+
+    private fun currentUsername(session: NanoHTTPD.IHTTPSession): String = bearerToken(session)?.let { token -> readableDatabase.rawQuery("SELECT username FROM security_sessions WHERE access_token=?", arrayOf(token)).use { if (it.moveToFirst()) it.getString(0) else "admin" } } ?: "admin"
+    private fun requestIp(session: NanoHTTPD.IHTTPSession): String = session.headers["x-forwarded-for"]?.substringBefore(',')?.trim().takeUnless { it.isNullOrEmpty() } ?: session.remoteIpAddress.orEmpty()
+    private fun clientName(session: NanoHTTPD.IHTTPSession): String = session.headers["x-client-name"]?.takeIf(String::isNotBlank) ?: "Flutter Android"
 
     fun isAuthorized(session: NanoHTTPD.IHTTPSession): Boolean {
         val token = bearerToken(session) ?: return false
@@ -273,20 +478,199 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         )
     }
 
+    fun serveUsers(session: NanoHTTPD.IHTTPSession, prefix: String = "/api/users"): NanoHTTPD.Response {
+        val tail = session.uri.removePrefix(prefix).trim('/')
+        val parts = if (tail.isBlank()) emptyList() else tail.split('/')
+        val id = parts.firstOrNull()?.toLongOrNull()
+        return when {
+            session.method == NanoHTTPD.Method.GET && id == null -> listUsers()
+            session.method == NanoHTTPD.Method.POST && id == null -> createUser(body(session))
+            session.method == NanoHTTPD.Method.PUT && id != null && parts.getOrNull(1) == "reset-password" -> resetUserPassword(id, body(session).optString("password"))
+            session.method == NanoHTTPD.Method.PUT && id != null -> updateUser(id, body(session))
+            session.method == NanoHTTPD.Method.DELETE && id != null -> if (writableDatabase.delete("local_users", "id=?", arrayOf(id.toString())) > 0) ok(JSONObject().put("message", "删除成功")) else error(NanoHTTPD.Response.Status.NOT_FOUND, "用户不存在")
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "用户接口不存在")
+        }
+    }
+
+    private fun createUser(json: JSONObject): NanoHTTPD.Response {
+        val username=json.optString("username").trim(); val password=json.optString("password")
+        if (username.isBlank() || password.length !in 6..128) return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空且密码需为 6-128 位")
+        val salt=ByteArray(16).also(SecureRandom()::nextBytes); val now=Instant.now().toString()
+        val id=try { writableDatabase.insertOrThrow("local_users",null,ContentValues().apply { put("username",username);put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("role",json.optString("role","operator"));put("enabled",1);put("created_at",now);put("updated_at",now) }) } catch (_: Exception) { return error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在") }
+        return ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",id).put("username",username)))
+    }
+    private fun updateUser(id:Long,json:JSONObject):NanoHTTPD.Response { val v=ContentValues().apply { if(json.has("role"))put("role",json.optString("role"));if(json.has("enabled"))put("enabled",if(json.optBoolean("enabled"))1 else 0);put("updated_at",Instant.now().toString()) };return if(writableDatabase.update("local_users",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在") }
+    private fun resetUserPassword(id:Long,password:String):NanoHTTPD.Response { if(password.length !in 6..128)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"密码需为 6-128 位");val salt=ByteArray(16).also(SecureRandom()::nextBytes);val v=ContentValues().apply{put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("updated_at",Instant.now().toString())};return if(writableDatabase.update("local_users",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","密码重置成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在") }
+    private fun changeOwnPassword(json:JSONObject):NanoHTTPD.Response { val user=readableDatabase.rawQuery("SELECT id,password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->if(!c.moveToFirst())null else Triple(c.long("id"),c.string("password_hash"),c.string("password_salt"))}?:return error(NanoHTTPD.Response.Status.NOT_FOUND,"管理员不存在");val salt=Base64.decode(user.third,Base64.NO_WRAP);if(hashPassword(json.optString("old_password"),salt)!=user.second)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"原密码错误");return resetUserPassword(user.first,json.optString("new_password")) }
+    private fun changeOwnUsername(json:JSONObject):NanoHTTPD.Response { val name=json.optString("username").trim();if(name.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空");return try{writableDatabase.update("local_users",ContentValues().apply{put("username",name);put("updated_at",Instant.now().toString())},"id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",null);ok(JSONObject().put("message","用户名已修改").put("user",userJson()))}catch(_:Exception){error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在")} }
+    private fun deleteAvatar():NanoHTTPD.Response { writableDatabase.execSQL("UPDATE local_users SET avatar_url='' WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)");return ok(JSONObject().put("message","头像已删除")) }
+    private fun uploadAvatar(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { if(!session.headers["content-type"].orEmpty().contains("multipart/form-data",true))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像上传仅支持 multipart/form-data，字段名 avatar");val files=HashMap<String,String>();session.parseBody(files);val temp=files["avatar"]?:return error(NanoHTTPD.Response.Status.BAD_REQUEST,"multipart 缺少 avatar 文件");val source=File(temp);if(!source.isFile)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件无效");val target=File(appContext.filesDir,"avatar-${System.currentTimeMillis()}.bin");source.copyTo(target,true);val url="/api/auth/avatar/file";writableDatabase.execSQL("UPDATE local_users SET avatar_url=? WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",arrayOf(url));return ok(JSONObject().put("message","头像已上传").put("avatar_url",url)) }
+
+    fun serveManagement(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response {
+        val uri=session.uri.removePrefix("/api/v1").removePrefix("/api")
+        return when {
+            uri.startsWith("/ssh-keys") -> serveSimpleSecretCrud(session,uri,"/ssh-keys","ssh_keys","private_key")
+            uri.startsWith("/platform-tokens") -> servePlatformTokens(session,uri)
+            uri.startsWith("/open-api/apps") -> serveOpenApi(session,uri)
+            uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> ok(JSONObject().put("data",JSONObject().put("sponsors",JSONArray()).put("count",0).put("total_amount",0).put("updated_at",JSONObject.NULL)))
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
+        }
+    }
+    private fun serveSimpleSecretCrud(s:NanoHTTPD.IHTTPSession,u:String,p:String,t:String,secret:String):NanoHTTPD.Response { val id=u.removePrefix(p).trim('/').toLongOrNull();return when { s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query(t,null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put(secret,"********").put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at")))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.GET&&id!=null->{readableDatabase.query(t,null,"id=?",arrayOf(id.toString()),null,null,null).use{c->if(!c.moveToFirst())return error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在");ok(JSONObject().put("data",JSONObject().put("id",id).put("name",c.string("name")).put(secret,c.string(secret))))}};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val n=j.optString("name").trim();val v=j.optString(secret);if(n.isBlank()||v.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称和密钥不能为空");val x=writableDatabase.insert(t,null,ContentValues().apply{put("name",n);put(secret,v);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString(secret).isNotBlank()&&j.optString(secret)!="********")put(secret,j.optString(secret));put("updated_at",Instant.now().toString())};if(writableDatabase.update(t,v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete(t,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"接口不存在") } }
+    private fun servePlatformTokens(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { if(u=="/platform-tokens/platforms"){if(s.method==NanoHTTPD.Method.GET){val a=JSONArray();readableDatabase.query("platforms",null,null,null,null,null,"name").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("label",c.string("label")).put("icon",c.string("icon")))};return ok(JSONObject().put("data",a))};if(s.method==NanoHTTPD.Method.POST){val j=body(s);val now=Instant.now().toString();val id=writableDatabase.insert("platforms",null,ContentValues().apply{put("name",j.optString("name"));put("label",j.optString("label",j.optString("name")));put("icon",j.optString("icon"));put("created_at",now);put("updated_at",now)});return ok(JSONObject().put("data",JSONObject().put("id",id)))}};val tail=u.removePrefix("/platform-tokens").trim('/');val parts=tail.split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("platform_tokens",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};return serveTokenCrud(s,id) }
+    private fun serveTokenCrud(s:NanoHTTPD.IHTTPSession,id:Long?):NanoHTTPD.Response { return when {s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();val q="SELECT t.*,p.name platform_name,p.label platform_label FROM platform_tokens t LEFT JOIN platforms p ON p.id=t.platform_id";readableDatabase.rawQuery(q,null).use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("platform_id",c.long("platform_id")).put("platform",JSONObject().put("name",c.string("platform_name")).put("label",c.string("platform_label"))).put("name",c.string("name")).put("token","********").put("remarks",c.string("remarks")).put("enabled",c.int("enabled")!=0))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val x=writableDatabase.insert("platform_tokens",null,ContentValues().apply{put("platform_id",j.optLong("platform_id"));put("name",j.optString("name"));put("token",j.optString("token"));put("remarks",j.optString("remarks"));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString("token").isNotBlank()&&j.optString("token")!="********")put("token",j.optString("token"));if(j.has("remarks"))put("remarks",j.optString("remarks"));put("updated_at",Instant.now().toString())};writableDatabase.update("platform_tokens",v,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","更新成功"))};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("platform_tokens","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"平台令牌接口不存在")} }
+
+    private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return ok(JSONObject().put("data",JSONArray()).put("total",0).put("page",1).put("page_size",20));if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST){val password=body(s).optString("password");val valid=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->c.moveToFirst()&&hashPassword(password,Base64.decode(c.string("password_salt"),Base64.NO_WRAP))==c.string("password_hash")};if(!valid)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"管理员密码错误");val secret=readableDatabase.query("open_api_apps",arrayOf("secret"),"id=?",arrayOf(id.toString()),null,null,null).use{c->if(c.moveToFirst())c.string("secret")else return error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};return ok(JSONObject().put("data",JSONObject().put("secret",secret)))};return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
+    private fun openApiJson(c:Cursor)=JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("app_key",c.string("app_key")).put("secret","********").put("scopes",c.string("scopes")).put("rate_limit",c.int("rate_limit")).put("enabled",c.int("enabled")!=0).put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at"))
+
+    fun serveConfigScript(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { val file=File(appContext.filesDir,"config.sh");return when(session.method){NanoHTTPD.Method.GET->ok(JSONObject().put("content",if(file.isFile)file.readText() else "").put("path",file.absolutePath));NanoHTTPD.Method.PUT->{val content=body(session).optString("content");file.writeText(content);ok(JSONObject().put("message","配置脚本已保存"))};else->error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED,"仅支持 GET/PUT")} }
+
+    fun serveNotifications(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val segments = normalizedUri.trim('/').split('/')
+        val id = segments.getOrNull(1)?.toLongOrNull()
+        val action = segments.getOrNull(2)
+        return when {
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/notifications/types" -> notificationTypes()
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/notifications/send" -> sendNotificationRequest(body(session))
+            session.method == NanoHTTPD.Method.GET && id == null -> paginated("notification_channels", notificationRows())
+            session.method == NanoHTTPD.Method.POST && id == null -> createNotification(body(session))
+            id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateNotification(id, body(session))
+            id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("notification_channels", id)
+            id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") -> setNotificationEnabled(id, action == "enable")
+            id != null && session.method == NanoHTTPD.Method.POST && action == "test" -> sendNotificationByIds("呆呆面板测试通知", "通知渠道配置正常", setOf(id), includeDisabled = true)
+            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "通知接口不存在")
+        }
+    }
+
+    private fun notificationRows(): JSONArray {
+        val rows = JSONArray()
+        readableDatabase.query("notification_channels", null, null, null, null, null, "id ASC").use { cursor ->
+            while (cursor.moveToNext()) rows.put(notificationJson(cursor))
+        }
+        return rows
+    }
+
+    private fun notificationJson(cursor: Cursor) = JSONObject().apply {
+        put("id", cursor.long("id")); put("name", cursor.string("name")); put("type", cursor.string("type"))
+        put("config", try { JSONObject(cursor.string("config")) } catch (_: Exception) { JSONObject() })
+        put("enabled", cursor.int("enabled") != 0); put("created_at", cursor.string("created_at")); put("updated_at", cursor.string("updated_at"))
+    }
+
+    private fun notificationTypes(): NanoHTTPD.Response = ok(JSONObject().put("data", JSONArray()
+        .put(JSONObject().put("type", "android_local").put("name", "Android 本地通知"))
+        .put(JSONObject().put("type", "webhook").put("name", "Webhook"))
+        .put(JSONObject().put("type", "ntfy").put("name", "ntfy"))
+        .put(JSONObject().put("type", "gotify").put("name", "Gotify"))))
+
+    private fun configString(json: JSONObject): String {
+        val value = json.opt("config")
+        return when (value) { is JSONObject -> value.toString(); is String -> JSONObject(value.ifBlank { "{}" }).toString(); else -> "{}" }
+    }
+
+    private fun createNotification(json: JSONObject): NanoHTTPD.Response {
+        val name = json.optString("name").trim(); val type = json.optString("type").trim()
+        if (name.isEmpty() || type !in setOf("android_local", "webhook", "ntfy", "gotify")) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道名称或类型无效")
+        val now = Instant.now().toString()
+        val id = writableDatabase.insertOrThrow("notification_channels", null, ContentValues().apply {
+            put("name", name); put("type", type); put("config", configString(json)); put("enabled", if (json.optBoolean("enabled", true)) 1 else 0); put("created_at", now); put("updated_at", now)
+        })
+        return ok(JSONObject().put("data", JSONObject().put("id", id)).put("message", "创建成功"))
+    }
+
+    private fun updateNotification(id: Long, json: JSONObject): NanoHTTPD.Response {
+        val values = ContentValues().apply {
+            if (json.has("name")) put("name", json.optString("name").trim())
+            if (json.has("type")) put("type", json.optString("type").trim())
+            if (json.has("config")) put("config", configString(json))
+            if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
+            put("updated_at", Instant.now().toString())
+        }
+        if (writableDatabase.update("notification_channels", values, "id=?", arrayOf(id.toString())) == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "通知渠道不存在")
+        return ok(JSONObject().put("message", "保存成功"))
+    }
+
+    private fun setNotificationEnabled(id: Long, enabled: Boolean): NanoHTTPD.Response {
+        val changed = writableDatabase.update("notification_channels", ContentValues().apply { put("enabled", if (enabled) 1 else 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+        return if (changed == 0) error(NanoHTTPD.Response.Status.NOT_FOUND, "通知渠道不存在") else ok(JSONObject().put("message", "ok"))
+    }
+
+    private fun sendNotificationRequest(json: JSONObject): NanoHTTPD.Response {
+        val title = json.optString("title").trim(); val content = json.optString("content").trim()
+        if (title.isEmpty() || content.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "标题和正文不能为空")
+        val ids = json.optJSONArray("channel_ids")?.let { a -> (0 until a.length()).map { a.optLong(it) }.toSet() }
+        return sendNotificationByIds(title, content, ids, includeDisabled = false)
+    }
+
+    private fun sendNotificationByIds(title: String, content: String, ids: Set<Long>?, includeDisabled: Boolean): NanoHTTPD.Response {
+        val failures = JSONArray(); var sent = 0
+        readableDatabase.query("notification_channels", arrayOf("id", "type", "config", "enabled"), null, null, null, null, "id ASC").use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.long("id"); if (ids != null && id !in ids) continue
+                if (!includeDisabled && cursor.int("enabled") == 0) continue
+                try { sendChannel(cursor.string("type"), JSONObject(cursor.string("config")), title, content); sent++ }
+                catch (e: Exception) { failures.put(JSONObject().put("id", id).put("error", e.message ?: "发送失败")) }
+            }
+        }
+        if (sent == 0 && failures.length() > 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, failures.optJSONObject(0)?.optString("error") ?: "发送失败")
+        return ok(JSONObject().put("message", "已发送 $sent 个渠道").put("sent", sent).put("failures", failures))
+    }
+
+    private fun sendChannel(type: String, config: JSONObject, title: String, content: String) {
+        when (type) {
+            "android_local" -> postAndroidNotification("panel_channel", title, content)
+            "webhook" -> httpPost(config.optString("url").ifBlank { config.optString("webhook") }, JSONObject().put("title", title).put("content", content), emptyMap())
+            "ntfy" -> {
+                val base = config.optString("server", "https://ntfy.sh").trimEnd('/'); val topic = config.optString("topic")
+                val headers = mutableMapOf("Title" to title); config.optString("token").takeIf { it.isNotBlank() }?.let { headers["Authorization"] = "Bearer $it" }
+                httpPost("$base/$topic", content, headers, "text/plain; charset=utf-8")
+            }
+            "gotify" -> httpPost(config.optString("server").trimEnd('/') + "/message?token=" + java.net.URLEncoder.encode(config.optString("token"), "UTF-8"), JSONObject().put("title", title).put("message", content).put("priority", 5), emptyMap())
+            else -> throw IllegalArgumentException("不支持的通知类型")
+        }
+    }
+
+    private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8") {
+        val uri = URI(url); if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) throw IllegalArgumentException("仅支持 HTTP(S) 地址")
+        if (InetAddress.getAllByName(uri.host).any(::isPrivateNotificationTarget)) throw IllegalArgumentException("拒绝 localhost/private 通知目标")
+        val connection = uri.toURL().openConnection() as HttpURLConnection
+        connection.connectTimeout = 5000; connection.readTimeout = 10000; connection.instanceFollowRedirects = false; connection.requestMethod = "POST"; connection.doOutput = true
+        connection.setRequestProperty("Content-Type", contentType); headers.forEach(connection::setRequestProperty)
+        connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+        val code = connection.responseCode; connection.disconnect()
+        if (code !in 200..299) throw IllegalStateException("通知服务返回 HTTP $code")
+    }
+
+    private fun isPrivateNotificationTarget(address: InetAddress): Boolean {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isSiteLocalAddress || address.isLinkLocalAddress || address.isMulticastAddress) return true
+        val bytes = address.address
+        if (bytes.size != 16) return false
+        val first = bytes[0].toInt() and 0xff; val second = bytes[1].toInt() and 0xff
+        if ((first and 0xfe) == 0xfc) return true // IPv6 unique-local fc00::/7
+        if (first == 0x20 && second == 0x01 && bytes[2].toInt() == 0x0d && bytes[3].toInt() == 0xb8) return true // documentation-only
+        return bytes.take(10).all { it.toInt() == 0 } && bytes[10].toInt() == -1 && bytes[11].toInt() == -1 && isPrivateNotificationTarget(InetAddress.getByAddress(bytes.copyOfRange(12, 16)))
+    }
+
+    private fun postAndroidNotification(channelId: String, title: String, content: String) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (android.os.Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channelId, if (channelId == "task_channel") "任务通知" else "面板通知", NotificationManager.IMPORTANCE_DEFAULT))
+        manager.notify((System.nanoTime() and 0x7fffffff).toInt(), NotificationCompat.Builder(appContext, channelId).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(title).setContentText(content).setStyle(NotificationCompat.BigTextStyle().bigText(content)).setAutoCancel(true).build())
+    }
+
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
         return when {
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/views" ->
-                ok(JSONObject().put("data", JSONArray()))
+            normalizedUri == "/tasks/views" || normalizedUri == "/tasks/views/reorder" || normalizedUri.startsWith("/tasks/views/") -> serveTaskViews(session, normalizedUri)
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/cron/templates" ->
                 cronTemplates()
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/cron/parse" ->
                 cronParse(body(session))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/notification-channels" ->
-                ok(JSONObject().put("data", JSONArray()))
+                ok(JSONObject().put("data", notificationRows()))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/export" -> exportTasks()
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/import" -> importTasks(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
@@ -294,11 +678,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, try { body(session) } catch (_: Exception) { JSONObject() })
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("tasks", id)
-            id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop") ->
+            id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop", "pin", "unpin") ->
                 updateTaskStatus(id, action!!)
             id != null && session.method == NanoHTTPD.Method.GET && (action == "latest-log" || action == "log") -> latestTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> liveTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "stats" -> taskStats(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "log-files" -> taskLogFiles(id)
+            id != null && session.method == NanoHTTPD.Method.POST && action == "copy" -> copyTask(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == null -> taskDetail(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "任务接口尚未实现")
         }
@@ -312,6 +698,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "stream" -> taskLogStream(id)
             session.method == NanoHTTPD.Method.GET && id != null -> taskLogByIdJson(id)?.let(::ok)
                 ?: error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
+            session.method == NanoHTTPD.Method.DELETE && id != null -> delete("task_logs_local", id)
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/logs/batch-delete" -> deleteLogs(body(session))
+            session.method == NanoHTTPD.Method.DELETE && normalizedUri == "/logs/clean" -> cleanLogs(session)
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/logs/clean" -> cleanLogs(session)
             session.method == NanoHTTPD.Method.GET -> {
                 val taskLogs = JSONArray()
                 readableDatabase.query("task_logs_local", arrayOf("id", "task_id", "status", "content", "duration", "started_at", "ended_at", "created_at"), null, null, null, null, "id DESC", "50").use { cursor ->
@@ -353,6 +743,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             id != null && session.method == NanoHTTPD.Method.DELETE -> delete("envs", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") ->
                 updateEnvEnabled(id, action == "enable")
+            id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("move-top", "cancel-top") -> moveEnvTop(id, action == "move-top")
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量接口尚未实现")
         }
     }
@@ -438,19 +829,19 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val action = segments.getOrNull(2)
         return when {
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtimes" -> pythonRuntimes()
-            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/python-runtime-default" ->
-                ok(JSONObject().put("data", JSONObject().put("version", body(session).optString("version", "3.14"))))
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/pip" -> ok(JSONArray())
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/npm" ->
-                ok(JSONObject().put("dependencies", JSONObject()))
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/mirrors" -> mirrors()
-            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/mirrors" -> ok(body(session))
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/python-runtime-default" -> setPythonDefault(body(session))
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtime-default" -> ok(JSONObject().put("data", JSONObject().put("version", configValue("python_runtime_default", "3.14"))))
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/pip" -> installedPipResponse()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/npm" -> installedNpmResponse()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/mirrors" -> persistedMirrors()
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/mirrors" -> setMirrors(body(session))
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/export" -> exportDependencies(session.parms["type"].orEmpty())
             session.method == NanoHTTPD.Method.GET && id != null && action == "log-stream" -> dependencyLog(id)
             session.method == NanoHTTPD.Method.GET && id != null && action == "status" -> dependencyStatus(id)
             session.method == NanoHTTPD.Method.PUT && id != null && action == "cancel" ->
                 updateDependencyStatus(id, "cancelled", "Dependency operation cancelled")
             session.method == NanoHTTPD.Method.PUT && id != null && action == "reinstall" ->
-                updateDependencyStatus(id, "installed", "Android local dependency record restored")
+                reinstallDependency(id)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/deps/batch-delete" ->
                 deleteDependencies(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/deps/batch-reinstall" ->
@@ -553,17 +944,42 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     }
 
     fun serveBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val uri = session.uri ?: ""
-        return when {
-            session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backups") -> listBackups()
-            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/backup/upload") -> ok(JSONObject().put("data", JSONObject().put("status", "uploaded")))
-            session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/backup/download") -> ok(JSONObject().put("data", JSONArray()).put("total", 0).put("status", "ok"))
-            session.method == NanoHTTPD.Method.POST && uri.startsWith("/api/system/restore") && !uri.contains("progress") -> ok(JSONObject().put("data", JSONObject().put("status", "completed").put("stage", "atomic_restore")))
-            session.method == NanoHTTPD.Method.GET && uri.startsWith("/api/system/restore/progress") -> restoreProgress()
-            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "backup route not found")
+        val uri = (session.uri ?: "").substringBefore("?").trimEnd('/')
+        return try {
+            when {
+                session.method == NanoHTTPD.Method.GET && uri == "/api/system/backups" ->
+                    ok(JSONObject().put("data", localBackupService.list()))
+                session.method == NanoHTTPD.Method.POST && uri == "/api/system/backup" ->
+                    ok(JSONObject().put("data", localBackupService.create(body(session))))
+                session.method == NanoHTTPD.Method.POST && uri == "/api/system/backup/upload" -> {
+                    val files = HashMap<String, String>()
+                    session.parseBody(files)
+                    val path = files["file"] ?: files["content"] ?: files.values.firstOrNull { File(it).isFile }
+                        ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "缺少备份文件")
+                    val name = session.parms["filename"] ?: session.parms["file"] ?: File(path).name
+                    ok(JSONObject().put("data", localBackupService.saveUpload(File(path), name)))
+                }
+                session.method == NanoHTTPD.Method.GET && uri == "/api/system/backup/download" -> {
+                    val file = localBackupService.resolve(session.parms["filename"].orEmpty())
+                        ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "备份文件不存在")
+                    NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", file.inputStream(), file.length()).apply {
+                        addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+                        addHeader("Cache-Control", "no-store")
+                    }
+                }
+                session.method == NanoHTTPD.Method.POST && uri == "/api/system/restore" ->
+                    ok(JSONObject().put("data", localBackupService.restore(body(session))))
+                session.method == NanoHTTPD.Method.GET && uri == "/api/system/restore/progress" -> restoreProgress()
+                session.method == NanoHTTPD.Method.DELETE && uri == "/api/system/backup" ->
+                    ok(JSONObject().put("data", localBackupService.delete(session.parms["filename"].orEmpty())))
+                else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "backup route not found")
+            }
+        } catch (error: NoSuchElementException) {
+            error(NanoHTTPD.Response.Status.NOT_FOUND, error.message ?: "备份文件不存在")
+        } catch (error: IllegalArgumentException) {
+            error(NanoHTTPD.Response.Status.BAD_REQUEST, error.message ?: "备份请求无效")
         }
     }
-
 
     // ===== Dashboard (Android local summary) =====
 
@@ -575,6 +991,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         val envCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val subCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val enabledTasks = readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks WHERE status > 0", null).use { it.moveToFirst(); it.getLong(0) }
+        val runningTasks = runningTaskIds.size
+        val successLogs = readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status=1", null).use { it.moveToFirst(); it.getLong(0) }
+        val failedLogs = readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status=2", null).use { it.moveToFirst(); it.getLong(0) }
+        val recentLogs = queryRows("SELECT * FROM task_logs_local ORDER BY id DESC LIMIT 10") { taskLogJson(it) }
+        val dailyStats = queryRows("SELECT substr(created_at,1,10) day, SUM(CASE WHEN status=1 THEN 1 ELSE 0 END) success, SUM(CASE WHEN status=2 THEN 1 ELSE 0 END) failed FROM task_logs_local GROUP BY substr(created_at,1,10) ORDER BY day DESC LIMIT 7") { c -> JSONObject().put("date", c.string("day")).put("success", c.long("success")).put("failed", c.long("failed")) }
         val data = JSONObject().apply {
             put("mode", "android_local")
             put("version", "0.3.15")
@@ -583,6 +1005,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             put("envs", envCount)
             put("deps", depCount)
             put("subscriptions", subCount)
+            put("task_count", taskCount)
+            put("enabled_tasks", enabledTasks)
+            put("running_tasks", runningTasks)
+            put("success_logs", successLogs)
+            put("failed_logs", failedLogs)
+            put("recent_logs", recentLogs)
+            put("daily_stats", dailyStats)
         }
         return ok(JSONObject().put("data", data))
     }
@@ -664,12 +1093,20 @@ fun serveDashboardStats(): JSONObject {
     }
 
     fun serveSubscriptions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val uri = session.uri ?: ""
+        val normalized = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val parts = normalized.trim('/').split('/')
+        val id = parts.getOrNull(1)?.toLongOrNull()
+        val action = parts.drop(2).joinToString("/")
         return when {
-            session.method == NanoHTTPD.Method.GET && uri == "/api/subscriptions" -> listSubscriptions()
-            session.method == NanoHTTPD.Method.POST && uri == "/api/subscriptions" -> addSubscription(readBody(session))
-            session.method == NanoHTTPD.Method.DELETE && uri.startsWith("/api/subscriptions/") -> deleteSubscription(uri)
-            session.method == NanoHTTPD.Method.PUT && uri.startsWith("/api/subscriptions/refresh/") -> refreshSubscription(uri)
+            session.method == NanoHTTPD.Method.GET && normalized == "/subscriptions" -> listSubscriptions()
+            session.method == NanoHTTPD.Method.POST && normalized == "/subscriptions" -> addSubscription(readBody(session))
+            id != null && session.method == NanoHTTPD.Method.PUT && action.isBlank() -> updateSubscription(id, body(session))
+            id != null && session.method == NanoHTTPD.Method.DELETE && action.isBlank() -> deleteSubscription(normalized)
+            id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") -> enableSubscription(id, action == "enable")
+            id != null && session.method == NanoHTTPD.Method.PUT && action == "pull" -> pullSubscription(id)
+            id != null && session.method == NanoHTTPD.Method.PUT && action == "pull/stop" -> stopSubscriptionPull(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "logs" -> subscriptionLogs(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
         }
     }
@@ -726,6 +1163,91 @@ fun serveDashboardStats(): JSONObject {
     }
 
 
+    private fun updateSubscription(id: Long, json: JSONObject): NanoHTTPD.Response {
+        val values = ContentValues().apply {
+            for (key in listOf("name", "url", "type")) if (json.has(key)) put(key, json.optString(key))
+            if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
+            put("updated_at", Instant.now().toString())
+        }
+        if (writableDatabase.update("local_subscriptions", values, "id=?", arrayOf(id.toString())) == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        return ok(JSONObject().put("data", JSONObject().put("id", id)))
+    }
+
+    private fun enableSubscription(id: Long, enabled: Boolean): NanoHTTPD.Response {
+        val count = writableDatabase.update("local_subscriptions", ContentValues().apply { put("enabled", if (enabled) 1 else 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+        if (count == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        return ok(JSONObject().put("data", JSONObject().put("id", id).put("enabled", enabled)))
+    }
+
+    private fun recordSubscriptionLog(id: Long, level: String, message: String) {
+        writableDatabase.insert("subscription_logs", null, ContentValues().apply { put("subscription_id", id); put("level", level); put("message", message); put("created_at", Instant.now().toString()) })
+    }
+
+    private fun pullSubscription(id: Long): NanoHTTPD.Response {
+        val pair = readableDatabase.query("local_subscriptions", arrayOf("url", "name"), "id=?", arrayOf(id.toString()), null, null, null).use { c -> if (c.moveToFirst()) c.getString(0) to c.getString(1) else null }
+            ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        return try {
+            val connection = java.net.URL(pair.first).openConnection() as HttpURLConnection
+            connection.connectTimeout = 15000; connection.readTimeout = 30000; connection.instanceFollowRedirects = true
+            val code = connection.responseCode
+            if (code !in 200..299) throw IllegalStateException("HTTP $code")
+            val filename = (pair.second.ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
+            val output = File(scriptsRoot(), filename)
+            connection.inputStream.use { input -> output.outputStream().use { input.copyTo(it) } }
+            connection.disconnect()
+            writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), id))
+            recordSubscriptionLog(id, "info", "Downloaded ${output.length()} bytes to $filename")
+            ok(JSONObject().put("data", JSONObject().put("id", id).put("path", filename).put("bytes", output.length()).put("status", "success")))
+        } catch (e: Exception) {
+            recordSubscriptionLog(id, "error", e.message ?: e.javaClass.simpleName)
+            error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "pull failed: ${e.message}")
+        }
+    }
+
+    private fun stopSubscriptionPull(id: Long): NanoHTTPD.Response {
+        recordSubscriptionLog(id, "info", "Pull stop requested")
+        return ok(JSONObject().put("data", JSONObject().put("id", id).put("stopped", true)))
+    }
+
+    private fun subscriptionLogArray(id: Long): JSONArray = queryRows("SELECT * FROM subscription_logs WHERE subscription_id=? ORDER BY id DESC LIMIT 200", arrayOf(id.toString())) { c -> JSONObject().put("id", c.long("id")).put("level", c.string("level")).put("message", c.string("message")).put("created_at", c.string("created_at")) }
+    private fun subscriptionLogs(id: Long) = ok(JSONObject().put("data", subscriptionLogArray(id)))
+    private fun subscriptionPullStream(id: Long): NanoHTTPD.Response {
+        val rows = subscriptionLogArray(id); val text = buildString { for (i in 0 until rows.length()) append("data: ").append(rows.getJSONObject(i).toString()).append("\n\n"); append("event: done\ndata: {\"done\":true}\n\n") }
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/event-stream; charset=utf-8", text).apply { addHeader("Cache-Control", "no-cache") }
+    }
+
+    private fun serveTaskViews(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response {
+        val id = uri.substringAfter("/tasks/views/", "").toLongOrNull()
+        if (session.method == NanoHTTPD.Method.GET && uri == "/tasks/views") return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/json", taskViewRows().toString())
+        val json = if (session.method in setOf(NanoHTTPD.Method.POST, NanoHTTPD.Method.PUT)) body(session) else JSONObject()
+        if (session.method == NanoHTTPD.Method.PUT && uri == "/tasks/views/reorder") {
+            val views=json.optJSONArray("views")?:JSONArray(); for(i in 0 until views.length()){ val v=views.optJSONObject(i)?:continue; writableDatabase.execSQL("UPDATE task_views SET sort_order=?,hidden=?,updated_at=? WHERE id=?", arrayOf<Any?>(v.optInt("sort_order"),if(v.optBoolean("hidden"))1 else 0,Instant.now().toString(),v.optLong("id"))) }; return ok(JSONObject().put("data", taskViewRows()))
+        }
+        if (session.method == NanoHTTPD.Method.DELETE && id != null) { writableDatabase.delete("task_views","id=?",arrayOf(id.toString())); return ok(JSONObject().put("data", JSONObject().put("deleted",id))) }
+        if ((session.method == NanoHTTPD.Method.POST && uri == "/tasks/views") || (session.method == NanoHTTPD.Method.PUT && id != null)) {
+            val now=Instant.now().toString(); val v=ContentValues().apply { put("name",json.optString("name","视图"));put("filters",json.optString("filters","[]"));put("sort_rules",json.optString("sort_rules","[]"));put("hidden",if(json.optBoolean("hidden"))1 else 0);put("sort_order",json.optInt("sort_order"));put("updated_at",now) }
+            val result=if(id==null){v.put("created_at",now);writableDatabase.insertOrThrow("task_views",null,v)}else{writableDatabase.update("task_views",v,"id=?",arrayOf(id.toString()));id}; return ok(JSONObject().put("data",JSONObject().put("id",result)))
+        }
+        return error(NanoHTTPD.Response.Status.NOT_FOUND,"task view route not found")
+    }
+    private fun taskViewRows(): JSONArray = queryRows("SELECT * FROM task_views ORDER BY sort_order,id") { c -> JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("filters",c.string("filters")).put("sort_rules",c.string("sort_rules")).put("hidden",c.int("hidden")==1).put("sort_order",c.int("sort_order")) }
+
+    private fun copyTask(id: Long): NanoHTTPD.Response {
+        val j=readableDatabase.query("tasks",null,"id=?",arrayOf(id.toString()),null,null,null).use { c -> if(!c.moveToFirst()) null else JSONObject().put("name",c.string("name")+" 副本").put("command",c.string("command")).put("cron_expression",c.string("cron_expression")).put("task_type",c.string("task_type")).put("python_version",c.string("python_version")).put("task_before",c.string("task_before")).put("task_after",c.string("task_after")).put("labels",JSONArray(c.string("labels"))) } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND,"task not found")
+        return createTask(j)
+    }
+    private fun taskLogFiles(id: Long): NanoHTTPD.Response { val rows=queryRows("SELECT id,created_at,length(content) size FROM task_logs_local WHERE task_id=? ORDER BY id DESC",arrayOf(id.toString())){c->JSONObject().put("id",c.long("id")).put("name","task-${id}-${c.long("id")}.log").put("size",c.long("size")).put("created_at",c.string("created_at"))};return ok(JSONObject().put("data",rows)) }
+
+    private fun deleteLogs(json: JSONObject): NanoHTTPD.Response { val ids=json.optJSONArray("ids")?:json.optJSONArray("log_ids")?:JSONArray();var n=0;for(i in 0 until ids.length())n+=writableDatabase.delete("task_logs_local","id=?",arrayOf(ids.optLong(i).toString()));return ok(JSONObject().put("data",JSONObject().put("deleted",n))) }
+    private fun cleanLogs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response { val days=session.parms["days"]?.toIntOrNull();val n=if(days==null)writableDatabase.delete("task_logs_local",null,null) else writableDatabase.delete("task_logs_local","created_at < datetime('now', ?)",arrayOf("-$days days"));return ok(JSONObject().put("data",JSONObject().put("deleted",n))) }
+
+    private fun moveEnvTop(id: Long, top: Boolean): NanoHTTPD.Response { val order=if(top)-1 else id.toInt();writableDatabase.execSQL("UPDATE envs SET sort_order=?,updated_at=? WHERE id=?",arrayOf<Any?>(order,Instant.now().toString(),id));return ok(JSONObject().put("data",JSONObject().put("id",id).put("top",top))) }
+
+    private fun persistedMirrors(): NanoHTTPD.Response { val raw=configValue("dependency_mirrors","");val data=if(raw.isBlank()) JSONObject().put("pip","").put("npm","") else JSONObject(raw);return ok(JSONObject().put("data",data)) }
+    private fun setMirrors(json: JSONObject): NanoHTTPD.Response { upsertConfig("dependency_mirrors",json.toString());return ok(JSONObject().put("data",json)) }
+    private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version","3.14");upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
+    private fun exportDependencies(type: String): NanoHTTPD.Response { val lines=mutableListOf<String>();readableDatabase.query("dependencies",arrayOf("name","version"),if(type.isBlank())null else "type=?",if(type.isBlank())null else arrayOf(normalizeDependencyType(type)?:type),null,null,"name").use{c->while(c.moveToNext())lines += c.string("name") + if(c.string("version").isBlank()) "" else if(type=="npm"||type=="nodejs") "@${c.string("version")}" else "==${c.string("version")}"};return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"text/plain; charset=utf-8",lines.joinToString("\n")) }
+
     private fun taskRows(): JSONArray = queryRows(
         "SELECT * FROM tasks ORDER BY id DESC"
     ) { cursor ->
@@ -736,9 +1258,12 @@ fun serveDashboardStats(): JSONObject {
             .put("cron_expression", cursor.string("cron_expression"))
             .put("task_type", cursor.string("task_type"))
             .put("python_version", cursor.string("python_version"))
+            .put("task_before", cursor.string("task_before"))
+            .put("task_after", cursor.string("task_after"))
             .put("status", cursor.double("status"))
             .put("labels", JSONArray(cursor.string("labels")))
             .put("last_run_status", cursor.string("last_run_status"))
+            .put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
             .put("created_at", cursor.string("created_at"))
             .put("updated_at", cursor.string("updated_at"))
     }
@@ -1502,13 +2027,15 @@ fun serveDashboardStats(): JSONObject {
             put("cron_expression", json.optString("cron_expression"))
             put("task_type", json.optString("task_type", "manual"))
             put("python_version", json.optString("python_version"))
+            put("task_before", json.optString("task_before"))
+            put("task_after", json.optString("task_after"))
             put("status", json.optDouble("status", 1.0))
             put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("created_at", now)
             put("updated_at", now)
         }
         val id = writableDatabase.insertOrThrow("tasks", null, values)
-        return ok(JSONObject().put("data", JSONObject().put("id", id)))
+        return taskDetail(id)
     }
 
     private fun taskDetail(id: Long): NanoHTTPD.Response {
@@ -1522,7 +2049,9 @@ fun serveDashboardStats(): JSONObject {
                 put("status", cursor.double("status"))
                 put("cron_expression", cursor.string("cron_expression"))
                 put("python_version", cursor.string("python_version"))
-                put("labels", cursor.string("labels"))
+                put("task_before", cursor.string("task_before"))
+                put("task_after", cursor.string("task_after"))
+                put("labels", JSONArray(cursor.string("labels")))
                 put("created_at", cursor.string("created_at"))
                 put("updated_at", cursor.string("updated_at"))
             }
@@ -1536,7 +2065,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun updateTask(id: Long, json: JSONObject): NanoHTTPD.Response {
         val values = ContentValues().apply {
-            listOf("name", "command", "cron_expression", "task_type", "python_version").forEach { key ->
+            listOf("name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after").forEach { key ->
                 if (json.has(key)) put(key, json.optString(key))
             }
             if (json.has("status")) put("status", json.optDouble("status"))
@@ -1544,10 +2073,14 @@ fun serveDashboardStats(): JSONObject {
             put("updated_at", Instant.now().toString())
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
-        return ok(JSONObject().put("data", JSONObject().put("id", id)))
+        return taskDetail(id)
     }
 
     private fun updateTaskStatus(id: Long, action: String): NanoHTTPD.Response {
+        if (action == "pin" || action == "unpin") {
+            writableDatabase.execSQL("UPDATE tasks SET pinned=?, updated_at=? WHERE id=?", arrayOf<Any?>(if (action == "pin") 1 else 0, Instant.now().toString(), id))
+            return ok(JSONObject().put("data", JSONObject().put("id", id).put("pinned", action == "pin")))
+        }
         val status = when (action) {
             "disable" -> 0.0
             "run" -> 2.0
@@ -1560,20 +2093,9 @@ fun serveDashboardStats(): JSONObject {
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
-            val startedAt = Instant.now()
-            appLog("Task", "Running task $id")
-            val result = runTaskNow(id)
-            appLog("Task", "Task $id result: ${result.status} exit=${result.exitCode}")
-            val endedAt = Instant.now()
-            val logId = insertTaskLog(id, result, startedAt, endedAt)
-            values.clear()
-            values.put("status", 1.0)
-            values.put("last_run_status", result.status)
-            values.put("last_run_logs", result.logs.toString())
-            values.put("last_log_id", logId)
-            values.put("updated_at", Instant.now().toString())
-            writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
-            return ok(JSONObject().put("message", "任务已执行").put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", result.status).put("log_id", logId).put("logs", result.logs)))
+            val execution = executeTaskAndSave(id)
+                ?: return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
+            return ok(JSONObject().put("message", "任务已执行").put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", execution.first.status).put("log_id", execution.second).put("logs", execution.first.logs)))
         }
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status)))
     }
@@ -1600,10 +2122,48 @@ fun serveDashboardStats(): JSONObject {
         return writableDatabase.insertOrThrow("task_logs_local", null, values)
     }
 
+    internal data class ScheduledTask(val id: Long, val cronExpression: String)
+
+    internal fun enabledScheduledTasks(): List<ScheduledTask> {
+        val tasks = mutableListOf<ScheduledTask>()
+        readableDatabase.query("tasks", arrayOf("id", "cron_expression"), "status > 0 AND cron_expression <> ''", null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) tasks += ScheduledTask(cursor.long("id"), cursor.string("cron_expression"))
+        }
+        return tasks
+    }
+
+    /** Unified manual/cron execution path. A task cannot overlap itself. */
+    internal fun executeTaskAndSave(id: Long): Pair<LocalScriptResult, Long>? {
+        if (!runningTaskIds.add(id)) return null
+        try {
+            val startedAt = Instant.now()
+            appLog("Task", "Running task $id")
+            val result = runTaskNow(id)
+            val endedAt = Instant.now()
+            val logId = insertTaskLog(id, result, startedAt, endedAt)
+            val values = ContentValues().apply {
+                put("status", 1.0)
+                put("last_run_status", result.status)
+                put("last_run_logs", result.logs.toString())
+                put("last_log_id", logId)
+                put("updated_at", endedAt.toString())
+            }
+            writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
+            appLog("Task", "Task $id result: ${result.status} exit=${result.exitCode}")
+            try {
+                val taskName = readableDatabase.rawQuery("SELECT name FROM tasks WHERE id=?", arrayOf(id.toString())).use { c -> if (c.moveToFirst()) c.getString(0) else "任务 $id" }
+                postAndroidNotification("task_channel", taskName, if (result.status == "success") "任务执行成功" else "任务执行失败（exit=${result.exitCode ?: "unknown"}）")
+            } catch (e: Exception) { appLog("Notification", "Task notification skipped: ${e.message}") }
+            return result to logId
+        } finally {
+            runningTaskIds.remove(id)
+        }
+    }
+
     private fun runTaskNow(id: Long): LocalScriptResult {
         return readableDatabase.query(
             "tasks",
-            arrayOf("command", "name"),
+            arrayOf("command", "name", "task_before", "task_after"),
             "id = ?",
             arrayOf(id.toString()),
             null,
@@ -1614,21 +2174,35 @@ fun serveDashboardStats(): JSONObject {
                 return@use LocalScriptResult(JSONArray().put("Task not found"), "failed", true, 404)
             }
             val command = cursor.string("command").trim()
+            val before = cursor.string("task_before").trim()
+            val after = cursor.string("task_after").trim()
+            val logs = JSONArray()
+            if (before.isNotEmpty()) {
+                val hook = executeShellCommand(before)
+                logs.put("[before] ${if (hook.status == "success") "success" else "failed"}")
+                for (i in 0 until hook.logs.length()) logs.put("[before] ${hook.logs.optString(i)}")
+            }
             val path = when {
                 command.startsWith("task ") -> command.removePrefix("task ").trim()
                 command.startsWith("script ") -> command.removePrefix("script ").trim()
                 command.contains("/") || command.contains(".") -> command
                 else -> ""
             }
-            if (path.isBlank()) {
-                // Execute raw shell command directly
-                return@use executeShellCommand(command)
+            val main = if (path.isBlank()) {
+                executeShellCommand(command)
+            } else {
+                val file = scriptFile(path)
+                if (!file.exists()) LocalScriptResult(JSONArray().put("Script does not exist: $path"), "failed", true, 404)
+                else executeScriptFile(file, path)
             }
-            val file = scriptFile(path)
-            if (!file.exists()) {
-                return@use LocalScriptResult(JSONArray().put("Script does not exist: $path"), "failed", true, 404)
+            for (i in 0 until main.logs.length()) logs.put(main.logs.optString(i))
+            // after always runs, including when the main command failed. Its failure is diagnostic only.
+            if (after.isNotEmpty()) {
+                val hook = executeShellCommand(after)
+                logs.put("[after] ${if (hook.status == "success") "success" else "failed"}")
+                for (i in 0 until hook.logs.length()) logs.put("[after] ${hook.logs.optString(i)}")
             }
-            executeScriptFile(file, path)
+            LocalScriptResult(logs, main.status, true, main.exitCode)
         }
     }
 
@@ -1642,10 +2216,7 @@ fun serveDashboardStats(): JSONObject {
             when (action) {
                 "enable" -> put("status", 1.0)
                 "disable" -> put("status", 0.0)
-                "run" -> {
-                    put("status", 1.0)
-                    put("last_run_status", "failed")
-                }
+                "run" -> put("status", 1.0)
             }
             put("updated_at", Instant.now().toString())
         }
@@ -1662,6 +2233,15 @@ fun serveDashboardStats(): JSONObject {
             writableDatabase.setTransactionSuccessful()
         } finally {
             writableDatabase.endTransaction()
+        }
+        if (action == "run") {
+            val results = JSONArray()
+            for (index in 0 until ids.length()) {
+                val taskId = ids.optLong(index)
+                val execution = executeTaskAndSave(taskId)
+                results.put(JSONObject().put("id", taskId).put("status", execution?.first?.status ?: "conflict").put("log_id", execution?.second ?: JSONObject.NULL))
+            }
+            return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("results", results)))
         }
         return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
     }
@@ -1801,6 +2381,8 @@ fun serveDashboardStats(): JSONObject {
             put("cron_expression", json.optString("cron_expression"))
             put("task_type", json.optString("task_type", "manual"))
             put("python_version", json.optString("python_version"))
+            put("task_before", json.optString("task_before"))
+            put("task_after", json.optString("task_after"))
             put("status", json.optDouble("status", 1.0))
             put("labels", (json.optJSONArray("labels") ?: JSONArray()).toString())
             put("updated_at", now)
@@ -1934,6 +2516,11 @@ fun serveDashboardStats(): JSONObject {
                 val id = ids.optLong(index)
                 when (action) {
                     "enable", "disable" -> updateEnvEnabledRecord(id, action == "enable")
+                    "rename" -> {
+                        val item = json.optJSONArray("items")?.let { if (index < it.length()) it.optJSONObject(index) else null }
+                        val name = item?.optString("name") ?: json.optString("name")
+                        if (name.isNotBlank()) writableDatabase.update("envs", ContentValues().apply { put("name", name); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+                    }
                     "group" -> {
                         val values = ContentValues().apply {
                             put("groups_json", normalizeGroups(json).toString())
@@ -1971,6 +2558,8 @@ fun serveDashboardStats(): JSONObject {
 
     private fun createDependencies(json: JSONObject): NanoHTTPD.Response {
         val names = json.optJSONArray("names") ?: JSONArray()
+        val depType = normalizeDependencyType(json.optString("type", "nodejs"))
+            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback only supports pip/python and npm/nodejs")
         val now = Instant.now().toString()
         val ids = JSONArray()
         val statuses = JSONArray()
@@ -1978,8 +2567,8 @@ fun serveDashboardStats(): JSONObject {
         for (index in 0 until names.length()) {
             val name = names.optString(index).trim()
             if (name.isEmpty()) continue
-            val depType = json.optString("type", "nodejs")
-            val installResult = installDependencyForFallback(depType, name)
+            val rawResult = installDependencyForFallback(depType, name)
+            val installResult = if (rawResult.first == "installed") rawResult else "failed" to rawResult.second
             results.add(Triple(name, depType, installResult))
             statuses.put(JSONObject().put("name", name).put("status", installResult.first).put("log", installResult.second.substring(0, Math.min(500, installResult.second.length))))
         }
@@ -1989,7 +2578,7 @@ fun serveDashboardStats(): JSONObject {
         writableDatabase.beginTransaction()
         try {
             for (triple in results) {
-                val ver = installedPkgs[triple.first.lowercase()] ?: ""
+                val ver = installedPkgs[normalizePackageName(triple.first)] ?: ""
                 val values = ContentValues().apply {
                     put("name", triple.first)
                     put("type", triple.second)
@@ -2069,6 +2658,60 @@ fun serveDashboardStats(): JSONObject {
         } catch (_: Exception) { emptyMap() }
     }
 
+    private fun normalizeDependencyType(raw: String): String? = when (raw.trim().lowercase()) {
+        "python", "pip" -> "python"
+        "node", "nodejs", "npm" -> "nodejs"
+        else -> null
+    }
+
+    private fun normalizePackageName(spec: String): String {
+        val value = spec.trim()
+        return when {
+            value.startsWith("@") -> value.indexOf('@', 1).let { versionAt -> if (versionAt > 0) value.substring(0, versionAt) else value }
+            else -> value.substringBefore("==").substringBefore(">=").substringBefore("<=")
+                .substringBefore("~=").substringBefore('>').substringBefore('<').substringBefore('@')
+        }.lowercase().replace('_', '-')
+    }
+
+    private fun installedPipResponse(): NanoHTTPD.Response {
+        if (AndroidPythonRuntime.ensureReady(appContext) == null) {
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready")
+        }
+        val packages = queryPipInstalledPackages()
+        val rows = JSONArray()
+        packages.toSortedMap().forEach { (name, version) -> rows.put(JSONObject().put("name", name).put("version", version)) }
+        return ok(rows)
+    }
+
+    private fun queryNpmInstalledPackages(): Map<String, String> {
+        val runtime = AndroidNodeRuntime.ensureReady(appContext) ?: return emptyMap()
+        val deps = AndroidNodeRuntime.depsDir(appContext)
+        val npm = File(runtime.modules, "npm/bin/npm-cli.js")
+        val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "list", "--json", "--depth=0", "--prefix", deps.absolutePath)
+        val result = runLocalProcess(command, deps, JSONArray())
+        val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}') + 1
+        if (start < 0 || end <= start) return emptyMap()
+        return try {
+            val dependencies = JSONObject(text.substring(start, end)).optJSONObject("dependencies") ?: JSONObject()
+            dependencies.keys().asSequence().associate { name ->
+                normalizePackageName(name) to dependencies.optJSONObject(name)?.optString("version").orEmpty()
+            }
+        } catch (_: Exception) { emptyMap() }
+    }
+
+    private fun installedNpmResponse(): NanoHTTPD.Response {
+        if (AndroidNodeRuntime.ensureReady(appContext) == null) {
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
+        }
+        val dependencies = JSONObject()
+        queryNpmInstalledPackages().toSortedMap().forEach { (name, version) ->
+            dependencies.put(name, JSONObject().put("version", version))
+        }
+        return ok(JSONObject().put("dependencies", dependencies))
+    }
+
     private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
         if (depType == "python") {
             val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
@@ -2086,7 +2729,10 @@ fun serveDashboardStats(): JSONObject {
                 .put("Installing Python dependency: " + name)
             val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-            return if (result.exitCode == 0) "installed" to text else "failed" to text
+            if (result.exitCode != 0) return "failed" to text
+            val verified = queryPipInstalledPackages().containsKey(normalizePackageName(name))
+            return if (verified) "installed" to "$text\nPost-install verification: pip list confirmed $name"
+            else "failed" to "$text\nPOST_VERIFY_FAILED: pip list did not report $name"
         }
         if (depType == "nodejs") {
             val restricted = setOf("@tencent-qqmail/agently-cli", "agent-browser", "clawhub")
@@ -2105,7 +2751,11 @@ fun serveDashboardStats(): JSONObject {
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
                 val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-                if (result.exitCode == 0) "installed" to text else "failed" to text
+                if (result.exitCode != 0) "failed" to text else {
+                    val verified = queryNpmInstalledPackages().containsKey(normalizePackageName(name))
+                    if (verified) "installed" to "$text\nPost-install verification: npm list confirmed $name"
+                    else "failed" to "$text\nPOST_VERIFY_FAILED: npm list did not report $name"
+                }
             } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
         }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
@@ -2125,7 +2775,8 @@ fun serveDashboardStats(): JSONObject {
             if (!it.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
             val status = it.string("status")
             val log = it.string("log")
-            val payload = "event: log\ndata: $log\n\nevent: done\ndata: $status\n\n"
+            val framedLog = log.replace("\r\n", "\n").replace('\r', '\n').split('\n').joinToString("\n") { "data: $it" }
+            val payload = "event: log\n$framedLog\n\nevent: done\ndata: $status\n\n"
             return NanoHTTPD.newFixedLengthResponse(
                 NanoHTTPD.Response.Status.OK,
                 "text/event-stream; charset=utf-8",
@@ -2175,16 +2826,45 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
     }
 
+    private fun reinstallDependency(id: Long): NanoHTTPD.Response {
+        val record = readableDatabase.query("dependencies", arrayOf("name", "type"), "id = ?", arrayOf(id.toString()), null, null, null).use { cursor ->
+            if (!cursor.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
+            cursor.string("name") to cursor.string("type")
+        }
+        val depType = normalizeDependencyType(record.second)
+        if (depType == null) {
+            val message = "UNSUPPORTED_DEPENDENCY_TYPE: ${record.second} cannot be installed on Android fallback"
+            updateDependencyRecord(id, "failed", message, "")
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, message)
+        }
+        val result = installDependencyForFallback(depType, record.first)
+        val status = if (result.first == "installed") "installed" else "failed"
+        val version = when (depType) {
+            "python" -> queryPipInstalledPackages()[normalizePackageName(record.first)].orEmpty()
+            else -> queryNpmInstalledPackages()[normalizePackageName(record.first)].orEmpty()
+        }
+        updateDependencyRecord(id, status, result.second, version)
+        return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status).put("version", version)))
+    }
+
+    private fun updateDependencyRecord(id: Long, status: String, log: String, version: String) {
+        writableDatabase.update("dependencies", ContentValues().apply {
+            put("status", status); put("log", log); put("version", version); put("updated_at", Instant.now().toString())
+        }, "id = ?", arrayOf(id.toString()))
+    }
+
     private fun reinstallDependencies(json: JSONObject): NanoHTTPD.Response {
         val ids = json.optJSONArray("ids") ?: JSONArray()
+        val statuses = JSONArray()
         for (index in 0 until ids.length()) {
-            updateDependencyStatus(
-                ids.optLong(index),
-                "installed",
-                "Android local dependency record reinstalled"
-            )
+            val id = ids.optLong(index)
+            reinstallDependency(id)
+            val status = readableDatabase.query("dependencies", arrayOf("status"), "id = ?", arrayOf(id.toString()), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.string("status") else "failed"
+            }
+            statuses.put(JSONObject().put("id", id).put("status", status))
         }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
+        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
     }
 
     private fun pythonRuntimes(): NanoHTTPD.Response = ok(
@@ -2315,7 +2995,7 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("message", "initialized"))
     }
 
-    private fun login(json: JSONObject): NanoHTTPD.Response {
+    private fun login(session: NanoHTTPD.IHTTPSession, json: JSONObject): NanoHTTPD.Response {
         val username = json.optString("username").trim()
         val password = json.optString("password")
         val cursor = readableDatabase.query(
@@ -2334,6 +3014,8 @@ fun serveDashboardStats(): JSONObject {
                 hashPassword(password, salt) == it.string("password_hash")
             }
         }
+        val now = Instant.now().toString()
+        writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("status", if (valid) 0 else 1); put("message", if (valid) "登录成功" else "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
         if (!valid) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "用户名或密码错误")
         val accessToken = randomToken()
         val refreshToken = randomToken()
@@ -2349,6 +3031,8 @@ fun serveDashboardStats(): JSONObject {
             values,
             SQLiteDatabase.CONFLICT_REPLACE
         )
+        writableDatabase.insert("security_sessions", null, ContentValues().apply { put("username", username); put("access_token", accessToken); put("ip", requestIp(session)); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) })
+        writableDatabase.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", "auth.login"); put("detail", "登录成功"); put("created_at", now) })
         return ok(
             JSONObject().put(
                 "data",
@@ -2358,6 +3042,12 @@ fun serveDashboardStats(): JSONObject {
                     .put("user", userJson())
             )
         )
+    }
+
+    private fun revokeAccessToken(token: String?, action: String) {
+        if (token == null) return
+        writableDatabase.delete("security_sessions", "access_token=?", arrayOf(token))
+        writableDatabase.delete("local_sessions", "access_token=?", arrayOf(token))
     }
 
     private fun refresh(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
@@ -2373,7 +3063,9 @@ fun serveDashboardStats(): JSONObject {
             put("access_token", accessToken)
             put("updated_at", Instant.now().toString())
         }
+        val oldAccessToken = readableDatabase.rawQuery("SELECT access_token FROM local_sessions WHERE id=1", null).use { if (it.moveToFirst()) it.getString(0) else "" }
         writableDatabase.update("local_sessions", values, "id = 1", null)
+        writableDatabase.update("security_sessions", ContentValues().apply { put("access_token", accessToken); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) }, "access_token=?", arrayOf(oldAccessToken))
         return ok(JSONObject().put("data", JSONObject().put("access_token", accessToken)))
     }
 

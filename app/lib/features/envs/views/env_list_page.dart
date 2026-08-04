@@ -242,7 +242,6 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
 
   void reorderLocal(int oldIndex, int newIndex) {
     final items = List<EnvVar>.from(state.envs);
-    if (newIndex > oldIndex) newIndex--;
     final item = items.removeAt(oldIndex);
     items.insert(newIndex, item);
     state = state.copyWith(envs: items);
@@ -591,11 +590,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         _EnvBatchAction.disable => '已批量禁用 ${ids.length} 个环境变量',
         _EnvBatchAction.delete => '已批量删除 ${ids.length} 个环境变量',
       };
-      AppGlassNotice.show(
-        context,
-        message,
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, message, type: AppGlassNoticeType.success);
     } catch (_) {
       if (!mounted) {
         return;
@@ -624,11 +619,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       final message = groups.isEmpty
           ? '已清空 ${ids.length} 个环境变量的分组'
           : '已将 ${ids.length} 个环境变量分组到“${groups.join(' / ')}”';
-      AppGlassNotice.show(
-        context,
-        message,
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, message, type: AppGlassNoticeType.success);
     } catch (_) {
       if (!mounted) {
         return;
@@ -680,8 +671,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     runSpacing: 8,
                     children: groups
                         .map(
-                           (group) => AppLiquidGlassActionChip(
-                             label: group,
+                          (group) => AppLiquidGlassActionChip(
+                            label: group,
                             onPressed: () {
                               if (selectedGroups.contains(group)) {
                                 selectedGroups.remove(group);
@@ -720,9 +711,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 ),
                 AppGlassDialogAction(
                   label: '确认',
-                  onPressed: () => Navigator.of(dialogCtx).pop(
-                    _normalizeGroups([controller.text, ...selectedGroups]),
-                  ),
+                  onPressed: () => Navigator.of(
+                    dialogCtx,
+                  ).pop(_normalizeGroups([controller.text, ...selectedGroups])),
                   variant: AppLiquidGlassButtonVariant.primary,
                 ),
               ],
@@ -751,7 +742,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final state = ref.watch(envListProvider);
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    
+
     final selectedCount = _selectedIds.length;
     final allSelected = _isAllSelected(state.envs);
 
@@ -787,10 +778,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 for (final move in _pendingSortMoves) {
                                   await ref
                                       .read(envListProvider.notifier)
-                                      .sortEnvs(
-                                        move.sourceId,
-                                        move.targetId,
-                                      );
+                                      .sortEnvs(move.sourceId, move.targetId);
                                 }
                                 if (context.mounted) {
                                   AppGlassNotice.show(
@@ -858,48 +846,50 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       height: 44,
                       child: AppLiquidGlassInput(
                         child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: '搜索变量...',
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            size: 18,
-                            color: AppColors.slate400,
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: '搜索变量...',
+                            prefixIcon: const Icon(
+                              Icons.search,
+                              size: 18,
+                              color: AppColors.slate400,
+                            ),
+                            isDense: true,
+                            suffixIcon: _searchController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(
+                                      Icons.clear,
+                                      size: 16,
+                                      color: AppColors.slate400,
+                                    ),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      if (_selectionMode) {
+                                        _setSelectionMode(false);
+                                      }
+                                      ref
+                                          .read(envListProvider.notifier)
+                                          .setKeyword('');
+                                    },
+                                  )
+                                : null,
                           ),
-                          isDense: true,
-                          suffixIcon: _searchController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(
-                                    Icons.clear,
-                                    size: 16,
-                                    color: AppColors.slate400,
-                                  ),
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    if (_selectionMode) {
-                                      _setSelectionMode(false);
-                                    }
-                                    ref
-                                        .read(envListProvider.notifier)
-                                        .setKeyword('');
-                                  },
-                                )
-                              : null,
-                        ),
-                        style: const TextStyle(fontSize: 14),
-                        onChanged: (v) {
-                          setState(() {});
-                          if (_selectionMode) {
-                            _setSelectionMode(false);
-                          }
-                          _debounce?.cancel();
-                          _debounce = Timer(
-                            const Duration(milliseconds: 300),
-                            () {
-                              ref.read(envListProvider.notifier).setKeyword(v);
-                            },
-                          );
-                        },
+                          style: const TextStyle(fontSize: 14),
+                          onChanged: (v) {
+                            setState(() {});
+                            if (_selectionMode) {
+                              _setSelectionMode(false);
+                            }
+                            _debounce?.cancel();
+                            _debounce = Timer(
+                              const Duration(milliseconds: 300),
+                              () {
+                                ref
+                                    .read(envListProvider.notifier)
+                                    .setKeyword(v);
+                              },
+                            );
+                          },
                         ),
                       ),
                     ),
@@ -946,37 +936,37 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         performanceMode: true,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: SizedBox(
-                        height: 44,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.label_outline,
-                              size: 18,
-                              color: AppColors.slate400,
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                state.selectedGroups.isEmpty
-                                    ? '全部'
-                                    : state.selectedGroups.join(' / '),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: theme.colorScheme.onSurface,
+                          height: 44,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.label_outline,
+                                size: 18,
+                                color: AppColors.slate400,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  state.selectedGroups.isEmpty
+                                      ? '全部'
+                                      : state.selectedGroups.join(' / '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(
-                              Icons.expand_more,
-                              size: 18,
-                              color: AppColors.slate400,
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 4),
+                              const Icon(
+                                Icons.expand_more,
+                                size: 18,
+                                color: AppColors.slate400,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1217,22 +1207,17 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     ? ReorderableListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
                         itemCount: state.envs.length,
-                        onReorder: (oldIndex, newIndex) {
+                        onReorderItem: (oldIndex, newIndex) {
                           final current = List<EnvVar>.from(state.envs);
                           if (current.isEmpty || oldIndex >= current.length) {
                             return;
                           }
                           final sourceEnv = current[oldIndex];
-                          final adjustedNewIndex = newIndex > oldIndex
-                              ? newIndex - 1
-                              : newIndex;
                           int? targetId;
-                          if (adjustedNewIndex > 0 &&
-                              adjustedNewIndex - 1 < current.length) {
-                            final targetSourceIndex =
-                                adjustedNewIndex > oldIndex
-                                ? adjustedNewIndex
-                                : adjustedNewIndex - 1;
+                          if (newIndex > 0 && newIndex - 1 < current.length) {
+                            final targetSourceIndex = newIndex > oldIndex
+                                ? newIndex
+                                : newIndex - 1;
                             if (targetSourceIndex >= 0 &&
                                 targetSourceIndex < current.length) {
                               targetId = current[targetSourceIndex].id;
@@ -1242,9 +1227,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               .read(envListProvider.notifier)
                               .reorderLocal(oldIndex, newIndex);
                           setState(() {
-                            _pendingSortMoves.add(
-                              (sourceId: sourceEnv.id, targetId: targetId),
-                            );
+                            _pendingSortMoves.add((
+                              sourceId: sourceEnv.id,
+                              targetId: targetId,
+                            ));
                           });
                         },
                         itemBuilder: (_, i) {
@@ -1391,183 +1377,188 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color:
-                            (env.enabled
-                                    ? AppColors.primary
-                                    : AppColors.slate400)
-                                .withAlpha(18),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        env.enabled ? '当前已启用' : '当前已禁用',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: env.enabled
-                              ? AppColors.primary
-                              : AppColors.slate500,
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color:
+                                (env.enabled
+                                        ? AppColors.primary
+                                        : AppColors.slate400)
+                                    .withAlpha(18),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            env.enabled ? '当前已启用' : '当前已禁用',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: env.enabled
+                                  ? AppColors.primary
+                                  : AppColors.slate500,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    const Spacer(),
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        await ref
-                            .read(envListProvider.notifier)
-                            .toggle(env.id, !env.enabled);
-                        if (!mounted || sheetRoute?.isCurrent != true) {
-                          return;
-                        }
-                        navigator.pop();
-                        AppGlassNotice.show(
-                          context,
-                          env.enabled
-                              ? '已禁用 ${env.name}'
-                              : '已启用 ${env.name}',
-                          type: AppGlassNoticeType.success,
-                        );
-                      },
-                      icon: Icon(
-                        env.enabled
-                            ? Icons.pause_circle_outline
-                            : Icons.play_arrow,
-                        size: 16,
-                      ),
-                      label: Text(env.enabled ? '禁用' : '启用'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: env.enabled
-                            ? AppColors.slate600
-                            : AppColors.primary,
-                        side: BorderSide(
-                          color: env.enabled
-                              ? AppColors.slate300
-                              : AppColors.primary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  env.name,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: nameC,
-                  decoration: const InputDecoration(labelText: '变量名'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: valueC,
-                  decoration: InputDecoration(
-                    labelText: '值',
-                    suffixIcon: IconButton(
-                      // 变量值较长时切到弹窗内的大输入区，不再新开页面，避免回填丢失。
-                      icon: const Icon(Icons.open_in_full, size: 18),
-                      tooltip: '放大编辑变量值',
-                      onPressed: () =>
-                          setSheetState(() => valueEditorOpen = true),
-                    ),
-                  ),
-                  maxLines: 4,
-                  minLines: 2,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: remarksC,
-                  decoration: const InputDecoration(labelText: '备注'),
-                ),
-                const SizedBox(height: 12),
-                _buildGroupAutocomplete(controller: groupC, options: groups),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        icon: const Icon(Icons.close, size: 16),
-                        label: const Text('关闭'),
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 44),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: valueC.text));
-                          AppGlassNotice.show(
-                            context,
-                            '已复制值',
-                            type: AppGlassNoticeType.info,
-                          );
-                        },
-                        icon: const Icon(Icons.copy, size: 16),
-                        label: const Text('复制'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.blue500,
-                          side: const BorderSide(color: AppColors.blue500),
-                          minimumSize: const Size(0, 44),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () async {
-                          final navigator = Navigator.of(ctx);
-                          final sheetRoute = ModalRoute.of(ctx);
-                          try {
+                        const Spacer(),
+                        OutlinedButton.icon(
+                          onPressed: () async {
                             await ref
                                 .read(envListProvider.notifier)
-                                .update(
-                                  env.id,
-                                  nameC.text.trim(),
-                                  valueC.text,
-                                  remarks: remarksC.text.trim(),
-                                  groups: _normalizeGroups([groupC.text]),
-                                );
+                                .toggle(env.id, !env.enabled);
                             if (!mounted || sheetRoute?.isCurrent != true) {
                               return;
                             }
                             navigator.pop();
                             AppGlassNotice.show(
                               context,
-                              '已保存',
+                              env.enabled
+                                  ? '已禁用 ${env.name}'
+                                  : '已启用 ${env.name}',
                               type: AppGlassNoticeType.success,
                             );
-                          } catch (error) {
-                            if (!mounted) {
-                              return;
-                            }
-                            AppGlassNotice.show(
-                              context,
-                              extractErrorMessage(error, '保存环境变量失败'),
-                              type: AppGlassNoticeType.error,
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.save, size: 16),
-                        label: const Text('保存'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(0, 44),
+                          },
+                          icon: Icon(
+                            env.enabled
+                                ? Icons.pause_circle_outline
+                                : Icons.play_arrow,
+                            size: 16,
+                          ),
+                          label: Text(env.enabled ? '禁用' : '启用'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: env.enabled
+                                ? AppColors.slate600
+                                : AppColors.primary,
+                            side: BorderSide(
+                              color: env.enabled
+                                  ? AppColors.slate300
+                                  : AppColors.primary,
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      env.name,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                  ],
-                ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: nameC,
+                      decoration: const InputDecoration(labelText: '变量名'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: valueC,
+                      decoration: InputDecoration(
+                        labelText: '值',
+                        suffixIcon: IconButton(
+                          // 变量值较长时切到弹窗内的大输入区，不再新开页面，避免回填丢失。
+                          icon: const Icon(Icons.open_in_full, size: 18),
+                          tooltip: '放大编辑变量值',
+                          onPressed: () =>
+                              setSheetState(() => valueEditorOpen = true),
+                        ),
+                      ),
+                      maxLines: 4,
+                      minLines: 2,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: remarksC,
+                      decoration: const InputDecoration(labelText: '备注'),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildGroupAutocomplete(
+                      controller: groupC,
+                      options: groups,
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            icon: const Icon(Icons.close, size: 16),
+                            label: const Text('关闭'),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Clipboard.setData(
+                                ClipboardData(text: valueC.text),
+                              );
+                              AppGlassNotice.show(
+                                context,
+                                '已复制值',
+                                type: AppGlassNoticeType.info,
+                              );
+                            },
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('复制'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.blue500,
+                              side: const BorderSide(color: AppColors.blue500),
+                              minimumSize: const Size(0, 44),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () async {
+                              final navigator = Navigator.of(ctx);
+                              final sheetRoute = ModalRoute.of(ctx);
+                              try {
+                                await ref
+                                    .read(envListProvider.notifier)
+                                    .update(
+                                      env.id,
+                                      nameC.text.trim(),
+                                      valueC.text,
+                                      remarks: remarksC.text.trim(),
+                                      groups: _normalizeGroups([groupC.text]),
+                                    );
+                                if (!mounted || sheetRoute?.isCurrent != true) {
+                                  return;
+                                }
+                                navigator.pop();
+                                AppGlassNotice.show(
+                                  context,
+                                  '已保存',
+                                  type: AppGlassNoticeType.success,
+                                );
+                              } catch (error) {
+                                if (!mounted) {
+                                  return;
+                                }
+                                AppGlassNotice.show(
+                                  context,
+                                  extractErrorMessage(error, '保存环境变量失败'),
+                                  type: AppGlassNoticeType.error,
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.save, size: 16),
+                            label: const Text('保存'),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1624,93 +1615,95 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                Text(
-                  '新建环境变量',
-                  style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: nameC,
-                  decoration: const InputDecoration(
-                    labelText: '变量名',
-                    hintText: '如 MY_TOKEN',
-                  ),
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: valueC,
-                  decoration: InputDecoration(
-                    labelText: '值',
-                    suffixIcon: IconButton(
-                      // 新建变量时也用同一个控制器放大编辑，完成后原表单立即保留输入。
-                      icon: const Icon(Icons.open_in_full, size: 18),
-                      tooltip: '放大编辑变量值',
-                      onPressed: () =>
-                          setSheetState(() => valueEditorOpen = true),
-                    ),
-                  ),
-                  maxLines: 3,
-                  minLines: 1,
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: remarksC,
-                        decoration: const InputDecoration(labelText: '备注'),
-                        textInputAction: TextInputAction.next,
+                    Text(
+                      '新建环境变量',
+                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildGroupAutocomplete(
-                        controller: groupC,
-                        options: groups,
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: nameC,
+                      decoration: const InputDecoration(
+                        labelText: '变量名',
+                        hintText: '如 MY_TOKEN',
                       ),
+                      textInputAction: TextInputAction.next,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: () async {
-                    if (nameC.text.trim().isEmpty) return;
-                    try {
-                      await ref
-                          .read(envListProvider.notifier)
-                          .create(
-                            nameC.text.trim(),
-                            valueC.text,
-                            remarks: remarksC.text.trim(),
-                            groups: _normalizeGroups([groupC.text]),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: valueC,
+                      decoration: InputDecoration(
+                        labelText: '值',
+                        suffixIcon: IconButton(
+                          // 新建变量时也用同一个控制器放大编辑，完成后原表单立即保留输入。
+                          icon: const Icon(Icons.open_in_full, size: 18),
+                          tooltip: '放大编辑变量值',
+                          onPressed: () =>
+                              setSheetState(() => valueEditorOpen = true),
+                        ),
+                      ),
+                      maxLines: 3,
+                      minLines: 1,
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: remarksC,
+                            decoration: const InputDecoration(labelText: '备注'),
+                            textInputAction: TextInputAction.next,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildGroupAutocomplete(
+                            controller: groupC,
+                            options: groups,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: () async {
+                        if (nameC.text.trim().isEmpty) return;
+                        try {
+                          await ref
+                              .read(envListProvider.notifier)
+                              .create(
+                                nameC.text.trim(),
+                                valueC.text,
+                                remarks: remarksC.text.trim(),
+                                groups: _normalizeGroups([groupC.text]),
+                              );
+                          if (!mounted || sheetRoute?.isCurrent != true) {
+                            return;
+                          }
+                          navigator.pop();
+                          AppGlassNotice.show(
+                            context,
+                            '环境变量已创建',
+                            type: AppGlassNoticeType.success,
                           );
-                      if (!mounted || sheetRoute?.isCurrent != true) {
-                        return;
-                      }
-                      navigator.pop();
-                      AppGlassNotice.show(
-                        context,
-                        '环境变量已创建',
-                        type: AppGlassNoticeType.success,
-                      );
-                    } catch (error) {
-                      if (!mounted) {
-                        return;
-                      }
-                      AppGlassNotice.show(
-                        context,
-                        extractErrorMessage(error, '创建环境变量失败'),
-                        type: AppGlassNoticeType.error,
-                      );
-                    }
-                  },
-                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
-                  child: const Text('创建'),
-                ),
+                        } catch (error) {
+                          if (!mounted) {
+                            return;
+                          }
+                          AppGlassNotice.show(
+                            context,
+                            extractErrorMessage(error, '创建环境变量失败'),
+                            type: AppGlassNoticeType.error,
+                          );
+                        }
+                      },
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 48),
+                      ),
+                      child: const Text('创建'),
+                    ),
                   ],
                 ),
               ),
@@ -1740,7 +1733,6 @@ class _EnvValueSheetEditor extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
     final isLight = Theme.of(context).brightness == Brightness.light;
     final screenHeight = MediaQuery.of(context).size.height;
     final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
@@ -1878,27 +1870,26 @@ class _HeaderChipButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
     return AppLiquidGlassSurface(
       onTap: onTap,
       borderRadius: 16,
       performanceMode: true,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: AppColors.slate400),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: AppColors.slate400),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1933,19 +1924,19 @@ class _BatchActionButton extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: foregroundColor),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: foregroundColor,
-                fontWeight: FontWeight.w600,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: foregroundColor),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: foregroundColor,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-          ],
+            ],
           ),
         ),
       ),
@@ -2011,8 +2002,7 @@ class _EnvCardState extends State<_EnvCard> {
                         onChanged: (_) => widget.onSelectedChanged(),
                         activeColor: AppColors.primary,
                         visualDensity: VisualDensity.compact,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -2043,22 +2033,14 @@ class _EnvCardState extends State<_EnvCard> {
                     ),
                   ),
                   if (!widget.selectionMode) ...[
-                    _MiniBtn(
-                      icon: Icons.copy_outlined,
-                      onTap: widget.onCopy,
-                    ),
+                    _MiniBtn(icon: Icons.copy_outlined, onTap: widget.onCopy),
                     const SizedBox(width: 4),
-                    _MiniBtn(
-                      icon: Icons.open_in_new,
-                      onTap: widget.onTap,
-                    ),
+                    _MiniBtn(icon: Icons.open_in_new, onTap: widget.onTap),
                   ],
                 ],
               ),
               Padding(
-                padding: EdgeInsets.only(
-                  left: widget.selectionMode ? 32 : 14,
-                ),
+                padding: EdgeInsets.only(left: widget.selectionMode ? 32 : 14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

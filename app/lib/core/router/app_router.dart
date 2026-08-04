@@ -44,9 +44,8 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 String? _pendingProtectedLocation;
 
-NoTransitionPage<void> _rootPage(Widget child) => NoTransitionPage<void>(
-  child: AppBackground(child: child),
-);
+NoTransitionPage<void> _rootPage(Widget child) =>
+    NoTransitionPage<void>(child: AppBackground(child: child));
 
 /// 将 auth status 变化转为 Listenable，供 GoRouter.refreshListenable 使用
 class _AuthNotifierBridge extends ChangeNotifier {
@@ -115,16 +114,29 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (isAuth) {
         final path = state.matchedLocation;
         const adminRoutes = <String>{
-          '/deps','/users','/security','/ssh-keys','/system-settings',
-          '/panel-settings','/panel-log','/backup','/open-api',
+          '/deps',
+          '/users',
+          '/security',
+          '/ssh-keys',
+          '/system-settings',
+          '/panel-settings',
+          '/panel-log',
+          '/backup',
+          '/open-api',
           '/platform-tokens',
           '/config-script',
           '/android-runtime',
           '/installed-packages',
+          '/health-check',
         };
         const operatorRoutes = <String>{
-          '/scripts','/subscriptions','/envs','/env-tools','/tasks/new',
-          '/tasks/edit','/task-views',
+          '/scripts',
+          '/subscriptions',
+          '/envs',
+          '/env-tools',
+          '/tasks/new',
+          '/tasks/edit',
+          '/task-views',
         };
         final user = authState.user;
         if (adminRoutes.any((route) => path.startsWith(route)) &&
@@ -139,10 +151,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(
-        path: '/boot',
-        builder: (_, state) => const AppBootPage(),
-      ),
+      GoRoute(path: '/boot', builder: (_, state) => const AppBootPage()),
       GoRoute(
         path: '/server-config',
         pageBuilder: (_, state) => NoTransitionPage(
@@ -151,10 +160,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
         ),
       ),
-      GoRoute(
-        path: '/login',
-        builder: (_, state) => const LoginPage(),
-      ),
+      GoRoute(path: '/login', builder: (_, state) => const LoginPage()),
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
         builder: (_, state, child) => MainScaffold(child: child),
@@ -197,19 +203,29 @@ final routerProvider = Provider<GoRouter>((ref) {
         pageBuilder: (_, state) => _rootPage(const ProfilePage()),
       ),
       GoRoute(
-        path:'/env-tools',parentNavigatorKey:_rootNavigatorKey,pageBuilder:(_,state)=>_rootPage(const EnvToolsPage()),
+        path: '/env-tools',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const EnvToolsPage()),
       ),
       GoRoute(
-        path:'/installed-packages',parentNavigatorKey:_rootNavigatorKey,pageBuilder:(_,state)=>_rootPage(const InstalledPackagesPage()),
+        path: '/installed-packages',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const InstalledPackagesPage()),
       ),
       GoRoute(
-        path:'/android-runtime',parentNavigatorKey:_rootNavigatorKey,pageBuilder:(_,state)=>_rootPage(const AndroidRuntimePage()),
+        path: '/android-runtime',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const AndroidRuntimePage()),
       ),
       GoRoute(
-        path:'/config-script',parentNavigatorKey:_rootNavigatorKey,pageBuilder:(_,state)=>_rootPage(const ConfigScriptPage()),
+        path: '/config-script',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const ConfigScriptPage()),
       ),
       GoRoute(
-        path: '/platform-tokens',parentNavigatorKey:_rootNavigatorKey,pageBuilder:(_,state)=>_rootPage(const PlatformTokensPage()),
+        path: '/platform-tokens',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const PlatformTokensPage()),
       ),
       GoRoute(
         path: '/health-check',
@@ -249,7 +265,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/logs/:id/stream',
         parentNavigatorKey: _rootNavigatorKey,
         pageBuilder: (_, state) => _rootPage(
-          LogStreamPage(logId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0),
+          LogStreamPage(
+            logId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0,
+          ),
         ),
       ),
       GoRoute(
@@ -297,9 +315,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/local-notifications',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(
-          const LocalNotificationSettingsPage(),
-        ),
+        pageBuilder: (_, state) =>
+            _rootPage(const LocalNotificationSettingsPage()),
       ),
       GoRoute(
         path: '/deps',
@@ -310,7 +327,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/deps/:id/log-stream',
         parentNavigatorKey: _rootNavigatorKey,
         pageBuilder: (_, state) => _rootPage(
-          DepLogStreamPage(depId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0),
+          DepLogStreamPage(
+            depId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0,
+          ),
         ),
       ),
       GoRoute(

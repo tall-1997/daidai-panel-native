@@ -225,12 +225,12 @@ void main() {
       'id': 'op-1',
       'kind': 'pip_install',
       'state': 'failed',
-      'progress': 2,
+      'progress': 120,
       'sequence': '12',
       'error_code': 'abi_incompatible',
     });
 
-    expect(operation.progress, 1);
+    expect(operation.progress, 100);
     expect(operation.sequence, 12);
     expect(operation.terminal, isTrue);
     expect(operation.errorCode, 'abi_incompatible');

@@ -187,10 +187,21 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
       builder: (dialogCtx) => AlertDialog(
         title: const Text('清理登录日志'),
         content: const Text('确定要清理全部登录日志吗？'),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '清理', onPressed: () => Navigator.pop(dialogCtx, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: '清理',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed != true) {
@@ -202,11 +213,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
       if (!mounted) {
         return;
       }
-      AppGlassNotice.show(
-        context,
-        '登录日志已清理',
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, '登录日志已清理', type: AppGlassNoticeType.success);
     } catch (error) {
       if (!mounted) {
         return;
@@ -228,158 +235,160 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
         return false;
       },
       child: RefreshIndicator(
-      color: AppColors.primary,
-      onRefresh: _load,
-      child: _loading && _logs.isEmpty
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 120),
-                Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
-              ],
-            )
-          : ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _usernameController,
-                        decoration: InputDecoration(
-                          hintText: '按用户名筛选',
-                          prefixIcon: const Icon(Icons.search, size: 18),
-                          suffixIcon: _usernameController.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, size: 16),
-                                  onPressed: () {
-                                    _usernameController.clear();
-                                    setState(() {});
-                                    _load();
-                                  },
-                                )
-                              : null,
-                        ),
-                        onChanged: (_) => setState(() {}),
-                        onSubmitted: (_) => _load(),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    OutlinedButton.icon(
-                      onPressed: _load,
-                      icon: const Icon(Icons.refresh, size: 16),
-                      label: const Text('刷新'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                FilledButton.tonalIcon(
-                  onPressed: _clearLogs,
-                  icon: const Icon(Icons.delete_sweep_outlined, size: 16),
-                  label: const Text('清理登录日志'),
-                  style: FilledButton.styleFrom(
-                    foregroundColor: AppColors.red500,
+        color: AppColors.primary,
+        onRefresh: _load,
+        child: _loading && _logs.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 120),
+                  Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
                   ),
-                ),
-                const SizedBox(height: 12),
-                if (_logs.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 80),
-                    child: Center(
-                      child: Text(
-                        '暂无记录',
-                        style: TextStyle(color: AppColors.slate400),
-                      ),
-                    ),
-                  )
-                else
-                  ..._logs.map((log) {
-                    final success = (log['status'] as num?)?.toInt() == 0;
-                    final time = DateTime.tryParse(
-                      log['created_at']?.toString() ?? '',
-                    );
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: AppCard(
-                        stableForScrolling: true,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 12,
-                        ),
-                        child: Row(
-                        children: [
-                          Icon(
-                            success ? Icons.check_circle : Icons.cancel,
-                            size: 18,
-                            color: success
-                                ? AppColors.primary
-                                : AppColors.red500,
+                ],
+              )
+            : ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _usernameController,
+                          decoration: InputDecoration(
+                            hintText: '按用户名筛选',
+                            prefixIcon: const Icon(Icons.search, size: 18),
+                            suffixIcon: _usernameController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 16),
+                                    onPressed: () {
+                                      _usernameController.clear();
+                                      setState(() {});
+                                      _load();
+                                    },
+                                  )
+                                : null,
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  log['username']?.toString() ?? '',
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${log['ip'] ?? ''} · ${log['message'] ?? ''}',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: widget.isLight
-                                        ? AppColors.slate500
-                                        : AppColors.slate400,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  log['client_name']?.toString() ?? '客户端未知',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: widget.isLight
-                                        ? AppColors.slate500
-                                        : AppColors.slate400,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            formatTimeCn(time),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: widget.isLight
-                                  ? AppColors.slate400
-                                  : AppColors.slate500,
-                            ),
-                          ),
-                        ],
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) => _load(),
                         ),
                       ),
-                    );
-                  }),
-                if (_loading && _logs.isNotEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(
-                      child: CircularProgressIndicator(color: AppColors.primary),
+                      const SizedBox(width: 10),
+                      OutlinedButton.icon(
+                        onPressed: _load,
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('刷新'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  FilledButton.tonalIcon(
+                    onPressed: _clearLogs,
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                    label: const Text('清理登录日志'),
+                    style: FilledButton.styleFrom(
+                      foregroundColor: AppColors.red500,
                     ),
                   ),
-              ],
-            ),
+                  const SizedBox(height: 12),
+                  if (_logs.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 80),
+                      child: Center(
+                        child: Text(
+                          '暂无记录',
+                          style: TextStyle(color: AppColors.slate400),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._logs.map((log) {
+                      final success = (log['status'] as num?)?.toInt() == 0;
+                      final time = DateTime.tryParse(
+                        log['created_at']?.toString() ?? '',
+                      );
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: AppCard(
+                          stableForScrolling: true,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                success ? Icons.check_circle : Icons.cancel,
+                                size: 18,
+                                color: success
+                                    ? AppColors.primary
+                                    : AppColors.red500,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      log['username']?.toString() ?? '',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${log['ip'] ?? ''} · ${log['message'] ?? ''}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: widget.isLight
+                                            ? AppColors.slate500
+                                            : AppColors.slate400,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      log['client_name']?.toString() ?? '客户端未知',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: widget.isLight
+                                            ? AppColors.slate500
+                                            : AppColors.slate400,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                formatTimeCn(time),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: widget.isLight
+                                      ? AppColors.slate400
+                                      : AppColors.slate500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  if (_loading && _logs.isNotEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
       ),
     );
   }
@@ -433,10 +442,21 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       builder: (dialogCtx) => AlertDialog(
         title: const Text('撤销其他会话'),
         content: const Text('确定要撤销当前账号的所有其他活跃会话吗？'),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '撤销', onPressed: () => Navigator.pop(dialogCtx, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: '撤销',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed != true) {
@@ -448,11 +468,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       if (!mounted) {
         return;
       }
-      AppGlassNotice.show(
-        context,
-        '其他会话已撤销',
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, '其他会话已撤销', type: AppGlassNoticeType.success);
     } catch (error) {
       if (!mounted) {
         return;
@@ -471,10 +487,21 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       builder: (dialogCtx) => AlertDialog(
         title: const Text('撤销会话'),
         content: const Text('确定要撤销这个活跃会话吗？'),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '撤销', onPressed: () => Navigator.pop(dialogCtx, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: '撤销',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed != true) {
@@ -486,11 +513,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       if (!mounted) {
         return;
       }
-      AppGlassNotice.show(
-        context,
-        '会话已撤销',
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, '会话已撤销', type: AppGlassNoticeType.success);
     } catch (error) {
       if (!mounted) {
         return;
@@ -506,7 +529,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    
+
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: _load,
@@ -583,75 +606,76 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                       vertical: 12,
                     ),
                     child: Row(
-                    children: [
-                      const Icon(
-                        Icons.devices,
-                        size: 18,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${s['username'] ?? ''} · ${s['ip'] ?? ''}',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              expires != null
-                                  ? '过期: ${formatTimeCn(expires)}'
-                                  : '',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: widget.isLight
-                                    ? AppColors.slate500
-                                    : AppColors.slate400,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '客户端: ${s['client_name'] ?? s['client_type_label'] ?? '未知'}',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: widget.isLight
-                                    ? AppColors.slate500
-                                    : AppColors.slate400,
-                              ),
-                            ),
-                            if ((s['user_agent']?.toString() ?? '').isNotEmpty)
+                      children: [
+                        const Icon(
+                          Icons.devices,
+                          size: 18,
+                          color: AppColors.primary,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                               Text(
-                                'UA: ${s['user_agent']}',
+                                '${s['username'] ?? ''} · ${s['ip'] ?? ''}',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                expires != null
+                                    ? '过期: ${formatTimeCn(expires)}'
+                                    : '',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: widget.isLight
                                       ? AppColors.slate500
                                       : AppColors.slate400,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                          ],
+                              const SizedBox(height: 2),
+                              Text(
+                                '客户端: ${s['client_name'] ?? s['client_type_label'] ?? '未知'}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: widget.isLight
+                                      ? AppColors.slate500
+                                      : AppColors.slate400,
+                                ),
+                              ),
+                              if ((s['user_agent']?.toString() ?? '')
+                                  .isNotEmpty)
+                                Text(
+                                  'UA: ${s['user_agent']}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: widget.isLight
+                                        ? AppColors.slate500
+                                        : AppColors.slate400,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          final id = (s['id'] as num?)?.toInt();
-                          if (id != null) {
-                            _revokeSession(id);
-                          }
-                        },
-                        child: const Icon(
-                          Icons.close,
-                          size: 18,
-                          color: AppColors.red500,
+                        GestureDetector(
+                          onTap: () {
+                            final id = (s['id'] as num?)?.toInt();
+                            if (id != null) {
+                              _revokeSession(id);
+                            }
+                          },
+                          child: const Icon(
+                            Icons.close,
+                            size: 18,
+                            color: AppColors.red500,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
                     ),
                   ),
                 );
@@ -969,6 +993,7 @@ class _TwoFaTab extends ConsumerStatefulWidget {
 class _TwoFaTabState extends ConsumerState<_TwoFaTab>
     with AutomaticKeepAliveClientMixin {
   bool _enabled = false;
+  bool _supported = true;
   bool _loading = true;
   String? _secret;
 
@@ -989,6 +1014,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
       if (!mounted) return;
       setState(() {
         _enabled = data is Map && data['enabled'] == true;
+        _supported = data is! Map || data['supported'] != false;
         _loading = false;
       });
     } catch (_) {
@@ -1035,7 +1061,9 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _enabled ? '已启用' : '未启用',
+                        !_supported
+                            ? '当前本地模式不支持真实 TOTP'
+                            : (_enabled ? '已启用' : '未启用'),
                         style: TextStyle(
                           fontSize: 12,
                           color: _enabled
@@ -1046,7 +1074,9 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                     ],
                   ),
                 ),
-                if (_enabled)
+                if (!_supported)
+                  const Icon(Icons.block, color: AppColors.slate400)
+                else if (_enabled)
                   OutlinedButton(
                     onPressed: _disable2FA,
                     style: OutlinedButton.styleFrom(
@@ -1138,11 +1168,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
       }
     } catch (_) {
       if (mounted) {
-        AppGlassNotice.show(
-          context,
-          '验证码错误',
-          type: AppGlassNoticeType.error,
-        );
+        AppGlassNotice.show(context, '验证码错误', type: AppGlassNoticeType.error);
       }
     }
   }
@@ -1201,11 +1227,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
         return;
       }
       setState(() => _enabled = false);
-      AppGlassNotice.show(
-        context,
-        '2FA 已禁用',
-        type: AppGlassNoticeType.warning,
-      );
+      AppGlassNotice.show(context, '2FA 已禁用', type: AppGlassNoticeType.warning);
     } catch (error) {
       if (!mounted) {
         return;
@@ -1268,9 +1290,7 @@ class _LoginStatsTabState extends ConsumerState<_LoginStatsTab>
         physics: const AlwaysScrollableScrollPhysics(),
         children: const [
           SizedBox(height: 120),
-          Center(
-            child: CircularProgressIndicator(color: AppColors.primary),
-          ),
+          Center(child: CircularProgressIndicator(color: AppColors.primary)),
         ],
       );
     }
@@ -1410,118 +1430,121 @@ class _AuditLogsTabState extends ConsumerState<_AuditLogsTab>
         return false;
       },
       child: RefreshIndicator(
-      color: AppColors.primary,
-      onRefresh: _load,
-      child: _loading
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 120),
-                Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
-              ],
-            )
-          : _logs.isEmpty
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 80),
-                Center(
-                  child: Text(
-                    '暂无审计记录',
-                    style: TextStyle(color: AppColors.slate400),
+        color: AppColors.primary,
+        onRefresh: _load,
+        child: _loading
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 120),
+                  Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
                   ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-              itemCount: _logs.length + (_logs.length < _total ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (i == _logs.length) {
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(
-                      child: CircularProgressIndicator(color: AppColors.primary),
+                ],
+              )
+            : _logs.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 80),
+                  Center(
+                    child: Text(
+                      '暂无审计记录',
+                      style: TextStyle(color: AppColors.slate400),
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+                itemCount: _logs.length + (_logs.length < _total ? 1 : 0),
+                itemBuilder: (_, i) {
+                  if (i == _logs.length) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    );
+                  }
+                  final log = _logs[i];
+                  final time = DateTime.tryParse(
+                    log['created_at']?.toString() ?? '',
+                  );
+                  return AppCard(
+                    stableForScrolling: true,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    borderRadius: 12,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.history,
+                              size: 16,
+                              color: AppColors.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                log['action']?.toString() ?? '',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (time != null)
+                              Text(
+                                formatTimeCn(time),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: widget.isLight
+                                      ? AppColors.slate400
+                                      : AppColors.slate500,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if ((log['username']?.toString() ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '${log['username']} · ${log['ip'] ?? ''}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: widget.isLight
+                                  ? AppColors.slate500
+                                  : AppColors.slate400,
+                            ),
+                          ),
+                        ],
+                        if ((log['detail']?.toString() ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            log['detail'].toString(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: widget.isLight
+                                  ? AppColors.slate600
+                                  : AppColors.slate300,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
                     ),
                   );
-                }
-                final log = _logs[i];
-                final time = DateTime.tryParse(
-                  log['created_at']?.toString() ?? '',
-                );
-                return AppCard(
-                  stableForScrolling: true,
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  borderRadius: 12,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.history,
-                            size: 16,
-                            color: AppColors.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              log['action']?.toString() ?? '',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          if (time != null)
-                            Text(
-                              formatTimeCn(time),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: widget.isLight
-                                    ? AppColors.slate400
-                                    : AppColors.slate500,
-                              ),
-                            ),
-                        ],
-                      ),
-                      if ((log['username']?.toString() ?? '').isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          '${log['username']} · ${log['ip'] ?? ''}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: widget.isLight
-                                ? AppColors.slate500
-                                : AppColors.slate400,
-                          ),
-                        ),
-                      ],
-                      if ((log['detail']?.toString() ?? '').isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          log['detail'].toString(),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: widget.isLight
-                                ? AppColors.slate600
-                                : AppColors.slate300,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ],
-                  ),
-                );
-              },
-            ),
+                },
+              ),
       ),
     );
   }

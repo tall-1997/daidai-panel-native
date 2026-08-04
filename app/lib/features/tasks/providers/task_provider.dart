@@ -54,8 +54,12 @@ class TaskListState {
       labelFilter: identical(labelFilter, _unset)
           ? this.labelFilter
           : labelFilter as String?,
-      viewFilters: identical(viewFilters,_unset)?this.viewFilters:viewFilters as String?,
-      viewSortRules: identical(viewSortRules,_unset)?this.viewSortRules:viewSortRules as String?,
+      viewFilters: identical(viewFilters, _unset)
+          ? this.viewFilters
+          : viewFilters as String?,
+      viewSortRules: identical(viewSortRules, _unset)
+          ? this.viewSortRules
+          : viewSortRules as String?,
     );
   }
 }
@@ -79,8 +83,12 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       if (state.labelFilter != null) {
         queryParams['label'] = state.labelFilter;
       }
-      if(state.viewFilters?.isNotEmpty==true) queryParams['filters']=state.viewFilters;
-      if(state.viewSortRules?.isNotEmpty==true) queryParams['sort_rules']=state.viewSortRules;
+      if (state.viewFilters?.isNotEmpty == true) {
+        queryParams['filters'] = state.viewFilters;
+      }
+      if (state.viewSortRules?.isNotEmpty == true) {
+        queryParams['sort_rules'] = state.viewSortRules;
+      }
 
       final response = await dio.get(
         ApiEndpoints.tasks,
@@ -116,7 +124,11 @@ class TaskNotifier extends StateNotifier<TaskListState> {
     state = state.copyWith(labelFilter: label);
     load(refresh: true);
   }
-  void setView(String? filters,String? sortRules){state=state.copyWith(viewFilters:filters,viewSortRules:sortRules);load(refresh:true);}
+
+  void setView(String? filters, String? sortRules) {
+    state = state.copyWith(viewFilters: filters, viewSortRules: sortRules);
+    load(refresh: true);
+  }
 
   Future<void> runTask(int id) async {
     await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
@@ -193,9 +205,6 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   void reorderLocalTasks(int oldIndex, int newIndex) {
     final items = List<Task>.from(state.tasks);
-    if (newIndex > oldIndex) {
-      newIndex--;
-    }
     final item = items.removeAt(oldIndex);
     items.insert(newIndex, item);
     state = state.copyWith(tasks: items);

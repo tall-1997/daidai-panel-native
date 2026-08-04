@@ -1323,7 +1323,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                         final filtered = _statusFilter == null
                             ? state.items
                             : state.items
-                                  .where((d) => d.status == _statusFilter)
+                                  .where((d) => _statusFilter == 'installed' ? d.isInstalled : d.status == _statusFilter)
                                   .toList();
                         if (filtered.isEmpty) {
                           return ListView(

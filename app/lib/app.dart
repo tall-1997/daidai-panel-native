@@ -17,12 +17,17 @@ class DaidaiApp extends ConsumerStatefulWidget {
 }
 
 class _DaidaiAppState extends ConsumerState<DaidaiApp> {
+  late final ThemeData _lightTheme = AppTheme.light();
+  late final ThemeData _darkTheme = AppTheme.dark();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (Platform.isAndroid) {
-        unawaited(ManagedLocalConnectionMonitor.instance.initializeFromStorage());
+        unawaited(
+          ManagedLocalConnectionMonitor.instance.initializeFromStorage(),
+        );
       }
     });
   }
@@ -30,14 +35,16 @@ class _DaidaiAppState extends ConsumerState<DaidaiApp> {
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
-    final styleSettings = ref.watch(appStyleProvider);
+    final themeMode = ref.watch(
+      appStyleProvider.select((settings) => settings.themeMode),
+    );
 
     return MaterialApp.router(
       title: '呆呆面板',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: styleSettings.themeMode,
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
+      themeMode: themeMode,
       routerConfig: router,
       locale: const Locale('zh', 'CN'),
       scrollBehavior: const MaterialScrollBehavior().copyWith(
