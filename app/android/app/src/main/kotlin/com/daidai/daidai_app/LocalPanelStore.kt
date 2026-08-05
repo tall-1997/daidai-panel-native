@@ -22,6 +22,9 @@ import java.time.Instant
 import java.security.SecureRandom
 import java.time.format.DateTimeFormatter
 import java.util.Collections
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -37,7 +40,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private val configPrefs by lazy {
         appContext.getSharedPreferences("daidai-local-configs", Context.MODE_PRIVATE)
     }
-    private val runningTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val runningTaskIds = ConcurrentHashMap.newKeySet<Long>()
+    private val scriptRunExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "local-script-run").apply { isDaemon = true }
+    }
+    private val scriptProcesses = ConcurrentHashMap<String, Process>()
+    private val scriptRunLogsMemory = ConcurrentHashMap<String, MutableList<String>>()
+    private val scriptRunLocks = ConcurrentHashMap<String, Any>()
     private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
 
     internal data class LocalScriptResult(
@@ -49,6 +58,25 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
 
     companion object {
         const val SCHEMA_VERSION = 10
+        private const val MAX_SCRIPT_LOG_LINES = 2000
+        private const val MAX_SCRIPT_LOG_LINE_CHARS = 8192
+        private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 1_000_000
+
+
+        internal fun normalizeScriptPath(rawPath: String, allowRootAlias: Boolean = false): String {
+            val decoded = runCatching { URLDecoder.decode(rawPath, "UTF-8") }.getOrElse { rawPath }
+            if (allowRootAlias && (decoded.isEmpty() || decoded == "/")) return ""
+            require(decoded.isNotBlank()) { "脚本路径不能为空" }
+            require(!decoded.startsWith("//") && !decoded.startsWith('\\')) { "脚本路径不能是绝对路径" }
+            require(!Regex("^[A-Za-z]:").containsMatchIn(decoded)) { "脚本路径不能是绝对路径" }
+            require('\\' !in decoded) { "脚本路径不能包含反斜杠" }
+            val workspacePath = decoded.removePrefix("/")
+            require(!workspacePath.startsWith("data/") && !workspacePath.startsWith("system/") && !workspacePath.startsWith("sdcard/")) { "脚本路径不能指向系统绝对路径" }
+            val segments = workspacePath.split('/')
+            require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段" }
+            require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段" }
+            return segments.joinToString("/")
+        }
 
         fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean {
             val base = uri.substringBefore("?").trimEnd('/')
@@ -751,7 +779,8 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     fun serveScripts(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
-        return when {
+        return try {
+            when {
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts/tree" -> scriptTree()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/scripts" -> paginated("scripts", scriptRows())
             session.method == NanoHTTPD.Method.GET && normalizedUri.startsWith("/scripts/content") -> scriptContent(session.parms["path"].orEmpty())
@@ -769,12 +798,15 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             session.method == NanoHTTPD.Method.GET && segments.size == 3 && segments[0] == "scripts" && segments[1] == "versions" -> getScriptVersion(segments[2].toLongOrNull())
             session.method == NanoHTTPD.Method.PUT && segments.size == 4 && segments[0] == "scripts" && segments[1] == "versions" && segments[3] == "rollback" -> rollbackScriptVersion(segments[2].toLongOrNull())
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/format" -> formatScript(body(session))
-            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> try { runScript(body(session)) } catch (_: Exception) { runScript(JSONObject().apply { put("path", session.parms["path"].orEmpty()) }) }
+            session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> runScript(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run-code" -> runCode(body(session))
             session.method == NanoHTTPD.Method.GET && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "logs" -> scriptRunLogs(segments[2])
             session.method == NanoHTTPD.Method.PUT && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "stop" -> stopScriptRun(segments[2])
             session.method == NanoHTTPD.Method.DELETE && segments.size == 3 && segments[0] == "scripts" && segments[1] == "run" -> clearScriptRun(segments[2])
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本接口尚未实现")
+            }
+        } catch (error: IllegalArgumentException) {
+            error(NanoHTTPD.Response.Status.BAD_REQUEST, error.message ?: "脚本路径无效")
         }
     }
 
@@ -1522,7 +1554,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun saveScriptContent(json: JSONObject): NanoHTTPD.Response {
-        val path = json.optString("path", json.optString("filename", "script.py")).ifBlank { "script.py" }
+        val path = cleanScriptPath(json.optString("path", json.optString("filename")))
         val file = scriptFile(path)
         file.parentFile?.mkdirs()
         val content = json.optString("content")
@@ -1532,7 +1564,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun createScriptDirectory(json: JSONObject): NanoHTTPD.Response {
-        val path = json.optString("path", json.optString("name", "new-folder"))
+        val path = cleanScriptPath(json.optString("path", json.optString("name")))
         val dir = scriptFile(path)
         dir.mkdirs()
         return ok(JSONObject().put("data", JSONObject().put("path", path)))
@@ -1548,9 +1580,10 @@ fun serveDashboardStats(): JSONObject {
             session.parms["file"],
             uploaded?.let { File(it).name }
         ) ?: "script.txt"
-        val dir = cleanScriptPath(session.parms["dir"].orEmpty())
-        val path = cleanScriptPath(listOf(dir, originalName).filter(String::isNotBlank).joinToString("/"))
-            .ifBlank { "script.txt" }
+        val dir = cleanScriptPath(session.parms["dir"].orEmpty(), allowRootAlias = true)
+        val name = cleanScriptPath(originalName)
+        require('/' !in name) { "上传文件名必须是文件名" }
+        val path = listOf(dir, name).filter(String::isNotBlank).joinToString("/")
         val content = when {
             uploaded != null && File(uploaded).isFile -> File(uploaded).readText()
             files["postData"] != null -> files["postData"].orEmpty()
@@ -1575,11 +1608,12 @@ fun serveDashboardStats(): JSONObject {
     private fun renameScript(json: JSONObject): NanoHTTPD.Response {
         val oldPath = cleanScriptPath(json.optString("old_path"))
         val newName = cleanScriptPath(json.optString("new_name"))
-        if (oldPath.isBlank() || newName.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "路径不能为空")
+        require('/' !in newName) { "新名称必须是文件名" }
         val source = scriptFile(oldPath)
         if (!source.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
         val targetPath = listOf(oldPath.substringBeforeLast('/', ""), newName.substringAfterLast('/')).filter(String::isNotBlank).joinToString("/")
         val target = scriptFile(targetPath)
+        if (target.exists()) return error(NanoHTTPD.Response.Status.CONFLICT, "目标已存在")
         target.parentFile?.mkdirs()
         if (!source.renameTo(target)) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "重命名失败")
         return ok(JSONObject().put("message", "重命名成功").put("new_path", targetPath))
@@ -1587,25 +1621,31 @@ fun serveDashboardStats(): JSONObject {
 
     private fun moveScript(json: JSONObject): NanoHTTPD.Response {
         val sourcePath = cleanScriptPath(json.optString("source_path"))
-        val targetDir = cleanScriptPath(json.optString("target_dir")).trim('/')
+        val targetDir = cleanScriptPath(json.optString("target_dir"), allowRootAlias = true)
         val source = scriptFile(sourcePath)
         if (!source.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
         val targetPath = listOf(targetDir, source.name).filter(String::isNotBlank).joinToString("/")
         val target = scriptFile(targetPath)
+        if (target.exists()) return error(NanoHTTPD.Response.Status.CONFLICT, "目标已存在")
         target.parentFile?.mkdirs()
         if (!source.renameTo(target)) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "移动失败")
-        return ok(JSONObject().put("message", "移动成功").put("path", targetPath))
+        return ok(JSONObject().put("message", "移动成功").put("new_path", targetPath))
     }
 
     private fun copyScript(json: JSONObject): NanoHTTPD.Response {
         val sourcePath = cleanScriptPath(json.optString("source_path"))
-        val targetPath = cleanScriptPath(json.optString("target_path"))
+        val targetDir = cleanScriptPath(json.optString("target_dir"), allowRootAlias = true)
         val source = scriptFile(sourcePath)
-        if (!source.exists() || !source.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
+        if (!source.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
+        val requestedName = json.optString("new_name")
+        val name = if (requestedName.isBlank()) source.name else cleanScriptPath(requestedName)
+        require('/' !in name) { "新名称必须是文件名" }
+        val targetPath = listOf(targetDir, name).filter(String::isNotBlank).joinToString("/")
         val target = scriptFile(targetPath)
+        if (target.exists()) return error(NanoHTTPD.Response.Status.CONFLICT, "目标已存在")
         target.parentFile?.mkdirs()
-        source.copyTo(target, overwrite = true)
-        return ok(JSONObject().put("message", "复制成功").put("path", targetPath))
+        if (source.isDirectory) source.copyRecursively(target, overwrite = false) else source.copyTo(target, overwrite = false)
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.CREATED, "application/json; charset=utf-8", JSONObject().put("message", "复制成功").put("new_path", targetPath).toString())
     }
 
     private fun batchDeleteScripts(json: JSONObject): NanoHTTPD.Response {
@@ -1626,8 +1666,8 @@ fun serveDashboardStats(): JSONObject {
     private fun runCode(json: JSONObject): NanoHTTPD.Response {
         val language = json.optString("language", "python")
         val code = json.optString("code")
-        val runId = "android-local-${Instant.now().toEpochMilli()}"
         if (code.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "运行代码不能为空")
+        val runId = "android-local-${UUID.randomUUID()}"
         val ext = when (language.lowercase()) {
             "javascript", "node", "nodejs" -> ".js"
             "typescript" -> ".ts"
@@ -1635,36 +1675,58 @@ fun serveDashboardStats(): JSONObject {
             "go" -> ".go"
             else -> ".py"
         }
-        val temp = File(appContext.cacheDir, "script-runs/$runId$ext").apply { parentFile?.mkdirs() }
-        temp.writeText(code)
-        val result = executeScriptFile(temp, "inline-$language$ext", language)
-        saveScriptRun(runId, result.status, result.logs, result.done, result.exitCode)
-        temp.delete()
-        return ok(scriptRunResponse(runId, result))
+        val temp = File(appContext.cacheDir, "script-runs/$runId$ext").apply { parentFile?.mkdirs(); writeText(code) }
+        createRunningScriptRun(runId)
+        scriptRunExecutor.execute { executeAsyncScriptRun(runId, temp, "inline-$language$ext", language, true) }
+        return startedScriptRun(runId)
     }
 
     private fun runScript(json: JSONObject): NanoHTTPD.Response {
         val path = json.optString("path", "script.py")
         val file = scriptFile(path)
-        if (!file.exists()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
-        val runId = "android-local-${Instant.now().toEpochMilli()}"
-        val result = executeScriptFile(file, path, json.optString("language"))
-        saveScriptRun(runId, result.status, result.logs, result.done, result.exitCode)
-        return ok(scriptRunResponse(runId, result))
+        if (!file.exists() || !file.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
+        val runId = "android-local-${UUID.randomUUID()}"
+        createRunningScriptRun(runId)
+        scriptRunExecutor.execute { executeAsyncScriptRun(runId, file, path, json.optString("language"), false) }
+        return startedScriptRun(runId)
+    }
+
+    private fun startedScriptRun(runId: String): NanoHTTPD.Response {
+        val result = LocalScriptResult(JSONArray(), "running", false, null)
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.CREATED, "application/json; charset=utf-8", scriptRunResponse(runId, result).toString())
     }
 
     private fun scriptRunResponse(runId: String, result: LocalScriptResult): JSONObject = JSONObject()
-        .put("message", "脚本已执行")
-        .put("run_id", runId)
-        .put(
-            "data",
-            JSONObject()
-                .put("run_id", runId)
-                .put("status", result.status)
-                .put("logs", result.logs)
-                .put("done", result.done)
-                .put("exit_code", result.exitCode)
-        )
+        .put("message", "脚本已启动").put("run_id", runId)
+        .put("data", JSONObject().put("run_id", runId).put("status", result.status)
+            .put("logs", result.logs).put("done", result.done).put("exit_code", result.exitCode))
+
+    private fun executeAsyncScriptRun(runId: String, file: File, displayPath: String, languageHint: String, deleteAfter: Boolean) {
+        try {
+            appendScriptRunLog(runId, "Android local fallback executing script: $displayPath")
+            val command = scriptCommand(file, displayPath, languageHint)
+            if (command == null) { appendScriptRunLog(runId, "Runtime not available for script type: ${file.extension.ifBlank { "unknown" }}"); finishScriptRun(runId, "failed", 127); return }
+            appendScriptRunLog(runId, "Command: ${command.first().substringAfterLast('/')}")
+            val process = ProcessBuilder(command).directory(file.parentFile ?: scriptsRoot()).redirectErrorStream(true)
+                .apply { environment().putAll(runtimeEnvironment()) }.start()
+            scriptProcesses[runId] = process
+            if (scriptRunStatus(runId) == "stopped") {
+                process.destroyForcibly()
+                return
+            }
+            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { appendScriptRunLog(runId, it) } }
+            val exit = process.waitFor()
+            if (scriptRunStatus(runId) != "stopped") {
+                appendScriptRunLog(runId, if (exit == 0) "Script completed successfully" else "Script failed with exit code $exit")
+                finishScriptRun(runId, if (exit == 0) "success" else "failed", exit)
+            }
+        } catch (error: Exception) {
+            if (scriptRunStatus(runId) != "stopped") { appendScriptRunLog(runId, "Script start failed: ${error.message ?: error.javaClass.simpleName}"); finishScriptRun(runId, "failed", 127) }
+        } finally {
+            scriptProcesses.remove(runId); scriptRunLocks.remove(runId); scriptRunLogsMemory.remove(runId)
+            if (deleteAfter) runCatching { file.delete() }
+        }
+    }
 
     private fun executeShellCommand(command: String): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing shell command: $command")
@@ -1855,33 +1917,64 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun stopScriptRun(runId: String): NanoHTTPD.Response {
-        val logs = JSONArray().put("Android local fallback script run stopped")
-        val values = ContentValues().apply {
-            put("status", "stopped")
-            put("logs_json", logs.toString())
-            put("done", 1)
-            put("exit_code", 130)
-            put("updated_at", Instant.now().toString())
-        }
-        writableDatabase.update("script_runs", values, "id = ?", arrayOf(runId))
+        val currentStatus = scriptRunStatus(runId) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "运行记录不存在")
+        if (currentStatus != "running") return ok(JSONObject().put("message", "运行已结束"))
+        val process = scriptProcesses[runId]
+        process?.destroy()
+        if (process != null && !process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
+        appendScriptRunLog(runId, "Android local fallback script run stopped")
+        finishScriptRun(runId, "stopped", 130)
         return ok(JSONObject().put("message", "已停止"))
     }
 
     private fun clearScriptRun(runId: String): NanoHTTPD.Response {
-        writableDatabase.delete("script_runs", "id = ?", arrayOf(runId))
+        val status = scriptRunStatus(runId) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "运行记录不存在")
+        if (status == "running") return error(NanoHTTPD.Response.Status.CONFLICT, "运行中的记录不能清除")
+        writableDatabase.delete("script_runs", "id = ?", arrayOf(runId)); scriptRunLogsMemory.remove(runId)
         return ok(JSONObject().put("message", "已清除"))
+    }
+
+    private fun createRunningScriptRun(runId: String) {
+        val now = Instant.now().toString()
+        scriptRunLogsMemory[runId] = Collections.synchronizedList(mutableListOf())
+        writableDatabase.insertOrThrow("script_runs", null, ContentValues().apply {
+            put("id", runId); put("status", "running"); put("logs_json", "[]"); put("done", 0)
+            putNull("exit_code"); put("created_at", now); put("updated_at", now)
+        })
+    }
+
+    private fun scriptRunStatus(runId: String): String? = readableDatabase.query(
+        "script_runs", arrayOf("status"), "id = ?", arrayOf(runId), null, null, null
+    ).use { if (it.moveToFirst()) it.string("status") else null }
+
+    private fun appendScriptRunLog(runId: String, rawLine: String) {
+        synchronized(scriptRunLocks.computeIfAbsent(runId) { Any() }) {
+            val memory = scriptRunLogsMemory.computeIfAbsent(runId) { Collections.synchronizedList(mutableListOf()) }
+            memory += rawLine.take(MAX_SCRIPT_LOG_LINE_CHARS)
+            while (memory.size > MAX_SCRIPT_LOG_LINES || memory.sumOf { it.length } > MAX_SCRIPT_LOG_TOTAL_CHARS) memory.removeAt(0)
+            val logs = JSONArray(); memory.forEach { logs.put(it) }
+            /* Persist every bounded snapshot so GET polling observes each increment. */
+            writableDatabase.update("script_runs", ContentValues().apply { put("logs_json", logs.toString()); put("updated_at", Instant.now().toString()) }, "id = ?", arrayOf(runId))
+        }
+    }
+
+    private fun finishScriptRun(runId: String, status: String, exitCode: Int) {
+        synchronized(scriptRunLocks.computeIfAbsent(runId) { Any() }) {
+            writableDatabase.update("script_runs", ContentValues().apply {
+                put("status", status); put("done", 1); put("exit_code", exitCode); put("updated_at", Instant.now().toString())
+            }, "id = ?", arrayOf(runId))
+        }
     }
 
     private fun saveScriptRun(runId: String, status: String, logs: JSONArray, done: Boolean, exitCode: Int?) {
         val now = Instant.now().toString()
+        val bounded = JSONArray()
+        val first = (logs.length() - MAX_SCRIPT_LOG_LINES).coerceAtLeast(0)
+        for (i in first until logs.length()) bounded.put(logs.optString(i).take(MAX_SCRIPT_LOG_LINE_CHARS))
         val values = ContentValues().apply {
-            put("id", runId)
-            put("status", status)
-            put("logs_json", logs.toString())
-            put("done", if (done) 1 else 0)
+            put("id", runId); put("status", status); put("logs_json", bounded.toString()); put("done", if (done) 1 else 0)
             if (exitCode == null) putNull("exit_code") else put("exit_code", exitCode)
-            put("created_at", now)
-            put("updated_at", now)
+            put("created_at", now); put("updated_at", now)
         }
         writableDatabase.insertWithOnConflict("script_runs", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -1988,18 +2081,15 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun scriptFile(path: String): File {
-        val clean = path.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." && it != ".." }.joinToString(File.separator)
-        return File(scriptsRoot(), clean.ifBlank { "script.py" }).canonicalFile.also {
-            require(it.path.startsWith(scriptsRoot().canonicalPath)) { "invalid script path" }
+        val clean = cleanScriptPath(path)
+        val root = scriptsRoot().canonicalFile
+        return File(root, clean.replace('/', File.separatorChar)).canonicalFile.also {
+            require(it.toPath().startsWith(root.toPath())) { "脚本路径越界" }
         }
     }
 
-    private fun cleanScriptPath(path: String): String = runCatching { URLDecoder.decode(path, "UTF-8") }.getOrElse { path }
-        .replace('\\', '/')
-        .split('/')
-        .map(String::trim)
-        .filter { it.isNotBlank() && it != "." && it != ".." }
-        .joinToString("/")
+    private fun cleanScriptPath(path: String, allowRootAlias: Boolean = false): String =
+        normalizeScriptPath(path, allowRootAlias)
 
     private fun firstPresent(vararg values: String?): String? = values
         .map { it?.trim().orEmpty() }
@@ -2052,6 +2142,9 @@ fun serveDashboardStats(): JSONObject {
                 put("task_before", cursor.string("task_before"))
                 put("task_after", cursor.string("task_after"))
                 put("labels", JSONArray(cursor.string("labels")))
+                put("last_run_status", cursor.string("last_run_status"))
+                put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
+                put("last_log_id", cursor.long("last_log_id"))
                 put("created_at", cursor.string("created_at"))
                 put("updated_at", cursor.string("updated_at"))
             }
@@ -3140,4 +3233,11 @@ fun serveDashboardStats(): JSONObject {
     private fun Cursor.long(column: String): Long = getLong(getColumnIndexOrThrow(column))
     private fun Cursor.int(column: String): Int = getInt(getColumnIndexOrThrow(column))
     private fun Cursor.double(column: String): Double = getDouble(getColumnIndexOrThrow(column))
+    override fun close() {
+        scriptProcesses.values.forEach { process -> runCatching { process.destroyForcibly() } }
+        scriptProcesses.clear()
+        scriptRunExecutor.shutdownNow()
+        super.close()
+    }
+
 }

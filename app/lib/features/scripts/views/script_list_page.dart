@@ -1999,6 +1999,12 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         data: {
           'path': widget.path,
           'code': _contentController.text,
+          'language': switch (widget.path.split('.').last.toLowerCase()) {
+            'js' || 'mjs' || 'cjs' => 'javascript',
+            'ts' => 'typescript',
+            'sh' || 'bash' => 'shell',
+            _ => 'python',
+          },
         },
       );
       final raw = resp.data;
