@@ -9,7 +9,6 @@
 
 typedef int (*Py_MainFunc)(int, wchar_t **);
 typedef void (*Py_SetPythonHomeFunc)(const wchar_t *);
-typedef void (*Py_SetPathFunc)(const wchar_t *);
 
 int main(int argc, char **argv) {
     // Load libpython3.14.so
@@ -21,8 +20,6 @@ int main(int argc, char **argv) {
 
     // Convert env vars to wchar_t
     char *home = getenv("PYTHONHOME");
-    char *pypath = getenv("PYTHONPATH");
-    
     // Set Python home
     Py_SetPythonHomeFunc set_home = (Py_SetPythonHomeFunc)dlsym(handle, "Py_SetPythonHome");
     if (set_home && home) {
@@ -30,17 +27,8 @@ int main(int argc, char **argv) {
         wchar_t *whome = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
         mbstowcs(whome, home, len + 1);
         set_home(whome);
-        free(whome);
-    }
-    
-    // Set Python path
-    Py_SetPathFunc set_path = (Py_SetPathFunc)dlsym(handle, "Py_SetPath");
-    if (set_path && pypath) {
-        size_t len = strlen(pypath);
-        wchar_t *wpath = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
-        mbstowcs(wpath, pypath, len + 1);
-        set_path(wpath);
-        free(wpath);
+        // CPython retains this pointer through initialization.
+        // Keep it alive until Py_Main returns.
     }
 
     // Convert argv to wchar_t

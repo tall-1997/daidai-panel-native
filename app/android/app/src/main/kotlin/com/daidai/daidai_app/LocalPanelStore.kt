@@ -825,11 +825,10 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
             null
         ).use { cursor ->
             while (cursor.moveToNext()) {
-                val runID = cursor.string("id")
-                val status = cursor.string("status")
                 val logs = JSONArray(cursor.string("logs_json"))
+                // Actual process lines belong in panel logs without synthetic prefixes.
                 for (index in 0 until logs.length()) {
-                    lines += "INFO script[$runID][$status] ${logs.optString(index)}"
+                    lines += logs.optString(index)
                 }
             }
         }
@@ -1704,11 +1703,14 @@ fun serveDashboardStats(): JSONObject {
     private fun executeAsyncScriptRun(runId: String, file: File, displayPath: String, languageHint: String, deleteAfter: Boolean) {
         try {
             appendScriptRunLog(runId, "Android local fallback executing script: $displayPath")
+            val workingDir = file.parentFile ?: scriptsRoot()
+            ensureQingLongShims(workingDir)
+            if (!prepareScriptDependencies(runId, file)) { finishScriptRun(runId, "failed", 2); return }
             val command = scriptCommand(file, displayPath, languageHint)
             if (command == null) { appendScriptRunLog(runId, "Runtime not available for script type: ${file.extension.ifBlank { "unknown" }}"); finishScriptRun(runId, "failed", 127); return }
             appendScriptRunLog(runId, "Command: ${command.first().substringAfterLast('/')}")
-            val process = ProcessBuilder(command).directory(file.parentFile ?: scriptsRoot()).redirectErrorStream(true)
-                .apply { environment().putAll(runtimeEnvironment()) }.start()
+            val process = ProcessBuilder(command).directory(workingDir).redirectErrorStream(true)
+                .apply { environment().putAll(runtimeEnvironment(workingDir)) }.start()
             scriptProcesses[runId] = process
             if (scriptRunStatus(runId) == "stopped") {
                 process.destroyForcibly()
@@ -1803,26 +1805,26 @@ fun serveDashboardStats(): JSONObject {
             "const out=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;" +
             "vm.runInThisContext(out,{filename:file});"
 
-    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray): LocalScriptResult {
+    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         logs.put("Command: ${command.first().substringAfterLast('/')}")
         return try {
             val process = ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true)
-                .apply { environment().putAll(runtimeEnvironment()) }
+                .apply { environment().putAll(runtimeEnvironment(workingDir)) }
                 .start()
             val output = Collections.synchronizedList(mutableListOf<String>())
             val reader = Thread {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { output += it }
+                    lines.forEach { line -> output += line; onLine?.invoke(line) }
                 }
             }.also { it.start() }
-            val finished = process.waitFor(300, TimeUnit.SECONDS)
+            val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
                 reader.join(1_000)
                 output.forEach { logs.put(it) }
-                logs.put("Script timed out after 300 seconds")
+                logs.put("Process timed out after $timeoutSeconds seconds")
                 LocalScriptResult(logs, "failed", true, 124)
             } else {
                 reader.join(1_000)
@@ -1837,11 +1839,50 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun runtimeEnvironment(): MutableMap<String, String> {
+    private fun prepareScriptDependencies(runId: String, file: File): Boolean {
+        val scan = ScriptCompatibility.scan(file)
+        if (scan.missingCompanionFiles.isNotEmpty()) {
+            scan.missingCompanionFiles.forEach { appendScriptRunLog(runId, "MISSING_COMPANION_FILE: $it (required from ${file.parentFile?.absolutePath})") }
+            return false
+        }
+        val dependencies = (scan.pythonPackages.map { "python" to it } + scan.nodePackages.map { "nodejs" to it })
+            .distinct().take(ScriptCompatibility.MAX_AUTO_INSTALLS)
+        if (dependencies.isEmpty()) return true
+        appendScriptRunLog(runId, "Compatibility scan found ${dependencies.size} allowlisted dependencies; unknown imports are not auto-installed")
+        for ((type, name) in dependencies) {
+            appendScriptRunLog(runId, "Dependency install started: $type/$name")
+            val result = installDependencyForFallback(type, name) { appendScriptRunLog(runId, it) }
+            if (result.second.isNotBlank()) appendScriptRunLog(runId, "Dependency install result: ${result.first}")
+            if (result.first != "installed") {
+                appendScriptRunLog(runId, "Dependency install failed: $type/$name (${result.first})")
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun ensureQingLongShims(workingDir: File) {
+        workingDir.mkdirs()
+        val notify = File(workingDir, "sendNotify.js")
+        if (!notify.exists()) notify.writeText(
+            "'use strict';\nfunction sendNotify(title, message) { console.log('[sendNotify] ' + String(title || '') + ': ' + String(message || '')); }\nmodule.exports = sendNotify; module.exports.sendNotify = sendNotify;\n"
+        )
+        // Only a deliberately tiny, data-free helper is supplied; do not emulate QingLong internals or secrets.
+        val common = File(workingDir, "common.js")
+        if (!common.exists()) common.writeText(
+            "'use strict';\nmodule.exports = { sleep: ms => new Promise(resolve => setTimeout(resolve, Number(ms) || 0)) };\n"
+        )
+    }
+
+    private fun runtimeEnvironment(workingDir: File = scriptsRoot()): MutableMap<String, String> {
         val env = mutableMapOf(
             "HOME" to appContext.filesDir.absolutePath,
             "TMPDIR" to appContext.cacheDir.absolutePath,
             "DAIDAI_ANDROID_LOCAL" to "1",
+            "QL_DIR" to scriptsRoot().absolutePath,
+            "QL_DATA_DIR" to appContext.filesDir.absolutePath,
+            "QL_SCRIPT_DIR" to workingDir.absolutePath,
+            "PWD" to workingDir.absolutePath,
             "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
             "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
             "LD_LIBRARY_PATH" to appContext.applicationInfo.nativeLibraryDir.orEmpty(),
@@ -1849,10 +1890,15 @@ fun serveDashboardStats(): JSONObject {
             "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
             "NODE_PATH" to listOf(
                 AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
-                File(appContext.filesDir, "deps/nodejs/lib/node_modules").absolutePath,
+                File(AndroidNodeRuntime.depsDir(appContext), "node_modules").absolutePath,
             ).filter(String::isNotBlank).joinToString(File.pathSeparator),
             "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
         )
+        AndroidPythonRuntime.ensureReady(appContext)?.let { runtime ->
+            env["PYTHONHOME"] = runtime.home
+            env["PYTHONPATH"] = listOf(runtime.sitePackages, File(appContext.filesDir, "deps/python").absolutePath)
+                .joinToString(File.pathSeparator)
+        }
         AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
             env["NPM_CONFIG_GLOBALCONFIG"] = File(runtime.home, "etc/npmrc").absolutePath
         }
@@ -1905,10 +1951,18 @@ fun serveDashboardStats(): JSONObject {
             null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use error(NanoHTTPD.Response.Status.NOT_FOUND, "运行记录不存在")
+            val logs = JSONArray(cursor.string("logs_json"))
+            val logLines = (0 until logs.length()).map { logs.optString(it) }
+            val status = cursor.string("status")
+            val failed = status == "failed" || status == "stopped" ||
+                (!cursor.isNull(cursor.getColumnIndexOrThrow("exit_code")) && cursor.int("exit_code") != 0)
             val payload = JSONObject()
-                .put("logs", JSONArray(cursor.string("logs_json")))
+                .put("logs", logs)
+                .put("content", logLines.joinToString("\n"))
+                .put("log_count", logLines.size)
                 .put("done", cursor.int("done") == 1)
-                .put("status", cursor.string("status"))
+                .put("status", status)
+            ScriptRunLogPresentation.errorSummary(logLines, failed)?.let { payload.put("error", it) }
             if (!cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) {
                 payload.put("exit_code", cursor.int("exit_code"))
             }
@@ -2805,7 +2859,7 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("dependencies", dependencies))
     }
 
-    private fun installDependencyForFallback(depType: String, name: String): Pair<String, String> {
+    private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null): Pair<String, String> {
         if (depType == "python") {
             val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
             if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
@@ -2815,14 +2869,17 @@ fun serveDashboardStats(): JSONObject {
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
             installScript.parentFile?.mkdirs()
-            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(['install', '--no-input', '--prefer-binary', '--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org', '--target', sp, sys.argv[1]])\nsys.exit(result)\n")
+            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(['install', '--no-input', '--only-binary=:all:', '--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org', '--target', sp, sys.argv[1]])\nsys.exit(result)\n")
 
             val command = listOf(runtime.executable, runtime.wrapperScript, installScript.absolutePath, name)
             val logs = JSONArray()
                 .put("Installing Python dependency: " + name)
-            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs)
+            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-            if (result.exitCode != 0) return "failed" to text
+            if (result.exitCode != 0) {
+                val noWheel = text.contains("No matching distribution found", true) || text.contains("Could not find a version", true)
+                return "failed" to if (noWheel) "$text\nANDROID_WHEEL_UNAVAILABLE: no compatible Android wheel; source builds are disabled" else text
+            }
             val verified = queryPipInstalledPackages().containsKey(normalizePackageName(name))
             return if (verified) "installed" to "$text\nPost-install verification: pip list confirmed $name"
             else "failed" to "$text\nPOST_VERIFY_FAILED: pip list did not report $name"
@@ -2842,7 +2899,7 @@ fun serveDashboardStats(): JSONObject {
                     .put("Installing Node dependency from network source: $name")
                     .put("npm_registry=$registry")
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
-                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs)
+                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) "failed" to text else {
                     val verified = queryNpmInstalledPackages().containsKey(normalizePackageName(name))

@@ -89,7 +89,7 @@ object AndroidNodeRuntime {
         wrapper.writeText(
             "#!/system/bin/sh\n" +
             "export LD_LIBRARY_PATH=\"$compatLibDir:$nativeDir:${home}/lib:\$LD_LIBRARY_PATH\"\n" +
-            "export NODE_PATH=\"${modules}\"\n" +
+            "export NODE_PATH=\"${modules}:\${NODE_PATH:-}\"\n" +
             "export HOME=\"$home\"\n" +
             "exec \"$launcherExe\" \"\$@\"\n"
         )

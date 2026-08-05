@@ -18,6 +18,7 @@ import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../tasks/views/task_form_page.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../models/script_run_log_data.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
   ref,
@@ -604,7 +605,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   Widget build(BuildContext context) {
     final state = ref.watch(scriptProvider);
     final isLight = Theme.of(context).brightness == Brightness.light;
-    
+
     final visibleTree = _sortScriptTree(_filterTree(state.tree, state.keyword));
 
     return Scaffold(
@@ -684,29 +685,29 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: AppLiquidGlassInput(
                 child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: '搜索脚本名称或路径...',
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: AppColors.slate400,
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: '搜索脚本名称或路径...',
+                    prefixIcon: const Icon(
+                      Icons.search,
+                      size: 18,
+                      color: AppColors.slate400,
+                    ),
+                    suffixIcon: _searchController.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: () {
+                              _searchController.clear();
+                              ref.read(scriptProvider.notifier).setKeyword('');
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.clear, size: 18),
+                          ),
                   ),
-                  suffixIcon: _searchController.text.trim().isEmpty
-                      ? null
-                      : IconButton(
-                          onPressed: () {
-                            _searchController.clear();
-                            ref.read(scriptProvider.notifier).setKeyword('');
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.clear, size: 18),
-                        ),
-                ),
-                onChanged: (value) {
-                  ref.read(scriptProvider.notifier).setKeyword(value);
-                  setState(() {});
-                },
+                  onChanged: (value) {
+                    ref.read(scriptProvider.notifier).setKeyword(value);
+                    setState(() {});
+                  },
                 ),
               ),
             ),
@@ -1044,37 +1045,37 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   label: '保存',
                   variant: AppLiquidGlassButtonVariant.primary,
                   onPressed: () async {
-                final newName = controller.text.trim();
-                if (newName.isEmpty) {
-                  AppGlassNotice.show(
-                    context,
-                    '名称不能为空',
-                    type: AppGlassNoticeType.warning,
-                  );
-                  return;
-                }
-                try {
-                  final newPath = await ref
-                      .read(scriptProvider.notifier)
-                      .renamePath(file.path, newName);
-                  if (!mounted) {
-                    return;
-                  }
-                  navigator.pop();
-                  _showMessage(
-                    '已重命名为 ${newPath.split('/').last}',
-                    type: AppGlassNoticeType.success,
-                  );
-                } catch (error) {
-                  if (!mounted) {
-                    return;
-                  }
-                  AppGlassNotice.show(
-                    context,
-                    _extractRequestError(error, '重命名失败'),
-                    type: AppGlassNoticeType.error,
-                  );
-                }
+                    final newName = controller.text.trim();
+                    if (newName.isEmpty) {
+                      AppGlassNotice.show(
+                        context,
+                        '名称不能为空',
+                        type: AppGlassNoticeType.warning,
+                      );
+                      return;
+                    }
+                    try {
+                      final newPath = await ref
+                          .read(scriptProvider.notifier)
+                          .renamePath(file.path, newName);
+                      if (!mounted) {
+                        return;
+                      }
+                      navigator.pop();
+                      _showMessage(
+                        '已重命名为 ${newPath.split('/').last}',
+                        type: AppGlassNoticeType.success,
+                      );
+                    } catch (error) {
+                      if (!mounted) {
+                        return;
+                      }
+                      AppGlassNotice.show(
+                        context,
+                        _extractRequestError(error, '重命名失败'),
+                        type: AppGlassNoticeType.error,
+                      );
+                    }
                   },
                 ),
               ],
@@ -1158,10 +1159,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
 
       _showMessage('脚本已保存', type: AppGlassNoticeType.success);
     } on UnsupportedError {
-      _showMessage(
-        '当前平台暂不支持直接保存文件',
-        type: AppGlassNoticeType.warning,
-      );
+      _showMessage('当前平台暂不支持直接保存文件', type: AppGlassNoticeType.warning);
     } catch (error) {
       _showMessage(
         _extractScriptError(error, '下载脚本失败'),
@@ -1223,28 +1221,28 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     label: '移动',
                     variant: AppLiquidGlassButtonVariant.primary,
                     onPressed: () async {
-                  try {
-                    final newPath = await ref
-                        .read(scriptProvider.notifier)
-                        .movePath(file.path, targetDir: targetDir);
-                    if (!mounted) {
-                      return;
-                    }
-                    navigator.pop();
-                    _showMessage(
-                      '已移动到 ${newPath.split('/').last}',
-                      type: AppGlassNoticeType.success,
-                    );
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    AppGlassNotice.show(
-                      this.context,
-                      _extractScriptError(error, '移动失败'),
-                      type: AppGlassNoticeType.error,
-                    );
-                  }
+                      try {
+                        final newPath = await ref
+                            .read(scriptProvider.notifier)
+                            .movePath(file.path, targetDir: targetDir);
+                        if (!mounted) {
+                          return;
+                        }
+                        navigator.pop();
+                        _showMessage(
+                          '已移动到 ${newPath.split('/').last}',
+                          type: AppGlassNoticeType.success,
+                        );
+                      } catch (error) {
+                        if (!mounted) {
+                          return;
+                        }
+                        AppGlassNotice.show(
+                          this.context,
+                          _extractScriptError(error, '移动失败'),
+                          type: AppGlassNoticeType.error,
+                        );
+                      }
                     },
                   ),
                 ],
@@ -1319,41 +1317,41 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     label: '复制',
                     variant: AppLiquidGlassButtonVariant.primary,
                     onPressed: () async {
-                  final newName = nameController.text.trim();
-                  if (newName.isEmpty) {
-                    AppGlassNotice.show(
-                      this.context,
-                      '名称不能为空',
-                      type: AppGlassNoticeType.warning,
-                    );
-                    return;
-                  }
-                  try {
-                    final newPath = await ref
-                        .read(scriptProvider.notifier)
-                        .copyPath(
-                          file.path,
-                          targetDir: targetDir,
-                          newName: newName,
+                      final newName = nameController.text.trim();
+                      if (newName.isEmpty) {
+                        AppGlassNotice.show(
+                          this.context,
+                          '名称不能为空',
+                          type: AppGlassNoticeType.warning,
                         );
-                    if (!mounted) {
-                      return;
-                    }
-                    navigator.pop();
-                    _showMessage(
-                      '已复制到 ${newPath.split('/').last}',
-                      type: AppGlassNoticeType.success,
-                    );
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    AppGlassNotice.show(
-                      this.context,
-                      _extractScriptError(error, '复制失败'),
-                      type: AppGlassNoticeType.error,
-                    );
-                  }
+                        return;
+                      }
+                      try {
+                        final newPath = await ref
+                            .read(scriptProvider.notifier)
+                            .copyPath(
+                              file.path,
+                              targetDir: targetDir,
+                              newName: newName,
+                            );
+                        if (!mounted) {
+                          return;
+                        }
+                        navigator.pop();
+                        _showMessage(
+                          '已复制到 ${newPath.split('/').last}',
+                          type: AppGlassNoticeType.success,
+                        );
+                      } catch (error) {
+                        if (!mounted) {
+                          return;
+                        }
+                        AppGlassNotice.show(
+                          this.context,
+                          _extractScriptError(error, '复制失败'),
+                          type: AppGlassNoticeType.error,
+                        );
+                      }
                     },
                   ),
                 ],
@@ -1408,7 +1406,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                  initialValue: parent,
+                    initialValue: parent,
                     decoration: const InputDecoration(labelText: '保存目录'),
                     items: [
                       const DropdownMenuItem(value: '', child: Text('根目录')),
@@ -1438,35 +1436,35 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     label: '创建',
                     variant: AppLiquidGlassButtonVariant.primary,
                     onPressed: () async {
-                  final fileName = nameController.text.trim();
-                  if (fileName.isEmpty) {
-                    AppGlassNotice.show(
-                      this.context,
-                      '文件名不能为空',
-                      type: AppGlassNoticeType.warning,
-                    );
-                    return;
-                  }
-                  final fullPath = _joinScriptPath(parent, fileName);
-                  try {
-                    await ref
-                        .read(scriptProvider.notifier)
-                        .createFile(fullPath);
-                    if (!mounted) {
-                      return;
-                    }
-                    navigator.pop();
-                    await _openScript(fullPath);
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    AppGlassNotice.show(
-                      this.context,
-                      _extractRequestError(error, '创建脚本失败'),
-                      type: AppGlassNoticeType.error,
-                    );
-                  }
+                      final fileName = nameController.text.trim();
+                      if (fileName.isEmpty) {
+                        AppGlassNotice.show(
+                          this.context,
+                          '文件名不能为空',
+                          type: AppGlassNoticeType.warning,
+                        );
+                        return;
+                      }
+                      final fullPath = _joinScriptPath(parent, fileName);
+                      try {
+                        await ref
+                            .read(scriptProvider.notifier)
+                            .createFile(fullPath);
+                        if (!mounted) {
+                          return;
+                        }
+                        navigator.pop();
+                        await _openScript(fullPath);
+                      } catch (error) {
+                        if (!mounted) {
+                          return;
+                        }
+                        AppGlassNotice.show(
+                          this.context,
+                          _extractRequestError(error, '创建脚本失败'),
+                          type: AppGlassNoticeType.error,
+                        );
+                      }
                     },
                   ),
                 ],
@@ -1536,37 +1534,37 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     label: '创建',
                     variant: AppLiquidGlassButtonVariant.primary,
                     onPressed: () async {
-                  final name = nameController.text.trim();
-                  if (name.isEmpty) {
-                    AppGlassNotice.show(
-                      this.context,
-                      '文件夹名称不能为空',
-                      type: AppGlassNoticeType.warning,
-                    );
-                    return;
-                  }
-                  try {
-                    await ref
-                        .read(scriptProvider.notifier)
-                        .createDirectory(_joinScriptPath(parent, name));
-                    if (!mounted) {
-                      return;
-                    }
-                    navigator.pop();
-                    _showMessage(
-                      '文件夹创建成功',
-                      type: AppGlassNoticeType.success,
-                    );
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    AppGlassNotice.show(
-                      this.context,
-                      _extractRequestError(error, '创建文件夹失败'),
-                      type: AppGlassNoticeType.error,
-                    );
-                  }
+                      final name = nameController.text.trim();
+                      if (name.isEmpty) {
+                        AppGlassNotice.show(
+                          this.context,
+                          '文件夹名称不能为空',
+                          type: AppGlassNoticeType.warning,
+                        );
+                        return;
+                      }
+                      try {
+                        await ref
+                            .read(scriptProvider.notifier)
+                            .createDirectory(_joinScriptPath(parent, name));
+                        if (!mounted) {
+                          return;
+                        }
+                        navigator.pop();
+                        _showMessage(
+                          '文件夹创建成功',
+                          type: AppGlassNoticeType.success,
+                        );
+                      } catch (error) {
+                        if (!mounted) {
+                          return;
+                        }
+                        AppGlassNotice.show(
+                          this.context,
+                          _extractRequestError(error, '创建文件夹失败'),
+                          type: AppGlassNoticeType.error,
+                        );
+                      }
                     },
                   ),
                 ],
@@ -1629,26 +1627,26 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       borderRadius: 12,
                       performanceMode: true,
                       child: ListView.separated(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      itemCount: files.length,
-                      separatorBuilder: (context, index) =>
-                          const Divider(height: 12, thickness: 0.6),
-                      itemBuilder: (_, index) => Text(
-                        files[index].name,
-                        style: const TextStyle(fontSize: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        itemCount: files.length,
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 12, thickness: 0.6),
+                        itemBuilder: (_, index) => Text(
+                          files[index].name,
+                          style: const TextStyle(fontSize: 12),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                  initialValue: targetDir,
+                    initialValue: targetDir,
                     decoration: const InputDecoration(labelText: '上传目录'),
                     items: [
                       const DropdownMenuItem(value: '', child: Text('根目录')),
@@ -1678,35 +1676,37 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     label: '上传',
                     variant: AppLiquidGlassButtonVariant.primary,
                     onPressed: () async {
-                  try {
-                    final paths = await ref
-                        .read(scriptProvider.notifier)
-                        .uploadFiles(files, dir: targetDir);
-                    if (!mounted) {
-                      return;
-                    }
-                    navigator.pop();
-                    _showMessage(
-                      paths.length > 1 ? '成功上传 ${paths.length} 个文件' : '上传成功',
-                      type: AppGlassNoticeType.success,
-                    );
-                    if (paths.length == 1) {
-                      await _openScript(paths.first);
-                      if (!mounted) {
-                        return;
+                      try {
+                        final paths = await ref
+                            .read(scriptProvider.notifier)
+                            .uploadFiles(files, dir: targetDir);
+                        if (!mounted) {
+                          return;
+                        }
+                        navigator.pop();
+                        _showMessage(
+                          paths.length > 1
+                              ? '成功上传 ${paths.length} 个文件'
+                              : '上传成功',
+                          type: AppGlassNoticeType.success,
+                        );
+                        if (paths.length == 1) {
+                          await _openScript(paths.first);
+                          if (!mounted) {
+                            return;
+                          }
+                          await _maybePromptAddToTask(paths.first);
+                        }
+                      } catch (error) {
+                        if (!mounted) {
+                          return;
+                        }
+                        AppGlassNotice.show(
+                          this.context,
+                          _extractScriptError(error, '上传失败'),
+                          type: AppGlassNoticeType.error,
+                        );
                       }
-                      await _maybePromptAddToTask(paths.first);
-                    }
-                  } catch (error) {
-                    if (!mounted) {
-                      return;
-                    }
-                    AppGlassNotice.show(
-                      this.context,
-                      _extractScriptError(error, '上传失败'),
-                      type: AppGlassNoticeType.error,
-                    );
-                  }
                     },
                   ),
                 ],
@@ -1743,7 +1743,6 @@ class _FileTreeItemState extends ConsumerState<_FileTreeItem> {
 
   @override
   Widget build(BuildContext context) {
-    
     final file = widget.file;
     final indent = widget.depth * 16.0;
 
@@ -1938,7 +1937,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       return;
     }
 
-    final hasUnsavedEdits = _editing && _contentController.text != ref.read(scriptProvider).content;
+    final hasUnsavedEdits =
+        _editing && _contentController.text != ref.read(scriptProvider).content;
 
     if (_editing && hasUnsavedEdits) {
       // 有未保存的编辑内容，使用 runCode 直接执行
@@ -2142,10 +2142,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
 
     final content = _contentController.text;
     if (content.isEmpty) {
-      _showMessage(
-        '当前脚本暂无可搜索内容',
-        type: AppGlassNoticeType.warning,
-      );
+      _showMessage('当前脚本暂无可搜索内容', type: AppGlassNoticeType.warning);
       return false;
     }
 
@@ -2593,11 +2590,11 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                           final message = version.message.trim().isEmpty
                               ? 'v${version.version}'
                               : version.message;
-                           return AppCard(
-                             stableForScrolling: true,
-                             borderRadius: 14,
-                             padding: const EdgeInsets.all(14),
-                             child: Column(
+                          return AppCard(
+                            stableForScrolling: true,
+                            borderRadius: 14,
+                            padding: const EdgeInsets.all(14),
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
@@ -2751,6 +2748,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
   bool _done = false;
   bool _autoScroll = true;
   String _statusText = '启动中...';
+  String? _errorSummary;
   Timer? _pollTimer;
   bool _pollRequestRunning = false;
   Color? _logBackgroundColor;
@@ -2787,16 +2785,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
         return;
       }
 
-      final rawLogs = data['logs'];
-      final nextLogs = rawLogs is List
-          ? rawLogs
-                .map((item) => item.toString())
-                .where((item) => item.trim().isNotEmpty)
-                .toList()
-          : const <String>[];
-      final done = data['done'] == true;
-      final exitCode = data['exit_code'];
-      final status = data['status']?.toString() ?? '';
+      final run = ScriptRunLogData.fromMap(data);
 
       if (!mounted) {
         return;
@@ -2805,46 +2794,31 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
       setState(() {
         _logs
           ..clear()
-          ..addAll(nextLogs);
-        _done = done;
+          ..addAll(run.logs);
+        _done = run.done;
         _loading = false;
-        _statusText = _buildStatusText(status, exitCode, done);
+        _errorSummary = run.error;
+        _statusText = run.statusText;
       });
 
       if (_autoScroll) {
         _scrollToBottom();
       }
 
-      if (done) {
+      if (run.done) {
         _pollTimer?.cancel();
       }
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
         _loading = false;
-        _statusText = '日志读取失败';
+        _statusText = extractScriptSaveErrorMessage(error, '日志读取失败');
       });
     } finally {
       _pollRequestRunning = false;
     }
-  }
-
-  String _buildStatusText(String status, dynamic exitCode, bool done) {
-    if (!done) {
-      return '运行中...';
-    }
-    if (status == 'success') {
-      return '执行成功';
-    }
-    if (status == 'stopped') {
-      return '已停止';
-    }
-    if (exitCode is num && exitCode == 0) {
-      return '执行成功';
-    }
-    return '执行失败';
   }
 
   void _scrollToBottom() {
@@ -2915,11 +2889,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
         ApiEndpoints.scriptsRunClear(widget.runId),
       );
       if (!mounted) return;
-      AppGlassNotice.show(
-        context,
-        '运行记录已清除',
-        type: AppGlassNoticeType.success,
-      );
+      AppGlassNotice.show(context, '运行记录已清除', type: AppGlassNoticeType.success);
       Navigator.of(context).pop();
     } catch (error) {
       if (!mounted) return;
@@ -2957,6 +2927,28 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
                 ),
               ),
               const SizedBox(height: 12),
+              if (_errorSummary != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.error,
+                      width: 1.5,
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: SelectableText(
+                    '错误详情\n${_errorSummary!}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               Row(
                 children: [
                   Expanded(

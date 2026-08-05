@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.4.4
+
+### 修复
+
+- 脚本调试页面直接显示明文 stdout、stderr 和完整 Traceback。
+- 失败状态显示退出码和实际错误摘要，并提供高对比度“错误详情”区域。
+- 日志接口新增 `content`、`error` 和 `log_count`，保留原始 `logs` 数组兼容性。
+- 面板日志纳入最近脚本运行的真实进程输出。
+- 修复 Android Python 子进程因错误 `Py_SetPath` 无法导入 `encodings`。
+- 修复 Node wrapper 覆盖 `NODE_PATH`，使自动安装的 npm 包可被脚本加载。
+- 新增保守型青龙脚本依赖扫描、常用 pip/npm 自动安装及配套文件缺失提示。
+
+### 兼容性
+
+- Python 常用导入映射支持 `yaml→pyyaml`、`bs4→beautifulsoup4`、`Crypto→pycryptodome`。
+- Node 常见纯 JavaScript 包可自动安装；相对模块缺失返回 `MISSING_COMPANION_FILE`。
+- 不支持 Android ARM64 的原生 Python 包返回 `ANDROID_WHEEL_UNAVAILABLE`，不再盲目源码编译。
+
 ## v0.4.3
 
 ### 修复
