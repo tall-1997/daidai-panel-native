@@ -392,6 +392,11 @@ func validateAPK(path string, contract runtimeContract, strict bool) []error {
 	}
 	for name := range entries {
 		if strings.HasPrefix(name, "lib/arm64-v8a/lib") && strings.HasSuffix(name, "_exec.so") && !seen[name] {
+			// Legacy launcher aliases are retained for migration compatibility and
+			// are not independent runtime contract entries.
+			if name == "lib/arm64-v8a/libnodejs_exec.so" {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("undeclared APK runtime entry %s", name))
 		}
 	}

@@ -106,6 +106,17 @@ func TestValidateAPKRejectsEmbeddedMetadataDrift(t *testing.T) {
 	assertErrorContains(t, errs, "APK metadata assets/manifest.json differs")
 }
 
+func TestValidateAPKAllowsLegacyNodeLauncherAlias(t *testing.T) {
+	contract := validTestContract(t)
+	apkPath := filepath.Join(t.TempDir(), "app.apk")
+	writeTestAPKWithExtraEntry(t, apkPath, contract, "lib/arm64-v8a/libnodejs_exec.so")
+
+	errs := validateAPK(apkPath, contract, false)
+	if len(errs) != 0 {
+		t.Fatalf("legacy node launcher alias errors = %v", errs)
+	}
+}
+
 func TestValidateAPKRejectsUndeclaredRuntimeEntrypoint(t *testing.T) {
 	contract := validTestContract(t)
 	apkPath := filepath.Join(t.TempDir(), "app.apk")
