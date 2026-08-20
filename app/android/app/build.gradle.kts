@@ -159,8 +159,12 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
                 temporaryJar.outputStream().use { output -> input.copyTo(output) }
             }
             ZipFile(temporaryJar).use { classes ->
-                check(classes.getEntry("mobilecore/Mobilecore.class") != null) {
-                    "Invalid mobilecore.aar: mobilecore/Mobilecore.class is missing."
+                val expectedClasses = listOf(
+                    "mobilecore/Mobilecore.class",
+                    "mobilecore/mobilecore/Mobilecore.class",
+                )
+                check(expectedClasses.any { classes.getEntry(it) != null }) {
+                    "Invalid mobilecore.aar: Mobilecore.class is missing. Expected one of ${expectedClasses.joinToString()}."
                 }
             }
         }
