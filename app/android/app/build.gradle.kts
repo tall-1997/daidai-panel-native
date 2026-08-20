@@ -115,8 +115,9 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("../../../runtime")
-            assets.srcDirs("src/main/pythonAssets")
-            assets.srcDirs("src/main/nodeAssets")
+            // Python and Node payloads are packaged as archives under src/main/assets.
+            // The generated pythonAssets/nodeAssets trees are build-time verification inputs;
+            // adding them as Android asset roots duplicates archive metadata paths.
         }
     }
 }
