@@ -1,5 +1,5 @@
 {
-  "sourceVersion": "0e33d022beb1ed16e68d4de022fef86f9834f2df",
+  "sourceVersion": "9a7c27e2a03ed30d3ac632adf58fec60009e601c",
   "fixtures": [
     "all-enabled-default"
   ],
@@ -876,6 +876,26 @@
     },
     {
       "method": "GET",
+      "path": "/api/logs/:id/raw",
+      "module": "logs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:logs",
+      "authContract": "public",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_logs_id_raw"
+    },
+    {
+      "method": "GET",
+      "path": "/api/logs/:id/raw-ticket",
+      "module": "logs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:logs",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_logs_id_raw-ticket"
+    },
+    {
+      "method": "GET",
       "path": "/api/logs/:id/stream",
       "module": "logs",
       "mobileStatus": "supported",
@@ -1356,6 +1376,26 @@
     },
     {
       "method": "GET",
+      "path": "/api/tasks/:id/log-files/:id/raw",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "public",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_tasks_id_log-files_id_raw"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/:id/log-files/:id/raw-ticket",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_tasks_id_log-files_id_raw-ticket"
+    },
+    {
+      "method": "GET",
       "path": "/api/tasks/:id/stats",
       "module": "tasks",
       "mobileStatus": "supported",
@@ -1643,6 +1683,26 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/get_api_v1_logs_id"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/logs/:id/raw",
+      "module": "logs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:logs",
+      "authContract": "public",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_v1_logs_id_raw"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/logs/:id/raw-ticket",
+      "module": "logs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:logs",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_v1_logs_id_raw-ticket"
     },
     {
       "method": "GET",
@@ -2126,6 +2186,26 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/tasks/:id/log-files/:id/raw",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "public",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_v1_tasks_id_log-files_id_raw"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tasks/:id/log-files/:id/raw-ticket",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_v1_tasks_id_log-files_id_raw-ticket"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/tasks/:id/stats",
       "module": "tasks",
       "mobileStatus": "supported",
@@ -2606,6 +2686,16 @@
     },
     {
       "method": "POST",
+      "path": "/api/system/stop",
+      "module": "system",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:system",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_system_stop"
+    },
+    {
+      "method": "POST",
       "path": "/api/system/update",
       "module": "system",
       "mobileStatus": "android_equivalent",
@@ -3076,6 +3166,16 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/system/stop",
+      "module": "system",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:system",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_v1_system_stop"
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/system/update",
       "module": "system",
       "mobileStatus": "android_equivalent",
@@ -3313,6 +3413,16 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/put_api_envs_batch_rename"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/envs/by-name",
+      "module": "envs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:envs",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_envs_by-name"
     },
     {
       "method": "PUT",
@@ -3586,6 +3696,16 @@
     },
     {
       "method": "PUT",
+      "path": "/api/tasks/:id/restore-subscription-default",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_tasks_id_restore-subscription-default"
+    },
+    {
+      "method": "PUT",
       "path": "/api/tasks/:id/run",
       "module": "tasks",
       "mobileStatus": "android_equivalent",
@@ -3856,6 +3976,16 @@
     },
     {
       "method": "PUT",
+      "path": "/api/v1/envs/by-name",
+      "module": "envs",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:envs",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_v1_envs_by-name"
+    },
+    {
+      "method": "PUT",
       "path": "/api/v1/envs/sort",
       "module": "envs",
       "mobileStatus": "supported",
@@ -4123,6 +4253,16 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/put_api_v1_tasks_id_pin"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/tasks/:id/restore-subscription-default",
+      "module": "tasks",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:tasks",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_v1_tasks_id_restore-subscription-default"
     },
     {
       "method": "PUT",

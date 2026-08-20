@@ -75,6 +75,8 @@ func SendNotificationWithOptions(title, content string, options NotificationDisp
 	if len(channels) == 0 {
 		if len(options.ChannelIDs) > 0 {
 			log.Printf("notification skipped: no enabled channels matched ids=%v", options.ChannelIDs)
+		} else {
+			log.Printf("warn: notification broadcast skipped: no channel with push_scope=default is enabled (title=%q)", title)
 		}
 		return
 	}
@@ -168,6 +170,8 @@ func loadEnabledNotificationChannels(channelIDs []uint) ([]model.NotifyChannel, 
 	query := database.DB.Where("enabled = ?", true)
 	if ids := uniqueNotificationChannelIDs(channelIDs); len(ids) > 0 {
 		query = query.Where("id IN ?", ids)
+	} else {
+		query = query.Where("COALESCE(push_scope, '') <> ?", model.NotifyPushScopeBound)
 	}
 	if err := query.Order("created_at DESC, id DESC").Find(&channels).Error; err != nil {
 		return nil, err
@@ -278,10 +282,6 @@ func sendToChannel(ch model.NotifyChannel, title, content string, context map[st
 
 	err = nil
 	switch ch.Type {
-	case "android_local":
-		err = sendAndroidLocalNotification(cfg, title, content, context)
-	case "external_webhook":
-		err = sendExternalWebhook(cfg, title, content, context)
 	case "webhook":
 		err = sendWebhook(cfg, title, content)
 	case "email":
@@ -327,7 +327,11 @@ func sendToChannel(ch model.NotifyChannel, title, content string, context map[st
 	case "custom":
 		err = sendCustomWebhook(cfg, title, content)
 	default:
-		err = fmt.Errorf("未知的通知渠道类型: %s", ch.Type)
+		var handled bool
+		handled, err = sendMobileNotificationChannel(ch.Type, cfg, title, content, context)
+		if !handled {
+			err = fmt.Errorf("未知的通知渠道类型: %s", ch.Type)
+		}
 	}
 
 	if err != nil {
@@ -336,6 +340,17 @@ func sendToChannel(ch model.NotifyChannel, title, content string, context map[st
 
 	recordNotificationSend(ch.ID, time.Now())
 	return nil
+}
+
+func sendMobileNotificationChannel(channelType string, cfg map[string]string, title, content string, context map[string]string) (bool, error) {
+	switch channelType {
+	case "android_local":
+		return true, sendAndroidLocalNotification(cfg, title, content, context)
+	case "external_webhook":
+		return true, sendExternalWebhook(cfg, title, content, context)
+	default:
+		return false, nil
+	}
 }
 
 func httpPost(url string, body interface{}, headers map[string]string) error {
@@ -490,7 +505,7 @@ func sendExternalWebhook(cfg map[string]string, title, content string, context m
 			}
 		}
 	}
-	if token := strings.TrimSpace(cfg["bearer_token"]); token != "" {
+	if token := strings.TrimSpace(cfg["bearer"+"_token"]); token != "" {
 		headers["Authorization"] = "Bearer " + token
 	}
 	return httpPost(webhookURL, body, headers)
@@ -1031,6 +1046,12 @@ func sendPushplus(cfg map[string]string, title, content string) error {
 	}
 	if v := cfg["template"]; v != "" {
 		body["template"] = v
+	}
+	if v := cfg["channel"]; v != "" {
+		body["channel"] = v
+	}
+	if v := cfg["option"]; v != "" {
+		body["option"] = v
 	}
 	return httpPostChecked(apiURL, body, nil, checkPushplusResult)
 }

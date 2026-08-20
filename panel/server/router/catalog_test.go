@@ -116,8 +116,8 @@ func TestRouteContractClassifiesEveryServerRoute(t *testing.T) {
 func TestRouteDescriptorsExplicitlyCoverEveryCanonicalRoute(t *testing.T) {
 	descriptors := RouteDescriptors()
 	routes := CanonicalServerRoutes()
-	if len(descriptors) != 423 || len(descriptors) != len(routes) {
-		t.Fatalf("descriptors=%d routes=%d want=423", len(descriptors), len(routes))
+	if len(descriptors) != 437 || len(descriptors) != len(routes) {
+		t.Fatalf("descriptors=%d routes=%d want=437", len(descriptors), len(routes))
 	}
 
 	for _, route := range routes {
@@ -213,8 +213,8 @@ func TestBuildContractDocumentCarriesSourceAndFixtureMetadata(t *testing.T) {
 	if len(document.Fixtures) == 0 || document.Fixtures[0] != "all-enabled-default" {
 		t.Fatalf("fixtures=%v", document.Fixtures)
 	}
-	if len(document.Routes) != 423 {
-		t.Fatalf("routes=%d want=423", len(document.Routes))
+	if len(document.Routes) != 437 {
+		t.Fatalf("routes=%d want=437", len(document.Routes))
 	}
 }
 

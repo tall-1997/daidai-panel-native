@@ -1131,20 +1131,14 @@ func uninstallDependency(id uint, depType, name, pythonVersion string) {
 		var err error
 		cmd, err = service.NewNpmUninstallCommand(name, false)
 		if err != nil {
-			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"status": model.DepStatusFailed,
-				"log":    err.Error(),
-			})
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
 	case model.DepTypePython:
 		var err error
 		cmd, err = service.NewPipUninstallCommandForPythonVersion(pythonVersion, name)
 		if err != nil {
-			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
-				"status": model.DepStatusFailed,
-				"log":    err.Error(),
-			})
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
 		cmd.Env = service.ManagedPythonDependencyEnv(service.SanitizePipEnv(service.AppendProxyEnv(os.Environ())), pythonVersion)
@@ -1154,17 +1148,17 @@ func uninstallDependency(id uint, depType, name, pythonVersion string) {
 
 		manager, err := detectLinuxPackageManager()
 		if err != nil {
-			database.DB.Delete(&model.Dependency{}, id)
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
 
 		cmd, err = buildLinuxPackageCommand(manager, "remove", name, false)
 		if err != nil {
-			database.DB.Delete(&model.Dependency{}, id)
+			failDependencyBeforeRun(id, err, "DEPENDENCY_PREPARE_FAILED")
 			return
 		}
 	default:
-		database.DB.Delete(&model.Dependency{}, id)
+		failDependencyBeforeRun(id, fmt.Errorf("不支持的依赖类型: %s", depType), "DEPENDENCY_PREPARE_FAILED")
 		return
 	}
 

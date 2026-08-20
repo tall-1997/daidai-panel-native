@@ -248,11 +248,31 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	req.TaskLogID = taskLog.ID
 	req.taskLog = taskLog
 	req.tinyLog = tinyLog
+
+	// Mobile Go tasks are also invoked directly by the gomobile adapter. Start
+	// them here so that direct callers retain the historical asynchronous
+	// contract; SchedulerV2's RunTask waits on executionDone and still owns the
+	// worker slot until the supervised process exits.
+	if plan.Interpreter == RuntimeIDYaegiGo {
+		req.taskLog = nil
+		req.tinyLog = nil
+		req.executionDone = make(chan struct{})
+		e.runWG.Add(1)
+		go func() {
+			defer e.runWG.Done()
+			defer close(req.executionDone)
+			e.runTask(req, taskLog, tinyLog)
+		}()
+	}
 	return nil
 }
 
 func (e *TaskExecutor) RunTask(req *ExecutionRequest) {
 	if e == nil || req == nil {
+		return
+	}
+	if req.executionDone != nil {
+		<-req.executionDone
 		return
 	}
 	taskLog, tinyLog := req.taskLog, req.tinyLog
@@ -434,9 +454,9 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 	}
 	envTTL := time.Duration(timeout)*time.Second + time.Hour
 	if timeout == 0 {
-		envTTL = 365 * 24 * time.Hour
+		envTTL = UntimedTaskScriptTokenTTL
 	}
-	envVars, envErr := BuildManagedRuntimeEnvMapForPythonVersion(taskWorkDir, e.scriptsDir, task.NotificationChannelID, envTTL, task.PythonVersion)
+	envVars, scriptToken, envErr := BuildManagedRuntimeEnvMapWithScriptToken(taskWorkDir, e.scriptsDir, task.NotificationChannelID, envTTL, task.PythonVersion)
 	if envErr != nil {
 		log.Printf("prepare task runtime env failed: %v", envErr)
 	}
@@ -450,6 +470,7 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			exitCode = 1
 			success = false
 		}
+		RevokeScriptToken(scriptToken)
 
 		duration := time.Since(startTime).Seconds()
 
@@ -584,10 +605,16 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 
 	if task.TaskBefore != nil && *task.TaskBefore != "" {
 		onOutput("[执行前置脚本]\n")
-		RunInlineScript(*task.TaskBefore, e.scriptsDir, envVars, 60, onOutput, plan.ScriptArgs...)
+		captureHookEnvExports(envVars, onOutput, func(hookEnv map[string]string) {
+			if err := RunInlineScript(*task.TaskBefore, e.scriptsDir, hookEnv, 60, onOutput, plan.ScriptArgs...); err != nil {
+				onOutput(fmt.Sprintf("[前置脚本执行失败: %s]\n", err.Error()))
+			}
+		})
 	}
 
-	RunHookScript("task_before.sh", e.scriptsDir, envVars, onOutput, plan.ScriptArgs...)
+	captureHookEnvExports(envVars, onOutput, func(hookEnv map[string]string) {
+		RunHookScript("task_before.sh", e.scriptsDir, hookEnv, onOutput, plan.ScriptArgs...)
+	})
 
 	retries := 0
 	var lastExitCode int
@@ -663,7 +690,9 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 
 	if task.TaskAfter != nil && *task.TaskAfter != "" {
 		onOutput("[执行后置脚本]\n")
-		RunInlineScript(*task.TaskAfter, e.scriptsDir, envVars, 60, onOutput, plan.ScriptArgs...)
+		if err := RunInlineScript(*task.TaskAfter, e.scriptsDir, envVars, 60, onOutput, plan.ScriptArgs...); err != nil {
+			onOutput(fmt.Sprintf("[后置脚本执行失败: %s]\n", err.Error()))
+		}
 	}
 
 	RunHookScript("task_after.sh", e.scriptsDir, envVars, onOutput, plan.ScriptArgs...)
@@ -789,6 +818,9 @@ func buildTaskExecutionNotification(task *model.Task, taskLogID uint, runStatus 
 var panelMetaLinePrefixes = []string{
 	"[执行前置脚本]",
 	"[执行后置脚本]",
+	"[前置脚本执行失败:",
+	"[后置脚本执行失败:",
+	"[前置脚本环境变量]",
 	"[执行错误:",
 	"[提示]",
 	"[第 ",

@@ -199,7 +199,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			response.Forbidden(c, "账号已被禁用")
 		case service.ErrTOTPRequired:
-			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":                  "请输入两步验证码",
 				"code":                   LoginCodeTwoFactorRequired,

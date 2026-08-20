@@ -542,6 +542,7 @@ const scopeOptions = [
   { label: "日志查看", value: "logs" },
   { label: "系统信息", value: "system" },
   { label: "系统备份", value: "backup" },
+  { label: "通知", value: "notifications" },
 ];
 
 const scopeLabelMap: Record<string, string> = Object.fromEntries(

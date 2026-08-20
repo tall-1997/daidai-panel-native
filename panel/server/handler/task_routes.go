@@ -7,6 +7,7 @@ import (
 )
 
 func (h *TaskHandler) RegisterRoutes(r *gin.RouterGroup) {
+	r.GET("/tasks/:id/log-files/:filename/raw", h.DownloadRawLogFile)
 	h.registerRoutes(r, true)
 }
 
@@ -43,6 +44,7 @@ func (h *TaskHandler) registerRoutes(r *gin.RouterGroup, executionRoutes bool) {
 		tasks.GET("/:id/log-files", middleware.RequireRole("viewer"), h.LogFiles)
 		tasks.GET("/:id/log-files/:filename", middleware.RequireRole("viewer"), h.LogFileContent)
 		tasks.GET("/:id/log-files/:filename/download", middleware.RequireRole("viewer"), h.DownloadLogFile)
+		tasks.GET("/:id/log-files/:filename/raw-ticket", middleware.RequireRole("viewer"), h.RawLogFileDownloadTicket)
 		tasks.GET("/:id/stats", middleware.RequireRole("viewer"), h.Stats)
 		tasks.GET("/export", middleware.RequireRole("viewer"), h.Export)
 		tasks.POST("/cron/parse", middleware.RequireRole("viewer"), h.CronParse)
@@ -60,6 +62,7 @@ func (h *TaskHandler) registerRoutes(r *gin.RouterGroup, executionRoutes bool) {
 		tasks.PUT("/:id/disable", middleware.RequireRole("operator"), h.Disable)
 		tasks.PUT("/:id/pin", middleware.RequireRole("operator"), h.Pin)
 		tasks.PUT("/:id/unpin", middleware.RequireRole("operator"), h.Unpin)
+		tasks.PUT("/:id/restore-subscription-default", middleware.RequireRole("operator"), h.RestoreSubscriptionDefault)
 		tasks.POST("/:id/copy", middleware.RequireRole("operator"), h.Copy)
 		tasks.DELETE("/:id/log-files/:filename", middleware.RequireRole("operator"), h.DeleteLogFile)
 		tasks.PUT("/batch", middleware.RequireRole("operator"), h.Batch)

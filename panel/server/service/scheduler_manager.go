@@ -101,7 +101,7 @@ func StopSchedulerV2(ctx context.Context) error {
 	schedulerLifecycle.mu.Lock()
 	defer schedulerLifecycle.mu.Unlock()
 
-	if !schedulerLifecycle.started {
+	if !schedulerLifecycle.started && globalScheduler == nil && globalExecutor == nil {
 		return nil
 	}
 

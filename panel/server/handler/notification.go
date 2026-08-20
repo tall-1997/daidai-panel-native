@@ -57,29 +57,33 @@ func (h *NotificationHandler) List(c *gin.Context) {
 
 func (h *NotificationHandler) Create(c *gin.Context) {
 	var req struct {
-		Name   string `json:"name" binding:"required"`
-		Type   string `json:"type" binding:"required"`
-		Config string `json:"config"`
+		Name      string `json:"name" binding:"required"`
+		Type      string `json:"type" binding:"required"`
+		Config    string `json:"config"`
+		PushScope string `json:"push_scope"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
 		return
 	}
 
-	if req.Config == "" {
-		req.Config = "{}"
-	}
-	sealedConfig, err := service.SealNotificationConfig(c.Request.Context(), req.Name, req.Config)
+	normalizedConfig, err := model.NormalizeNotifyChannelConfig(req.Config)
 	if err != nil {
-		response.InternalError(c, "封存通知配置失败")
+		response.BadRequest(c, err.Error())
+		return
+	}
+	pushScope, ok := model.NormalizeNotifyPushScope(req.PushScope)
+	if !ok {
+		response.BadRequest(c, "推送范围只能是 default（默认推送）或 bound（绑定推送）")
 		return
 	}
 
 	ch := model.NotifyChannel{
-		Name:    req.Name,
-		Type:    req.Type,
-		Config:  sealedConfig,
-		Enabled: true,
+		Name:      req.Name,
+		Type:      req.Type,
+		Config:    normalizedConfig,
+		PushScope: pushScope,
+		Enabled:   true,
 	}
 
 	if err := database.DB.Create(&ch).Error; err != nil {
@@ -105,26 +109,47 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 		return
 	}
 
-	allowed := map[string]bool{"name": true, "type": true, "config": true}
+	allowed := map[string]bool{"name": true, "type": true, "config": true, "push_scope": true}
 	updates := make(map[string]interface{})
 	for k, v := range req {
-		if k == "config" {
-			if rawConfig, ok := v.(string); ok {
-				if strings.TrimSpace(rawConfig) == "********" {
-					continue
-				}
-				sealedConfig, err := service.SealNotificationConfig(c.Request.Context(), ch.Name, rawConfig)
-				if err != nil {
-					response.InternalError(c, "封存通知配置失败")
-					return
-				}
-				updates[k] = sealedConfig
+		if !allowed[k] {
+			continue
+		}
+		if k == "push_scope" {
+			if v == nil {
 				continue
 			}
+			raw, ok := v.(string)
+			if !ok {
+				response.BadRequest(c, "推送范围必须是字符串")
+				return
+			}
+			scope, valid := model.NormalizeNotifyPushScope(raw)
+			if !valid {
+				response.BadRequest(c, "推送范围只能是 default（默认推送）或 bound（绑定推送）")
+				return
+			}
+			updates[k] = scope
+			continue
 		}
-		if allowed[k] {
-			updates[k] = v
+		if k == "config" {
+			rawConfig, ok := v.(string)
+			if !ok {
+				response.BadRequest(c, "通知渠道配置必须是 JSON 字符串")
+				return
+			}
+			if strings.TrimSpace(rawConfig) == "********" {
+				continue
+			}
+			normalizedConfig, err := model.NormalizeNotifyChannelConfig(rawConfig)
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			updates[k] = normalizedConfig
+			continue
 		}
+		updates[k] = v
 	}
 
 	if len(updates) > 0 {
@@ -198,11 +223,20 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 		return
 	}
 
+	targeted := req.ChannelID != nil || len(req.ChannelIDs) > 0
 	channelIDs := make([]uint, 0, len(req.ChannelIDs)+1)
 	if req.ChannelID != nil && *req.ChannelID > 0 {
 		channelIDs = append(channelIDs, *req.ChannelID)
 	}
-	channelIDs = append(channelIDs, req.ChannelIDs...)
+	for _, id := range req.ChannelIDs {
+		if id > 0 {
+			channelIDs = append(channelIDs, id)
+		}
+	}
+	if targeted && len(channelIDs) == 0 {
+		response.BadRequest(c, "通知渠道 ID 无效：channel_id / channel_ids 必须是大于 0 的渠道 ID")
+		return
+	}
 
 	context := make(map[string]string, len(req.Context))
 	for key, value := range req.Context {
@@ -243,33 +277,7 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 }
 
 func (h *NotificationHandler) Types(c *gin.Context) {
-	types := []map[string]string{
-		{"type": "android_local", "name": "Android 本地通知"},
-		{"type": "external_webhook", "name": "外部 Webhook"},
-		{"type": "webhook", "name": "Webhook"},
-		{"type": "email", "name": "邮件"},
-		{"type": "telegram", "name": "Telegram"},
-		{"type": "dingtalk", "name": "钉钉"},
-		{"type": "wecom", "name": "企业微信机器人"},
-		{"type": "wecom_app", "name": "企业微信应用"},
-		{"type": "bark", "name": "Bark"},
-		{"type": "pushplus", "name": "PushPlus"},
-		{"type": "serverchan", "name": "Server酱"},
-		{"type": "feishu", "name": "飞书"},
-		{"type": "gotify", "name": "Gotify"},
-		{"type": "pushdeer", "name": "PushDeer"},
-		{"type": "pushme", "name": "PushMe"},
-		{"type": "chanify", "name": "Chanify"},
-		{"type": "igot", "name": "iGot"},
-		{"type": "qmsg", "name": "Qmsg"},
-		{"type": "pushover", "name": "Pushover"},
-		{"type": "discord", "name": "Discord"},
-		{"type": "slack", "name": "Slack"},
-		{"type": "ntfy", "name": "ntfy"},
-		{"type": "wxpusher", "name": "WxPusher / ClawBot(iLink)"},
-		{"type": "custom", "name": "自定义"},
-	}
-	response.Success(c, gin.H{"data": types})
+	response.Success(c, gin.H{"data": model.NotifyChannelDefinitions()})
 }
 
 func (h *NotificationHandler) RegisterRoutes(r *gin.RouterGroup) {

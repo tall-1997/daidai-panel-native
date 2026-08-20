@@ -60,10 +60,36 @@ var capabilityRouteDefinitions = []CapabilityRoute{
 	{http.MethodPost, "/notifications/:id/test", CapabilityNotificationDispatch},
 }
 
+var extensionRouteDescriptors = map[string]RouteDescriptor{
+	"GET /api/logs/:id/raw":                              {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_logs_id_raw"},
+	"GET /api/logs/:id/raw-ticket":                       {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_logs_id_raw-ticket"},
+	"GET /api/tasks/:id/log-files/:id/raw":               {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_id_log-files_id_raw"},
+	"GET /api/tasks/:id/log-files/:id/raw-ticket":        {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_id_log-files_id_raw-ticket"},
+	"GET /api/v1/logs/:id/raw":                           {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_logs_id_raw"},
+	"GET /api/v1/logs/:id/raw-ticket":                    {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_logs_id_raw-ticket"},
+	"GET /api/v1/tasks/:id/log-files/:id/raw":            {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_id_log-files_id_raw"},
+	"GET /api/v1/tasks/:id/log-files/:id/raw-ticket":     {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_id_log-files_id_raw-ticket"},
+	"POST /api/system/stop":                              {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_system_stop"},
+	"POST /api/v1/system/stop":                           {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_system_stop"},
+	"PUT /api/envs/by-name":                              {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_envs_by-name"},
+	"PUT /api/tasks/:id/restore-subscription-default":    {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_tasks_id_restore-subscription-default"},
+	"PUT /api/v1/envs/by-name":                           {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_envs_by-name"},
+	"PUT /api/v1/tasks/:id/restore-subscription-default": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_tasks_id_restore-subscription-default"},
+}
+
+func descriptorForRoute(key string) (RouteDescriptor, bool) {
+	descriptor, ok := explicitRouteDescriptors[key]
+	if ok {
+		return descriptor, true
+	}
+	descriptor, ok = extensionRouteDescriptors[key]
+	return descriptor, ok
+}
+
 func MetadataForRoute(method, routePath string) (RouteMetadata, bool) {
 	method = strings.ToUpper(strings.TrimSpace(method))
 	routePath = normalizeRoutePath(routePath)
-	descriptor, ok := explicitRouteDescriptors[method+" "+routePath]
+	descriptor, ok := descriptorForRoute(method + " " + routePath)
 	if !ok {
 		return RouteMetadata{}, false
 	}
@@ -78,8 +104,11 @@ func MetadataForRoute(method, routePath string) (RouteMetadata, bool) {
 }
 
 func RouteDescriptors() map[string]RouteDescriptor {
-	descriptors := make(map[string]RouteDescriptor, len(explicitRouteDescriptors))
+	descriptors := make(map[string]RouteDescriptor, len(explicitRouteDescriptors)+len(extensionRouteDescriptors))
 	for key, descriptor := range explicitRouteDescriptors {
+		descriptors[key] = descriptor
+	}
+	for key, descriptor := range extensionRouteDescriptors {
 		descriptors[key] = descriptor
 	}
 	return descriptors

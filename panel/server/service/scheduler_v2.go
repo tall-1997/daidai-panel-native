@@ -47,8 +47,9 @@ type ExecutionRequest struct {
 	DelayResolved bool
 
 	// taskLog / tinyLog 由 OnTaskExecuting 准备、交给 RunTask 使用，只在包内流转。
-	taskLog *model.TaskLog
-	tinyLog *TinyLog
+	taskLog       *model.TaskLog
+	tinyLog       *TinyLog
+	executionDone chan struct{}
 }
 
 type ExecutionResult struct {

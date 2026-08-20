@@ -93,7 +93,7 @@ func BuildRouteContracts(server, mobile []gin.RouteInfo) []RouteContract {
 		if !ok {
 			panic("route metadata missing for " + routeKey(route))
 		}
-		descriptor := explicitRouteDescriptors[routeKey(route)]
+		descriptor, _ := descriptorForRoute(routeKey(route))
 		contracts = append(contracts, RouteContract{
 			Method:            route.Method,
 			Path:              route.Path,

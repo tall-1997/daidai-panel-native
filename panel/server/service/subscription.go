@@ -249,6 +249,11 @@ func runCmdWithCallback(ctx context.Context, cmd *exec.Cmd, emit PullCallback) (
 	if ctx != nil && ctx.Err() != nil {
 		return buf.String(), fmt.Errorf("拉取已停止")
 	}
+	if err != nil {
+		if hint := classifyGitFailure(buf.String(), err); hint != "" {
+			emit(hint)
+		}
+	}
 	return buf.String(), err
 }
 
@@ -262,7 +267,7 @@ func gitHasWorkingTreeChanges(ctx context.Context, repoDir string, env []string)
 		if ctx != nil && ctx.Err() != nil {
 			return false, fmt.Errorf("拉取已停止")
 		}
-		return false, err
+		return false, wrapGitCommandError("检查本地改动", gitCommandStderr(err), err)
 	}
 
 	return strings.TrimSpace(string(output)) != "", nil
@@ -298,7 +303,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 
 		emit(fmt.Sprintf("[检测到已有仓库] %s 已存在 Git 仓库，接下来会同步远端并覆盖更新本地文件", saveDir))
 		emit(fmt.Sprintf("[同步远端地址] 正在校正订阅地址 -> %s", authCfg.DisplayURL))
-		output, err := syncGitRemoteWithCallback(ctx, destDir, authCfg.DisplayURL, env, emit)
+		output, err := syncGitRemoteWithCallback(ctx, destDir, authCfg.RemoteURL, env, emit)
 		fullOutput.WriteString(output)
 		if err != nil {
 			return fullOutput.String(), err
@@ -408,7 +413,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			}
 
 			emit(fmt.Sprintf("[同步远端地址] 正在校正订阅地址 -> %s", authCfg.DisplayURL))
-			output, err = syncGitRemoteWithCallback(ctx, destDir, authCfg.DisplayURL, env, emit)
+			output, err = syncGitRemoteWithCallback(ctx, destDir, authCfg.RemoteURL, env, emit)
 			fullOutput.WriteString(output)
 			if err != nil {
 				return fullOutput.String(), err
@@ -923,7 +928,10 @@ func syncGitRemoteWithCallback(ctx context.Context, repoDir, remoteURL string, e
 
 	remoteOutput, err := cmd.Output()
 	if err != nil {
-		return "", err
+		if ctx != nil && ctx.Err() != nil {
+			return "", fmt.Errorf("拉取已停止")
+		}
+		return "", wrapGitCommandError("读取远端配置", gitCommandStderr(err), err)
 	}
 
 	args := []string{"remote", "add", "origin", remoteURL}
@@ -970,6 +978,8 @@ var (
 	// 通过 `\b` 词界避免误匹配 `crontab` / `cron-utils` 等关键字。
 	cronLabelPrefixRe      = regexp.MustCompile(`(?im)^[\s#*@/]*@?cron\b\s*[:：]?\s*(\S.*)$`)
 	subscriptionTaskNameRe = regexp.MustCompile(`new\s+Env\s*\(\s*['"` + "`" + `]([^'"` + "`" + `]+)['"` + "`" + `]\s*\)`)
+	// Only accept name declarations from comment headers to avoid matching object fields.
+	subscriptionTaskNameLabelRe = regexp.MustCompile(`(?i)^\s*(?:<!--|//+|#+|\*+|--+|@)\s*@?name\s*[:：]\s*(\S.*)$`)
 	// 青龙风格 `cron "EXPR" filename, tag:xxx` 单行声明，常见于 JS 顶部注释。
 	// 例如：cron "6 6 6 6 *" jd_CheckCK.js, tag:京东CK检测by-ccwav
 	cronDirectiveLineRe = regexp.MustCompile(`(?i)\bcron\s+["']([^"'\n\r]+)["']\s+([^\s,;]+)`)
@@ -1054,11 +1064,16 @@ func subscriptionFilterContains(target string, pattern string) bool {
 
 func splitSubscriptionFilterPatterns(raw string) []string {
 	var patterns []string
-	for _, pattern := range strings.Split(raw, ",") {
+	seen := make(map[string]bool)
+	for _, pattern := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '|'
+	}) {
 		pattern = strings.TrimSpace(pattern)
-		if pattern != "" {
-			patterns = append(patterns, pattern)
+		if pattern == "" || seen[pattern] {
+			continue
 		}
+		seen[pattern] = true
+		patterns = append(patterns, pattern)
 	}
 	return patterns
 }
@@ -1188,12 +1203,8 @@ func isSubscriptionDependencyOnlyFile(sub *model.Subscription, filePath string) 
 }
 
 func checkBlacklist(sub *model.Subscription, filePath string) bool {
-	if sub.Blacklist == "" {
-		return true
-	}
-	for _, pattern := range strings.Split(sub.Blacklist, ",") {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" || isWildcardFilterPattern(pattern) {
+	for _, pattern := range splitSubscriptionFilterPatterns(sub.Blacklist) {
+		if isWildcardFilterPattern(pattern) {
 			continue
 		}
 		if subscriptionFilterContains(filePath, pattern) {
@@ -1221,10 +1232,17 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 	emit(fmt.Sprintf("[扫描脚本] 目录 %s 共扫描 %d 个候选文件（按白/黑名单过滤后），识别出 %d 个含 cron 的脚本",
 		scriptsDir, scannedFileCount, len(candidates)))
 	if len(dependencyFiles) > 0 {
-		emit("[依赖文件] 已检出但不创建任务: " + formatSubscriptionFileList(dependencyFiles, 20))
+		emit(fmt.Sprintf("[依赖文件] 依赖规则命中 %d 个文件，已拉取到脚本目录供主脚本调用，不会建成定时任务: %s",
+			len(dependencyFiles), formatSubscriptionFileList(dependencyFiles, 10)))
 	}
 	if len(candidates) == 0 && scannedFileCount > 0 {
 		emit("[提示] 仓库内有脚本但没有识别到 cron 表达式：请检查脚本头部是否含 `cron <表达式>` 注释，或在系统设置 default_cron_rule 里配置默认 cron")
+	}
+	if scannedFileCount == 0 {
+		emit("[提示] 没有扫描到任何候选脚本，常见原因：1) 指定子目录/白名单/黑名单把文件全过滤掉了（多个模式用 `,` 或 `|` 分隔，匹配方式是「子串包含」而非正则）；2) 上一步 sparse-checkout 规则没命中任何文件；3) 系统设置 repo_file_extensions 不含该脚本扩展名")
+		if len(dependencyFiles) > 0 {
+			emit("[提示] 本次只有依赖规则命中了文件、白名单一个都没命中：依赖规则只负责把辅助库文件拉下来，不会建任务。请确认主脚本的文件名片段是否填在「白名单」里")
+		}
 	}
 
 	var managedTasks []model.Task
@@ -1243,6 +1261,13 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 	if options.autoAdd {
 		for command, candidate := range candidates {
 			if existing, ok := managedByCommand[command]; ok {
+				if existing.SubscriptionLocked {
+					if existing.Name != candidate.Name || existing.CronExpression != candidate.CronExpression {
+						emit(fmt.Sprintf("[保留手动定时] %s 已被手动调整过，跳过订阅源的名称/定时覆盖（订阅源 cron: %s）；如需重新跟随订阅，请在任务详情点「恢复为订阅默认」",
+							existing.Name, candidate.CronExpression))
+					}
+					continue
+				}
 				changes := map[string]interface{}{}
 				if existing.Name != candidate.Name {
 					changes["name"] = candidate.Name
@@ -1273,7 +1298,11 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 			if err := database.DB.Where("command = ?", command).First(&existing).Error; err == nil {
 				labels := withLabel(existing.GetLabels(), label)
 				existing.SetLabelsFromSlice(labels)
-				if err := database.DB.Model(&existing).Update("labels", existing.Labels).Error; err != nil {
+				existing.SubscriptionLocked = true
+				if err := database.DB.Model(&existing).Updates(map[string]interface{}{
+					"labels":              existing.Labels,
+					"subscription_locked": true,
+				}).Error; err != nil {
 					failed++
 					emit(fmt.Sprintf("[关联已有任务失败] %s: %v", existing.Name, err))
 				} else {
@@ -1318,6 +1347,10 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 				continue
 			}
 			if _, ok := candidates[command]; ok {
+				continue
+			}
+			if task.SubscriptionLocked {
+				emit(fmt.Sprintf("[保留任务] %s 已加锁，订阅源中已无对应脚本，已保留，请手动确认", task.Name))
 				continue
 			}
 
@@ -1683,6 +1716,7 @@ func resolveSubscriptionTaskName(path, fallback string) string {
 	}
 	defer f.Close()
 
+	var envName, labelName string
 	scanner := bufio.NewScanner(f)
 	lineCount := 0
 	for scanner.Scan() {
@@ -1690,16 +1724,46 @@ func resolveSubscriptionTaskName(path, fallback string) string {
 		if lineCount > 120 {
 			break
 		}
-
-		if matches := subscriptionTaskNameRe.FindStringSubmatch(scanner.Text()); len(matches) > 1 {
-			name := strings.TrimSpace(matches[1])
-			if name != "" {
-				return name
+		line := scanner.Text()
+		if envName == "" {
+			if matches := subscriptionTaskNameRe.FindStringSubmatch(line); len(matches) > 1 {
+				envName = strings.TrimSpace(matches[1])
 			}
+		}
+		if labelName == "" {
+			labelName = extractSubscriptionTaskNameFromLabel(line)
+		}
+		if envName != "" && labelName != "" {
+			break
 		}
 	}
 
+	if envName != "" {
+		return envName
+	}
+	if labelName != "" {
+		return labelName
+	}
 	return fallback
+}
+
+func extractSubscriptionTaskNameFromLabel(line string) string {
+	matches := subscriptionTaskNameLabelRe.FindStringSubmatch(line)
+	if len(matches) < 2 {
+		return ""
+	}
+
+	name := strings.TrimSpace(matches[1])
+	name = strings.TrimSpace(strings.TrimSuffix(name, "-->"))
+	name = strings.TrimSpace(strings.TrimSuffix(name, "*/"))
+	name = strings.TrimSpace(strings.Trim(name, "\"'`"))
+	if name == "" {
+		return ""
+	}
+	if runes := []rune(name); len(runes) > 128 {
+		name = strings.TrimSpace(string(runes[:128]))
+	}
+	return name
 }
 
 func extractSubscriptionCronExpression(line, scriptBase string) string {
