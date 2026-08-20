@@ -1615,7 +1615,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             clipBehavior: Clip.hardEdge,
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
             itemCount: groups.length,
-            onReorderItem: (oldIndex, newIndex) {
+            onReorder: (oldIndex, newIndex) {
               setState(() {
                 final item = groups.removeAt(oldIndex);
                 groups.insert(newIndex, item);
@@ -1673,7 +1673,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       clipBehavior: Clip.hardEdge,
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
       itemCount: tasks.length,
-      onReorderItem: (oldIndex, newIndex) {
+      onReorder: (oldIndex, newIndex) {
         // 只先调整本地顺序，等用户点击“完成”后再统一保存到后端，避免拖一下就请求多次。
         ref.read(taskProvider.notifier).reorderLocalTasks(oldIndex, newIndex);
         setState(() => _taskOrderDirty = true);

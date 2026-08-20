@@ -1207,7 +1207,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     ? ReorderableListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
                         itemCount: state.envs.length,
-                        onReorderItem: (oldIndex, newIndex) {
+                        onReorder: (oldIndex, newIndex) {
                           final current = List<EnvVar>.from(state.envs);
                           if (current.isEmpty || oldIndex >= current.length) {
                             return;

@@ -144,7 +144,7 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
         emptyText: '暂无任务视图',
         onRetry: () => ref.read(taskViewProvider.notifier).load(),
         child: ReorderableListView(
-          onReorderItem: (oldIndex, newIndex) {
+          onReorder: (oldIndex, newIndex) {
             final views = [...state.items];
             views.insert(newIndex, views.removeAt(oldIndex));
             ref.read(taskViewProvider.notifier).reorder(views);
