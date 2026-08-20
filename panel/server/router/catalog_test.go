@@ -207,7 +207,7 @@ func TestCanonicalServerRoutesUnionsNamedFixtures(t *testing.T) {
 
 func TestBuildContractDocumentCarriesSourceAndFixtureMetadata(t *testing.T) {
 	document := BuildContractDocument(CanonicalServerRoutes(), CanonicalMobileRoutes())
-	if !strings.HasPrefix(document.SourceVersion, "0e33d022") {
+	if !strings.HasPrefix(document.SourceVersion, "9a7c27e2") {
 		t.Fatalf("sourceVersion=%q", document.SourceVersion)
 	}
 	if len(document.Fixtures) == 0 || document.Fixtures[0] != "all-enabled-default" {
