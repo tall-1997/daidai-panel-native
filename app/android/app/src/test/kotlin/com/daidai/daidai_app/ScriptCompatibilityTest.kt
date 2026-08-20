@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import kotlin.io.path.createTempDirectory
 
 class ScriptCompatibilityTest {
     @Test fun mapsOnlyKnownTopLevelPythonImports() {
@@ -12,7 +13,7 @@ class ScriptCompatibilityTest {
     }
 
     @Test fun identifiesNodePackagesAndMissingRelativeFiles() {
-        val dir = createTempDir(prefix = "compat-")
+        val dir = createTempDirectory("compat-").toFile()
         try {
             File(dir, "exists.js").writeText("module.exports={}")
             val scan = ScriptCompatibility.scanNode("require('fs'); require('axios'); require('./exists'); require('./missing')", dir)
