@@ -119,6 +119,7 @@ class ScriptState {
   final bool isBinary;
   final bool loadingContent;
   final bool saving;
+  final String? error;
 
   const ScriptState({
     this.tree = const [],
@@ -129,6 +130,7 @@ class ScriptState {
     this.isBinary = false,
     this.loadingContent = false,
     this.saving = false,
+    this.error,
   });
 
   ScriptState copyWith({
@@ -140,6 +142,8 @@ class ScriptState {
     bool? isBinary,
     bool? loadingContent,
     bool? saving,
+    String? error,
+    bool clearError = false,
   }) {
     return ScriptState(
       tree: tree ?? this.tree,
@@ -152,6 +156,7 @@ class ScriptState {
       isBinary: isBinary ?? this.isBinary,
       loadingContent: loadingContent ?? this.loadingContent,
       saving: saving ?? this.saving,
+      error: clearError ? null : error ?? this.error,
     );
   }
 }
@@ -166,7 +171,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> loadTree() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, clearError: true);
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.scriptsTree);
       final data = extractData(resp.data);
@@ -179,9 +184,12 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
                 )
                 .toList()
           : <ScriptFile>[];
-      state = state.copyWith(tree: tree, loading: false);
-    } catch (_) {
-      state = state.copyWith(loading: false);
+      state = state.copyWith(tree: tree, loading: false, clearError: true);
+    } catch (error) {
+      state = state.copyWith(
+        loading: false,
+        error: extractErrorMessage(error, '脚本列表加载失败'),
+      );
     }
   }
 
@@ -728,6 +736,8 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                         color: AppColors.primary,
                       ),
                     )
+                  : state.error != null && state.tree.isEmpty
+                  ? _buildLoadError(state.error!)
                   : visibleTree.isEmpty
                   ? _buildEmpty(state)
                   : RefreshIndicator(
@@ -736,18 +746,24 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                           ref.read(scriptProvider.notifier).loadTree(),
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        children: visibleTree
-                            .map(
-                              (file) => _FileTreeItem(
-                                file: file,
-                                isLight: isLight,
-                                depth: 0,
-                                onTap: (path) => _openScript(path),
-                                onAction: (entry) =>
-                                    _handleEntryAction(entry, state),
-                              ),
-                            )
-                            .toList(),
+                        children: [
+                          if (state.error != null)
+                            _ScriptInlineLoadError(
+                              message: state.error!,
+                              onRetry: () =>
+                                  ref.read(scriptProvider.notifier).loadTree(),
+                            ),
+                          ...visibleTree.map(
+                            (file) => _FileTreeItem(
+                              file: file,
+                              isLight: isLight,
+                              depth: 0,
+                              onTap: (path) => _openScript(path),
+                              onAction: (entry) =>
+                                  _handleEntryAction(entry, state),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
             ),
@@ -1726,6 +1742,49 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
       },
     );
   }
+
+  Widget _buildLoadError(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.cloud_off_outlined,
+            size: 56,
+            color: AppColors.slate400,
+          ),
+          const SizedBox(height: 12),
+          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: () => ref.read(scriptProvider.notifier).loadTree(),
+            child: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScriptInlineLoadError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ScriptInlineLoadError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => AppCard(
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    child: Row(
+      children: [
+        const Icon(Icons.sync_problem_outlined, color: AppColors.amber500),
+        const SizedBox(width: 10),
+        Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
+        TextButton(onPressed: onRetry, child: const Text('重试')),
+      ],
+    ),
+  );
 }
 
 class _FileTreeItem extends ConsumerStatefulWidget {

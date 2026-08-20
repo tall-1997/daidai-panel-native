@@ -68,13 +68,20 @@ class UserListItem {
 class UserListState {
   final List<UserListItem> items;
   final bool loading;
+  final String? error;
 
-  const UserListState({this.items = const [], this.loading = false});
+  const UserListState({this.items = const [], this.loading = false, this.error});
 
-  UserListState copyWith({List<UserListItem>? items, bool? loading}) {
+  UserListState copyWith({
+    List<UserListItem>? items,
+    bool? loading,
+    String? error,
+    bool clearError = false,
+  }) {
     return UserListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
+      error: clearError ? null : error ?? this.error,
     );
   }
 }
@@ -83,7 +90,7 @@ class UserListNotifier extends StateNotifier<UserListState> {
   UserListNotifier() : super(const UserListState());
 
   Future<void> load() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, clearError: true);
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.users);
       final data = extractData(resp.data);
@@ -94,9 +101,12 @@ class UserListNotifier extends StateNotifier<UserListState> {
             .map((e) => UserListItem.fromJson(e))
             .toList();
       }
-      state = state.copyWith(items: items, loading: false);
-    } catch (_) {
-      state = state.copyWith(loading: false);
+      state = state.copyWith(items: items, loading: false, clearError: true);
+    } catch (error) {
+      state = state.copyWith(
+        loading: false,
+        error: extractErrorMessage(error, '用户列表加载失败'),
+      );
     }
   }
 
@@ -202,6 +212,12 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                           ),
                         ],
                       )
+                    : state.error != null && state.items.isEmpty
+                    ? _UserLoadError(
+                        message: state.error!,
+                        onRetry: () =>
+                            ref.read(userListProvider.notifier).load(),
+                      )
                     : state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -223,15 +239,26 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                       )
                     : ListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        itemCount: state.items.length,
-                        itemBuilder: (_, i) => _UserCard(
-                          user: state.items[i],
-                          isLight: isLight,
-                          currentUsername: currentUsername,
-                          showResetPw: _showResetPasswordDialog,
-                          showRolePicker: _showRolePicker,
-                          showDelete: _confirmDelete,
-                        ),
+                        itemCount:
+                            state.items.length + (state.error == null ? 0 : 1),
+                        itemBuilder: (_, i) {
+                          if (state.error != null && i == 0) {
+                            return _InlineUserLoadError(
+                              message: state.error!,
+                              onRetry: () =>
+                                  ref.read(userListProvider.notifier).load(),
+                            );
+                          }
+                          final index = i - (state.error == null ? 0 : 1);
+                          return _UserCard(
+                            user: state.items[index],
+                            isLight: isLight,
+                            currentUsername: currentUsername,
+                            showResetPw: _showResetPasswordDialog,
+                            showRolePicker: _showRolePicker,
+                            showDelete: _confirmDelete,
+                          );
+                        },
                       ),
               ),
             ),
@@ -509,6 +536,48 @@ class _UserListPageState extends ConsumerState<UserListPage> {
       }
     }
   }
+}
+
+class _UserLoadError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _UserLoadError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    physics: const AlwaysScrollableScrollPhysics(),
+    padding: const EdgeInsets.symmetric(horizontal: 32),
+    children: [
+      const SizedBox(height: 100),
+      const Icon(Icons.cloud_off_outlined, size: 56, color: AppColors.slate400),
+      const SizedBox(height: 12),
+      Text(message, textAlign: TextAlign.center),
+      const SizedBox(height: 12),
+      Center(child: TextButton(onPressed: onRetry, child: const Text('重试'))),
+    ],
+  );
+}
+
+class _InlineUserLoadError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _InlineUserLoadError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => AppCard(
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    child: Row(
+      children: [
+        const Icon(Icons.sync_problem_outlined, color: AppColors.amber500),
+        const SizedBox(width: 10),
+        Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
+        TextButton(onPressed: onRetry, child: const Text('重试')),
+      ],
+    ),
+  );
 }
 
 class _UserCard extends ConsumerWidget {

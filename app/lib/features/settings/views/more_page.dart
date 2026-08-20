@@ -17,6 +17,9 @@ class MorePage extends ConsumerStatefulWidget {
   ConsumerState<MorePage> createState() => _MorePageState();
 }
 
+bool showsOperatorAutomation(String? role) =>
+    role == 'operator' || role == 'admin';
+
 class _MorePageState extends ConsumerState<MorePage> {
   AppUpdateInfo? _updateInfo;
   bool _checking = false;
@@ -126,19 +129,32 @@ class _MorePageState extends ConsumerState<MorePage> {
             isLight: isLight,
             onTap: () => context.push('/server-config?manage=1'),
           ),
-          _SettingsItem(
-            icon: Icons.key_outlined,
-            title: '环境变量',
-            isLight: isLight,
-            onTap: () => context.go('/envs'),
-          ),
-          if (user?.isOperator == true)
+          if (showsOperatorAutomation(user?.role)) ...[
+            _SettingsItem(
+              icon: Icons.key_outlined,
+              title: '环境变量',
+              isLight: isLight,
+              onTap: () => context.go('/envs'),
+            ),
             _SettingsItem(
               icon: Icons.tune_outlined,
               title: '环境变量高级工具',
               isLight: isLight,
               onTap: () => context.push('/env-tools'),
             ),
+            _SettingsItem(
+              icon: Icons.code,
+              title: '脚本管理',
+              isLight: isLight,
+              onTap: () => context.push('/scripts'),
+            ),
+            _SettingsItem(
+              icon: Icons.sync,
+              title: '订阅管理',
+              isLight: isLight,
+              onTap: () => context.push('/subscriptions'),
+            ),
+          ],
           _SettingsItem(
             icon: Icons.notifications_none,
             title: '消息通知',
@@ -162,18 +178,6 @@ class _MorePageState extends ConsumerState<MorePage> {
             const SizedBox(height: 24),
             _SectionLabel('系统管理'),
             const SizedBox(height: 8),
-            _SettingsItem(
-              icon: Icons.code,
-              title: '脚本管理',
-              isLight: isLight,
-              onTap: () => context.push('/scripts'),
-            ),
-            _SettingsItem(
-              icon: Icons.sync,
-              title: '订阅管理',
-              isLight: isLight,
-              onTap: () => context.push('/subscriptions'),
-            ),
             _SettingsItem(
               icon: Icons.inventory_2_outlined,
               title: '依赖管理',

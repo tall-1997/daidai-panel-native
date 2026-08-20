@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/theme_provider.dart';
@@ -27,6 +26,17 @@ class ThemeSettingsPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
+          _buildSectionTitle('视觉风格', isLight),
+          const SizedBox(height: 8),
+          AppCard(
+            padding: const EdgeInsets.all(6),
+            child: _VisualStyleSelector(
+              currentStyle: settings.visualStyle,
+              onChanged: (style) =>
+                  ref.read(appStyleProvider.notifier).setVisualStyle(style),
+            ),
+          ),
+          const SizedBox(height: 24),
           _buildSectionTitle('主题模式', isLight),
           const SizedBox(height: 8),
           AppCard(
@@ -50,7 +60,8 @@ class ThemeSettingsPage extends ConsumerWidget {
                   ref.read(appStyleProvider.notifier).setBackgroundImage(path),
             ),
           ),
-          if (settings.backgroundImagePath != null) ...[
+          if (settings.backgroundImagePath != null &&
+              settings.visualStyle == AppVisualStyle.liquidGlass) ...[
             const SizedBox(height: 24),
             _buildSectionTitle('模糊强度', isLight),
             const SizedBox(height: 8),
@@ -82,6 +93,61 @@ class ThemeSettingsPage extends ConsumerWidget {
           color: isLight ? AppColors.slate500 : AppColors.slate400,
         ),
       ),
+    );
+  }
+}
+
+class _VisualStyleSelector extends StatelessWidget {
+  final AppVisualStyle currentStyle;
+  final ValueChanged<AppVisualStyle> onChanged;
+
+  const _VisualStyleSelector({
+    required this.currentStyle,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final style in AppVisualStyle.values)
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: AppLiquidGlassSurface(
+                onTap: () => onChanged(style),
+                selected: currentStyle == style,
+                borderRadius: 12,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      style == AppVisualStyle.pureFlat
+                          ? Icons.layers_clear_outlined
+                          : Icons.blur_on_outlined,
+                      color: currentStyle == style
+                          ? AppColors.primary
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      style == AppVisualStyle.pureFlat
+                          ? 'Pure Flat'
+                          : 'Liquid Glass',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: currentStyle == style
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
