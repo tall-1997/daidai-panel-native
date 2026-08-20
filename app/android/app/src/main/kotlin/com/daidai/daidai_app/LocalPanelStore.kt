@@ -41,8 +41,13 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         appContext.getSharedPreferences("daidai-local-configs", Context.MODE_PRIVATE)
     }
     private val runningTaskIds = ConcurrentHashMap.newKeySet<Long>()
+    private val taskRunLogsMemory = ConcurrentHashMap<Long, MutableList<String>>()
+    private val taskRunStartedAt = ConcurrentHashMap<Long, Instant>()
     private val scriptRunExecutor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "local-script-run").apply { isDaemon = true }
+    }
+    private val taskRunExecutor = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "local-task-run").apply { isDaemon = true }
     }
     private val scriptProcesses = ConcurrentHashMap<String, Process>()
     private val scriptRunLogsMemory = ConcurrentHashMap<String, MutableList<String>>()
@@ -1730,8 +1735,9 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun executeShellCommand(command: String): LocalScriptResult {
+    private fun executeShellCommand(command: String, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing shell command: $command")
+        onLine?.invoke("Android local fallback executing shell command: $command")
         val parts = command.split("\\s+".toRegex()).filter { it.isNotBlank() }
         if (parts.isEmpty()) {
             return LocalScriptResult(logs.put("Empty command"), "failed", true, 1)
@@ -1741,8 +1747,14 @@ fun serveDashboardStats(): JSONObject {
         pb.redirectErrorStream(true)
         return try {
             val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText()
-            output.split("\n").takeLast(100).forEach { logs.put(it) }
+            val output = mutableListOf<String>()
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    output += line
+                    onLine?.invoke(line)
+                }
+            }
+            output.takeLast(100).forEach { logs.put(it) }
             val code = process.waitFor()
             val status = if (code == 0) "success" else "failed"
             LocalScriptResult(logs, status, true, code)
@@ -1751,7 +1763,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun executeScriptFile(file: File, displayPath: String, languageHint: String = ""): LocalScriptResult {
+    private fun executeScriptFile(file: File, displayPath: String, languageHint: String = "", onLine: ((String) -> Unit)? = null): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
@@ -1761,7 +1773,7 @@ fun serveDashboardStats(): JSONObject {
                 127,
             )
 
-        return runLocalProcess(command, file.parentFile ?: scriptsRoot(), logs).also { result ->
+        return runLocalProcess(command, file.parentFile ?: scriptsRoot(), logs, onLine = onLine).also { result ->
             recordDetectedDependencies(result.logs)
         }
     }
@@ -2241,9 +2253,17 @@ fun serveDashboardStats(): JSONObject {
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
-            val execution = executeTaskAndSave(id)
-                ?: return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
-            return ok(JSONObject().put("message", "任务已执行").put("data", JSONObject().put("id", id).put("status", 1.0).put("run_status", execution.first.status).put("log_id", execution.second).put("logs", execution.first.logs)))
+            if (!enqueueTask(id)) {
+                return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
+            }
+            return NanoHTTPD.newFixedLengthResponse(
+                NanoHTTPD.Response.Status.ACCEPTED,
+                "application/json; charset=utf-8",
+                JSONObject()
+                    .put("message", "任务已开始")
+                    .put("data", JSONObject().put("id", id).put("status", 2.0).put("run_status", "running"))
+                    .toString(),
+            )
         }
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status)))
     }
@@ -2280,13 +2300,42 @@ fun serveDashboardStats(): JSONObject {
         return tasks
     }
 
+    private fun enqueueTask(id: Long): Boolean {
+        if (!runningTaskIds.add(id)) return false
+        val startedAt = Instant.now()
+        taskRunStartedAt[id] = startedAt
+        taskRunLogsMemory[id] = Collections.synchronizedList(mutableListOf("任务已入队，正在启动..."))
+        taskRunExecutor.execute {
+            try {
+                executeTaskAndSave(id, alreadyClaimed = true)
+            } catch (error: Throwable) {
+                appendTaskRunLog(id, "任务执行异常: ${error.message ?: error.javaClass.simpleName}")
+                appLog("Task", "Task $id crashed: ${error.message ?: error.javaClass.simpleName}")
+            } finally {
+                runningTaskIds.remove(id)
+                taskRunStartedAt.remove(id)
+                taskRunLogsMemory.remove(id)
+            }
+        }
+        return true
+    }
+
+    private fun appendTaskRunLog(id: Long, line: String) {
+        val logs = taskRunLogsMemory[id] ?: return
+        synchronized(logs) {
+            logs += line.take(MAX_SCRIPT_LOG_LINE_CHARS)
+            while (logs.size > MAX_SCRIPT_LOG_LINES) logs.removeAt(0)
+        }
+    }
+
     /** Unified manual/cron execution path. A task cannot overlap itself. */
-    internal fun executeTaskAndSave(id: Long): Pair<LocalScriptResult, Long>? {
-        if (!runningTaskIds.add(id)) return null
+    internal fun executeTaskAndSave(id: Long, alreadyClaimed: Boolean = false): Pair<LocalScriptResult, Long>? {
+        if (!alreadyClaimed && !runningTaskIds.add(id)) return null
         try {
-            val startedAt = Instant.now()
+            val startedAt = taskRunStartedAt[id] ?: Instant.now()
             appLog("Task", "Running task $id")
-            val result = runTaskNow(id)
+            appendTaskRunLog(id, "任务已启动")
+            val result = runTaskNow(id) { line -> appendTaskRunLog(id, line) }
             val endedAt = Instant.now()
             val logId = insertTaskLog(id, result, startedAt, endedAt)
             val values = ContentValues().apply {
@@ -2304,11 +2353,11 @@ fun serveDashboardStats(): JSONObject {
             } catch (e: Exception) { appLog("Notification", "Task notification skipped: ${e.message}") }
             return result to logId
         } finally {
-            runningTaskIds.remove(id)
+            if (!alreadyClaimed) runningTaskIds.remove(id)
         }
     }
 
-    private fun runTaskNow(id: Long): LocalScriptResult {
+    private fun runTaskNow(id: Long, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         return readableDatabase.query(
             "tasks",
             arrayOf("command", "name", "task_before", "task_after"),
@@ -2326,7 +2375,7 @@ fun serveDashboardStats(): JSONObject {
             val after = cursor.string("task_after").trim()
             val logs = JSONArray()
             if (before.isNotEmpty()) {
-                val hook = executeShellCommand(before)
+                val hook = executeShellCommand(before) { line -> onLine?.invoke("[before] $line") }
                 logs.put("[before] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[before] ${hook.logs.optString(i)}")
             }
@@ -2337,16 +2386,16 @@ fun serveDashboardStats(): JSONObject {
                 else -> ""
             }
             val main = if (path.isBlank()) {
-                executeShellCommand(command)
+                executeShellCommand(command, onLine)
             } else {
                 val file = scriptFile(path)
                 if (!file.exists()) LocalScriptResult(JSONArray().put("Script does not exist: $path"), "failed", true, 404)
-                else executeScriptFile(file, path)
+                else executeScriptFile(file, path, onLine = onLine)
             }
             for (i in 0 until main.logs.length()) logs.put(main.logs.optString(i))
             // after always runs, including when the main command failed. Its failure is diagnostic only.
             if (after.isNotEmpty()) {
-                val hook = executeShellCommand(after)
+                val hook = executeShellCommand(after) { line -> onLine?.invoke("[after] $line") }
                 logs.put("[after] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[after] ${hook.logs.optString(i)}")
             }
@@ -2401,8 +2450,23 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun liveTaskLogResponse(id: Long): NanoHTTPD.Response {
+        if (runningTaskIds.contains(id)) {
+            val lines = taskRunLogsMemory[id]?.let { logs ->
+                synchronized(logs) { logs.toList() }
+            }.orEmpty()
+            val startedAt = taskRunStartedAt[id]?.toString() ?: Instant.now().toString()
+            val data = JSONObject()
+                .put("task_id", id)
+                .put("status", 2)
+                .put("run_status", "running")
+                .put("done", false)
+                .put("logs", JSONArray(lines))
+                .put("content", lines.joinToString("\n"))
+                .put("started_at", startedAt)
+            return ok(JSONObject(data.toString()).put("data", data))
+        }
         val payload = latestTaskLogJson(id)
-            ?: return ok(JSONObject().put("data", JSONObject().put("task_id", id).put("status", 2).put("done", false).put("logs", JSONArray()).put("content", "")))
+            ?: return ok(JSONObject().put("data", JSONObject().put("task_id", id).put("status", 2).put("run_status", "pending").put("done", false).put("logs", JSONArray()).put("content", "")))
         return ok(payload)
     }
 
@@ -2446,6 +2510,7 @@ fun serveDashboardStats(): JSONObject {
             .put("logs", logs)
             .put("status", cursor.int("status"))
             .put("run_status", when (cursor.int("status")) { 1 -> "success"; 2 -> "failed"; 3 -> "running"; 0 -> "pending"; else -> "unknown" })
+            .put("done", cursor.int("status") != 3)
             .put("exit_code", if (cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) JSONObject.NULL else cursor.int("exit_code"))
             .put("duration", cursor.double("duration"))
             .put("started_at", cursor.string("started_at"))
@@ -2455,14 +2520,22 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun taskLogStream(id: Long): NanoHTTPD.Response {
-        val payloadJson = latestTaskLogJson(id)?.optJSONObject("data")
-        val logs = payloadJson?.optJSONArray("logs") ?: JSONArray().put("Task log not found")
+        val running = runningTaskIds.contains(id)
+        val logs = if (running) {
+            val lines = taskRunLogsMemory[id]?.let { current ->
+                synchronized(current) { current.toList() }
+            }.orEmpty()
+            JSONArray(lines)
+        } else {
+            latestTaskLogJson(id)?.optJSONObject("data")?.optJSONArray("logs")
+                ?: JSONArray().put("Task log not found")
+        }
         val payload = StringBuilder()
         for (index in 0 until logs.length()) {
             payload.append("data: ").append(logs.optString(index).replace("\n", "\\n")).append("\n\n")
         }
         payload.append("event: done\n")
-        payload.append("data: finished\n\n")
+        payload.append("data: ").append(if (running) "reconnect" else "finished").append("\n\n")
         return NanoHTTPD.newFixedLengthResponse(
             NanoHTTPD.Response.Status.OK,
             "text/event-stream; charset=utf-8",
@@ -3313,6 +3386,9 @@ fun serveDashboardStats(): JSONObject {
         scriptProcesses.values.forEach { process -> runCatching { process.destroyForcibly() } }
         scriptProcesses.clear()
         scriptRunExecutor.shutdownNow()
+        taskRunExecutor.shutdownNow()
+        taskRunLogsMemory.clear()
+        taskRunStartedAt.clear()
         super.close()
     }
 

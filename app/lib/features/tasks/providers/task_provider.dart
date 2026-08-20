@@ -132,7 +132,9 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   Future<void> runTask(int id) async {
     await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
-    await load(refresh: true);
+    // Do not block navigation to live logs on an additional list refresh.
+    // The run endpoint acknowledges immediately; refresh can happen in background.
+    Future.microtask(() => load(refresh: true));
   }
 
   Future<void> stopTask(int id) async {
