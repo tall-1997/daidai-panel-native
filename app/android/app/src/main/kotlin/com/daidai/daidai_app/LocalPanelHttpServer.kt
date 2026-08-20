@@ -35,18 +35,8 @@ class LocalPanelHttpServer(
             }
         }
 
-        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = when {
-            method == Method.GET && uri in setOf(
-                "/api/v1/health",
-                "/api/local/capabilities",
-                "/api/android/recovery-metadata",
-            ) -> true
-            method == Method.POST && uri in setOf(
-                "/api/auth/init",
-                "/api/system/restore",
-            ) -> true
-            else -> false
-        }
+        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean =
+            uri.startsWith("/api/")
     }
 
     internal data class RequestBoundary(

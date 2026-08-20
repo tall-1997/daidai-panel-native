@@ -19,15 +19,15 @@ class LocalPanelFallbackContractTest {
     }
 
     @Test
-    fun `fallback status exposes diagnostic endpoint without claiming ready`() {
+    fun `full Kotlin fallback exposes a ready local endpoint`() {
         val status = LocalPanelRuntime.fallbackStatus(
             endpoint = "http://127.0.0.1:5700",
             localToken = "process-token",
             reason = "go_core_start:LinkageError",
         )
 
-        assertEquals("degraded", status["phase"])
-        assertEquals("diagnostic", status["fallback_mode"])
+        assertEquals("ready", status["phase"])
+        assertEquals("full", status["fallback_mode"])
         assertEquals("http://127.0.0.1:5700", status["base_url"])
         assertEquals("process-token", status["local_token"])
         assertEquals("go_core_start:LinkageError", status["failure_stage"])
@@ -69,18 +69,19 @@ class LocalPanelFallbackContractTest {
     }
 
     @Test
-    fun `fallback routes allow diagnostics auth and recovery only`() {
+    fun `full Kotlin fallback allows store backed API routes`() {
         assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.GET, "/api/v1/health"))
         assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.GET, "/api/local/capabilities"))
         assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/auth/init"))
         assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/system/restore"))
         assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.GET, "/api/android/recovery-metadata"))
 
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/tasks"))
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/scripts"))
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/envs"))
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/deps"))
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/configs"))
-        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/system/update"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/tasks"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/scripts"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/envs"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/deps"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/configs"))
+        assertTrue(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.POST, "/api/system/update"))
+        assertFalse(LocalPanelHttpServer.isFallbackRouteAllowed(NanoHTTPD.Method.GET, "/not-api"))
     }
 }
