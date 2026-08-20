@@ -2122,7 +2122,11 @@ fun serveDashboardStats(): JSONObject {
         appendScriptRunLog(runId, "Compatibility scan found ${dependencies.size} allowlisted dependencies; unknown imports are not auto-installed")
         for ((type, name) in dependencies) {
             appendScriptRunLog(runId, "Dependency install started: $type/$name")
-            val result = installDependencyForFallback(type, name) { appendScriptRunLog(runId, it) }
+            val result = installDependencyForFallback(
+                type,
+                name,
+                onLine = { line -> appendScriptRunLog(runId, line) },
+            )
             if (result.second.isNotBlank()) appendScriptRunLog(runId, "Dependency install result: ${result.first}")
             if (result.first != "installed") {
                 appendScriptRunLog(runId, "Dependency install failed: $type/$name (${result.first})")
@@ -2602,7 +2606,8 @@ fun serveDashboardStats(): JSONObject {
             put("logs_json", result.logs.toString()); put("status", if (result.status == "success") 0 else 1)
             if (result.exitCode == null) putNull("exit_code") else put("exit_code", result.exitCode)
             put("duration", (endedAt.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0)
-            put("ended_at", endedAt.toString()); put("log_cursor", taskRunCursors[taskId] ?: result.logs.length())
+            put("ended_at", endedAt.toString())
+            put("log_cursor", taskRunCursors[taskId] ?: result.logs.length().toLong())
         }
         writableDatabase.update("task_logs_local", values, "id = ?", arrayOf(logId.toString()))
     }
