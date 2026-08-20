@@ -100,7 +100,7 @@ object LocalPanelRuntime {
         fallbackStatus(server.endpoint, localToken, reason)
 
     internal fun fallbackStatus(endpoint: String, localToken: String, reason: String): Map<String, Any> = mapOf(
-        "phase" to "ready",
+        "phase" to "degraded",
         "base_url" to endpoint,
         "instance_id" to "kotlin-local-fallback",
         "core_version" to "kotlin-local-fallback",

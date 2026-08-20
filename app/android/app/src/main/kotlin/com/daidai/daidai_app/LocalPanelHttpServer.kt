@@ -35,7 +35,18 @@ class LocalPanelHttpServer(
             }
         }
 
-        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = uri.startsWith("/api/")
+        internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean = when {
+            method == Method.GET && uri in setOf(
+                "/api/v1/health",
+                "/api/local/capabilities",
+                "/api/android/recovery-metadata",
+            ) -> true
+            method == Method.POST && uri in setOf(
+                "/api/auth/init",
+                "/api/system/restore",
+            ) -> true
+            else -> false
+        }
     }
 
     internal data class RequestBoundary(
@@ -44,8 +55,12 @@ class LocalPanelHttpServer(
         val localToken: String,
     ) {
         fun rejection(headers: Map<String, String>): Response.Status? {
-            if (singleHeader(headers, "host") != authority) return Response.Status.BAD_REQUEST
-            if (singleHeader(headers, "origin") != origin) return Response.Status.FORBIDDEN
+            val host = singleHeader(headers, "host")
+            val requestOrigin = singleHeader(headers, "origin")
+            val token = singleHeader(headers, "x-daidai-local-token")
+            if (host != authority) return Response.Status.BAD_REQUEST
+            if (requestOrigin != origin) return Response.Status.FORBIDDEN
+            if (localToken.isBlank() || token != localToken) return Response.Status.UNAUTHORIZED
             return null
         }
 
