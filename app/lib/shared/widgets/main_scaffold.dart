@@ -204,12 +204,12 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       child: LiquidGlassScaffold(
         pixelRatio: 0.65,
         realTimeCapture: false,
-        useSync: true,
+        useSync: false,
         safeArea: true,
         body: LiquidGlassView(
           pixelRatio: 0.7,
           realTimeCapture: false,
-          useSync: true,
+          useSync: false,
           backgroundWidget: backgroundWidget,
           child: Material(
             type: MaterialType.transparency,

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../providers/app_lock_provider.dart';
 import 'pattern_pad.dart';
@@ -27,6 +28,7 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
     Future.microtask(() async {
       final controller = ref.read(appLockProvider.notifier);
       await controller.initialize();
+      if (!mounted) return;
       if (ref.read(authProvider).status == AuthStatus.authenticated) {
         controller.lockIfEnabled();
       }
@@ -90,17 +92,17 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
 
 enum _UnlockMethod { biometric, password, pattern }
 
-class _AppLockOverlay extends StatefulWidget {
+class _AppLockOverlay extends ConsumerStatefulWidget {
   const _AppLockOverlay({required this.state, required this.controller});
 
   final AppLockState state;
   final AppLockController controller;
 
   @override
-  State<_AppLockOverlay> createState() => _AppLockOverlayState();
+  ConsumerState<_AppLockOverlay> createState() => _AppLockOverlayState();
 }
 
-class _AppLockOverlayState extends State<_AppLockOverlay> {
+class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
   final TextEditingController _passwordController = TextEditingController();
   List<int> _patternPoints = const [];
   _UnlockMethod? _activeMethod;
@@ -240,122 +242,130 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isFlat = ref.watch(
+      appStyleProvider.select(
+        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+      ),
+    );
     final methods = <_UnlockMethod>[
       if (widget.state.hasBiometric) _UnlockMethod.biometric,
       if (widget.state.hasPassword) _UnlockMethod.password,
       if (widget.state.hasPattern) _UnlockMethod.pattern,
     ];
 
-    return Material(
-      color: Colors.black.withAlpha(140),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: AppCard(
-                borderRadius: 24,
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withAlpha(22),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.lock_outline,
-                        size: 30,
-                        color: AppColors.primary,
-                      ),
+    final content = SafeArea(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: AppCard(
+              borderRadius: 24,
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withAlpha(22),
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      '应用已锁定',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    child: const Icon(
+                      Icons.lock_outline,
+                      size: 30,
+                      color: AppColors.primary,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '请完成二次验证后继续使用当前服务器与任务。',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        height: 1.45,
-                      ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '应用已锁定',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
                     ),
-                    if (methods.length > 1) ...[
-                      const SizedBox(height: 18),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: methods.map((method) {
-                          final selected = _activeMethod == method;
-                           return AppLiquidGlassChoiceChip(
-                             label: _methodLabel(method, widget.state),
-                            selected: selected,
-                            onSelected: (_) {
-                              setState(() {
-                                _activeMethod = method;
-                                _error = null;
-                                _patternPoints = const [];
-                              });
-                              if (method == _UnlockMethod.biometric) {
-                                _tryAutoBiometric();
-                              }
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    if (_activeMethod == _UnlockMethod.password)
-                      _buildPasswordView(context)
-                    else if (_activeMethod == _UnlockMethod.pattern)
-                      _buildPatternView(context)
-                    else
-                      _buildBiometricView(context),
-                    if (_error != null) ...[
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.red500.withAlpha(14),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: AppColors.red500.withAlpha(36),
-                          ),
-                        ),
-                        child: Text(
-                          _error!,
-                          style: const TextStyle(
-                            color: AppColors.red500,
-                            fontSize: 13,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '请完成二次验证后继续使用当前服务器与任务。',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.45,
+                    ),
+                  ),
+                  if (methods.length > 1) ...[
+                    const SizedBox(height: 18),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: methods.map((method) {
+                        final selected = _activeMethod == method;
+                        return AppLiquidGlassChoiceChip(
+                          label: _methodLabel(method, widget.state),
+                          selected: selected,
+                          onSelected: (_) {
+                            setState(() {
+                              _activeMethod = method;
+                              _error = null;
+                              _patternPoints = const [];
+                            });
+                            if (method == _UnlockMethod.biometric) {
+                              _tryAutoBiometric();
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
                   ],
-                ),
-                ),
+                  const SizedBox(height: 20),
+                  if (_activeMethod == _UnlockMethod.password)
+                    _buildPasswordView(context)
+                  else if (_activeMethod == _UnlockMethod.pattern)
+                    _buildPatternView(context)
+                  else
+                    _buildBiometricView(context),
+                  if (_error != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.red500.withAlpha(14),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.red500.withAlpha(36),
+                        ),
+                      ),
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(
+                          color: AppColors.red500,
+                          fontSize: 13,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
         ),
       ),
+    );
+    return Material(
+      color: isFlat ? Colors.black : Colors.black.withAlpha(140),
+      child: isFlat
+          ? content
+          : BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: content,
+            ),
     );
   }
 

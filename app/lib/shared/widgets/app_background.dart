@@ -21,36 +21,64 @@ class AppBackground extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final blur = settings.blurIntensity.clamp(0.0, 50.0);
+    final isFlat = settings.visualStyle == AppVisualStyle.pureFlat;
     final baseColor = Theme.of(context).scaffoldBackgroundColor;
+    final mediaQuery = MediaQuery.of(context);
+    final cacheWidth =
+        (mediaQuery.size.width * mediaQuery.devicePixelRatio).round();
+    final cacheHeight =
+        (mediaQuery.size.height * mediaQuery.devicePixelRatio).round();
+    final image = hasBg
+        ? Image(
+            image: ResizeImage(
+              FileImage(File(settings.backgroundImagePath!)),
+              width: cacheWidth,
+              height: cacheHeight,
+              policy: ResizeImagePolicy.fit,
+            ),
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => ColoredBox(color: baseColor),
+          )
+        : null;
     final Widget background = hasBg
         ? Stack(
             fit: StackFit.expand,
             children: [
               ColoredBox(color: baseColor),
-              Image.file(
-                File(settings.backgroundImagePath!),
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => ColoredBox(
-                  color: Theme.of(context).scaffoldBackgroundColor,
+              if (isFlat || blur == 0)
+                image!
+              else
+                ImageFiltered(
+                  imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+                  child: image!,
                 ),
-              ),
-              if (blur > 0)
-                BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-                  child: ColoredBox(
-                    color: isDark
-                        ? AppColors.darkPage.withAlpha(72)
-                        : Colors.white.withAlpha(28),
-                  ),
+              if (!isFlat && blur > 0)
+                ColoredBox(
+                  color: isDark
+                      ? AppColors.darkPage.withAlpha(72)
+                      : Colors.white.withAlpha(28),
                 ),
             ],
           )
         : ColoredBox(color: baseColor);
 
+    if (isFlat) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          background,
+          Material(
+            type: MaterialType.transparency,
+            child: SizedBox.expand(child: child),
+          ),
+        ],
+      );
+    }
+
     return LiquidGlassView(
       pixelRatio: 0.7,
       realTimeCapture: false,
-      useSync: true,
+      useSync: false,
       backgroundWidget: background,
       child: Material(
         type: MaterialType.transparency,

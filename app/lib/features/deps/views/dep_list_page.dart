@@ -1,14 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/network/sse_client.dart';
+import '../../../core/network/sse_protocol.dart';
+import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/dependency.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
+import '../../../shared/utils/bounded_log_buffer.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -31,6 +37,7 @@ class DepListState {
   final String pythonDefaultVersion;
   final List<PythonRuntimeInfo> pythonRuntimes;
   final bool runtimeLoading;
+  final bool runtimeSupported;
   final String? error;
 
   const DepListState({
@@ -42,6 +49,7 @@ class DepListState {
     this.pythonDefaultVersion = '3.12',
     this.pythonRuntimes = const [],
     this.runtimeLoading = false,
+    this.runtimeSupported = true,
     this.error,
   });
 
@@ -54,6 +62,7 @@ class DepListState {
     String? pythonDefaultVersion,
     List<PythonRuntimeInfo>? pythonRuntimes,
     bool? runtimeLoading,
+    bool? runtimeSupported,
     String? error,
     bool clearError = false,
   }) {
@@ -67,6 +76,7 @@ class DepListState {
       pythonDefaultVersion: pythonDefaultVersion ?? this.pythonDefaultVersion,
       pythonRuntimes: pythonRuntimes ?? this.pythonRuntimes,
       runtimeLoading: runtimeLoading ?? this.runtimeLoading,
+      runtimeSupported: runtimeSupported ?? this.runtimeSupported,
       error: clearError ? null : error ?? this.error,
     );
   }
@@ -136,8 +146,10 @@ class DepMirrorConfig {
 }
 
 class DepListNotifier extends StateNotifier<DepListState> {
+  String? _scope;
   DepListNotifier() : super(const DepListState());
   int _loadRequestId = 0;
+  int _runtimeRequestId = 0;
   int _page = 1;
 
   Future<({List<Dependency> items, int total})> fetchByType(
@@ -170,6 +182,9 @@ class DepListNotifier extends StateNotifier<DepListState> {
     String? pythonVersion,
     bool refresh = true,
   }) async {
+    final capabilityScope = PanelCapabilityRegistry.currentScope;
+    final sessionScope = AuthSessionEpoch.scoped(capabilityScope);
+    _ensureScope(sessionScope);
     final requestId = ++_loadRequestId;
     if (refresh) _page = 1;
     final nextType = type ?? state.selectedType;
@@ -186,14 +201,22 @@ class DepListNotifier extends StateNotifier<DepListState> {
         pythonVersion: nextType == 'python' ? nextPythonVersion : null,
         page: _page,
       );
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope !=
+              AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
       state = state.copyWith(
         items: refresh ? result.items : [...state.items, ...result.items],
         total: result.total,
         loading: false,
       );
     } catch (error) {
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope !=
+              AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
       if (!refresh && _page > 1) _page--;
       state = state.copyWith(
         loading: false,
@@ -217,12 +240,32 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> loadPythonRuntimes() async {
+    final capabilityScope = PanelCapabilityRegistry.currentScope;
+    final sessionScope = AuthSessionEpoch.scoped(capabilityScope);
+    _ensureScope(sessionScope);
+    final requestId = ++_runtimeRequestId;
+    if (PanelCapabilityRegistry.isUnsupported(
+      PanelCapability.pythonRuntimes,
+      scope: capabilityScope,
+    )) {
+      state = state.copyWith(runtimeLoading: false, runtimeSupported: false);
+      return;
+    }
     state = state.copyWith(runtimeLoading: true);
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.depsPythonRuntimes,
       );
       final raw = resp.data;
+      if (requestId != _runtimeRequestId ||
+          sessionScope !=
+              AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
+      PanelCapabilityRegistry.recordSupported(
+        PanelCapability.pythonRuntimes,
+        scope: capabilityScope,
+      );
       final map = raw is Map<String, dynamic>
           ? raw
           : raw is Map
@@ -254,10 +297,34 @@ class DepListNotifier extends StateNotifier<DepListState> {
             ? state.selectedPythonVersion
             : defaultVersion,
         runtimeLoading: false,
+        runtimeSupported: true,
       );
-    } catch (_) {
-      state = state.copyWith(runtimeLoading: false);
+    } catch (error) {
+      if (requestId != _runtimeRequestId ||
+          sessionScope !=
+              AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
+      final capabilityState = PanelCapabilityRegistry.recordFailure(
+        PanelCapability.pythonRuntimes,
+        error,
+        scope: capabilityScope,
+      );
+      state = state.copyWith(
+        runtimeLoading: false,
+        runtimeSupported:
+            capabilityState != PanelCapabilityState.unsupported,
+      );
     }
+  }
+
+  void _ensureScope(String scope) {
+    if (_scope == scope) return;
+    _scope = scope;
+    _loadRequestId++;
+    _runtimeRequestId++;
+    _page = 1;
+    state = const DepListState();
   }
 
   Future<void> setDefaultPythonRuntime(String version) async {
@@ -373,34 +440,62 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   }
 
   Future<void> _loadPageData() async {
-    await ref.read(depListProvider.notifier).loadPythonRuntimes();
+    final selectedType = ref.read(depListProvider).selectedType;
+    final initialPythonVersion = ref
+        .read(depListProvider)
+        .selectedPythonVersion;
     await Future.wait([
+      ref.read(depListProvider.notifier).loadPythonRuntimes(),
       ref.read(depListProvider.notifier).load(),
-      _loadCounts(),
+      _loadCounts(skipType: selectedType),
     ]);
+    if (mounted) {
+      final state = ref.read(depListProvider);
+      if (state.selectedPythonVersion != initialPythonVersion) {
+        if (selectedType == 'python') {
+          await ref.read(depListProvider.notifier).load();
+        } else {
+          final python = await ref
+              .read(depListProvider.notifier)
+              .fetchByType(
+                'python',
+                pythonVersion: state.selectedPythonVersion,
+              );
+          if (mounted) _counts = {..._counts, 'python': python.total};
+        }
+      }
+      if (!mounted) return;
+      final latestState = ref.read(depListProvider);
+      setState(() {
+        _counts = {..._counts, selectedType: latestState.total};
+      });
+    }
     _trimSelection();
   }
 
-  Future<void> _loadCounts() async {
+  Future<void> _loadCounts({String? skipType}) async {
     final notifier = ref.read(depListProvider.notifier);
     final state = ref.read(depListProvider);
     try {
-      final results = await Future.wait([
-        notifier.fetchByType('nodejs'),
-        notifier.fetchByType(
-          'python',
-          pythonVersion: state.selectedPythonVersion,
+      final types = ['nodejs', 'python', 'linux']
+          .where((type) => type != skipType)
+          .toList();
+      final results = await Future.wait(
+        types.map(
+          (type) => notifier.fetchByType(
+            type,
+            pythonVersion: type == 'python' ? state.selectedPythonVersion : null,
+          ),
         ),
-        notifier.fetchByType('linux'),
-      ]);
+      );
       if (!mounted) {
         return;
       }
       setState(() {
         _counts = {
-          'nodejs': results[0].total,
-          'python': results[1].total,
-          'linux': results[2].total,
+          ..._counts,
+          for (var index = 0; index < types.length; index++)
+            types[index]: results[index].total,
         };
         _countLoading = false;
       });
@@ -1210,7 +1305,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               ),
             ),
             const SizedBox(height: 10),
-            if (state.selectedType == 'python') ...[
+            if (state.selectedType == 'python' && state.runtimeSupported) ...[
               _buildPythonRuntimePanel(state, isLight),
               const SizedBox(height: 10),
             ],
@@ -1615,8 +1710,68 @@ class DepLogStreamPage extends ConsumerStatefulWidget {
 class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
   final _sseClient = SseClient();
   final _scrollController = ScrollController();
+  final _pendingLogEvents = <({String? event, String data})>[];
+  int _pendingLogCharacters = 0;
+  Timer? _logFlushTimer;
   DependencyLogState _logState = const DependencyLogState();
   Color? _logBackgroundColor;
+
+  void _queueLogEvent(String? event, String data) {
+    final boundedData = <String>[];
+    appendBoundedLogEntries(boundedData, [data]);
+    final safeData = boundedData.join('\n');
+    if (_pendingLogEvents.length >= defaultMaxLogLines ||
+        _pendingLogCharacters + safeData.length > defaultMaxLogCharacters) {
+      _flushPendingLogEvents();
+    }
+    _pendingLogEvents.add((event: event, data: safeData));
+    _pendingLogCharacters += safeData.length;
+    if (isTerminalSseEvent(event, data)) {
+      _flushPendingLogEvents();
+      return;
+    }
+    _logFlushTimer ??= Timer(
+      const Duration(milliseconds: 32),
+      _flushPendingLogEvents,
+    );
+  }
+
+  void _flushPendingLogEvents() {
+    _logFlushTimer?.cancel();
+    _logFlushTimer = null;
+    if (!mounted || _pendingLogEvents.isEmpty) return;
+
+    final events = List.of(_pendingLogEvents);
+    _pendingLogEvents.clear();
+    _pendingLogCharacters = 0;
+    setState(() {
+      for (final event in events) {
+        final reconnect = isReconnectSseEvent(event.event, event.data);
+        final terminal = isTerminalSseEvent(event.event, event.data);
+        _logState = _logState.add(event.data).transition(
+          DependencyLogPhase.streaming,
+        );
+        if (terminal) {
+          _logState = _logState.transition(
+            dependencyLogDonePhase(event.data),
+            message: event.data,
+          );
+        } else if (reconnect) {
+          _logState = _logState.transition(
+            DependencyLogPhase.reconnecting,
+            message: '连接已中断，正在恢复日志',
+          );
+        }
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scrollController.hasClients) {
+        _scrollController.jumpTo(
+          _scrollController.position.maxScrollExtent,
+        );
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -1632,31 +1787,10 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
-        setState(() {
-          _logState = _logState.add(event.data).transition(
-            DependencyLogPhase.streaming,
-          );
-          if (event.event == 'done' && event.data != 'reconnect') {
-            _logState = _logState.transition(
-              dependencyLogDonePhase(event.data),
-              message: event.data,
-            );
-          } else if (event.event == 'done' && event.data == 'reconnect') {
-            _logState = _logState.transition(
-              DependencyLogPhase.reconnecting,
-              message: '连接已中断，正在恢复日志',
-            );
-          }
-        });
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
-            );
-          }
-        });
+        _queueLogEvent(event.event, event.data);
       },
       onDone: () {
+        _flushPendingLogEvents();
         if (mounted && !_logState.terminal) {
           setState(() {
             _logState = _logState.transition(
@@ -1667,6 +1801,7 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         }
       },
       onReconnecting: () {
+        _flushPendingLogEvents();
         if (mounted && !_logState.terminal) {
           setState(() {
             _logState = _logState.transition(
@@ -1677,6 +1812,7 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         }
       },
       onError: (error) {
+        _flushPendingLogEvents();
         if (mounted) {
           setState(() {
             _logState = _logState.transition(
@@ -1691,6 +1827,9 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
 
   @override
   void dispose() {
+    _logFlushTimer?.cancel();
+    _pendingLogEvents.clear();
+    _pendingLogCharacters = 0;
     _sseClient.close();
     _scrollController.dispose();
     super.dispose();

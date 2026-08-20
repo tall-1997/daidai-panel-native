@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'theme_provider.dart';
+
 /// 设计系统色板 — 基于 Emerald + Slate
 class AppColors {
   // Primary
@@ -66,14 +68,18 @@ class AppColors {
 }
 
 class AppTheme {
-  static ThemeData light() {
+  static ThemeData light({
+    AppVisualStyle visualStyle = AppVisualStyle.pureFlat,
+  }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
       brightness: Brightness.light,
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: AppColors.lightSurface,
+      surface: visualStyle == AppVisualStyle.pureFlat
+          ? Colors.white
+          : AppColors.lightSurface,
       onSurface: AppColors.slate900,
       onSurfaceVariant: AppColors.slate500,
       outline: AppColors.glassCardBorder,
@@ -81,17 +87,21 @@ class AppTheme {
       error: AppColors.red500,
       surfaceContainerHighest: AppColors.slate100,
     );
-    return _buildTheme(colorScheme);
+    return _buildTheme(colorScheme, visualStyle);
   }
 
-  static ThemeData dark() {
+  static ThemeData dark({
+    AppVisualStyle visualStyle = AppVisualStyle.pureFlat,
+  }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
       brightness: Brightness.dark,
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: AppColors.darkSurface,
+      surface: visualStyle == AppVisualStyle.pureFlat
+          ? AppColors.slate900
+          : AppColors.darkSurface,
       onSurface: AppColors.slate50,
       onSurfaceVariant: AppColors.slate400,
       outline: AppColors.slate800,
@@ -99,33 +109,49 @@ class AppTheme {
       error: AppColors.red500,
       surfaceContainerHighest: AppColors.slate900,
     );
-    return _buildTheme(colorScheme);
+    return _buildTheme(colorScheme, visualStyle);
   }
 
-  static ThemeData _buildTheme(ColorScheme cs) {
+  static ThemeData _buildTheme(ColorScheme cs, AppVisualStyle visualStyle) {
     final isLight = cs.brightness == Brightness.light;
-    final cardColor = isLight ? AppColors.lightSurface : AppColors.darkSurface;
-    final borderColor = isLight ? const Color(0x70FFFFFF) : AppColors.darkBorder;
+    final isFlat = visualStyle == AppVisualStyle.pureFlat;
+    final cardColor = isFlat
+        ? (isLight ? Colors.white : AppColors.slate900)
+        : (isLight ? AppColors.lightSurface : AppColors.darkSurface);
+    final borderColor = isFlat
+        ? (isLight ? AppColors.slate200 : AppColors.slate700)
+        : (isLight ? const Color(0x70FFFFFF) : AppColors.darkBorder);
     final scaffoldBg = isLight ? AppColors.lightPage : AppColors.darkPage;
-    final controlColor = isLight
-        ? AppColors.lightControl
-        : AppColors.darkControl;
-    final pressedControlColor = isLight
-        ? AppColors.lightControlPressed
-        : AppColors.darkControlPressed;
-    final overlayGlassColor = isLight
-        ? Colors.white.withAlpha(188)
-        : AppColors.slate900.withAlpha(196);
-    final modalSurfaceColor = isLight
-        ? Colors.white.withAlpha(236)
-        : AppColors.slate900.withAlpha(236);
+    final controlColor = isFlat
+        ? (isLight ? AppColors.slate100 : AppColors.slate800)
+        : (isLight ? AppColors.lightControl : AppColors.darkControl);
+    final pressedControlColor = isFlat
+        ? (isLight ? AppColors.slate200 : AppColors.slate700)
+        : (isLight
+              ? AppColors.lightControlPressed
+              : AppColors.darkControlPressed);
+    final overlayGlassColor = isFlat
+        ? cardColor
+        : (isLight
+              ? Colors.white.withAlpha(188)
+              : AppColors.slate900.withAlpha(196));
+    final modalSurfaceColor = isFlat
+        ? cardColor
+        : (isLight
+              ? Colors.white.withAlpha(236)
+              : AppColors.slate900.withAlpha(236));
     final modalBarrierColor = isLight
         ? AppColors.slate950.withAlpha(64)
         : Colors.black.withAlpha(96);
 
     Color resolveControlColor(Set<WidgetState> states) {
       if (states.contains(WidgetState.disabled)) {
-        return controlColor.withAlpha(isLight ? 120 : 105);
+        return isFlat
+            ? Color.alphaBlend(
+                controlColor.withAlpha(isLight ? 120 : 105),
+                cardColor,
+              )
+            : controlColor.withAlpha(isLight ? 120 : 105);
       }
       if (states.contains(WidgetState.pressed) ||
           states.contains(WidgetState.hovered) ||
@@ -155,7 +181,9 @@ class AppTheme {
         centerTitle: false,
         elevation: 0,
         scrolledUnderElevation: 0,
-        backgroundColor: scaffoldBg.withAlpha(isLight ? 224 : 230),
+        backgroundColor: isFlat
+            ? scaffoldBg
+            : scaffoldBg.withAlpha(isLight ? 224 : 230),
         foregroundColor: cs.onSurface,
         titleTextStyle: TextStyle(
           color: cs.onSurface,
@@ -248,7 +276,12 @@ class AppTheme {
                 states.contains(WidgetState.hovered)) {
               return pressedControlColor;
             }
-            return controlColor.withAlpha(isLight ? 120 : 105);
+            return isFlat
+                ? Color.alphaBlend(
+                    controlColor.withAlpha(isLight ? 120 : 105),
+                    cardColor,
+                  )
+                : controlColor.withAlpha(isLight ? 120 : 105);
           }),
           foregroundColor: WidgetStatePropertyAll(cs.primary),
           overlayColor: WidgetStatePropertyAll(
@@ -297,10 +330,15 @@ class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         elevation: 0,
         height: 60,
-        backgroundColor: Colors.transparent,
+        backgroundColor: isFlat ? cardColor : Colors.transparent,
         surfaceTintColor: Colors.transparent,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        indicatorColor: Colors.transparent,
+        indicatorColor: isFlat
+            ? Color.alphaBlend(
+                AppColors.primary.withAlpha(isLight ? 28 : 42),
+                cardColor,
+              )
+            : Colors.transparent,
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
             return const IconThemeData(color: AppColors.primary, size: 22);
@@ -395,9 +433,11 @@ class AppTheme {
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: isLight
-            ? AppColors.lightControlPressed
-            : AppColors.darkControlPressed,
+        backgroundColor: isFlat
+            ? cardColor
+            : (isLight
+                  ? AppColors.lightControlPressed
+                  : AppColors.darkControlPressed),
         contentTextStyle: TextStyle(
           color: cs.onSurface,
           fontSize: 14,

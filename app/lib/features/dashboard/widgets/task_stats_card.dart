@@ -10,6 +10,7 @@ class TaskStatsCard extends ConsumerWidget {
   final int disabled;
   final int todaySuccess;
   final int todayFailed;
+  final int todayAborted;
   final VoidCallback? onTap;
 
   const TaskStatsCard({
@@ -20,6 +21,7 @@ class TaskStatsCard extends ConsumerWidget {
     required this.disabled,
     required this.todaySuccess,
     required this.todayFailed,
+    required this.todayAborted,
     this.onTap,
   });
 
@@ -78,6 +80,12 @@ class TaskStatsCard extends ConsumerWidget {
               label: '今日失败',
               value: '$todayFailed',
               color: AppColors.red500,
+              isLight: isLight,
+            ),
+            _StatItem(
+              label: '今日终止',
+              value: '$todayAborted',
+              color: AppColors.amber500,
               isLight: isLight,
             ),
           ],

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 
@@ -38,6 +39,7 @@ class _InstalledPackagesPageState extends State<InstalledPackagesPage> {
       ]);
       final pip = extractData(responses[0].data);
       final npm = extractData(responses[1].data);
+      PanelCapabilityRegistry.recordSupported(PanelCapability.installedPackages);
       if (!mounted) return;
       setState(() {
         _pip = pip is List
@@ -52,6 +54,7 @@ class _InstalledPackagesPageState extends State<InstalledPackagesPage> {
         _loading = false;
       });
     } catch (error) {
+      PanelCapabilityRegistry.recordFailure(PanelCapability.installedPackages, error);
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -84,6 +87,7 @@ class _InstalledPackagesPageState extends State<InstalledPackagesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final npmEntries = _npm.entries.toList(growable: false);
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(title: const Text('系统依赖清单')),
@@ -104,25 +108,73 @@ class _InstalledPackagesPageState extends State<InstalledPackagesPage> {
                 ),
               ),
             )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                Wrap(spacing: 8, children: [AppLiquidGlassButton(label: '导出 Python', onPressed: () => _export('python'), height: 42), AppLiquidGlassButton(label: '导出 Node', onPressed: () => _export('nodejs'), height: 42), AppLiquidGlassButton(label: '顺序重装', onPressed: _batchReinstall, height: 42)]),
-                if (_exported.isNotEmpty) AppCard(child: SelectableText(_exported, style: const TextStyle(fontFamily: 'monospace'))),
-                const Text('Python', style: TextStyle(fontWeight: FontWeight.bold)),
-                ..._pip.map((item) => AppCard(
-                      margin: const EdgeInsets.only(bottom: 6),
-                      child: Text('${item['name']} ${item['version']}'),
-                    )),
-                const Text('Node.js', style: TextStyle(fontWeight: FontWeight.bold)),
-                ..._npm.entries.map((entry) {
-                  final value = entry.value;
-                  final version = value is Map ? value['version'] : '';
-                  return AppCard(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    child: Text('${entry.key} $version'),
-                  );
-                }),
+          : CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        AppLiquidGlassButton(label: '导出 Python', onPressed: () => _export('python'), height: 42),
+                        AppLiquidGlassButton(label: '导出 Node', onPressed: () => _export('nodejs'), height: 42),
+                        AppLiquidGlassButton(label: '顺序重装', onPressed: _batchReinstall, height: 42),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_exported.isNotEmpty)
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverToBoxAdapter(
+                      child: AppCard(
+                        stableForScrolling: true,
+                        child: SelectableText(_exported, style: const TextStyle(fontFamily: 'monospace')),
+                      ),
+                    ),
+                  ),
+                const SliverPadding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverToBoxAdapter(
+                    child: Text('Python', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverList.builder(
+                    itemCount: _pip.length,
+                    itemBuilder: (context, index) {
+                      final item = _pip[index];
+                      return AppCard(
+                        stableForScrolling: true,
+                        margin: const EdgeInsets.only(bottom: 6),
+                        child: Text('${item['name']} ${item['version']}'),
+                      );
+                    },
+                  ),
+                ),
+                const SliverPadding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverToBoxAdapter(
+                    child: Text('Node.js', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  sliver: SliverList.builder(
+                    itemCount: npmEntries.length,
+                    itemBuilder: (context, index) {
+                      final entry = npmEntries[index];
+                      final value = entry.value;
+                      final version = value is Map ? value['version'] : '';
+                      return AppCard(
+                        stableForScrolling: true,
+                        margin: const EdgeInsets.only(bottom: 6),
+                        child: Text('${entry.key} $version'),
+                      );
+                    },
+                  ),
+                ),
               ],
             ),
     );

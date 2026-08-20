@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../providers/app_lock_provider.dart';
@@ -343,11 +342,10 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                       ],
                                     ),
                                   ),
-                                  LiquidGlassToggle(
+                                  AppLiquidGlassToggle(
                                     value: lockState.isEnabled,
                                     onChanged: _toggleEnabled,
                                     activeColor: AppColors.primary,
-                                    pixelRatio: 0.8,
                                   ),
                                 ],
                               ),
@@ -448,12 +446,11 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                             opacity: lockState.biometricAvailable ? 1 : 0.45,
                             child: IgnorePointer(
                               ignoring: !lockState.biometricAvailable,
-                              child: LiquidGlassToggle(
+                              child: AppLiquidGlassToggle(
                                 value: lockState.config.biometricEnabled &&
                                     lockState.biometricAvailable,
                                 onChanged: _toggleBiometric,
                                 activeColor: AppColors.primary,
-                                pixelRatio: 0.8,
                               ),
                             ),
                           ),

@@ -1,3 +1,5 @@
+import '../../../shared/utils/bounded_log_buffer.dart';
+
 enum DependencyLogPhase {
   connecting,
   streaming,
@@ -9,7 +11,7 @@ enum DependencyLogPhase {
 }
 
 class DependencyLogState {
-  static const maxEntries = 1000;
+  static const maxEntries = defaultMaxLogLines;
 
   final List<String> entries;
   final DependencyLogPhase phase;
@@ -30,10 +32,8 @@ class DependencyLogState {
   };
 
   DependencyLogState add(String entry) {
-    final next = [...entries, entry];
-    if (next.length > maxEntries) {
-      next.removeRange(0, next.length - maxEntries);
-    }
+    final next = [...entries];
+    appendBoundedLogEntries(next, [entry]);
     return DependencyLogState(entries: next, phase: phase, message: message);
   }
 

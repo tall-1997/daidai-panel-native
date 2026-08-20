@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../auth/auth_token_snapshot.dart';
+import '../auth/auth_session_epoch.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../shared/models/user.dart';
 
@@ -96,22 +98,33 @@ class SecureStorage {
   static const _userKey = 'auth_user';
   static const _appLockConfigKey = 'app_lock_config';
   static const _prefsNamespaceKey = 'ui_state';
+  static Future<void> _authMutationQueue = Future.value();
 
   // Token
   static Future<void> saveTokens({
     required String accessToken,
     required String refreshToken,
-  }) async {
-    final previousAccessToken = await getAccessToken();
-    final previousRefreshToken = await getRefreshToken();
-    try {
-      await _storage.write(key: _accessTokenKey, value: accessToken);
-      await _storage.write(key: _refreshTokenKey, value: refreshToken);
-    } catch (error, stackTrace) {
-      await _restoreValue(_accessTokenKey, previousAccessToken);
-      await _restoreValue(_refreshTokenKey, previousRefreshToken);
-      Error.throwWithStackTrace(error, stackTrace);
-    }
+    int? authEpoch,
+  }) {
+    final epoch = authEpoch ?? AuthSessionEpoch.current;
+    return _queueAuthMutation(epoch, () async {
+      _ensureAuthEpoch(epoch);
+      final previousAccessToken = await getAccessToken();
+      _ensureAuthEpoch(epoch);
+      final previousRefreshToken = await getRefreshToken();
+      _ensureAuthEpoch(epoch);
+      try {
+        await _storage.write(key: _accessTokenKey, value: accessToken);
+        await _storage.write(key: _refreshTokenKey, value: refreshToken);
+        if (AuthSessionEpoch.isCurrent(epoch)) {
+          AuthTokenSnapshot.setAccessToken(accessToken);
+        }
+      } catch (error, stackTrace) {
+        await _restoreValue(_accessTokenKey, previousAccessToken);
+        await _restoreValue(_refreshTokenKey, previousRefreshToken);
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    });
   }
 
   static Future<String?> getAccessToken() =>
@@ -120,24 +133,32 @@ class SecureStorage {
   static Future<String?> getRefreshToken() =>
       _storage.read(key: _refreshTokenKey);
 
-  static Future<void> saveAccessToken(String token) =>
-      _storage.write(key: _accessTokenKey, value: token);
+  static Future<void> saveAccessToken(String token) async {
+    await _storage.write(key: _accessTokenKey, value: token);
+    AuthTokenSnapshot.setAccessToken(token);
+  }
 
   static Future<void> clearTokens() async {
     await _storage.delete(key: _accessTokenKey);
     await _storage.delete(key: _refreshTokenKey);
+    AuthTokenSnapshot.clear();
   }
 
   static Future<void> saveTrustedLoginSession({
     required String serverUrl,
     required DateTime expiresAt,
-  }) async {
-    // 保存当前面板的本地可信登录有效期，7 天内启动不再重复走登录接口。
-    await _storage.write(
-      key: _trustedLoginUntilKey,
-      value: expiresAt.toUtc().toIso8601String(),
-    );
-    await _storage.write(key: _trustedLoginServerUrlKey, value: serverUrl);
+    int? authEpoch,
+  }) {
+    final epoch = authEpoch ?? AuthSessionEpoch.current;
+    return _queueAuthMutation(epoch, () async {
+      // 保存当前面板的本地可信登录有效期，7 天内启动不再重复走登录接口。
+      _ensureAuthEpoch(epoch);
+      await _storage.write(
+        key: _trustedLoginUntilKey,
+        value: expiresAt.toUtc().toIso8601String(),
+      );
+      await _storage.write(key: _trustedLoginServerUrlKey, value: serverUrl);
+    });
   }
 
   static Future<DateTime?> getTrustedLoginUntil() async {
@@ -175,8 +196,13 @@ class SecureStorage {
     await _storage.delete(key: _trustedLoginServerUrlKey);
   }
 
-  static Future<void> saveUser(User user) =>
-      _storage.write(key: _userKey, value: jsonEncode(user.toJson()));
+  static Future<void> saveUser(User user, {int? authEpoch}) {
+    final epoch = authEpoch ?? AuthSessionEpoch.current;
+    return _queueAuthMutation(epoch, () async {
+      _ensureAuthEpoch(epoch);
+      await _storage.write(key: _userKey, value: jsonEncode(user.toJson()));
+    });
+  }
 
   static Future<User?> getUser() async {
     final raw = await _storage.read(key: _userKey);
@@ -199,25 +225,37 @@ class SecureStorage {
 
   static Future<void> clearUser() => _storage.delete(key: _userKey);
 
-  static Future<void> clearAuthSession() async {
-    final previousValues = <String, String?>{
-      _accessTokenKey: await getAccessToken(),
-      _refreshTokenKey: await getRefreshToken(),
-      _userKey: await _storage.read(key: _userKey),
-      _trustedLoginUntilKey: await _storage.read(key: _trustedLoginUntilKey),
-      _trustedLoginServerUrlKey: await _storage.read(
-        key: _trustedLoginServerUrlKey,
-      ),
-    };
-    try {
-      await clearTokens();
-      await clearUser();
-      await clearTrustedLoginSession();
-    } catch (error, stackTrace) {
-      for (final entry in previousValues.entries) {
-        await _restoreValue(entry.key, entry.value);
+  static Future<void> clearAuthSession({int? authEpoch}) {
+    final epoch = authEpoch ?? AuthSessionEpoch.current;
+    return _queueAuthMutation(epoch, () async {
+      _ensureAuthEpoch(epoch);
+      await _storage.delete(key: _accessTokenKey);
+      await _storage.delete(key: _refreshTokenKey);
+      await _storage.delete(key: _userKey);
+      await _storage.delete(key: _trustedLoginUntilKey);
+      await _storage.delete(key: _trustedLoginServerUrlKey);
+      if (AuthSessionEpoch.isCurrent(epoch)) {
+        AuthTokenSnapshot.clear();
       }
-      Error.throwWithStackTrace(error, stackTrace);
+    });
+  }
+
+  static Future<void> _queueAuthMutation(
+    int epoch,
+    Future<void> Function() operation,
+  ) {
+    final result = _authMutationQueue.then((_) async {
+      if (AuthSessionEpoch.isCurrent(epoch)) {
+        await operation();
+      }
+    });
+    _authMutationQueue = result.catchError((_) {});
+    return result;
+  }
+
+  static void _ensureAuthEpoch(int epoch) {
+    if (!AuthSessionEpoch.isCurrent(epoch)) {
+      throw StateError('Auth session changed during storage mutation');
     }
   }
 

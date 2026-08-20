@@ -167,6 +167,20 @@ class LocalNotificationService {
     await _plugin.show(id, title, body, details, payload: payload);
   }
 
+  Future<bool> showUpdateNotification({
+    required String version,
+    String releaseNotes = '',
+  }) async {
+    if (!await getChannelEnabled(NotificationChannel.system)) return false;
+    await showSystemNotification(
+      id: updateNotificationId(version),
+      title: '发现新版本 $version',
+      body: updateNotificationBody(releaseNotes),
+      payload: updateNotificationPayload(version),
+    );
+    return true;
+  }
+
   Future<void> showTestNotification(NotificationChannel channel) async {
     final details = _channelDetails(channel);
     await _plugin.show(
@@ -238,10 +252,33 @@ String taskNotificationPayload(int taskId) =>
 String logNotificationPayload(int logId) =>
     jsonEncode({'type': 'log', 'id': logId});
 
+String updateNotificationPayload(String version) =>
+    jsonEncode({'type': 'app_update', 'version': version});
+
+int updateNotificationId(String version) {
+  var hash = 17;
+  for (final codeUnit in version.codeUnits) {
+    hash = (hash * 31 + codeUnit) & 0x3fffffff;
+  }
+  return 1000000000 + hash;
+}
+
+String updateNotificationBody(String releaseNotes) {
+  final normalized = releaseNotes.trim().replaceAll(RegExp(r'\s+'), ' ');
+  if (normalized.isEmpty) return '点击查看并更新应用';
+  return normalized.length <= 120
+      ? normalized
+      : '${normalized.substring(0, 117)}...';
+}
+
 String? notificationPayloadRoute(String payload) {
   try {
     final data = jsonDecode(payload);
     if (data is! Map) return null;
+    if (data['type'] == 'app_update' &&
+        data['version']?.toString().trim().isNotEmpty == true) {
+      return '/more';
+    }
     final id = data['id'];
     if (id is! num || id.toInt() <= 0) return null;
     return switch (data['type']) {

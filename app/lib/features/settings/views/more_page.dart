@@ -567,7 +567,7 @@ class _MorePageState extends ConsumerState<MorePage> {
                       const SizedBox(height: 10),
                       _RepoInfoRow(
                         label: '当前仓库',
-                        url: 'github.com/tall-1997/daidai-flutter',
+                        url: 'github.com/tall-1997/daidai-panel-native',
                         isLight: isLight,
                         icon: Icons.folder_outlined,
                       ),

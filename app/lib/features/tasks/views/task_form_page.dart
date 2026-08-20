@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/models/cron_template.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -60,42 +61,6 @@ class _TaskNotificationChannel {
   }
 }
 
-class _CronTemplate {
-  final String name;
-  final String expression;
-  final String description;
-
-  const _CronTemplate({
-    required this.name,
-    required this.expression,
-    this.description = '',
-  });
-
-  factory _CronTemplate.fromJson(Map<String, dynamic> json) {
-    final expression = (json['expression'] ??
-            json['cron_expression'] ??
-            json['cron'] ??
-            json['value'] ??
-            '')
-        .toString()
-        .trim();
-    final name = (json['name'] ?? json['label'] ?? json['title'] ?? expression)
-        .toString()
-        .trim();
-    return _CronTemplate(
-      name: name.isEmpty ? expression : name,
-      expression: expression,
-      description: json['description']?.toString().trim() ?? '',
-    );
-  }
-}
-
-const _fallbackCronTemplates = [
-  _CronTemplate(name: '每小时', expression: '0 0 * * * *'),
-  _CronTemplate(name: '每天0点', expression: '0 0 0 * * *'),
-  _CronTemplate(name: '每天9点', expression: '0 0 9 * * *'),
-];
-
 class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameC;
@@ -105,6 +70,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   late final TextEditingController _randomDelayC;
   late final TextEditingController _retriesC;
   late final TextEditingController _retryIntervalC;
+  late final TextEditingController _successExitCodesC;
   late final TextEditingController _dependsOnC;
   late final TextEditingController _taskBeforeC;
   late final TextEditingController _taskAfterC;
@@ -119,6 +85,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   String _taskType = 'cron';
   bool _notifyOnFailure = true;
   bool _notifyOnSuccess = false;
+  bool _notifyOnAbort = false;
   bool _allowMultipleInstances = false;
   String _pythonVersion = '3.12';
   String _pythonDefaultVersion = '3.12';
@@ -127,7 +94,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   final List<String> _labels = [];
   List<_TaskNotificationChannel> _notificationChannels = const [];
   List<PythonRuntimeInfo> _pythonRuntimes = const [];
-  List<_CronTemplate> _cronTemplates = _fallbackCronTemplates;
+  List<CronTemplateGroup> _cronTemplateGroups = fallbackCronTemplateGroups;
+  String _panelTimezoneLabel = '执行时区：由面板设置决定';
   String? _cronPreview;
   bool _showHooks = false;
   List<String> _knownGroups = const [];
@@ -144,8 +112,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       text: task?.command ?? prefill?.command ?? '',
     );
     _cronC = TextEditingController(
-      text: task?.cronExpression.isNotEmpty == true
-          ? task!.cronExpression
+      text: task?.effectiveCronExpressions.isNotEmpty == true
+          ? task!.effectiveCronExpressions.join('\n')
           : (prefill?.cronExpression ?? '0 0 * * *'),
     );
     _timeoutC = TextEditingController(text: '${task?.timeout ?? 0}');
@@ -155,6 +123,9 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     _retriesC = TextEditingController(text: '${task?.maxRetries ?? 0}');
     _retryIntervalC = TextEditingController(
       text: '${task?.retryInterval ?? 60}',
+    );
+    _successExitCodesC = TextEditingController(
+      text: (task?.successExitCodes ?? const [0]).join(','),
     );
     _dependsOnC = TextEditingController(
       text: task?.dependsOn?.toString() ?? '',
@@ -168,6 +139,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     _pythonVersion = task?.pythonVersion ?? '3.12';
     _notifyOnFailure = task?.notifyOnFailure ?? true;
     _notifyOnSuccess = task?.notifyOnSuccess ?? false;
+    _notifyOnAbort = task?.notifyOnAbort ?? false;
     _allowMultipleInstances = task?.allowMultipleInstances ?? false;
     _notificationChannelId = task?.notificationChannelId;
     _labels
@@ -182,6 +154,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
         _loadKnownGroups(),
         _loadPythonRuntimes(),
         _loadCronTemplates(),
+        _loadPanelTimezone(),
       ]);
     });
   }
@@ -196,6 +169,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       _randomDelayC,
       _retriesC,
       _retryIntervalC,
+      _successExitCodesC,
       _dependsOnC,
       _taskBeforeC,
       _taskAfterC,
@@ -244,7 +218,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.tasks,
-        queryParameters: {'page': 1, 'page_size': 200},
+        queryParameters: {'all': 1},
       );
       final paginated = extractPaginated(response.data);
       final groups =
@@ -316,35 +290,47 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
         ApiEndpoints.cronTemplates,
       );
       final data = extractData(response.data);
-      final templates = data is List
-          ? data
-                .whereType<Map>()
-                .map(
-                  (item) => _CronTemplate.fromJson(
-                    Map<String, dynamic>.from(item),
-                  ),
-                )
-                .where((item) => item.expression.isNotEmpty)
-                .toList()
-          : <_CronTemplate>[];
+      final groups = parseCronTemplateGroups(data);
       if (!mounted) return;
       setState(() {
-        _cronTemplates = templates.isEmpty ? _fallbackCronTemplates : templates;
+        _cronTemplateGroups = groups.isEmpty
+            ? fallbackCronTemplateGroups
+            : groups;
         _loadingCronTemplates = false;
       });
     } catch (_) {
       if (mounted) {
         setState(() {
-          _cronTemplates = _fallbackCronTemplates;
+          _cronTemplateGroups = fallbackCronTemplateGroups;
           _loadingCronTemplates = false;
         });
       }
     }
   }
 
+  Future<void> _loadPanelTimezone() async {
+    try {
+      final response = await DioClient.instance.dio.get(ApiEndpoints.configs);
+      final label = panelTimezoneLabel(extractData(response.data));
+      if (mounted) setState(() => _panelTimezoneLabel = label);
+    } catch (_) {}
+  }
+
+  void _appendCronTemplate(CronTemplate template) {
+    final current = Task.parseCronInput(_cronC.text);
+    final isUntouchedDefault = !isEditing &&
+        current.length == 1 &&
+        current.single == '0 0 * * *';
+    _cronC.text = isUntouchedDefault || current.isEmpty
+        ? template.expression
+        : [...current, template.expression].join('\n');
+    setState(() => _cronPreview = null);
+  }
+
   Future<void> _parseCronExpression() async {
-    final expression = _cronC.text.trim();
-    if (expression.isEmpty) {
+    final expressions = Task.parseCronInput(_cronC.text);
+    final inputSnapshot = _cronC.text;
+    if (expressions.isEmpty) {
       setState(() => _cronPreview = '请输入 Cron 表达式后再解析');
       return;
     }
@@ -353,18 +339,31 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       _cronPreview = null;
     });
     try {
-      final response = await DioClient.instance.dio.post(
-        ApiEndpoints.cronParse,
-        data: {'expression': expression},
-      );
-      final data = extractData(response.data);
+      final previews = <String>[];
+      for (final expression in expressions) {
+        final response = await DioClient.instance.dio.post(
+          ApiEndpoints.cronParse,
+          data: {'expression': expression},
+        );
+        previews.add(
+          '$expression\n${_formatCronParseResult(extractData(response.data))}',
+        );
+      }
       if (!mounted) return;
+      if (_cronC.text != inputSnapshot) {
+        setState(() => _parsingCron = false);
+        return;
+      }
       setState(() {
-        _cronPreview = _formatCronParseResult(data);
+        _cronPreview = previews.join('\n\n');
         _parsingCron = false;
       });
     } catch (error) {
       if (!mounted) return;
+      if (_cronC.text != inputSnapshot) {
+        setState(() => _parsingCron = false);
+        return;
+      }
       setState(() {
         _cronPreview = extractErrorMessage(error, 'Cron 表达式解析失败');
         _parsingCron = false;
@@ -455,15 +454,19 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     final data = <String, dynamic>{
       'name': _nameC.text.trim(),
       'command': _commandC.text.trim(),
-      'cron_expression': _taskType == 'cron' ? _cronC.text.trim() : '',
+      ...Task.cronPayload(_taskType == 'cron' ? _cronC.text : ''),
       'task_type': _taskType,
       'python_version': _pythonVersion,
       'timeout': _parseInt(_timeoutC, 0),
       'random_delay_seconds': randomDelay,
       'max_retries': _parseInt(_retriesC, 0),
       'retry_interval': _parseInt(_retryIntervalC, 60),
+      'success_exit_codes': Task.parseSuccessExitCodes(
+        _successExitCodesC.text,
+      )!.join(','),
       'notify_on_failure': _notifyOnFailure,
       'notify_on_success': _notifyOnSuccess,
+      'notify_on_abort': _notifyOnAbort,
       'notification_channel_id': _notificationChannelId,
       'labels': normalizedLabels,
       'depends_on': int.tryParse(_dependsOnC.text.trim()),
@@ -623,10 +626,15 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                 DropdownButtonFormField<String>(
                   initialValue: _taskType,
                   decoration: const InputDecoration(labelText: '任务类型'),
-                  items: const [
-                    DropdownMenuItem(value: 'cron', child: Text('常规定时')),
-                    DropdownMenuItem(value: 'manual', child: Text('手动运行')),
-                    DropdownMenuItem(value: 'startup', child: Text('开机运行')),
+                  items: [
+                    const DropdownMenuItem(value: 'cron', child: Text('常规定时')),
+                    const DropdownMenuItem(value: 'manual', child: Text('手动运行')),
+                    const DropdownMenuItem(value: 'startup', child: Text('开机运行')),
+                    if (!const ['cron', 'manual', 'startup'].contains(_taskType))
+                      DropdownMenuItem(
+                        value: _taskType,
+                        child: Text('未知类型（$_taskType）'),
+                      ),
                   ],
                   onChanged: (v) {
                     if (v != null) setState(() => _taskType = v);
@@ -664,8 +672,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     minLines: 1,
                     onChanged: (_) => setState(() => _cronPreview = null),
                     decoration: const InputDecoration(
-                      labelText: 'Cron 表达式',
-                      hintText: '0 0 * * *',
+                      labelText: 'Cron 表达式（每行一条）',
+                      hintText: '0 0 * * *\n0 30 * * *',
                     ),
                     validator: (v) =>
                         _taskType == 'cron' && (v == null || v.trim().isEmpty)
@@ -673,21 +681,46 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                         : null,
                   ),
                   const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _panelTimezoneLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final group in _cronTemplateGroups) ...[
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        group.name,
+                        style: theme.textTheme.labelMedium,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final template in group.templates)
+                          AppLiquidGlassActionChip(
+                            label: template.name,
+                            onPressed: () => _appendCronTemplate(template),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      for (final template in _cronTemplates)
-                        AppLiquidGlassActionChip(
-                          label: template.name,
-                          onPressed: () {
-                            _cronC.text = template.expression;
-                            setState(() => _cronPreview = null);
-                          },
-                        ),
-                       AppLiquidGlassActionChip(
-                         icon: Icons.manage_search,
-                         label: _loadingCronTemplates ? '模板加载中' : '解析预览',
+                      AppLiquidGlassActionChip(
+                        icon: Icons.manage_search,
+                        label: _loadingCronTemplates ? '模板加载中' : '解析预览',
                         onPressed: _parsingCron ? null : _parseCronExpression,
                       ),
                     ],
@@ -701,11 +734,11 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                         borderRadius: 10,
                         performanceMode: true,
                         child: Text(
-                        _cronPreview!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+                          _cronPreview!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ),
                     ),
@@ -879,6 +912,23 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     keyboardType: TextInputType.number,
                   ),
                 ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _successExitCodesC,
+                  decoration: const InputDecoration(
+                    labelText: '成功退出码',
+                    helperText: '使用英文逗号分隔，例如 0,2',
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    signed: true,
+                  ),
+                  validator: (value) {
+                    if (Task.parseSuccessExitCodes(value ?? '') == null) {
+                      return '请输入逗号分隔的整数退出码';
+                    }
+                    return null;
+                  },
+                ),
               ]),
 
               // 通知
@@ -891,6 +941,17 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     AppLiquidGlassToggle(
                       value: _notifyOnFailure,
                       onChanged: (v) => setState(() => _notifyOnFailure = v),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('终止时通知', style: TextStyle(fontSize: 14)),
+                    ),
+                    AppLiquidGlassToggle(
+                      value: _notifyOnAbort,
+                      onChanged: (v) => setState(() => _notifyOnAbort = v),
                     ),
                   ],
                 ),
@@ -938,6 +999,14 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                       value: null,
                       child: Text('全部启用渠道'),
                     ),
+                    if (_notificationChannelId != null &&
+                        _channelOptions.every(
+                          (channel) => channel.id != _notificationChannelId,
+                        ))
+                      DropdownMenuItem<int?>(
+                        value: _notificationChannelId,
+                        child: Text('渠道 #$_notificationChannelId（当前值）'),
+                      ),
                     ..._channelOptions.map(
                       (c) => DropdownMenuItem<int?>(
                         value: c.id,

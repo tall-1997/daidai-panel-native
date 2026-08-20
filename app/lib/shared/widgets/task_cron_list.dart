@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/theme/theme_provider.dart';
 
-class TaskCronList extends StatelessWidget {
+class TaskCronList extends ConsumerWidget {
   final List<String> expressions;
   final bool compact;
   final bool numbered;
@@ -20,10 +22,27 @@ class TaskCronList extends StatelessWidget {
       .toList();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
+    final isFlat = ref.watch(
+      appStyleProvider.select(
+        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+      ),
+    );
     final items = _normalized;
+    final cardBg = isFlat
+        ? theme.colorScheme.surfaceContainerHighest
+        : AppColors.slate500.withAlpha(isLight ? 8 : 24);
+    final cardBorder = isFlat
+        ? theme.colorScheme.outline
+        : AppColors.slate500.withAlpha(isLight ? 28 : 56);
+    final badgeBg = isFlat
+        ? Color.alphaBlend(
+            AppColors.primary.withAlpha(isLight ? 22 : 36),
+            cardBg,
+          )
+        : AppColors.primary.withAlpha(isLight ? 22 : 36);
 
     if (items.isEmpty) {
       return Container(
@@ -33,10 +52,10 @@ class TaskCronList extends StatelessWidget {
           vertical: compact ? 6 : 9,
         ),
         decoration: BoxDecoration(
-          color: AppColors.slate500.withAlpha(isLight ? 8 : 24),
+          color: cardBg,
           borderRadius: BorderRadius.circular(compact ? 8 : 10),
           border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate700,
+            color: cardBorder,
           ),
         ),
         child: Text(
@@ -50,9 +69,6 @@ class TaskCronList extends StatelessWidget {
     }
 
     final isMulti = items.length > 1;
-    final cardBg = AppColors.slate500.withAlpha(isLight ? 8 : 24);
-    final cardBorder = AppColors.slate500.withAlpha(isLight ? 28 : 56);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -76,7 +92,7 @@ class TaskCronList extends StatelessWidget {
                   width: compact ? 26 : 30,
                   height: compact ? 26 : 30,
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withAlpha(isLight ? 22 : 36),
+                    color: badgeBg,
                     borderRadius: BorderRadius.circular(compact ? 8 : 10),
                   ),
                   alignment: Alignment.center,

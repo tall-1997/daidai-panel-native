@@ -5,26 +5,40 @@ import 'package:dio/dio.dart';
 import '../network/api_endpoints.dart';
 import '../network/dio_client.dart';
 import '../storage/secure_storage.dart';
+import 'auth_session_epoch.dart';
 
 class TokenRefreshCoordinator {
   TokenRefreshCoordinator._();
 
-  static Future<String>? _inFlight;
-  static int _epoch = 0;
+  static final Map<int, Future<String>> _inFlight = {};
 
-  static void invalidate() {
-    _epoch++;
-    _inFlight = null;
+  static int invalidate() => AuthSessionEpoch.advance();
+
+  static Future<String> refresh({int? epoch}) {
+    final refreshEpoch = epoch ?? AuthSessionEpoch.current;
+    if (!AuthSessionEpoch.isCurrent(refreshEpoch)) {
+      return Future.error(
+        StateError('Auth session changed during token refresh'),
+      );
+    }
+    final existing = _inFlight[refreshEpoch];
+    if (existing != null) return existing;
+
+    late final Future<String> operation;
+    operation = _refreshOnce(refreshEpoch).whenComplete(() {
+      if (identical(_inFlight[refreshEpoch], operation)) {
+        _inFlight.remove(refreshEpoch);
+      }
+    });
+    _inFlight[refreshEpoch] = operation;
+    return operation;
   }
 
-  static Future<String> refresh() {
-    return _inFlight ??= _refreshOnce().whenComplete(() => _inFlight = null);
-  }
-
-  static Future<String> _refreshOnce() async {
-    final epoch = _epoch;
+  static Future<String> _refreshOnce(int epoch) async {
+    _ensureCurrent(epoch);
     final baseUrl = DioClient.instance.baseUrl;
     final refreshToken = await SecureStorage.getRefreshToken();
+    _ensureCurrent(epoch);
     if (refreshToken == null || refreshToken.isEmpty) {
       throw StateError('Missing refresh token');
     }
@@ -38,14 +52,23 @@ class TokenRefreshCoordinator {
       response.data,
       'refresh_token',
     );
-    if (epoch != _epoch || baseUrl != DioClient.instance.baseUrl) {
+    if (!AuthSessionEpoch.isCurrent(epoch) ||
+        baseUrl != DioClient.instance.baseUrl) {
       throw StateError('Auth session changed during token refresh');
     }
     await SecureStorage.saveTokens(
       accessToken: accessToken,
       refreshToken: rotatedRefreshToken ?? refreshToken,
+      authEpoch: epoch,
     );
+    _ensureCurrent(epoch);
     return accessToken;
+  }
+
+  static void _ensureCurrent(int epoch) {
+    if (!AuthSessionEpoch.isCurrent(epoch)) {
+      throw StateError('Auth session changed during token refresh');
+    }
   }
 
   static String _readToken(dynamic data, String key) {

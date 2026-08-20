@@ -25,7 +25,7 @@ class NotifyChannel {
       name: json['name']?.toString() ?? '',
       type: json['type']?.toString() ?? '',
       config: _config(json['config']),
-      enabled: json['enabled'] != false,
+      enabled: _bool(json['enabled'], fallback: true),
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       updatedAt: _date(json['updated_at']) ?? DateTime.now(),
     );
@@ -39,6 +39,24 @@ class NotifyChannel {
 }
 
 int _int(dynamic v) => (v is num) ? v.toInt() : 0;
+bool _bool(dynamic value, {required bool fallback}) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  switch (value?.toString().trim().toLowerCase()) {
+    case 'true':
+    case '1':
+    case 'yes':
+    case 'on':
+      return true;
+    case 'false':
+    case '0':
+    case 'no':
+    case 'off':
+      return false;
+    default:
+      return fallback;
+  }
+}
 DateTime? _date(dynamic v) {
   if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
   return null;

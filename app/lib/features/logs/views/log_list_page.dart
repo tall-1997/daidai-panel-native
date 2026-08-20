@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -17,10 +19,13 @@ final logListProvider = StateNotifierProvider<LogListNotifier, LogListState>((
   return LogListNotifier();
 });
 
+const _logStateUnset = Object();
+
 class LogListState {
   final List<TaskLog> logs;
   final int total;
   final bool loading;
+  final String? error;
   final String keyword;
   final String taskIdFilter;
   final int? statusFilter;
@@ -28,6 +33,7 @@ class LogListState {
     this.logs = const [],
     this.total = 0,
     this.loading = false,
+    this.error,
     this.keyword = '',
     this.taskIdFilter = '',
     this.statusFilter,
@@ -37,6 +43,7 @@ class LogListState {
     List<TaskLog>? logs,
     int? total,
     bool? loading,
+    Object? error = _logStateUnset,
     String? keyword,
     String? taskIdFilter,
     int? statusFilter,
@@ -46,6 +53,7 @@ class LogListState {
       logs: logs ?? this.logs,
       total: total ?? this.total,
       loading: loading ?? this.loading,
+      error: identical(error, _logStateUnset) ? this.error : error as String?,
       keyword: keyword ?? this.keyword,
       taskIdFilter: taskIdFilter ?? this.taskIdFilter,
       statusFilter: resetStatusFilter
@@ -58,7 +66,27 @@ class LogListState {
 class LogListNotifier extends StateNotifier<LogListState> {
   LogListNotifier() : super(const LogListState());
   int _page = 1;
-  int _loadRequestId = 0;
+  bool _loadInFlight = false;
+  bool _refreshInFlight = false;
+  bool _refreshQueued = false;
+  bool _silentRefreshQueued = false;
+  int _queryGeneration = 0;
+  String? _scope;
+
+  String _ensureScope() {
+    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    if (_scope != scope) {
+      _scope = scope;
+      _queryGeneration++;
+      _page = 1;
+      _loadInFlight = false;
+      _refreshInFlight = false;
+      _refreshQueued = false;
+      _silentRefreshQueued = false;
+      state = const LogListState();
+    }
+    return scope;
+  }
 
   Map<String, dynamic> _currentQueryParams({
     required int page,
@@ -77,38 +105,70 @@ class LogListNotifier extends StateNotifier<LogListState> {
     return params;
   }
 
-  Future<void> load({bool refresh = false}) async {
-    final requestId = ++_loadRequestId;
-    if (refresh) _page = 1;
-    state = state.copyWith(loading: true);
+  Future<void> load({bool refresh = false, int? targetPage}) async {
+    final scope = _ensureScope();
+    if (_loadInFlight || _refreshInFlight) {
+      if (refresh) _refreshQueued = true;
+      return;
+    }
+
+    _loadInFlight = true;
+    final generation = _queryGeneration;
+    final requestedPage = refresh ? 1 : targetPage ?? _page;
+    state = state.copyWith(loading: true, error: null);
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.logs,
-        queryParameters: _currentQueryParams(page: _page),
+        queryParameters: _currentQueryParams(page: requestedPage),
       );
       final paginated = extractPaginated(response.data);
       final items = paginated.items.map((e) => TaskLog.fromJson(e)).toList();
-      if (requestId != _loadRequestId) return;
+      if (generation != _queryGeneration ||
+          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
+      _page = requestedPage;
       state = state.copyWith(
         logs: refresh ? items : [...state.logs, ...items],
         total: paginated.total,
         loading: false,
+        error: null,
       );
-    } catch (_) {
-      if (requestId != _loadRequestId) return;
-      if (!refresh && _page > 1) _page--;
-      state = state.copyWith(loading: false);
+    } catch (error) {
+      if (generation != _queryGeneration ||
+          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
+      state = state.copyWith(
+        loading: false,
+        error: extractErrorMessage(error, '日志加载失败'),
+      );
+    } finally {
+      if (generation == _queryGeneration &&
+          scope == AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        _loadInFlight = false;
+        await _runQueuedRefresh();
+      }
     }
   }
 
   Future<void> loadMore() async {
-    if (state.loading || state.logs.length >= state.total) return;
-    _page++;
-    await load();
+    if (_loadInFlight ||
+        _refreshInFlight ||
+        state.logs.length >= state.total) {
+      return;
+    }
+    await load(targetPage: _page + 1);
   }
 
   Future<void> refreshFirstPage() async {
-    final requestId = ++_loadRequestId;
+    final scope = _ensureScope();
+    if (_loadInFlight || _refreshInFlight) {
+      _silentRefreshQueued = true;
+      return;
+    }
+    _refreshInFlight = true;
+    final generation = _queryGeneration;
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.logs,
@@ -116,29 +176,64 @@ class LogListNotifier extends StateNotifier<LogListState> {
       );
       final paginated = extractPaginated(response.data);
       final firstPage = paginated.items.map(TaskLog.fromJson).toList();
-      if (requestId != _loadRequestId) return;
+      if (generation != _queryGeneration ||
+          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        return;
+      }
       final firstPageIds = firstPage.map((log) => log.id).toSet();
       final merged = [
         ...firstPage,
-        ...state.logs.where((log) => !firstPageIds.contains(log.id)),
-      ];
-      state = state.copyWith(logs: merged, total: paginated.total);
+        ...state.logs
+            .where((log) => !firstPageIds.contains(log.id)),
+      ].take(paginated.total).toList();
+      state = state.copyWith(logs: merged, total: paginated.total, error: null);
     } catch (_) {
       // 自动刷新失败时保留当前分页和滚动内容。
+    } finally {
+      if (generation == _queryGeneration &&
+          scope == AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
+        _refreshInFlight = false;
+        await _runQueuedRefresh();
+      }
     }
   }
 
+  Future<void> _runQueuedRefresh() async {
+    if (_loadInFlight || _refreshInFlight) return;
+    if (_refreshQueued) {
+      _refreshQueued = false;
+      _silentRefreshQueued = false;
+      await load(refresh: true);
+      return;
+    }
+    if (_silentRefreshQueued) {
+      _silentRefreshQueued = false;
+      await refreshFirstPage();
+    }
+  }
+
+  void _invalidateQuery() {
+    _queryGeneration++;
+    _loadInFlight = false;
+    _refreshInFlight = false;
+    _refreshQueued = false;
+    _silentRefreshQueued = false;
+  }
+
   void setKeyword(String keyword) {
+    _invalidateQuery();
     state = state.copyWith(keyword: keyword);
     load(refresh: true);
   }
 
   void setTaskIdFilter(String taskId) {
+    _invalidateQuery();
     state = state.copyWith(taskIdFilter: taskId);
     load(refresh: true);
   }
 
   void setStatusFilter(int? status) {
+    _invalidateQuery();
     state = state.copyWith(
       statusFilter: status,
       resetStatusFilter: status == null,
@@ -213,17 +308,22 @@ class LogListPage extends ConsumerStatefulWidget {
   ConsumerState<LogListPage> createState() => _LogListPageState();
 }
 
-class _LogListPageState extends ConsumerState<LogListPage> {
+class _LogListPageState extends ConsumerState<LogListPage>
+    with WidgetsBindingObserver {
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
   Timer? _refreshTimer;
   Timer? _debounce;
   bool _selectionMode = false;
+  bool _appResumed = true;
   final Set<int> _selectedIds = <int>{};
 
   @override
   void initState() {
     super.initState();
+    _appResumed =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
     Future.microtask(
       () => ref.read(logListProvider.notifier).load(refresh: true),
     );
@@ -237,6 +337,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _refreshTimer?.cancel();
     _searchController.dispose();
@@ -246,7 +347,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
 
   void _syncAutoRefresh(LogListState state) {
     final hasRunning = state.logs.any((log) => log.isRunning);
-    if (hasRunning) {
+    if (hasRunning && _appResumed) {
       _refreshTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
         ref.read(logListProvider.notifier).refreshFirstPage();
       });
@@ -254,6 +355,20 @@ class _LogListPageState extends ConsumerState<LogListPage> {
       _refreshTimer?.cancel();
       _refreshTimer = null;
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (!_appResumed) {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+      return;
+    }
+
+    final notifier = ref.read(logListProvider.notifier);
+    notifier.refreshFirstPage();
+    _syncAutoRefresh(ref.read(logListProvider));
   }
 
   void _resetScroll() {
@@ -599,11 +714,43 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                       },
                       selectedColor: AppColors.blue500,
                     ),
+                    _StatusFilterChip(
+                      label: '已终止',
+                      selected: state.statusFilter == 3,
+                      onTap: () {
+                        if (_selectionMode) _exitSelectionMode();
+                        _resetScroll();
+                        ref.read(logListProvider.notifier).setStatusFilter(3);
+                      },
+                      selectedColor: AppColors.amber500,
+                    ),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 16),
+
+            if (state.error != null && state.logs.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: AppCard(
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline, color: AppColors.red500),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(state.error!)),
+                      TextButton(
+                        onPressed: () => ref
+                            .read(logListProvider.notifier)
+                            .load(refresh: true),
+                        child: const Text('重试'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
 
             Expanded(
               child: RefreshIndicator(
@@ -618,6 +765,29 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                           Center(
                             child: CircularProgressIndicator(
                               color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      )
+                    : state.error != null && state.logs.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(20, 80, 20, 110),
+                        children: [
+                          AppCard(
+                            child: Column(
+                              children: [
+                                const Icon(Icons.cloud_off_outlined, size: 42),
+                                const SizedBox(height: 10),
+                                Text(state.error!, textAlign: TextAlign.center),
+                                const SizedBox(height: 12),
+                                AppLiquidGlassButton(
+                                  label: '重试',
+                                  onPressed: () => ref
+                                      .read(logListProvider.notifier)
+                                      .load(refresh: true),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -700,6 +870,7 @@ class _LogItem extends ConsumerWidget {
   Color _statusColor() {
     if (log.isSuccess) return AppColors.primary;
     if (log.isFailed) return AppColors.red500;
+    if (log.isAborted) return AppColors.amber500;
     return AppColors.blue500;
   }
 

@@ -47,6 +47,7 @@ class OpenApiPage extends ConsumerStatefulWidget {
 class _OpenApiPageState extends ConsumerState<OpenApiPage> {
   List<Map<String, dynamic>> _apps = [];
   bool _loading = true;
+  String? _loadError;
 
   String _scopeLabel(String value) {
     for (final option in _apiScopeOptions) {
@@ -84,10 +85,14 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             ? data.whereType<Map<String, dynamic>>().toList()
             : [];
         _loading = false;
+        _loadError = null;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _loadError = extractErrorMessage(error, 'Open API 应用加载失败');
+      });
     }
   }
 
@@ -145,7 +150,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                         ],
                       )
-                    : _apps.isEmpty
+                    : _apps.isEmpty && _loadError == null
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
@@ -164,11 +169,32 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                         ],
                       )
-                    : ListView.builder(
+                    : ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        itemCount: _apps.length,
-                        itemBuilder: (_, i) =>
-                            _buildAppCard(app: _apps[i], isLight: isLight),
+                        children: [
+                          if (_loadError != null) ...[
+                            AppCard(
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.cloud_off_outlined,
+                                    color: AppColors.red500,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: Text(_loadError!)),
+                                  TextButton(
+                                    onPressed: _loading ? null : _load,
+                                    child: const Text('重试'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_apps.isNotEmpty) const SizedBox(height: 12),
+                          ],
+                          for (final app in _apps)
+                            _buildAppCard(app: app, isLight: isLight),
+                        ],
                       ),
               ),
             ),
@@ -1043,6 +1069,7 @@ class OpenApiLogsPage extends ConsumerStatefulWidget {
 class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
   List<Map<String, dynamic>> _logs = [];
   bool _loading = true;
+  bool _requestInFlight = false;
   int _page = 1;
   int _total = 0;
 
@@ -1053,26 +1080,29 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
   }
 
   Future<void> _load({bool refresh = true}) async {
-    if (_loading && !refresh) return;
-    if (refresh) _page = 1;
+    if (_requestInFlight) return;
+    final targetPage = refresh ? 1 : _page + 1;
+    _requestInFlight = true;
     setState(() => _loading = true);
     try {
-      final result = await _loadOpenApiLogPage(widget.appId, _page);
+      final result = await _loadOpenApiLogPage(widget.appId, targetPage);
       if (!mounted) return;
       setState(() {
         _logs = refresh ? result.items : [..._logs, ...result.items];
         _total = result.total;
+        _page = targetPage;
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
+    } finally {
+      _requestInFlight = false;
     }
   }
 
   void _loadMore() {
     if (_loading || _logs.length >= _total) return;
-    _page++;
     _load(refresh: false);
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_async_state.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -61,12 +62,15 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
     setState(() { _loading = true; _error = null; });
     try {
       final response = await DioClient.instance.dio.get(ApiEndpoints.configScript);
-      final data = response.data as Map;
+      final raw = extractData(response.data);
+      final data = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
+      PanelCapabilityRegistry.recordSupported(PanelCapability.configScript);
       if (!mounted) return;
       _saved = data['content']?.toString() ?? '';
       _controller.text = _saved;
       setState(() => _loading = false);
     } catch (error) {
+      PanelCapabilityRegistry.recordFailure(PanelCapability.configScript, error);
       if (mounted) setState(() { _loading = false; _error = extractErrorMessage(error, '配置脚本加载失败'); });
     }
   }

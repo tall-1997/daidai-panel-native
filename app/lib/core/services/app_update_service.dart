@@ -12,7 +12,7 @@ import '../network/app_user_agent.dart';
 import '../theme/app_theme.dart';
 import 'android_update_manifest.dart';
 
-const _kGitHubRepo = 'tall-1997/daidai-flutter';
+const _kGitHubRepo = 'tall-1997/daidai-panel-native';
 const _kGitHubDownloadHost = 'github.com';
 const _kGitHubReleaseHost = 'objects.githubusercontent.com';
 const _kGitHubAssetHost = 'githubusercontent.com';
@@ -57,6 +57,7 @@ class AppUpdateInfo {
   final String assetName;
   final int assetSize;
   final String assetDigest;
+  final String releasePageUrl;
   final bool hasUpdate;
   final DateTime? publishedAt;
   final AndroidUpdateManifest? androidManifest;
@@ -69,6 +70,7 @@ class AppUpdateInfo {
     required this.assetName,
     required this.assetSize,
     required this.assetDigest,
+    this.releasePageUrl = '',
     required this.hasUpdate,
     this.publishedAt,
     this.androidManifest,
@@ -192,19 +194,28 @@ class AppUpdateService {
     );
   }
 
-  static Future<bool> claimAutomaticReminder(String version) async {
+  static Future<bool> shouldShowAutomaticReminder(String version) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_reminderAtKey);
     final now = DateTime.now().toUtc();
-    final allowed = shouldShowAutomaticUpdateReminder(
+    return shouldShowAutomaticUpdateReminder(
       version: version,
       lastVersion: prefs.getString(_reminderVersionKey),
       lastReminder: raw == null ? null : DateTime.tryParse(raw),
       now: now,
     );
-    if (!allowed) return false;
+  }
+
+  static Future<void> completeAutomaticReminder(String version) async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now().toUtc();
     await prefs.setString(_reminderVersionKey, version);
     await prefs.setString(_reminderAtKey, now.toIso8601String());
+  }
+
+  static Future<bool> claimAutomaticReminder(String version) async {
+    if (!await shouldShowAutomaticReminder(version)) return false;
+    await completeAutomaticReminder(version);
     return true;
   }
 
@@ -273,6 +284,7 @@ class AppUpdateService {
         assetName: assetName,
         assetSize: assetSize,
         assetDigest: assetDigest,
+        releasePageUrl: data['html_url']?.toString() ?? '',
         hasUpdate: hasUpdate,
         publishedAt: publishedAt,
       );
@@ -309,6 +321,8 @@ class AppUpdateService {
         assetName: manifest.full.name,
         assetSize: manifest.full.size,
         assetDigest: 'sha256:${manifest.full.sha256}',
+        releasePageUrl:
+            'https://github.com/$_kGitHubRepo/releases/tag/v${manifest.version}',
         hasUpdate: _isNewer(manifest.version, currentVersion),
         androidManifest: manifest,
       );
@@ -644,6 +658,26 @@ class AppUpdateService {
       ),
     );
   }
+
+  static Future<bool> openUpdatePage(AppUpdateInfo info) async {
+    final uri = Uri.tryParse(info.releasePageUrl);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.toLowerCase() != _kGitHubDownloadHost) {
+      return false;
+    }
+    try {
+      return await _platform.invokeMethod<bool>(
+            'openExternalUrl',
+            {'url': uri.toString()},
+          ) ??
+          false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
 
 class _UpdateDialog extends StatefulWidget {
@@ -659,6 +693,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   bool _downloading = false;
   double _progress = 0;
   String? _error;
+
+  Future<void> _openUpdatePage() async {
+    final opened = await AppUpdateService.openUpdatePage(widget.info);
+    if (!mounted) return;
+    if (opened) {
+      Navigator.pop(context);
+    } else {
+      setState(() => _error = '无法打开 Release 页面，请检查系统浏览器设置');
+    }
+  }
 
   void _startDownload() {
     if (widget.info.downloadUrl.isEmpty) {
@@ -808,6 +852,17 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                         child: FilledButton(
                           onPressed: _startDownload,
                           child: const Text('立即更新'),
+                        ),
+                      ),
+                    ),
+                  ] else if (widget.info.releasePageUrl.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SizedBox(
+                        height: 44,
+                        child: FilledButton(
+                          onPressed: _openUpdatePage,
+                          child: const Text('查看更新'),
                         ),
                       ),
                     ),

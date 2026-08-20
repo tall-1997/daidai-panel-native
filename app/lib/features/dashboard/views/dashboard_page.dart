@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/services/app_update_service.dart';
+import '../../../core/services/local_notification_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -51,11 +52,26 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       if (info != null &&
           classifyAppUpdate(info) == AppUpdateAvailability.updateAvailable &&
           mounted) {
-        final show = await AppUpdateService.claimAutomaticReminder(
+        final notificationService = LocalNotificationService();
+        if (!await notificationService.getChannelEnabled(
+          NotificationChannel.system,
+        )) {
+          return;
+        }
+        if (!await notificationService.areNotificationsEnabled()) return;
+        final show = await AppUpdateService.shouldShowAutomaticReminder(
           info.latestVersion,
         );
         if (mounted && show) {
-          AppUpdateService.showUpdateDialog(context, info);
+          final shown = await notificationService.showUpdateNotification(
+            version: info.latestVersion,
+            releaseNotes: info.releaseNotes,
+          );
+          if (shown) {
+            await AppUpdateService.completeAutomaticReminder(
+              info.latestVersion,
+            );
+          }
         }
       }
     } catch (_) {
@@ -341,6 +357,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                       disabled: data.disabledTasks,
                       todaySuccess: data.todaySuccess,
                       todayFailed: data.todayFailed,
+                      todayAborted: data.todayAborted,
                       onTap: () => context.go('/tasks'),
                     ),
                     const SizedBox(height: 24),
