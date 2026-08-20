@@ -89,6 +89,7 @@ func TestValidateAPKChecksMetadataAndManifestEntrypoints(t *testing.T) {
 	}
 
 	writeTestAPK(t, apkPath, contract, false)
+	contract.Smoke.Records[len(contract.Smoke.Records)-1].Status = "pass"
 	errs = validateAPK(apkPath, contract, false)
 	assertErrorContains(t, errs, "missing APK entry")
 }
@@ -112,6 +113,18 @@ func TestValidateAPKRejectsUndeclaredRuntimeEntrypoint(t *testing.T) {
 
 	errs := validateAPK(apkPath, contract, false)
 	assertErrorContains(t, errs, "undeclared APK runtime entry")
+}
+
+func TestNonStrictAllowsMissingBlockedNativeEntry(t *testing.T) {
+	contract := validTestContract(t)
+	nativeDir := t.TempDir()
+
+	errs := validateNativeEntries(nativeDir, contract, false)
+	if len(errs) != 0 {
+		t.Fatalf("non-strict missing blocked entry errors = %v", errs)
+	}
+	errs = validateNativeEntries(nativeDir, contract, true)
+	assertErrorContains(t, errs, "missing native entry")
 }
 
 func TestPlaceholderELFIsBlockedAndFailsStrictMode(t *testing.T) {

@@ -264,6 +264,14 @@ func mapKeys[T any](values map[string]T) []string {
 	return keys
 }
 
+func recordsByRuntimeID(records []smokeRecord) map[string]smokeRecord {
+	result := make(map[string]smokeRecord, len(records))
+	for _, record := range records {
+		result[record.RuntimeID] = record
+	}
+	return result
+}
+
 func validateNativeEntries(nativeDir string, contract runtimeContract, strict bool) []error {
 	var errs []error
 	records := make(map[string]smokeRecord, len(contract.Smoke.Records))
@@ -278,6 +286,10 @@ func validateNativeEntries(nativeDir string, contract runtimeContract, strict bo
 		seenEntries[component.Entrypoint] = true
 		payload, err := os.ReadFile(filepath.Join(nativeDir, component.Entrypoint))
 		if err != nil {
+			record := records[component.ID]
+			if !strict && record.Status == "blocked" {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("%s missing native entry %s: %w", component.ID, component.Entrypoint, err))
 			continue
 		}
@@ -362,6 +374,10 @@ func validateAPK(path string, contract runtimeContract, strict bool) []error {
 		seen[apkEntry] = true
 		file, ok := entries[apkEntry]
 		if !ok {
+			record := recordsByRuntimeID(contract.Smoke.Records)[component.ID]
+			if !strict && record.Status == "blocked" {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("%s missing APK entry %s", component.ID, apkEntry))
 			continue
 		}
