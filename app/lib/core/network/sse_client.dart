@@ -228,7 +228,9 @@ class SseClient with WidgetsBindingObserver {
       void scheduleReconnect() {
         if (!options.autoReconnect ||
             !_isCurrent(options, generation) ||
-            reconnectScheduled) return;
+            reconnectScheduled) {
+          return;
+        }
         reconnectScheduled = true;
         final reconnectGeneration = ++_generation;
         _state = SseClientState.reconnecting;

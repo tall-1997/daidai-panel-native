@@ -162,7 +162,7 @@ class AuthService {
     if (data is! Map) {
       throw const FormatException('用户信息响应格式错误');
     }
-    final userData = data is Map && data['user'] is Map
+    final userData = data['user'] is Map
         ? Map<String, dynamic>.from(data['user'] as Map)
         : Map<String, dynamic>.from(data);
     final user = User.fromJson(userData);

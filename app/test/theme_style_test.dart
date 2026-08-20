@@ -104,14 +104,14 @@ void main() {
       final buttonColor = theme.outlinedButtonTheme.style?.backgroundColor
           ?.resolve(<WidgetState>{});
 
-      expect(theme.colorScheme.surface.alpha, 255);
-      expect(theme.cardTheme.color?.alpha, 255);
-      expect(theme.inputDecorationTheme.fillColor?.alpha, 255);
-      expect(theme.dialogTheme.backgroundColor?.alpha, 255);
-      expect(theme.bottomSheetTheme.backgroundColor?.alpha, 255);
-      expect(theme.popupMenuTheme.color?.alpha, 255);
-      expect(theme.navigationBarTheme.backgroundColor?.alpha, 255);
-      expect(buttonColor?.alpha, 255);
+      expect(theme.colorScheme.surface.a, 1);
+      expect(theme.cardTheme.color?.a, 1);
+      expect(theme.inputDecorationTheme.fillColor?.a, 1);
+      expect(theme.dialogTheme.backgroundColor?.a, 1);
+      expect(theme.bottomSheetTheme.backgroundColor?.a, 1);
+      expect(theme.popupMenuTheme.color?.a, 1);
+      expect(theme.navigationBarTheme.backgroundColor?.a, 1);
+      expect(buttonColor?.a, 1);
     });
 
     testWidgets('Pure Flat omits liquid glass render widgets', (tester) async {
@@ -137,7 +137,7 @@ void main() {
             )
             .first,
       );
-      expect(surfaceMaterial.color?.alpha, 255);
+      expect(surfaceMaterial.color?.a, 1);
     });
 
     testWidgets('Liquid Glass uses liquid glass render widgets', (tester) async {

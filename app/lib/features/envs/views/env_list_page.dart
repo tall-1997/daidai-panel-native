@@ -503,23 +503,25 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               children: [
                 Text('文件包含 $count 个环境变量，请选择导入方式。'),
                 const SizedBox(height: 12),
-                RadioListTile<_EnvImportMode>(
-                  value: _EnvImportMode.merge,
+                RadioGroup<_EnvImportMode>(
                   groupValue: mode,
-                  title: const Text('合并'),
-                  subtitle: const Text('保留现有变量，并导入文件内容'),
                   onChanged: (value) {
                     if (value != null) setDialogState(() => mode = value);
                   },
-                ),
-                RadioListTile<_EnvImportMode>(
-                  value: _EnvImportMode.replace,
-                  groupValue: mode,
-                  title: const Text('替换'),
-                  subtitle: const Text('使用文件内容替换当前全部环境变量'),
-                  onChanged: (value) {
-                    if (value != null) setDialogState(() => mode = value);
-                  },
+                  child: const Column(
+                    children: [
+                      RadioListTile<_EnvImportMode>(
+                        value: _EnvImportMode.merge,
+                        title: Text('合并'),
+                        subtitle: Text('保留现有变量，并导入文件内容'),
+                      ),
+                      RadioListTile<_EnvImportMode>(
+                        value: _EnvImportMode.replace,
+                        title: Text('替换'),
+                        subtitle: Text('使用文件内容替换当前全部环境变量'),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

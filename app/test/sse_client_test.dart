@@ -15,11 +15,6 @@ class _RequestClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) =>
       onSend(request);
-
-  @override
-  void close() {
-    super.close();
-  }
 }
 
 http.StreamedResponse _response(int statusCode, [String body = '']) =>
