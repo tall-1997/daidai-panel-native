@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:dio/dio.dart';
@@ -263,34 +264,42 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
     List<PlatformFile> files, {
     String dir = '',
   }) async {
-    final formData = FormData();
-    for (final file in files) {
-      final multipart = await _toMultipartFile(file);
-      if (multipart != null) {
-        formData.files.add(MapEntry('file', multipart));
-      }
-    }
-    if (formData.files.isEmpty) {
+    if (files.isEmpty) {
       throw StateError('未选择可上传的文件');
     }
-    if (dir.trim().isNotEmpty) {
-      formData.fields.add(MapEntry('dir', dir.trim()));
+    final uploadedPaths = <String>[];
+    for (final file in files) {
+      final multipart = await _toMultipartFile(file);
+      if (multipart == null) continue;
+      final formData = FormData();
+      formData.files.add(MapEntry('file', multipart));
+      formData.fields.add(
+        MapEntry('filename_b64', base64Encode(utf8.encode(file.name))),
+      );
+      if (dir.trim().isNotEmpty) {
+        formData.fields.add(MapEntry('dir', dir.trim()));
+      }
+      final resp = await DioClient.instance.dio.post(
+        ApiEndpoints.scriptsUpload,
+        data: formData,
+        options: Options(contentType: 'multipart/form-data'),
+      );
+      final raw = resp.data;
+      if (raw is Map && raw['paths'] is List) {
+        uploadedPaths.addAll(
+          (raw['paths'] as List).map((item) => item.toString()),
+        );
+      } else if (raw is Map && raw['path'] != null) {
+        uploadedPaths.add(raw['path'].toString());
+      } else {
+        uploadedPaths.add(_joinScriptPath(dir, file.name));
+      }
     }
-
-    final resp = await DioClient.instance.dio.post(
-      ApiEndpoints.scriptsUpload,
-      data: formData,
-      options: Options(contentType: 'multipart/form-data'),
-    );
+    if (uploadedPaths.isEmpty) {
+      throw StateError('未选择可上传的文件');
+    }
     await loadTree();
-    final raw = resp.data;
-    if (raw is Map && raw['paths'] is List) {
-      return (raw['paths'] as List).map((item) => item.toString()).toList();
-    }
-    if (raw is Map && raw['path'] != null) {
-      return [raw['path'].toString()];
-    }
-    return files.map((file) => _joinScriptPath(dir, file.name)).toList();
+    return uploadedPaths;
   }
 
   Future<String> renamePath(String oldPath, String newName) async {

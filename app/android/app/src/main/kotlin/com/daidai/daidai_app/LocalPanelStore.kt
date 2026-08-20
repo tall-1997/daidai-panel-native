@@ -73,7 +73,14 @@ class LocalPanelStore(
 
 
         internal fun normalizeScriptPath(rawPath: String, allowRootAlias: Boolean = false): String {
-            val decoded = runCatching { URLDecoder.decode(rawPath, "UTF-8") }.getOrElse { rawPath }
+            // NanoHTTPD already decodes form/query values. Decode percent escapes only when
+            // they are still present, and preserve literal '+' in valid script names.
+            val decoded = if ('%' in rawPath) {
+                runCatching { URLDecoder.decode(rawPath.replace("+", "%2B"), "UTF-8") }
+                    .getOrElse { rawPath }
+            } else {
+                rawPath
+            }
             if (allowRootAlias && (decoded.isEmpty() || decoded == "/")) return ""
             require(decoded.isNotBlank()) { "脚本路径不能为空" }
             require(!decoded.startsWith("//") && !decoded.startsWith('\\')) { "脚本路径不能是绝对路径" }
