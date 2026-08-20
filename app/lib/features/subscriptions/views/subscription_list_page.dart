@@ -14,6 +14,23 @@ import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 
+String? validateSubscriptionAuth({
+  required String subscriptionType,
+  required String authType,
+  required int? sshKeyId,
+  required String authToken,
+  bool hasExistingToken = false,
+}) {
+  if (subscriptionType != 'git-repo') return null;
+  if (authType == 'ssh' && (sshKeyId == null || sshKeyId <= 0)) {
+    return '请选择 SSH 密钥';
+  }
+  if (authType == 'token' && authToken.trim().isEmpty && !hasExistingToken) {
+    return '请填写访问 Token';
+  }
+  return null;
+}
+
 // ── Provider ──
 
 final subscriptionListProvider =

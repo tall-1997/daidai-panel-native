@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/theme/theme_provider.dart';
 
 class AppCard extends ConsumerWidget {
   final Widget child;
@@ -234,6 +235,48 @@ class AppLiquidGlassInput extends StatelessWidget {
           ),
         ),
         child: child,
+      ),
+    );
+  }
+}
+
+class AppStyleSlider extends ConsumerWidget {
+  final double value;
+  final ValueChanged<double>? onChanged;
+  final Color activeColor;
+  final Color? inactiveColor;
+
+  const AppStyleSlider({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.activeColor = AppColors.primary,
+    this.inactiveColor,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isFlat = ref.watch(
+      appStyleProvider.select(
+        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+      ),
+    );
+    if (isFlat) {
+      return Slider(
+        value: value,
+        onChanged: onChanged,
+        activeColor: activeColor,
+        inactiveColor: inactiveColor,
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) => LiquidGlassSlider(
+        value: value,
+        layout: LiquidGlassSliderLayout(width: constraints.maxWidth),
+        activeColor: activeColor,
+        inactiveColor: inactiveColor ?? Theme.of(context).colorScheme.outlineVariant,
+        pixelRatio: 0.7,
+        onChanged: onChanged ?? (_) {},
       ),
     );
   }
