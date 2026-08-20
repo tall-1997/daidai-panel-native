@@ -18,7 +18,11 @@ class LocalPanelHttpServer(
     localToken: String,
     port: Int = findAvailablePort()
 ) : NanoHTTPD("127.0.0.1", port) {
-    private val store = LocalPanelStore(context)
+    private val store = LocalPanelStore(
+        context,
+        endpointProvider = { endpoint },
+        localTokenProvider = { localToken },
+    )
     private val cronScheduler = AndroidFallbackCronScheduler(store)
     @Volatile
     private var goCoreFallbackReason = goCoreFallbackReason

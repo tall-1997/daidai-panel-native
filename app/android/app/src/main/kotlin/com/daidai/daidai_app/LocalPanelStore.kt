@@ -31,7 +31,11 @@ import androidx.core.content.ContextCompat
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
-class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
+class LocalPanelStore(
+    private val appContext: Context,
+    private val endpointProvider: () -> String = { "http://127.0.0.1:5700" },
+    private val localTokenProvider: () -> String = { "" },
+) : SQLiteOpenHelper(
     appContext,
     "daidai-local.db",
     null,
@@ -62,7 +66,7 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 10
+        const val SCHEMA_VERSION = 11
         private const val MAX_SCRIPT_LOG_LINES = 2000
         private const val MAX_SCRIPT_LOG_LINE_CHARS = 8192
         private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 1_000_000
@@ -186,6 +190,12 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
         if (oldVersion < 8) createFallbackCoreTables(db)
         if (oldVersion < 9) createManagementTables(db)
         if (oldVersion < 10) createSecurityTables(db)
+        if (oldVersion < 11) {
+            // v0.4.7 wrote task log codes as 1=success, 2=failure, 3=running,
+            // while all clients and the Go backend use 0=success, 1=failure, 2=running.
+            db.execSQL("UPDATE task_logs_local SET status = CASE status WHEN 1 THEN 0 WHEN 2 THEN 1 WHEN 3 THEN 2 ELSE status END")
+            createNotificationTables(db)
+        }
     }
 
     private fun createFallbackCoreTables(db: SQLiteDatabase) {
@@ -631,7 +641,11 @@ class LocalPanelStore(private val appContext: Context) : SQLiteOpenHelper(
     private fun sendNotificationRequest(json: JSONObject): NanoHTTPD.Response {
         val title = json.optString("title").trim(); val content = json.optString("content").trim()
         if (title.isEmpty() || content.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "标题和正文不能为空")
-        val ids = json.optJSONArray("channel_ids")?.let { a -> (0 until a.length()).map { a.optLong(it) }.toSet() }
+        val ids = when {
+            json.has("channel_id") -> setOf(json.optLong("channel_id"))
+            json.optJSONArray("channel_ids") != null -> json.optJSONArray("channel_ids")!!.let { a -> (0 until a.length()).map { a.optLong(it) }.toSet() }
+            else -> null
+        }
         return sendNotificationByIds(title, content, ids, includeDisabled = false)
     }
 
@@ -1298,7 +1312,7 @@ fun serveDashboardStats(): JSONObject {
             .put("task_after", cursor.string("task_after"))
             .put("status", cursor.double("status"))
             .put("labels", JSONArray(cursor.string("labels")))
-            .put("last_run_status", cursor.string("last_run_status"))
+            .put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
             .put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
             .put("created_at", cursor.string("created_at"))
             .put("updated_at", cursor.string("updated_at"))
@@ -1321,7 +1335,15 @@ fun serveDashboardStats(): JSONObject {
             .put("updated_at", cursor.string("updated_at"))
     }
 
+    private fun taskRunStatusCode(value: String): Any = when (value.trim().lowercase()) {
+        "success" -> 0
+        "failed", "aborted", "stopped" -> 1
+        "running" -> 2
+        else -> JSONObject.NULL
+    }
+
     private fun dependencyRows(session: NanoHTTPD.IHTTPSession): JSONArray {
+        runCatching { syncInstalledRuntimeDependencies("Discovered from installed runtime packages") }
         val type = session.parms["type"]?.trim().orEmpty()
         val pythonVersion = session.parms["python_version"]?.trim().orEmpty()
         val clauses = mutableListOf<String>()
@@ -1852,6 +1874,42 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
+    private fun syncInstalledRuntimeDependencies(log: String) {
+        queryPipInstalledPackages().forEach { (name, version) ->
+            upsertInstalledDependency(name, "python", version, log)
+        }
+        queryNpmInstalledPackages().forEach { (name, version) ->
+            upsertInstalledDependency(name, "nodejs", version, log)
+        }
+    }
+
+    private fun upsertInstalledDependency(name: String, type: String, version: String = "", log: String) {
+        val normalizedName = normalizePackageName(name)
+        val now = Instant.now().toString()
+        val existingId = readableDatabase.query(
+            "dependencies",
+            arrayOf("id"),
+            "LOWER(REPLACE(name, '_', '-')) = ? AND type = ?",
+            arrayOf(normalizedName, type),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.long("id") else null }
+        val values = ContentValues().apply {
+            put("name", normalizedName)
+            put("type", type)
+            put("python_version", if (type == "python") "3.14" else "")
+            put("version", version)
+            put("status", "installed")
+            put("log", log)
+            put("updated_at", now)
+            if (existingId == null) put("created_at", now)
+        }
+        if (existingId == null) writableDatabase.insertOrThrow("dependencies", null, values)
+        else writableDatabase.update("dependencies", values, "id = ?", arrayOf(existingId.toString()))
+    }
+
     private fun prepareScriptDependencies(runId: String, file: File): Boolean {
         val scan = ScriptCompatibility.scan(file)
         if (scan.missingCompanionFiles.isNotEmpty()) {
@@ -1870,17 +1928,30 @@ fun serveDashboardStats(): JSONObject {
                 appendScriptRunLog(runId, "Dependency install failed: $type/$name (${result.first})")
                 return false
             }
+            val version = if (type == "python") queryPipInstalledPackages()[normalizePackageName(name)].orEmpty()
+                else queryNpmInstalledPackages()[normalizePackageName(name)].orEmpty()
+            upsertInstalledDependency(name, type, version, "Auto-installed while running script")
         }
         return true
     }
 
+    private fun copyManagedHelper(assetName: String, target: File) {
+        val content = appContext.assets.open("helpers/$assetName").bufferedReader().use { it.readText() }
+        if (!target.exists() || !target.readText().contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
+            target.parentFile?.mkdirs()
+            target.writeText(content)
+        }
+    }
+
     private fun ensureQingLongShims(workingDir: File) {
         workingDir.mkdirs()
-        val notify = File(workingDir, "sendNotify.js")
-        if (!notify.exists()) notify.writeText(
-            "'use strict';\nfunction sendNotify(title, message) { console.log('[sendNotify] ' + String(title || '') + ': ' + String(message || '')); }\nmodule.exports = sendNotify; module.exports.sendNotify = sendNotify;\n"
-        )
-        // Only a deliberately tiny, data-free helper is supplied; do not emulate QingLong internals or secrets.
+        val scripts = scriptsRoot()
+        copyManagedHelper("notify.py", File(scripts, "notify.py"))
+        copyManagedHelper("sendNotify.js", File(scripts, "sendNotify.js"))
+        if (workingDir.canonicalFile != scripts.canonicalFile) {
+            copyManagedHelper("notify.py", File(workingDir, "notify.py"))
+            copyManagedHelper("sendNotify.js", File(workingDir, "sendNotify.js"))
+        }
         val common = File(workingDir, "common.js")
         if (!common.exists()) common.writeText(
             "'use strict';\nmodule.exports = { sleep: ms => new Promise(resolve => setTimeout(resolve, Number(ms) || 0)) };\n"
@@ -1892,25 +1963,40 @@ fun serveDashboardStats(): JSONObject {
             putAll(
                 mapOf(
                     "DAIDAI_ANDROID_LOCAL" to "1",
+                    "DAIDAI_SCRIPTS_DIR" to scriptsRoot().absolutePath,
+                    "DAIDAI_NOTIFY_PY" to File(scriptsRoot(), "notify.py").absolutePath,
+                    "DAIDAI_SEND_NOTIFY_JS" to File(scriptsRoot(), "sendNotify.js").absolutePath,
+                    "DAIDAI_NOTIFY_URL" to "${endpointProvider().trimEnd('/')}/api/v1/notifications/send",
+                    "DAIDAI_NOTIFY_ORIGIN" to endpointProvider().trimEnd('/'),
+                    "DAIDAI_NOTIFY_TOKEN" to localTokenProvider(),
+                    "DAIDAI_NOTIFY_TIMEOUT" to "15000",
                     "QL_DIR" to scriptsRoot().absolutePath,
                     "QL_DATA_DIR" to appContext.filesDir.absolutePath,
                     "QL_SCRIPT_DIR" to workingDir.absolutePath,
                     "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
                     "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
-                    "PYTHONPATH" to File(appContext.filesDir, "deps/python").absolutePath,
+                    "PYTHONPATH" to listOf(
+                        scriptsRoot().absolutePath,
+                        File(appContext.filesDir, "deps/python").absolutePath,
+                    ).joinToString(File.pathSeparator),
                     "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
                     "NODE_PATH" to listOf(
+                        scriptsRoot().absolutePath,
                         AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
                         File(AndroidNodeRuntime.depsDir(appContext), "node_modules").absolutePath,
                     ).filter(String::isNotBlank).joinToString(File.pathSeparator),
+                    "NODE_OPTIONS" to "--require=${File(scriptsRoot(), "sendNotify.js").absolutePath}",
                     "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
                 )
             )
         }
         AndroidPythonRuntime.ensureReady(appContext)?.let { runtime ->
             env["PYTHONHOME"] = runtime.home
-            env["PYTHONPATH"] = listOf(runtime.sitePackages, File(appContext.filesDir, "deps/python").absolutePath)
-                .joinToString(File.pathSeparator)
+            env["PYTHONPATH"] = listOf(
+                scriptsRoot().absolutePath,
+                runtime.sitePackages,
+                File(appContext.filesDir, "deps/python").absolutePath,
+            ).joinToString(File.pathSeparator)
         }
         AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
             env["NPM_CONFIG_GLOBALCONFIG"] = File(runtime.home, "etc/npmrc").absolutePath
@@ -2209,7 +2295,7 @@ fun serveDashboardStats(): JSONObject {
                 put("task_before", cursor.string("task_before"))
                 put("task_after", cursor.string("task_after"))
                 put("labels", JSONArray(cursor.string("labels")))
-                put("last_run_status", cursor.string("last_run_status"))
+                put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
                 put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
                 put("last_log_id", cursor.long("last_log_id"))
                 put("created_at", cursor.string("created_at"))
@@ -2271,10 +2357,10 @@ fun serveDashboardStats(): JSONObject {
     private fun insertTaskLog(taskId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant): Long {
         val content = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         val statusCode = when (result.status) {
-            "success" -> 1
-            "failed" -> 2
-            "running" -> 3
-            else -> 0
+            "success" -> 0
+            "failed" -> 1
+            "running" -> 2
+            else -> 1
         }
         val values = ContentValues().apply {
             put("task_id", taskId)
@@ -2509,8 +2595,8 @@ fun serveDashboardStats(): JSONObject {
             .put("content", cursor.string("content"))
             .put("logs", logs)
             .put("status", cursor.int("status"))
-            .put("run_status", when (cursor.int("status")) { 1 -> "success"; 2 -> "failed"; 3 -> "running"; 0 -> "pending"; else -> "unknown" })
-            .put("done", cursor.int("status") != 3)
+            .put("run_status", when (cursor.int("status")) { 0 -> "success"; 1 -> "failed"; 2 -> "running"; else -> "unknown" })
+            .put("done", cursor.int("status") != 2)
             .put("exit_code", if (cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) JSONObject.NULL else cursor.int("exit_code"))
             .put("duration", cursor.double("duration"))
             .put("started_at", cursor.string("started_at"))
