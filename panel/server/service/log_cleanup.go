@@ -90,7 +90,7 @@ func logCleanupLoop(stop <-chan struct{}, done chan<- struct{}) {
 	// 启动延迟，避免与启动迁移争抢
 	select {
 	case <-time.After(60 * time.Second):
-		cleanupOldLogs()
+		runPeriodicCleanup()
 	case <-stop:
 		return
 	}
@@ -98,10 +98,19 @@ func logCleanupLoop(stop <-chan struct{}, done chan<- struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			cleanupOldLogs()
+			runPeriodicCleanup()
 		case <-stop:
 			return
 		}
+	}
+}
+
+func runPeriodicCleanup() {
+	cleanupOldLogs()
+	if removed, err := CleanExpiredTokenBlocklist(); err != nil {
+		log.Printf("token blocklist cleanup failed: %v", err)
+	} else if removed > 0 {
+		log.Printf("token blocklist cleanup: removed %d expired rows", removed)
 	}
 }
 

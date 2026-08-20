@@ -86,6 +86,13 @@ func RunCommandWithPlan(plan *CommandExecutionPlan, timeout int, envVars map[str
 		return nil, nil, err
 	}
 
+	// 放在 desi 收窄之后：desi 只把选中的账号写回变量，按这里的口径统计才是子进程真实要背的量。
+	if onOutput != nil {
+		emitRuntimeEnvLimitWarnings(resolvedEnv, plan.Interpreter, func(line string) {
+			onOutput(line + "\n")
+		})
+	}
+
 	return runSingleCommand(plan, effectiveTimeout, resolvedEnv, maxLogSize, onOutput, onProcessStart...)
 }
 
@@ -860,6 +867,14 @@ func runConcurrentCommand(plan *CommandExecutionPlan, timeout int, envVars map[s
 			}
 		}
 	}
+
+	// conc 会为每个账号各起一个进程，环境只差 EnvName 这一条，
+	// 所以按第一个账号体检一次即可，避免同一段提示刷 N 遍。
+	emitRuntimeEnvLimitWarnings(
+		applyConcurrentAccountEnv(plan, envVars, selections[0]),
+		plan.Interpreter,
+		appendLine,
+	)
 
 	type concurrentResult struct {
 		index      int

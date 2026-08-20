@@ -2,12 +2,57 @@ package handler_test
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
+
+// isolatePythonProbePath 把进程 PATH 整体替换成一个空的临时目录，并返回这个目录。
+//
+// service.DefaultPythonVersion() 会真的 exec `python3.X --version` 做版本回退探测，
+// 所以只要系统 PATH 还可见，创建任务拿到的默认 Python 版本就跟着宿主机走：
+// GitHub ubuntu runner 自带 python3.12，纯净构建容器里一个 python 都没有。
+// 整体替换之后，PATH 上有哪些 Python 完全由用例自己写死。
+//
+// 注：service 包里有同名的等价实现（writeFakeExecutable 是 service 包的测试辅助，
+// handler 包用不了），两边各自维护一份，改动时注意同步语义。
+func isolatePythonProbePath(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	pathValue := dir
+	if runtime.GOOS == "windows" {
+		// Windows 上假解释器是 .cmd，CreateProcess 需要能找到 cmd.exe 才能拉起它。
+		// System32 里没有任何 python / python3 / py，补上它不会让宿主机解释器重新可见。
+		if systemRoot := strings.TrimSpace(os.Getenv("SystemRoot")); systemRoot != "" {
+			pathValue += string(os.PathListSeparator) + filepath.Join(systemRoot, "System32")
+		}
+	}
+	t.Setenv("PATH", pathValue)
+	return dir
+}
+
+// writeFakePythonInterpreter 写一个假 Python 解释器，
+// 按真实格式打印 "Python X.Y.Z"，供 `<binary> --version` 探测识别。
+func writeFakePythonInterpreter(t *testing.T, dir, binary, version string) {
+	t.Helper()
+
+	path := filepath.Join(dir, binary)
+	content := "#!/bin/sh\necho Python " + version + "\n"
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		content = "@echo off\r\necho Python " + version + "\r\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake python interpreter: %v", err)
+	}
+}
 
 func TestCreateTaskDefaultsTimeoutToZero(t *testing.T) {
 	testutil.SetupTestEnv(t)
@@ -49,6 +94,18 @@ func TestCreateTaskDefaultsTimeoutToZero(t *testing.T) {
 func TestCreateTaskUsesConfiguredDefaultPythonVersionWhenOmitted(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	t.Setenv("PATH", t.TempDir())
+
+	// 请求里省略 python_version 时，handler 会落到 service.DefaultPythonVersion()，
+	// 那里会做"请求版本探测不到才回退到已装版本"的真实 exec 探测。
+	// 原来这个用例没造任何假 python，纯靠宿主机恰好没装 python3.12 才拿到 3.11；
+	// runner 上自带 3.12 时配置的 3.11 会被回退掉，响应变成 3.12。
+	// 现在把 PATH 收敛到只有自造的 3.10 / 3.11 / 3.12：
+	//   - 配置的 3.11 探测得到 → 不回退 → 响应必须是 3.11；
+	//   - 回退不变量若被破坏（例如无条件回退到默认 3.12），环境里恰好也有 3.12 可回退，本用例立刻红。
+	fakePythonDir := isolatePythonProbePath(t)
+	for _, version := range []string{"3.10", "3.11", "3.12"} {
+		writeFakePythonInterpreter(t, fakePythonDir, "python"+version, version+".4")
+	}
 
 	if err := model.SetConfig("python_default_version", "3.11"); err != nil {
 		t.Fatalf("set default python version: %v", err)

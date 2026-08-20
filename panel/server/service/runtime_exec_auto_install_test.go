@@ -62,7 +62,7 @@ func TestNodePreloadKeepsGithubEnvReadableButHiddenFromStringify(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte(envJSON), 0o600); err != nil {
 		t.Fatalf("write env file: %v", err)
 	}
-	preloadFile, err := writeNodePreloadScript(tempDir, envFile, map[string]string{})
+	preloadFile, err := writeNodePreloadScript(tempDir, envFile, map[string]string{}, false)
 	if err != nil {
 		t.Fatalf("write node preload: %v", err)
 	}

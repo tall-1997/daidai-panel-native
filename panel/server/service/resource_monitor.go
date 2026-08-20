@@ -96,12 +96,14 @@ func CountScriptFiles(scriptsDir string) int64 {
 			return nil
 		}
 		if info.IsDir() {
-			if ShouldIgnoreScriptPath(scriptsDir, path) {
+			// 逐段遍历版本：.git/objects 里成千上万个文件不该算进“脚本文件数”，
+			// 顺带修掉子目录里的 node_modules 也被计入的既有缺陷。
+			if ShouldHideScriptTreePath(scriptsDir, path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if ShouldIgnoreScriptPath(scriptsDir, path) {
+		if ShouldHideScriptTreePath(scriptsDir, path) {
 			return nil
 		}
 		count++

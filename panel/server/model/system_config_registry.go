@@ -27,13 +27,33 @@ type SystemConfigOption struct {
 	Label string `json:"label"`
 }
 
+// SystemConfigDefinition 是面板对「一项系统配置长什么样」的唯一声明。
+// 除服务端自身使用外，它还通过 GET /api/configs 原样下发给 Web 和 APP，
+// 让客户端可以完全按 schema 动态渲染设置页，而不用各自再抄一份表单定义。
+//
+// 字段只允许新增，不允许改名或改语义：老客户端拿到多出来的键应当无感。
 type SystemConfigDefinition struct {
-	Key          string                `json:"key"`
+	Key string `json:"key"`
+	// Label 是输入框标题用的短词。Description 是长句说明（个别项有三行），
+	// 只能当 hint 用，不能直接拿来当标题。
+	Label        string                `json:"label"`
 	DefaultValue string                `json:"default_value"`
 	Description  string                `json:"description"`
 	ValueType    SystemConfigValueType `json:"value_type"`
 	Group        string                `json:"group"`
-	Options      []SystemConfigOption  `json:"options,omitempty"`
+	// GroupLabel 是 Group 这个英文 slug 对应的中文分组名，由 systemConfigGroupLabels 统一给出。
+	GroupLabel string `json:"group_label"`
+	// Order 是注册顺序。/api/configs 返回的是 map 而不是 list，本身没有顺序，
+	// 客户端要按声明顺序渲染就只能靠这个字段。
+	Order int `json:"order"`
+	// Secret 标记该项是凭据类配置，客户端渲染时应当打码（密码框）。
+	// 注意：这里只是渲染提示，服务端目前仍然明文下发，详见 handler.buildConfigResponseItem 的说明。
+	Secret bool `json:"secret,omitempty"`
+	// Min / Max 只对 int 类型有值，来自 newIntConfig 的取值区间，
+	// 供客户端做前端校验（服务端仍然会独立校验一次）。
+	Min     *int                 `json:"min,omitempty"`
+	Max     *int                 `json:"max,omitempty"`
+	Options []SystemConfigOption `json:"options,omitempty"`
 }
 
 type systemConfigSpec struct {
@@ -46,17 +66,69 @@ const (
 	DefaultPanelTimezone   = "Asia/Shanghai"
 )
 
-var registeredSystemConfigSpecs = []systemConfigSpec{
-	newIntConfig("max_concurrent_tasks", "5", "定时任务最大并发数", "tasks", 1, 128),
-	newIntConfig("log_retention_days", "7", "日志保留天数", "tasks", 1, 3650),
-	newIntConfig("max_log_content_size", "102400000", "任务日志内容最大保留字节数", "tasks", 1024, 524288000),
-	newBoolConfig("auto_update_enabled", "false", "静默更新开关（每 24 小时自动检查并在有新版本时尝试更新）", "network"),
-	newTrimmedStringConfig("auto_update_last_checked_at", "", "上次自动检查更新时间", "network"),
-	newIntConfig("random_delay", "0", "任务执行前随机延迟最大秒数", "tasks", 0, 86400),
-	newTrimmedStringConfig("random_delay_extensions", "", "随机延迟仅对指定脚本后缀生效", "tasks"),
-	newBoolConfig("auto_install_deps", "true", "脚本缺依赖时自动尝试安装", "tasks"),
+const (
+	// DefaultRepoFileExtensions 是订阅扫描任务候选时认的脚本后缀。
+	// LegacyRepoFileExtensions 是 v3.0.5 及之前的默认值，它漏了 mjs。
+	// 两个常量都要留着：升级时靠「库里存的正好等于旧默认」来判断用户没改过这项配置，
+	// 只有这种情况才把它抬到新默认，用户自己填过的值一律不动。
+	DefaultRepoFileExtensions = "py js mjs ts sh"
+	LegacyRepoFileExtensions  = "py js sh ts"
+)
+
+// defaultBackupScheduleSelection 同时给注册表默认值和 normalizeBackupScheduleSelectionValue 使用。
+//
+// 这两处历史上是各写各的字面量，注册表那份少了 task_views：
+// newValidatedStringConfig 把 DefaultValue 原样存进 definition、注册时不过 normalize，
+// 于是 /api/configs 报出去的 default_value、InitDefaultConfigs 首次建行写入的值、
+// GetRegisteredConfig 在库里没记录时的回退值，全都是缺了任务视图的那份，
+// 表现为「从未保存过备份设置的实例，定时备份不含任务视图」。收成一个常量避免再次分叉。
+const defaultBackupScheduleSelection = "configs,tasks,subscriptions,env_vars,logs,scripts,dependencies,task_views"
+
+// systemConfigGroupLabels 是分组 slug -> 中文分组名。
+// 新增分组时必须在这里补一条，TestEveryRegisteredConfigGroupHasLabel 会兜底拦截漏补。
+var systemConfigGroupLabels = map[string]string{
+	"tasks":        "任务执行",
+	"network":      "网络代理",
+	"security":     "安全",
+	"branding":     "面板与运行时",
+	"backup":       "定时备份",
+	"alerts":       "告警通知",
+	"subscription": "订阅拉取",
+}
+
+// finalizeSystemConfigSpecs 补齐无法在单条声明里写死的元信息：注册顺序和分组中文名。
+//
+// 必须在 registeredSystemConfigSpecs 这个变量的初始化表达式里调用，不能挪到 init()：
+// registeredSystemConfigMap 是按值拷贝存 spec 的，init() 里再改切片，map 里那份就成了旧数据。
+func finalizeSystemConfigSpecs(specs []systemConfigSpec) []systemConfigSpec {
+	for i := range specs {
+		specs[i].def.Order = i
+		if label, exists := systemConfigGroupLabels[specs[i].def.Group]; exists {
+			specs[i].def.GroupLabel = label
+		} else {
+			// 漏配中文名时退化成 slug，保证这个字段永远不为空串。
+			specs[i].def.GroupLabel = specs[i].def.Group
+		}
+	}
+	return specs
+}
+
+var registeredSystemConfigSpecs = finalizeSystemConfigSpecs([]systemConfigSpec{
+	newIntConfig("max_concurrent_tasks", "定时任务并发数", "5", "定时任务最大并发数", "tasks", 1, 128),
+	newIntConfig("log_retention_days", "日志保留天数", "7", "日志保留天数", "tasks", 1, 3650),
+	newIntConfig("max_log_content_size", "日志内容上限", "102400000", "任务日志内容最大保留字节数", "tasks", 1024, 524288000),
+	// 下限刻意不给到 1 分钟：填 1 会让几乎所有安装都秒失败，看起来像面板坏了。
+	// 上限 720 分钟（12 小时）足够覆盖 ARM 设备上现场编译 opencv 这类极端情况。
+	newIntConfig("dependency_install_timeout_minutes", "依赖安装超时(分钟)", "20", "单个依赖安装/卸载的最长执行时间。安装 opencv 等需要现场编译的大包时可调大", "tasks", 5, 720),
+	newBoolConfig("auto_update_enabled", "静默更新", "false", "静默更新开关（每 24 小时自动检查并在有新版本时尝试更新）", "network"),
+	newTrimmedStringConfig("auto_update_last_checked_at", "上次检查更新时间", "", "上次自动检查更新时间", "network"),
+	newIntConfig("random_delay", "随机延迟最大秒数", "0", "任务执行前随机延迟最大秒数", "tasks", 0, 86400),
+	newTrimmedStringConfig("random_delay_extensions", "延迟文件后缀", "", "随机延迟仅对指定脚本后缀生效", "tasks"),
+	newBoolConfig("auto_install_deps", "自动安装缺失依赖", "true", "脚本缺依赖时自动尝试安装", "tasks"),
+	newBoolConfig("detect_silent_exit", "检测脚本半路静默结束", "true", "Node 任务因 Promise 永不完成而提前退出时判定为失败，而不是记成成功", "tasks"),
 	newEnumConfig(
 		"python_default_version",
+		"默认 Python 版本",
 		"3.12",
 		"默认 Python 运行版本",
 		"tasks",
@@ -66,36 +138,41 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 			{Value: "3.12", Label: "Python 3.12"},
 		},
 	),
-	newIntConfig("cpu_warn", "80", "CPU 告警阈值（%）", "alerts", 1, 100),
-	newIntConfig("memory_warn", "80", "内存告警阈值（%）", "alerts", 1, 100),
-	newIntConfig("disk_warn", "90", "磁盘告警阈值（%）", "alerts", 1, 100),
-	newBoolConfig("auto_add_cron", "true", "自动添加定时任务", "subscription"),
-	newBoolConfig("auto_del_cron", "true", "自动删除失效任务", "subscription"),
-	newBoolConfig("subscription_force_overwrite", "true", "订阅拉取时覆盖本地修改并清理多余文件", "subscription"),
-	newValidatedStringConfig("default_cron_rule", "", "订阅脚本未声明 cron 时使用的默认规则", "subscription", normalizeDefaultCronRule),
-	newTrimmedStringConfig("repo_file_extensions", "py js sh ts", "订阅自动识别任务时扫描的脚本后缀", "subscription"),
-	newBoolConfig("notify_on_resource_warn", "false", "资源超限发送通知", "alerts"),
-	newTrimmedStringConfig("notify_panel_label", "", "通知标题前缀的面板名称（多面板区分用，留空不附带）", "alerts"),
-	newBoolConfig("notify_on_login", "false", "登录成功发送通知", "security"),
-	newValidatedStringConfig("proxy_url", "", "出站请求代理地址", "network", normalizeProxyURL),
-	newValidatedStringConfig("update_image_mirror", "", "系统更新拉取镜像时使用的可选镜像源（留空直连 Docker Hub）", "network", normalizeUpdateImageMirror),
-	newValidatedStringConfig("binary_update_proxy", "", "二进制更新下载加速源（留空直连 GitHub Release）", "network", normalizeBinaryUpdateProxy),
+	newIntConfig("cpu_warn", "CPU 阈值 (%)", "80", "CPU 告警阈值（%）", "alerts", 1, 100),
+	newIntConfig("memory_warn", "内存阈值 (%)", "80", "内存告警阈值（%）", "alerts", 1, 100),
+	newIntConfig("disk_warn", "磁盘阈值 (%)", "90", "磁盘告警阈值（%）", "alerts", 1, 100),
+	newBoolConfig("auto_add_cron", "自动添加定时任务", "true", "自动添加定时任务", "subscription"),
+	newBoolConfig("auto_del_cron", "自动删除失效任务", "true", "自动删除失效任务", "subscription"),
+	newBoolConfig("subscription_force_overwrite", "覆盖拉取", "true", "订阅拉取时覆盖本地修改并清理多余文件", "subscription"),
+	newValidatedStringConfig("default_cron_rule", "默认 Cron 规则", "", "订阅脚本未声明 cron 时使用的默认规则", "subscription", normalizeDefaultCronRule),
+	// 默认值必须含 mjs：ESM 脚本（.mjs）在青龙生态里很常见，
+	// 旧默认 LegacyRepoFileExtensions 漏了它，表现为「仓库拉取成功、.mjs 却一个任务都不建」。
+	// 存量实例的补齐见 system_config.go 的 InitDefaultConfigs。
+	newTrimmedStringConfig("repo_file_extensions", "拉取文件后缀", DefaultRepoFileExtensions, "订阅自动识别任务时扫描的脚本后缀", "subscription"),
+	newBoolConfig("notify_on_resource_warn", "资源超限发送通知", "false", "资源超限发送通知", "alerts"),
+	newTrimmedStringConfig("notify_panel_label", "通知面板名称", "", "通知标题前缀的面板名称（多面板区分用，留空不附带）", "alerts"),
+	newBoolConfig("notify_on_login", "登录成功发送通知", "false", "登录成功发送通知", "security"),
+	newValidatedStringConfig("proxy_url", "代理地址", "", "出站请求代理地址", "network", normalizeProxyURL),
+	newValidatedStringConfig("update_image_mirror", "系统更新镜像源", "", "旧 Docker Socket 更新链路使用的可选镜像源（Watchtower 部署请通过 DAIDAI_PANEL_IMAGE 配置仓库）", "network", normalizeUpdateImageMirror),
+	newValidatedStringConfig("binary_update_proxy", "二进制更新加速源", "", "二进制更新下载加速源（留空直连 GitHub Release）", "network", normalizeBinaryUpdateProxy),
 	newValidatedStringConfig(
 		"trusted_proxy_cidrs",
+		"可信代理 CIDR",
 		strings.Join(netutil.DefaultTrustedProxyCIDRs(), "\n"),
 		"可信代理 CIDR/IP 列表（逗号、空格或换行分隔）",
 		"network",
 		normalizeTrustedProxyCIDRs,
 	),
-	newTrimmedStringConfig("panel_title", "呆呆面板", "面板标题", "branding"),
-	newValidatedStringConfig(PanelTimezoneConfigKey, DefaultPanelTimezone, "面板时区（影响日志、定时任务日期判断和脚本 TZ）", "branding", normalizeTimezoneValue),
-	newTrimmedStringConfig("panel_icon", "", "面板图标（SVG data URL）", "branding"),
-	newTrimmedStringConfig("editor_background_color", "", "脚本编辑器背景颜色（留空使用默认样式）", "branding"),
-	newTrimmedStringConfig("log_background_color", "", "日志视图背景颜色（留空跟随当前主题）", "branding"),
-	newTrimmedStringConfig("log_background_image", "", "日志视图背景图片（data URL）", "branding"),
-	newBoolConfig("backup_schedule_enabled", "false", "启用定时备份", "backup"),
+	newTrimmedStringConfig("panel_title", "面板标题", "呆呆面板", "面板标题", "branding"),
+	newValidatedStringConfig(PanelTimezoneConfigKey, "面板时区", DefaultPanelTimezone, "面板时区（影响日志、定时任务日期判断和脚本 TZ）", "branding", normalizeTimezoneValue),
+	newTrimmedStringConfig("panel_icon", "面板图标 (SVG)", "", "面板图标（SVG data URL）", "branding"),
+	newTrimmedStringConfig("editor_background_color", "编辑器背景颜色", "", "脚本编辑器背景颜色（留空使用默认样式）", "branding"),
+	newTrimmedStringConfig("log_background_color", "日志背景颜色", "", "日志视图背景颜色（留空跟随当前主题）", "branding"),
+	newTrimmedStringConfig("log_background_image", "日志背景图片", "", "日志视图背景图片（data URL）", "branding"),
+	newBoolConfig("backup_schedule_enabled", "启用定时备份", "false", "启用定时备份", "backup"),
 	newEnumConfig(
 		"backup_schedule_frequency",
+		"备份频率",
 		"daily",
 		"定时备份频率",
 		"backup",
@@ -105,9 +182,10 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 			{Value: "monthly", Label: "每月"},
 		},
 	),
-	newValidatedStringConfig("backup_schedule_time", "03:00", "定时备份执行时间（24 小时制 HH:MM）", "backup", normalizeBackupScheduleTimeValue),
+	newValidatedStringConfig("backup_schedule_time", "执行时间", "03:00", "定时备份执行时间（24 小时制 HH:MM）", "backup", normalizeBackupScheduleTimeValue),
 	newEnumConfig(
 		"backup_schedule_weekday",
+		"每周执行日",
 		"1",
 		"每周备份执行日（0=周日，1=周一）",
 		"backup",
@@ -121,18 +199,20 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 			{Value: "6", Label: "周六"},
 		},
 	),
-	newIntConfig("backup_schedule_monthday", "1", "每月备份执行日", "backup", 1, 28),
-	newTrimmedStringConfig("backup_schedule_name", "", "定时备份文件名前缀", "backup"),
-	newTrimmedStringConfig("backup_schedule_password", "", "定时备份加密密码", "backup"),
+	newIntConfig("backup_schedule_monthday", "每月执行日", "1", "每月备份执行日", "backup", 1, 28),
+	newTrimmedStringConfig("backup_schedule_name", "文件名前缀", "", "定时备份文件名前缀", "backup"),
+	newSecretStringConfig("backup_schedule_password", "加密密码", "", "定时备份加密密码", "backup"),
 	newValidatedStringConfig(
 		"backup_schedule_selection",
-		"configs,tasks,subscriptions,env_vars,logs,scripts,dependencies",
+		"备份内容",
+		defaultBackupScheduleSelection,
 		"定时备份包含的内容（逗号分隔）",
 		"backup",
 		normalizeBackupScheduleSelectionValue,
 	),
 	newEnumConfig(
 		"panel_runtime_mode",
+		"运行时日志输出",
 		"auto",
 		"二进制运行时日志输出策略：auto=Docker 输出到 stdout，裸机输出到 panel.log；stdout=同时输出到 stdout 和 panel.log；file=仅写 panel.log",
 		"branding",
@@ -144,6 +224,7 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 	),
 	newEnumConfig(
 		"panel_service_manager",
+		"守护方式",
 		"none",
 		"面板二进制守护方式；启用后更新流程会尝试先停止守护再启动守护",
 		"branding",
@@ -152,14 +233,15 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 			{Value: "systemd", Label: "systemd"},
 		},
 	),
-	newTrimmedStringConfig("panel_service_name", "daidai-panel", "systemd 服务名称", "branding"),
-	newIntConfig("max_web_sessions", "1", "同一用户最大网页端会话数（多设备同时在线）", "security", 1, 20),
-	newIntConfig("max_app_sessions", "1", "同一用户最大 APP 端会话数（多设备同时在线）", "security", 1, 20),
-	newBoolConfig("captcha_enabled", "false", "极验验证码开关（开启后每次登录触发）", "security"),
-	newTrimmedStringConfig("captcha_id", "", "验证码平台 ID", "security"),
-	newTrimmedStringConfig("captcha_key", "", "验证码平台密钥（服务端 Key）", "security"),
+	newTrimmedStringConfig("panel_service_name", "systemd 服务名", "daidai-panel", "systemd 服务名称", "branding"),
+	newIntConfig("max_web_sessions", "网页端会话上限", "1", "同一用户最大网页端会话数（多设备同时在线）", "security", 1, 20),
+	newIntConfig("max_app_sessions", "APP 端会话上限", "1", "同一用户最大 APP 端会话数（多设备同时在线）", "security", 1, 20),
+	newBoolConfig("captcha_enabled", "启用极验验证码", "false", "极验验证码开关（开启后每次登录触发）", "security"),
+	newTrimmedStringConfig("captcha_id", "Captcha ID", "", "验证码平台 ID", "security"),
+	newSecretStringConfig("captcha_key", "Captcha Key", "", "验证码平台密钥（服务端 Key）", "security"),
 	newEnumConfig(
 		"captcha_fail_mode",
+		"上游异常策略",
 		"open",
 		"验证码上游异常策略：open=放行，strict=严格拦截",
 		"security",
@@ -168,7 +250,7 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 			{Value: "strict", Label: "严格拦截"},
 		},
 	),
-}
+})
 
 var registeredSystemConfigMap = buildSystemConfigSpecMap(registeredSystemConfigSpecs)
 
@@ -180,11 +262,14 @@ func buildSystemConfigSpecMap(specs []systemConfigSpec) map[string]systemConfigS
 	return result
 }
 
-func newTrimmedStringConfig(key, defaultValue, description, group string) systemConfigSpec {
+func newTrimmedStringConfig(key, label, defaultValue, description, group string) systemConfigSpec {
 	return systemConfigSpec{
 		def: SystemConfigDefinition{
-			Key:          key,
-			DefaultValue: defaultValue,
+			Key:   key,
+			Label: label,
+			// 这里存 TrimSpace 之后的值，保证 DefaultValue 与下面 normalize("") 的结果始终相等，
+			// 不依赖「调用方碰巧没写多余空格」。
+			DefaultValue: strings.TrimSpace(defaultValue),
 			Description:  description,
 			ValueType:    SystemConfigTypeString,
 			Group:        group,
@@ -199,10 +284,19 @@ func newTrimmedStringConfig(key, defaultValue, description, group string) system
 	}
 }
 
-func newValidatedStringConfig(key, defaultValue, description, group string, normalize func(string) (string, error)) systemConfigSpec {
+// newSecretStringConfig 与 newTrimmedStringConfig 行为完全一致，只是额外标记 Secret=true，
+// 让客户端知道这是凭据类配置、渲染时要用密码框而不是普通输入框。
+func newSecretStringConfig(key, label, defaultValue, description, group string) systemConfigSpec {
+	spec := newTrimmedStringConfig(key, label, defaultValue, description, group)
+	spec.def.Secret = true
+	return spec
+}
+
+func newValidatedStringConfig(key, label, defaultValue, description, group string, normalize func(string) (string, error)) systemConfigSpec {
 	return systemConfigSpec{
 		def: SystemConfigDefinition{
 			Key:          key,
+			Label:        label,
 			DefaultValue: defaultValue,
 			Description:  description,
 			ValueType:    SystemConfigTypeString,
@@ -212,22 +306,23 @@ func newValidatedStringConfig(key, defaultValue, description, group string, norm
 	}
 }
 
-func newHTTPBaseURLConfig(key, defaultValue, description, group string) systemConfigSpec {
-	return newValidatedStringConfig(key, defaultValue, description, group, func(value string) (string, error) {
+func newHTTPBaseURLConfig(key, label, defaultValue, description, group string) systemConfigSpec {
+	return newValidatedStringConfig(key, label, defaultValue, description, group, func(value string) (string, error) {
 		return normalizeHTTPBaseURLValue(value, defaultValue)
 	})
 }
 
-func newAIEndpointURLConfig(key, defaultValue, description, group string) systemConfigSpec {
-	return newValidatedStringConfig(key, defaultValue, description, group, func(value string) (string, error) {
+func newAIEndpointURLConfig(key, label, defaultValue, description, group string) systemConfigSpec {
+	return newValidatedStringConfig(key, label, defaultValue, description, group, func(value string) (string, error) {
 		return normalizeAIEndpointURLValue(value, defaultValue)
 	})
 }
 
-func newBoolConfig(key, defaultValue, description, group string) systemConfigSpec {
+func newBoolConfig(key, label, defaultValue, description, group string) systemConfigSpec {
 	return systemConfigSpec{
 		def: SystemConfigDefinition{
 			Key:          key,
+			Label:        label,
 			DefaultValue: normalizeBoolDefault(defaultValue),
 			Description:  description,
 			ValueType:    SystemConfigTypeBool,
@@ -247,14 +342,21 @@ func newBoolConfig(key, defaultValue, description, group string) systemConfigSpe
 	}
 }
 
-func newIntConfig(key, defaultValue, description, group string, minValue, maxValue int) systemConfigSpec {
+func newIntConfig(key, label, defaultValue, description, group string, minValue, maxValue int) systemConfigSpec {
+	// 取值区间原本只被下面的 normalize 闭包捕获，从不写进 def，客户端拿不到、只能等服务端 400。
+	// 这里额外拷两份出来挂到 def 上：用拷贝而不是 &minValue，
+	// 是为了避免调用方拿到 def 后改 *def.Min 反过来把校验逻辑也改了。
+	minBound, maxBound := minValue, maxValue
 	return systemConfigSpec{
 		def: SystemConfigDefinition{
 			Key:          key,
+			Label:        label,
 			DefaultValue: defaultValue,
 			Description:  description,
 			ValueType:    SystemConfigTypeInt,
 			Group:        group,
+			Min:          &minBound,
+			Max:          &maxBound,
 		},
 		normalize: func(value string) (string, error) {
 			value = strings.TrimSpace(value)
@@ -274,7 +376,7 @@ func newIntConfig(key, defaultValue, description, group string, minValue, maxVal
 	}
 }
 
-func newEnumConfig(key, defaultValue, description, group string, options []SystemConfigOption) systemConfigSpec {
+func newEnumConfig(key, label, defaultValue, description, group string, options []SystemConfigOption) systemConfigSpec {
 	allowed := make(map[string]bool, len(options))
 	normalizedOptions := make([]SystemConfigOption, len(options))
 	for i, option := range options {
@@ -291,6 +393,7 @@ func newEnumConfig(key, defaultValue, description, group string, options []Syste
 	return systemConfigSpec{
 		def: SystemConfigDefinition{
 			Key:          key,
+			Label:        label,
 			DefaultValue: defaultValue,
 			Description:  description,
 			ValueType:    SystemConfigTypeEnum,
@@ -531,11 +634,10 @@ func normalizeBackupScheduleSelectionValue(value string) (string, error) {
 		"dependencies":  true,
 		"task_views":    true,
 	}
-	defaultValue := "configs,tasks,subscriptions,env_vars,logs,scripts,dependencies,task_views"
 
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return defaultValue, nil
+		return defaultBackupScheduleSelection, nil
 	}
 
 	seen := make(map[string]bool)

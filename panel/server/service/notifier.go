@@ -641,7 +641,7 @@ func sendTelegram(cfg map[string]string, title, content string) error {
 				body["message_thread_id"] = threadID
 			}
 		}
-		if err := httpPostWithClient(client, apiURL, body, nil); err != nil {
+		if err := httpPostCheckedWithClient(client, apiURL, body, nil, checkTelegramResult); err != nil {
 			return err
 		}
 	}
@@ -684,7 +684,7 @@ func sendDingtalk(cfg map[string]string, title, content string) error {
 			},
 		}
 	}
-	return httpPost(webhook, body, nil)
+	return httpPostChecked(webhook, body, nil, checkWecomStyleResult)
 }
 
 func sendWecom(cfg map[string]string, title, content string) error {
@@ -755,7 +755,7 @@ func sendWecomWithContext(cfg map[string]string, title, content string, context 
 		return fmt.Errorf("不支持的企业微信机器人消息类型: %s", msgType)
 	}
 
-	return httpPost(webhook, body, nil)
+	return httpPostChecked(webhook, body, nil, checkWecomStyleResult)
 }
 
 func sendWecomApp(cfg map[string]string, title, content string) error {
@@ -1012,7 +1012,7 @@ func sendBarkWithContext(cfg map[string]string, title, content string, context m
 	if jumpURL != "" {
 		body["url"] = jumpURL
 	}
-	return httpPost(apiURL, body, nil)
+	return httpPostChecked(apiURL, body, nil, checkBarkResult)
 }
 
 func sendPushplus(cfg map[string]string, title, content string) error {
@@ -1032,7 +1032,7 @@ func sendPushplus(cfg map[string]string, title, content string) error {
 	if v := cfg["template"]; v != "" {
 		body["template"] = v
 	}
-	return httpPost(apiURL, body, nil)
+	return httpPostChecked(apiURL, body, nil, checkPushplusResult)
 }
 
 func sendServerchan(cfg map[string]string, title, content string) error {
@@ -1042,7 +1042,7 @@ func sendServerchan(cfg map[string]string, title, content string) error {
 		"title": title,
 		"desp":  content,
 	}
-	return httpPost(apiURL, body, nil)
+	return httpPostChecked(apiURL, body, nil, checkServerchanResult)
 }
 
 func sendFeishu(cfg map[string]string, title, content string) error {
@@ -1062,7 +1062,7 @@ func sendFeishu(cfg map[string]string, title, content string) error {
 		body["timestamp"] = fmt.Sprintf("%d", timestamp)
 		body["sign"] = sign
 	}
-	return httpPost(webhook, body, nil)
+	return httpPostChecked(webhook, body, nil, checkFeishuResult)
 }
 
 func sendGotify(cfg map[string]string, title, content string) error {

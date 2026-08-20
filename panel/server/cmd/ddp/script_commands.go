@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"daidai-panel/service"
 )
 
 var cliAllowedScriptExtensions = map[string]bool{
@@ -64,6 +66,11 @@ func runScriptList(rt *cliRuntime) error {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
+
+		// 与面板一致：.git 等受控目录不列出来
+		if service.ShouldHideScriptTreeRelativePath(rel) {
+			return nil
+		}
 
 		ext := strings.ToLower(filepath.Ext(info.Name()))
 		if ext != "" && !cliAllowedScriptExtensions[ext] {
@@ -197,6 +204,13 @@ func resolveCLIScriptPath(baseDir, relativePath string, mustExist bool) (string,
 	normalized, err := normalizeCLIScriptRelativePath(relativePath)
 	if err != nil {
 		return "", "", err
+	}
+
+	// CLI 侧的收口，管着 script cat 与 script fetch。
+	// 下面的扩展名闸门对 config/HEAD/index 这类无扩展名文件一律放行，
+	// 少了这一步 `ddp script cat SmallWorld/.git/config` 会直接把 PAT 打印到终端。
+	if service.ShouldHideScriptTreeRelativePath(normalized) {
+		return "", "", fmt.Errorf("该路径不可访问")
 	}
 
 	full := filepath.Join(baseDir, filepath.FromSlash(normalized))

@@ -785,10 +785,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   List<MapEntry<String, String>> _linuxMirrorOptions(DepMirrorConfig config) {
     if (config.linuxPackageManager == 'apk') {
       return const [
-        MapEntry('阿里云 (默认)', 'https://mirrors.aliyun.com/alpine'),
+        MapEntry('华为云 (默认)', 'https://repo.huaweicloud.com/alpine'),
+        MapEntry('Alpine 官方', 'https://dl-cdn.alpinelinux.org/alpine'),
+        MapEntry('阿里云', 'https://mirrors.aliyun.com/alpine'),
         MapEntry('清华大学', 'https://mirrors.tuna.tsinghua.edu.cn/alpine'),
         MapEntry('腾讯云', 'https://mirrors.cloud.tencent.com/alpine'),
-        MapEntry('华为云', 'https://repo.huaweicloud.com/alpine'),
       ];
     }
     if (config.linuxPackageManager == 'apt') {
@@ -896,6 +897,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             '腾讯云',
                             'https://mirrors.cloud.tencent.com/pypi/simple',
                           ),
+                          MapEntry('PyPI 官方', 'https://pypi.org/simple'),
                         ].map((entry) {
                            return AppLiquidGlassActionChip(
                              label: entry.key,
@@ -921,7 +923,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     runSpacing: 8,
                     children:
                         [
-                          ('淘宝 (npmmirror)', 'https://registry.npmmirror.com'),
+                          ('npmmirror (默认)', 'https://registry.npmmirror.com'),
+                          ('npm 官方', 'https://registry.npmjs.org'),
                           ('腾讯云', 'https://mirrors.cloud.tencent.com/npm/'),
                           (
                             '华为云',

@@ -66,8 +66,6 @@ object AndroidNodeRuntime {
                 "DAIDAI_RUNTIME_LANGUAGE" to "node",
                 "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
                 "npm_config_ignore_scripts" to "true",
-                "NPM_CONFIG_REGISTRY" to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
-                "npm_config_registry" to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
             ),
             executable = launcherExe,
         )

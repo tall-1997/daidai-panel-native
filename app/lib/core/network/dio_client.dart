@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 import 'app_user_agent.dart';
 import 'managed_local_session.dart';
+import 'panel_capability_registry.dart';
 
 final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -53,6 +54,14 @@ class DioClient {
         },
       ),
     );
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (error, handler) {
+          PanelCapabilityRegistry.recordPlatformCapabilityFailure(error);
+          handler.next(error);
+        },
+      ),
+    );
 
     if (enableLogging && kDebugMode) {
       dio.interceptors.add(
@@ -79,6 +88,7 @@ class DioClient {
     clearManagedLocalSession();
     _baseUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
     dio.options.baseUrl = _baseUrl;
+    PanelCapabilityRegistry.setCurrentScope(_baseUrl);
     dio.options.headers.addAll(AppUserAgent.defaultHeaders);
   }
 
@@ -95,6 +105,7 @@ class DioClient {
     _managedLocalSession.set(normalized, token);
     _baseUrl = normalized;
     dio.options.baseUrl = normalized;
+    PanelCapabilityRegistry.setCurrentScope(normalized);
     dio.options.headers.addAll(AppUserAgent.defaultHeaders);
     dio.options.headers.addAll(
       _managedLocalSession.headersFor(Uri.parse(normalized)),
@@ -117,6 +128,14 @@ class DioClient {
         onRequest: (options, handler) {
           applyManagedLocalHeaders(options);
           handler.next(options);
+        },
+      ),
+    );
+    raw.interceptors.add(
+      InterceptorsWrapper(
+        onError: (error, handler) {
+          PanelCapabilityRegistry.recordPlatformCapabilityFailure(error);
+          handler.next(error);
         },
       ),
     );

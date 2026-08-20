@@ -40,11 +40,18 @@ func GenerateAccessTokenInfo(username, role string) (*TokenInfo, error) {
 }
 
 func GenerateTemporaryAccessToken(username, role string, ttl time.Duration) (string, error) {
-	info, err := generateAccessTokenInfoWithTTL(username, role, ttl)
+	info, err := GenerateTemporaryAccessTokenInfo(username, role, ttl)
 	if err != nil {
 		return "", err
 	}
 	return info.Token, nil
+}
+
+// GenerateTemporaryAccessTokenInfo 与 GenerateTemporaryAccessToken 等价，但保留 jti 与到期时间。
+// 签发方拿到 jti 才能在凭据用完后主动拉黑（IsTokenBlocked 按 jti 单条命中），
+// 否则临时 token 只能等自然过期，面板自己都不知道它是谁。
+func GenerateTemporaryAccessTokenInfo(username, role string, ttl time.Duration) (*TokenInfo, error) {
+	return generateAccessTokenInfoWithTTL(username, role, ttl)
 }
 
 func generateAccessTokenInfoWithTTL(username, role string, ttl time.Duration) (*TokenInfo, error) {

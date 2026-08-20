@@ -106,7 +106,7 @@ func TestCheckpointWALPathFlushesLegacyDatabase(t *testing.T) {
 	}
 }
 
-func TestEnsureColumnsReturnsAlterFailure(t *testing.T) {
+func TestEnsureColumnsSkipsCompatibilityViews(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ensure-columns.db")
 	if err := Init(&config.DatabaseConfig{Path: path}); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestEnsureColumnsReturnsAlterFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := EnsureColumns(); err == nil {
-		t.Fatal("expected ALTER TABLE failure")
+	if err := EnsureColumns(); err != nil {
+		t.Fatalf("compatibility view should be skipped without blocking other migrations: %v", err)
 	}
 }

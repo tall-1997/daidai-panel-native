@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func TestBuildNotifyHelperEnvCreatesManagedHelpers(t *testing.T) {
 	scriptsDir := config.C.Data.ScriptsDir
 	workDir := filepath.Join(scriptsDir, "nested")
 
-	env, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
+	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("build notify helper env: %v", err)
 	}
@@ -26,8 +27,15 @@ func TestBuildNotifyHelperEnvCreatesManagedHelpers(t *testing.T) {
 	if env["DAIDAI_NOTIFY_URL"] == "" || env["DAIDAI_NOTIFY_TOKEN"] == "" {
 		t.Fatalf("expected notify url/token in env, got %#v", env)
 	}
-	if _, err := middleware.ParseToken(env["DAIDAI_NOTIFY_TOKEN"]); err != nil {
+	claims, err := middleware.ParseToken(env["DAIDAI_NOTIFY_TOKEN"])
+	if err != nil {
 		t.Fatalf("parse helper token: %v", err)
+	}
+	if tokenInfo == nil || tokenInfo.JTI == "" {
+		t.Fatalf("expected script token info with jti, got %#v", tokenInfo)
+	}
+	if claims.ID != tokenInfo.JTI {
+		t.Fatalf("expected returned jti %q to match token claim %q", tokenInfo.JTI, claims.ID)
 	}
 
 	paths := []string{
@@ -70,7 +78,7 @@ func TestBuildNotifyHelperEnvUsesAbsoluteHelperPaths(t *testing.T) {
 		t.Fatalf("mkdir work dir: %v", err)
 	}
 
-	env, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
+	env, _, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
 	if err != nil {
 		t.Fatalf("build notify helper env: %v", err)
 	}
@@ -79,6 +87,72 @@ func TestBuildNotifyHelperEnvUsesAbsoluteHelperPaths(t *testing.T) {
 		if !filepath.IsAbs(env[key]) {
 			t.Fatalf("expected %s to be absolute, got %q", key, env[key])
 		}
+	}
+}
+
+// 验收 A5：通用入口变量必须存在，而历史的 notify 专用变量一个都不能少 ——
+// 内置 notify.py / sendNotify.js 和用户既有脚本都在读它们。
+func TestBuildNotifyHelperEnvExposesGenericAPIEntrypoint(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	scriptsDir := config.C.Data.ScriptsDir
+	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, scriptsDir, config.C.Server.Port, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("build notify helper env: %v", err)
+	}
+	if tokenInfo == nil || tokenInfo.JTI == "" {
+		t.Fatalf("expected script token info, got %#v", tokenInfo)
+	}
+
+	wantBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1", config.C.Server.Port)
+	if got := env["DAIDAI_API_BASE"]; got != wantBase {
+		t.Fatalf("expected DAIDAI_API_BASE=%q, got %q", wantBase, got)
+	}
+	if got := env["DAIDAI_NOTIFY_URL"]; got != wantBase+"/notifications/send" {
+		t.Fatalf("expected DAIDAI_NOTIFY_URL to stay unchanged, got %q", got)
+	}
+	if env["DAIDAI_TOKEN"] == "" {
+		t.Fatalf("expected DAIDAI_TOKEN to be populated")
+	}
+	if env["DAIDAI_TOKEN"] != env["DAIDAI_NOTIFY_TOKEN"] {
+		t.Fatalf("expected DAIDAI_TOKEN and DAIDAI_NOTIFY_TOKEN to be the same credential, got %q vs %q",
+			env["DAIDAI_TOKEN"], env["DAIDAI_NOTIFY_TOKEN"])
+	}
+
+	claims, err := middleware.ParseToken(env["DAIDAI_TOKEN"])
+	if err != nil {
+		t.Fatalf("parse DAIDAI_TOKEN: %v", err)
+	}
+	if claims.Role != "operator" {
+		t.Fatalf("expected operator role on script token, got %q", claims.Role)
+	}
+}
+
+// 同样的四个变量必须一路走到任务运行时的 env map，而不只是 helper 内部有。
+func TestManagedRuntimeEnvMapCarriesScriptAPIEntrypoint(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	scriptsDir := config.C.Data.ScriptsDir
+	envMap, tokenInfo, err := BuildManagedRuntimeEnvMapWithScriptToken(scriptsDir, scriptsDir, nil, time.Hour, "")
+	if err != nil {
+		t.Fatalf("build managed runtime env map: %v", err)
+	}
+	if tokenInfo == nil || tokenInfo.JTI == "" {
+		t.Fatalf("expected script token info from runtime env builder, got %#v", tokenInfo)
+	}
+
+	for _, key := range []string{"DAIDAI_API_BASE", "DAIDAI_TOKEN", "DAIDAI_NOTIFY_URL", "DAIDAI_NOTIFY_TOKEN"} {
+		if envMap[key] == "" {
+			t.Fatalf("expected %s in task runtime env, got %q", key, envMap[key])
+		}
+	}
+
+	claims, err := middleware.ParseToken(envMap["DAIDAI_TOKEN"])
+	if err != nil {
+		t.Fatalf("parse runtime DAIDAI_TOKEN: %v", err)
+	}
+	if claims.ID != tokenInfo.JTI {
+		t.Fatalf("expected runtime token jti %q to match returned jti %q", claims.ID, tokenInfo.JTI)
 	}
 }
 

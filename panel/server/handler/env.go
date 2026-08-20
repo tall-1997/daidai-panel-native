@@ -376,6 +376,170 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	response.Success(c, payload)
 }
 
+// errEnvUpsertAmbiguous 标记「同名记录不止一条」。这是数据安全防线而不是偷懒：
+// 同名多条 = 多账号场景，脚本读到的是合并且转义后的串，整段写回任意一条都会破坏结构。
+// 报错让脚本作者立刻发现，静默更新会无声毁掉用户的多账号配置。
+var errEnvUpsertAmbiguous = errors.New("env upsert matched multiple rows")
+
+type upsertEnvByNameRequest struct {
+	Name    string    `json:"name"`
+	Value   *string   `json:"value"`
+	Remarks *string   `json:"remarks"`
+	Group   *string   `json:"group"`
+	Groups  *[]string `json:"groups"`
+	Enabled *bool     `json:"enabled"`
+}
+
+// UpsertByName 按变量名 upsert，语义与 `ddp env set` 对齐（0 条创建 / 1 条更新 / >1 条报错），
+// 消除 CLI 与 HTTP 的分叉，让脚本"跑完更新 Cookie"不必先 GET 找 id 再 PUT。
+//
+// 注意：POST /envs 的纯 insert 是刻意的青龙兼容行为，不在这里合并。两个入口各司其职。
+func (h *EnvHandler) UpsertByName(c *gin.Context) {
+	limitEnvRequestBody(c)
+
+	var req upsertEnvByNameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		if isRequestBodyTooLarge(err) {
+			response.BadRequest(c, "请求体过大（最大 1MB）")
+			return
+		}
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		response.BadRequest(c, "变量名不能为空")
+		return
+	}
+	if !envNamePattern.MatchString(name) {
+		response.BadRequest(c, "变量名格式无效")
+		return
+	}
+
+	// remarks 在这里有两个身份：同名多条时的消歧条件，以及创建/更新时写入的值。
+	// 与 `ddp env set --remarks` 保持一致。
+	remarks := ""
+	if req.Remarks != nil {
+		remarks = strings.TrimSpace(*req.Remarks)
+	}
+
+	var (
+		result       model.EnvVar
+		created      bool
+		matchedCount int
+	)
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var matched []model.EnvVar
+		query := tx.Where("name = ?", name)
+		if remarks != "" {
+			query = query.Where("remarks = ?", remarks)
+		}
+		if err := query.Order("id ASC").Find(&matched).Error; err != nil {
+			return err
+		}
+		matchedCount = len(matched)
+
+		// 先判分叉再写：这一条返回时事务里还没有任何写操作，保证报错路径零副作用。
+		if matchedCount > 1 {
+			return errEnvUpsertAmbiguous
+		}
+
+		if matchedCount == 0 {
+			position, posErr := nextEnvPosition(tx, envNormalSortOrder)
+			if posErr != nil {
+				return posErr
+			}
+
+			env := model.EnvVar{
+				Name:      name,
+				Remarks:   remarks,
+				Enabled:   true,
+				SortOrder: envNormalSortOrder,
+				Position:  position,
+			}
+			if req.Value != nil {
+				// 逐字节原样写入，不做任何转义：转义只发生在多条同名记录合并成
+				// 环境变量时（joinTaskEnvValues），单条记录存的就是原始值。
+				env.Value = *req.Value
+			}
+			if req.Groups != nil {
+				env.Group = model.JoinEnvGroups(*req.Groups)
+			} else if req.Group != nil {
+				env.Group = normalizeEnvGroupValue(*req.Group)
+			}
+			if req.Enabled != nil {
+				env.Enabled = *req.Enabled
+			}
+
+			if createErr := tx.Create(&env).Error; createErr != nil {
+				return createErr
+			}
+			if req.Enabled != nil && !*req.Enabled {
+				// EnvVar.Enabled 带 `default:true` 标签，GORM 对这类字段可能跳过零值插入。
+				// 显式回写一次，保证调用方传的 enabled:false 不被数据库默认值悄悄翻成 true。
+				if disableErr := tx.Model(&model.EnvVar{}).Where("id = ?", env.ID).
+					Update("enabled", false).Error; disableErr != nil {
+					return disableErr
+				}
+				env.Enabled = false
+			}
+			result = env
+			created = true
+			return nil
+		}
+
+		existing := matched[0]
+		updates := make(map[string]interface{})
+		if req.Value != nil && *req.Value != existing.Value {
+			updates["value"] = *req.Value
+		}
+		if req.Remarks != nil && remarks != existing.Remarks {
+			updates["remarks"] = remarks
+		}
+		if req.Groups != nil {
+			normalized := model.JoinEnvGroups(*req.Groups)
+			if normalized != existing.Group {
+				updates["group"] = normalized
+			}
+		} else if req.Group != nil {
+			normalized := normalizeEnvGroupValue(*req.Group)
+			if normalized != existing.Group {
+				updates["group"] = normalized
+			}
+		}
+		if req.Enabled != nil && *req.Enabled != existing.Enabled {
+			updates["enabled"] = *req.Enabled
+		}
+
+		if len(updates) > 0 {
+			if updateErr := tx.Model(&model.EnvVar{}).Where("id = ?", existing.ID).Updates(updates).Error; updateErr != nil {
+				return updateErr
+			}
+		}
+
+		return tx.First(&result, existing.ID).Error
+	})
+
+	if err != nil {
+		if errors.Is(err, errEnvUpsertAmbiguous) {
+			response.Error(c, http.StatusConflict, fmt.Sprintf(
+				"存在 %d 条名为 '%s' 的环境变量（多账号场景），已拒绝写入以免破坏结构。请在请求体中带上 remarks 精确定位，或改用 PUT /envs/:id。",
+				matchedCount, name))
+			return
+		}
+		response.InternalError(c, "保存失败")
+		return
+	}
+
+	if created {
+		response.Created(c, gin.H{"message": "创建成功", "data": result.ToDict(), "created": true})
+		return
+	}
+	response.Success(c, gin.H{"message": "更新成功", "data": result.ToDict(), "created": false})
+}
+
 type updateEnvRequest struct {
 	Name    *string   `json:"name"`
 	Value   *string   `json:"value"`
@@ -1080,6 +1244,9 @@ func (h *EnvHandler) RegisterRoutes(r *gin.RouterGroup) {
 		envs.GET("", h.List)
 		envs.GET("/:id", h.Get)
 		envs.POST("", h.Create)
+		// by-name 走独立静态路径：POST /envs 保持纯 insert（青龙兼容），
+		// 需要按名字 upsert 的脚本走这里。
+		envs.PUT("/by-name", h.UpsertByName)
 		envs.PUT("/:id", h.Update)
 		envs.DELETE("/:id", h.Delete)
 		envs.PUT("/:id/enable", h.Enable)

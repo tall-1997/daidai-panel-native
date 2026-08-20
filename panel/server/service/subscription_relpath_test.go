@@ -76,7 +76,7 @@ func TestPullGitRepoWithCallbackHandlesRelativeScriptsDir(t *testing.T) {
 		autoAdd:     true,
 		allowedExts: map[string]bool{".js": true},
 	}
-	candidates := collectSubscriptionTaskCandidates(sub, options)
+	candidates, _ := collectSubscriptionTaskCandidates(sub, options)
 	if len(candidates) == 0 {
 		t.Fatal("expected at least one task candidate after pull, got none")
 	}

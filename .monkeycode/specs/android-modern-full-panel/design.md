@@ -1,7 +1,7 @@
 # Android Modern 全功能本机面板设计
 
 Feature Name: android-modern-full-panel
-Updated: 2026-07-27
+Updated: 2026-08-20
 
 ## Description
 
@@ -106,6 +106,38 @@ Android Host通过 Binder 提供 Keystore、通知、资源、电量、温度、
 ```
 
 Runtime Manager负责安装包内资产校验、只读入口解析、健康检查、引用计数、空间预算和版本切换。
+
+### Panel Profile and Capability Handshake
+
+Flutter 使用单一 `PanelProfile` 表达本地与远程实例：
+
+```text
+PanelProfile
+- instanceId
+- instanceMode
+- serverVersion
+- apiVersion
+- schemaVersion
+- capabilityRevision
+- capabilities
+- source
+```
+
+新后端通过 `/api/v1/client-handshake` 返回 profile。旧后端返回 404 时，legacy probe adapter 使用现有端点探测生成 profile。Dio capability interceptor 解析 `PLATFORM_CAPABILITY` 响应并实时更新 profile。菜单、路由 guard 和页面操作均读取同一 profile，避免页面局部探测与全局可见性分离。
+
+### Unified Mirror Configuration
+
+镜像配置使用同一字段模型 `pip_mirror`、`npm_mirror`、`linux_mirror`。Android Host 将配置持久化到本地数据库并同步 rootfs 配置文件；Go Core dependency provider 通过 platform adapter 读取 Android rootfs、PRoot 和镜像配置。配置优先级为用户保存值、导入 rootfs 值、内置默认值。初始化只补齐缺失值。
+
+默认值：
+
+- Alpine APK：`https://repo.huaweicloud.com/alpine`
+- Python pip：`https://mirrors.aliyun.com/pypi/simple`
+- Node.js npm：`https://registry.npmmirror.com`
+
+### Fallback Execution Parity
+
+Kotlin fallback 仅承担 Go Core 无法启动时的兼容执行路径，但任务语义必须保持一致：结构化 argv、完整环境注入、进程句柄映射、可终止进程树、运行中日志增量落盘、游标 SSE、缺失 pip/npm 依赖识别与有界重跑。共享 contract tests 对 Go Core 和 fallback 运行同一组输入输出断言。
 
 ### Android Executable Packaging
 

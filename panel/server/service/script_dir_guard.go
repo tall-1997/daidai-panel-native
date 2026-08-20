@@ -32,6 +32,88 @@ func ShouldIgnoreScriptEntryName(name string) bool {
 	return quarantinedScriptDirNames[strings.ToLower(name)]
 }
 
+// hiddenScriptTreeNames 记录必须对脚本管理链路隐藏、并禁止读写的版本控制元数据目录。
+// 其中 .git 里的 config 保存着订阅 Token 鉴权注入的 remote URL（内含 PAT），
+// 一旦能被读出来就等于把访问令牌交给任何能读脚本的主体，因此这里硬编码、刻意不做可配置 ——
+// 只要可配置，用户清空配置就重新打开了凭据读取路径。
+var hiddenScriptTreeNames = map[string]bool{
+	".git": true,
+	".svn": true,
+	".hg":  true,
+	".bzr": true,
+}
+
+// ShouldHideScriptTreeEntryName 判断某个名称是否应该在脚本树展示与访问链路里被隐藏 / 拒绝。
+// ⚠️ 它刻意与 ShouldIgnoreScriptEntryName 分成两套语义：后者被启动期隔离逻辑
+// QuarantineUnexpectedScriptEntriesOnStartup 复用，命中即 os.Rename 物理搬走，
+// 一旦把 .git 加进去，脚本根目录本身是 git 仓库时整个仓库会被搬走。
+func ShouldHideScriptTreeEntryName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+
+	if ShouldIgnoreScriptEntryName(name) {
+		return true
+	}
+
+	return hiddenScriptTreeNames[strings.ToLower(name)]
+}
+
+// ShouldHideScriptTreeRelativePath 逐段遍历相对路径，任意一段命中隐藏规则即返回 true。
+// 与只判第一段的 ShouldIgnoreScriptRelativePath 不同，这里能拦住 SmallWorld/.git/config
+// 这类嵌套路径（顺带修掉“子目录里的 node_modules 仍被计入脚本数”这个既有缺陷）。
+func ShouldHideScriptTreeRelativePath(relPath string) bool {
+	relPath = strings.TrimSpace(filepath.ToSlash(relPath))
+	if relPath == "" || relPath == "." || relPath == "/" {
+		return false
+	}
+
+	relPath = strings.TrimPrefix(relPath, "/")
+
+	for _, segment := range strings.Split(relPath, "/") {
+		segment = strings.TrimSpace(segment)
+		if segment == "" || segment == "." || segment == ".." {
+			continue
+		}
+		if ShouldHideScriptTreeEntryName(segment) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ShouldHideScriptTreePath 判断脚本目录内的某个绝对路径是否命中隐藏规则（逐段遍历）。
+func ShouldHideScriptTreePath(scriptsDir, targetPath string) bool {
+	scriptsDir = strings.TrimSpace(scriptsDir)
+	targetPath = strings.TrimSpace(targetPath)
+	if scriptsDir == "" || targetPath == "" {
+		return false
+	}
+
+	absScriptsDir, err := filepath.Abs(scriptsDir)
+	if err != nil {
+		return false
+	}
+	absTargetPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return false
+	}
+
+	relPath, err := filepath.Rel(absScriptsDir, absTargetPath)
+	if err != nil {
+		return false
+	}
+
+	relPath = filepath.ToSlash(relPath)
+	if relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return false
+	}
+
+	return ShouldHideScriptTreeRelativePath(relPath)
+}
+
 // ShouldIgnoreScriptPath 判断某个脚本目录内的绝对路径是否命中异常隔离规则。
 // 只要相对路径第一段命中黑名单，就认为这条路径不该继续参与脚本管理链路。
 func ShouldIgnoreScriptPath(scriptsDir, targetPath string) bool {

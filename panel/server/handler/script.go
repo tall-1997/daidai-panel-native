@@ -98,6 +98,13 @@ func safePath(relPath string, mustExist bool) (string, error) {
 		return "", err
 	}
 
+	// safePath 是脚本读写删改 13 个入口的唯一收口，
+	// 在这里拒绝一次就等于同时堵住 content/download/save/delete/rename/move/copy/
+	// batch-delete/mkdir/rollback/debug-run。树里隐藏而 API 可读等于藏起来但没锁上。
+	if service.ShouldHideScriptTreeRelativePath(normalizedPath) {
+		return "", fmt.Errorf("该路径不可访问")
+	}
+
 	full, err := pathutil.ResolveWithinBase(scriptsDir(), normalizedPath, false)
 	if err != nil {
 		return "", err

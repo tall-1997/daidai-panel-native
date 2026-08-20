@@ -27,6 +27,12 @@ func resolveScriptUploadPath(targetPath string) (string, string, error) {
 		return "", "", err
 	}
 
+	// Upload 与 Copy 的目标端不走 safePath，必须在这里单独挡一次，
+	// 否则可以直接往 .git 里写文件。
+	if service.ShouldHideScriptTreeRelativePath(normalizedPath) {
+		return "", "", fmt.Errorf("该路径不可访问")
+	}
+
 	baseDir, err := filepath.Abs(scriptsDir())
 	if err != nil {
 		return "", "", fmt.Errorf("脚本目录无效")
@@ -53,6 +59,11 @@ func validateScriptLeafName(name string) (string, error) {
 	}
 	if invalidScriptPathCharsPattern.MatchString(name) {
 		return "", fmt.Errorf("名称包含非法字符")
+	}
+	// 禁止把文件/目录改名或复制成 .git 这类受控名称，
+	// 否则改完立刻会被隐藏规则吞掉，用户会以为文件丢了。
+	if service.ShouldHideScriptTreeEntryName(name) {
+		return "", fmt.Errorf("名称不可用: %s", name)
 	}
 	return name, nil
 }
@@ -404,6 +415,14 @@ func copyDir(src, dst string) error {
 			return err
 		}
 		rel, _ := filepath.Rel(src, path)
+		// 源路径本身合法时（例如复制整个订阅目录），Walk 仍会遍历到里面的 .git。
+		// 不在这里过滤的话会复制出一份含 PAT、而且同样被隐藏的凭据副本。
+		if service.ShouldHideScriptTreeRelativePath(filepath.ToSlash(rel)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0755)

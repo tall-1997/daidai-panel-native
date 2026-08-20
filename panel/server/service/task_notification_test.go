@@ -222,6 +222,53 @@ func TestSummarizeTaskSuccessOutputDropsBannersAndMeta(t *testing.T) {
 	}
 }
 
+// 前置钩子的环境变量回传日志，以及前/后置脚本的执行失败行，都是面板自己打进任务日志的。
+// 漏登记到 panelMetaLinePrefixes 时它们会占满成功通知的摘录（30 行 / 1500 字符），
+// 把用户真正想看的脚本输出挤掉。
+func TestSummarizeTaskSuccessOutputDropsHookEnvAndHookFailureMeta(t *testing.T) {
+	// 运行时关键变量的提示行直接取自真实生成函数，避免这里的字面量与实现漂移。
+	runtimeNotice := hookEnvRuntimeOverrideNotice("PATH", "/managed/bin", "/only/mine")
+	if runtimeNotice == "" {
+		t.Fatal("expected hookEnvRuntimeOverrideNotice to produce a notice line")
+	}
+
+	metaLines := []string{
+		"[前置脚本环境变量] 已生效: MY_TOKEN",
+		"[前置脚本环境变量] 已忽略受保护变量: TZ",
+		"[前置脚本环境变量] 未采集到回传数据，本次 export 不会对目标脚本生效",
+		"[前置脚本环境变量] 采集准备失败，本次不回传: permission denied",
+		runtimeNotice,
+		"[前置脚本执行失败: exit status 3]",
+		"[后置脚本执行失败: exit status 3]",
+	}
+	for _, line := range metaLines {
+		if !isPanelMetaLine(line) {
+			t.Fatalf("expected panel meta line to be registered, got unrecognized %q", line)
+		}
+	}
+
+	logLines := []string{
+		"=== 开始执行 [2026-04-18 00:00:00] ===",
+		"[执行前置脚本]",
+	}
+	logLines = append(logLines, metaLines...)
+	logLines = append(logLines,
+		"签到: 成功",
+		"今日积分: +80",
+		"=== 执行结束 [2026-04-18 00:00:10] 耗时 10.00 秒 退出码 0 ===",
+	)
+
+	summary := summarizeTaskSuccessOutput(strings.Join(logLines, "\n"))
+	for _, line := range metaLines {
+		if strings.Contains(summary, line) {
+			t.Fatalf("expected panel meta %q removed, got %q", line, summary)
+		}
+	}
+	if !strings.Contains(summary, "签到: 成功") || !strings.Contains(summary, "今日积分: +80") {
+		t.Fatalf("expected user output retained, got %q", summary)
+	}
+}
+
 func TestSummarizeTaskSuccessOutputTruncatesLongLogs(t *testing.T) {
 	var builder strings.Builder
 	for i := 0; i < 200; i++ {

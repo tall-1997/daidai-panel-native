@@ -32,49 +32,62 @@ type subscriptionHookTrustMetadata struct {
 	Capability string
 }
 
+func runSubscriptionPreScriptIfConfigured(sub *model.Subscription, emit PullCallback) error {
+	return runSubscriptionPreScriptWithContext(context.Background(), sub, emit)
+}
+
+func runSubscriptionPreScriptWithContext(ctx context.Context, sub *model.Subscription, emit PullCallback) error {
+	return runSubscriptionInlineScriptIfConfigured(ctx, sub, sub.PreScript, "拉取前指令", "pre", emit)
+}
+
 func runSubscriptionHookIfConfigured(ctx context.Context, sub *model.Subscription, emit PullCallback) error {
-	hookScript := normalizeSubscriptionHookScript(sub)
-	if hookScript == "" {
+	return runSubscriptionInlineScriptIfConfigured(ctx, sub, sub.HookScript, "订阅钩子", "hook", emit)
+}
+
+func runSubscriptionInlineScriptIfConfigured(ctx context.Context, sub *model.Subscription, rawScript, label, logPrefix string, emit PullCallback) error {
+	script := normalizeSubscriptionScriptPaths(sub, rawScript)
+	if script == "" {
 		return nil
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return fmt.Errorf("拉取已停止")
 	}
-
 	workDir := subscriptionWorkingDir(sub)
 	if _, err := os.Stat(workDir); err != nil {
 		workDir = config.C.Data.ScriptsDir
 	}
-	return runSubscriptionHookInWorkDir(ctx, sub, workDir, emit)
+	return runSubscriptionInlineScriptInWorkDir(ctx, sub, script, workDir, label, logPrefix, emit)
 }
 
 func runSubscriptionHookInWorkDir(ctx context.Context, sub *model.Subscription, workDir string, emit PullCallback) error {
+	return runSubscriptionInlineScriptInWorkDir(ctx, sub, normalizeSubscriptionHookScript(sub), workDir, "订阅钩子", "hook", emit)
+}
+
+func runSubscriptionInlineScriptInWorkDir(ctx context.Context, sub *model.Subscription, script, workDir, label, logPrefix string, emit PullCallback) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	hookScript := normalizeSubscriptionHookScript(sub)
-	if hookScript == "" {
+	if script == "" {
 		return nil
 	}
-	if ctx != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return fmt.Errorf("拉取已停止")
 	}
-	metadata := buildSubscriptionHookTrustMetadata(sub, hookScript)
+	metadata := buildSubscriptionHookTrustMetadata(sub, script)
 	if !RuntimeTrustAuthorizer().IsAuthorized(metadata.Source, metadata.Version, metadata.SHA256, metadata.Capability) {
 		return fmt.Errorf("%w: source=%s version=%s sha256=%s capability=%s", ErrSubscriptionHookUnauthorized, metadata.Source, metadata.Version, metadata.SHA256, metadata.Capability)
 	}
-	emit("[执行订阅钩子]")
-	err := runSubscriptionHookScript(ctx, hookScript, workDir, buildSubscriptionHookEnv(sub, workDir), func(line string) {
-		emit("[hook] " + line)
+	emit("[执行" + label + "]")
+	err := runSubscriptionHookScript(ctx, script, workDir, buildSubscriptionHookEnv(sub, workDir), func(line string) {
+		emit("[" + logPrefix + "] " + line)
 	})
 	if err != nil {
-		return fmt.Errorf("执行订阅钩子失败: %w", err)
+		return fmt.Errorf("执行%s失败: %w", label, err)
 	}
-	if ctx != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return fmt.Errorf("拉取已停止")
 	}
-
-	emit("[订阅钩子完成]")
+	emit("[" + label + "完成]")
 	return nil
 }
 
@@ -100,6 +113,15 @@ func subscriptionHookTrustSource(sub *model.Subscription) string {
 		subscriptionSaveDir(sub),
 	}
 	return strings.Join(parts, ":")
+}
+
+func AuthorizeSubscriptionPreScriptForTest(sub *model.Subscription) {
+	script := normalizeSubscriptionScriptPaths(sub, sub.PreScript)
+	if script == "" {
+		return
+	}
+	metadata := buildSubscriptionHookTrustMetadata(sub, script)
+	SeedRuntimeTrustRecord(metadata.Source, metadata.Version, metadata.SHA256, []string{metadata.Capability})
 }
 
 func AuthorizeSubscriptionHookForTest(sub *model.Subscription) {
@@ -194,7 +216,11 @@ func buildSubscriptionHookEnv(sub *model.Subscription, workDir string) map[strin
 }
 
 func normalizeSubscriptionHookScript(sub *model.Subscription) string {
-	hookScript := strings.TrimSpace(sub.HookScript)
+	return normalizeSubscriptionScriptPaths(sub, sub.HookScript)
+}
+
+func normalizeSubscriptionScriptPaths(sub *model.Subscription, rawScript string) string {
+	hookScript := strings.TrimSpace(rawScript)
 	if hookScript == "" {
 		return ""
 	}

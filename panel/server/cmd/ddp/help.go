@@ -54,7 +54,8 @@ func printHelp() {
       交互执行，可输入手机号/验证码等；解决 docker exec 终端 python3 找不到面板依赖的问题。
       python 的脚本路径相对脚本目录（也可给绝对路径）；shell 进入后 python3 即面板解释器。
   3. sub pull 会在当前终端里实时输出拉库日志。
-  4. update 会自动识别 Docker 或二进制部署；Docker 模式依赖 /var/run/docker.sock 挂载。
+  4. update 会自动识别 Watchtower、Magisk 模块版、旧 Docker Socket 或二进制部署；精简镜像默认通过 Watchtower HTTP API 触发更新。
+  4.1 Magisk 模块版只在线更新面板程序与前端，容器 rootfs 和已装依赖不动；模块外壳有变更的版本会提示重新刷入模块 zip。
   5. service install 目前会在 Linux 上安装 systemd 守护，并让二进制更新时自动停启该服务。
   6. script / env / list / logs 这类命令不会依赖面板前端，容器里直接可用。
 

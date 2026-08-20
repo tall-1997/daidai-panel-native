@@ -940,13 +940,28 @@ func buildDependencyFailureHint(logText string) string {
 		strings.Contains(lower, "unable to lock database") ||
 		strings.Contains(lower, "another app is currently holding the yum lock"):
 		return "[检测到系统包管理器锁冲突，请稍后重试，或先确认没有其他 apt/yum/dnf/apk 任务正在运行]"
+	// DNS 解析失败必须与「网络/镜像源不可达」分开报。
+	// 这两类的排查方向完全相反：解析失败时宿主机往往一切正常（宿主走系统 DNS，
+	// 容器走自己的 /etc/resolv.conf），此时让用户去「检查宿主机网络连通性」
+	// 只会让他反复确认一个本来就没问题的东西，真正坏掉的那条线索反而被抹掉。
+	// 模块版 Debian 容器的装依赖失败就长这样，之前一直被归到下面那条里误诊。
 	case strings.Contains(lower, "temporary failure resolving") ||
+		strings.Contains(lower, "temporary failure in name resolution") ||
 		strings.Contains(lower, "could not resolve") ||
-		strings.Contains(lower, "connection timed out") ||
+		strings.Contains(lower, "name or service not known"):
+		return "[检测到容器内 DNS 解析失败：域名解析不出来，这与宿主机能否上网是两回事——" +
+			"容器用的是自己的 /etc/resolv.conf。请在容器内执行 getent hosts mirrors.nju.edu.cn 复现，" +
+			"并确认 /etc/resolv.conf 里的 nameserver 在当前网络下可用（校园网/企业网强制 DNS、" +
+			"公共 Wi-Fi 登录门户、运营商屏蔽对外 53 端口都会导致这种失败）；" +
+			"若 root 能解析而 apt 仍失败，则是 apt 降权用户 _apt 被限制联网，" +
+			"需在 /etc/apt/apt.conf.d/ 下配置 APT::Sandbox::User \"root\"]"
+	case strings.Contains(lower, "connection timed out") ||
+		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "failed to fetch"):
-		return "[检测到网络或镜像源异常，请检查 Linux 镜像源配置、代理设置和宿主机网络连通性]"
+		return "[检测到镜像源不可达或网络中断（域名能解析但连不上/下载失败），" +
+			"请检查 Linux 镜像源配置、代理设置和网络连通性，必要时更换镜像源后重试]"
 	case isAlpineGlibcIncompatible(lower):
-		return "[当前容器使用 Alpine 镜像（musl libc），该依赖需要 glibc 环境，无法在 Alpine 上安装。请切换到 Debian 版镜像（如 linzixuan/daidai-panel:debian）后重试]"
+		return "[当前容器使用 Alpine 镜像（musl libc），该依赖需要 glibc 环境，无法在 Alpine 上安装。请切换到 Debian 版镜像（如 linzixuanzz/daidai-panel:debian）后重试]"
 	default:
 		return ""
 	}

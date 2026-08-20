@@ -222,12 +222,17 @@ func scriptRuntimeInterpreter(ext string) (string, error) {
 	}
 }
 
-func buildScriptExecEnv(workDir string) map[string]string {
-	envMap, err := service.BuildManagedRuntimeEnvMapForPythonVersion(workDir, config.C.Data.ScriptsDir, nil, 2*time.Hour, "")
-	if err != nil {
-		return envMap
-	}
-	return envMap
+// scriptDebugEnvTTL 是脚本编辑器「调试运行 / 运行代码」注入凭据的兜底有效期。
+// 主控手段是运行结束后的吊销（见 DebugRun / RunCode），这里只在面板被 kill -9 时兜底。
+const scriptDebugEnvTTL = 2 * time.Hour
+
+// buildScriptExecEnv 返回调试运行的环境，以及注入其中的那枚 operator 凭据。
+// 调用方必须在运行结束（含启动失败、被手动停止）后调 service.RevokeScriptToken 吊销它，
+// 否则这枚凭据会一直有效到 scriptDebugEnvTTL 到期。
+func buildScriptExecEnv(workDir string) (map[string]string, *service.ScriptTokenInfo) {
+	// 与原实现一致：构建部分失败时仍返回已拼好的 env（通知 helper 不可用而已，脚本照跑）。
+	envMap, scriptToken, _ := service.BuildManagedRuntimeEnvMapWithScriptToken(workDir, config.C.Data.ScriptsDir, nil, scriptDebugEnvTTL, "")
+	return envMap, scriptToken
 }
 
 func newScriptCommand(interpreter string, target string, scriptArgs []string, workDir string, envMap map[string]string) (*exec.Cmd, func(), error) {

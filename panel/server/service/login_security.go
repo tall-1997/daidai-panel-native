@@ -252,6 +252,26 @@ func CleanExpiredSessions() {
 	database.DB.Where("(refresh_expires_at IS NOT NULL AND refresh_expires_at < ?) OR (refresh_expires_at IS NULL AND expires_at < ?)", now, now).Delete(&model.UserSession{})
 }
 
+// CleanExpiredTokenBlocklist 删除 expires_at 已过的黑名单行。
+//
+// 黑名单只在「token 本身还没到期、但要提前作废」这段窗口里有意义：expires_at 一过，
+// JWT 校验自己就会因为 exp 过期而拒绝这枚 token，黑名单行留着不再改变任何鉴权结果，
+// 只是磁盘与运维负担。而每跑一次任务 / 一次 ddp 交互会话 / 一次调试运行都会写一行，
+// 不清理就是无界增长。
+//
+// 返回删除行数；database.DB 未初始化或删除失败时返回 0 与对应错误。
+func CleanExpiredTokenBlocklist() (int64, error) {
+	if database.DB == nil {
+		return 0, nil
+	}
+
+	result := database.DB.Where("expires_at < ?", time.Now()).Delete(&model.TokenBlocklist{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func IsIPWhitelisted(ip string) bool {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {

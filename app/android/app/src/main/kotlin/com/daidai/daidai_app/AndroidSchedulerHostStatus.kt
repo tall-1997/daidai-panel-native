@@ -43,6 +43,8 @@ object AndroidSchedulerHostStatus {
             "script_execution",
             "dependency_mutation",
             "subscription_pull",
+            "system_update",
+            "system_restart",
             "backup_mutation",
             "runtime_mutation",
             "notification_dispatch",

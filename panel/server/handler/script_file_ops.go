@@ -28,7 +28,7 @@ func (h *ScriptHandler) List(c *gin.Context) {
 			}
 			return nil
 		}
-		if service.ShouldIgnoreScriptPath(dir, path) {
+		if service.ShouldHideScriptTreePath(dir, path) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(info.Name()))
@@ -61,8 +61,11 @@ func (h *ScriptHandler) Tree(c *gin.Context) {
 	response.Success(c, gin.H{"data": tree})
 }
 
+// shouldSkipScriptTreeDir 同时覆盖脚本树与文件列表：
+// 除了历史的异常目录（node_modules / __pycache__ / 隔离目录），
+// 还要挡住 .git 这类版本控制元数据目录（其 config 里存着订阅注入的访问令牌）。
 func shouldSkipScriptTreeDir(name string) bool {
-	return service.ShouldIgnoreScriptEntryName(name)
+	return service.ShouldHideScriptTreeEntryName(name)
 }
 
 func buildTree(baseDir, prefix string) []map[string]interface{} {
@@ -88,10 +91,14 @@ func buildTree(baseDir, prefix string) []map[string]interface{} {
 			rel = prefix + "/" + name
 		}
 
+		// 名字判定必须放在目录/文件分支之外：
+		// submodule 与 worktree 场景下 .git 是一个内容为 "gitdir: ..." 的**文件**，
+		// 只在 IsDir 分支里判断会让它整个漏出来。
+		if shouldSkipScriptTreeDir(name) {
+			continue
+		}
+
 		if entry.IsDir() {
-			if shouldSkipScriptTreeDir(name) {
-				continue
-			}
 			children := buildTree(baseDir, rel)
 			dirs = append(dirs, map[string]interface{}{
 				"key":      rel,

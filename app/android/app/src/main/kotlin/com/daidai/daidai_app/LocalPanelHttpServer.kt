@@ -122,7 +122,14 @@ class LocalPanelHttpServer(
             if (uri.startsWith("/api/android-runtime") || uri.startsWith("/api/v1/android-runtime")) return androidRuntime(session)
             if (uri.endsWith("/system/update-status") || uri.endsWith("/system/update") || uri.endsWith("/system/restart")) return systemLifecycle(session)
             if (uri.startsWith("/api/system/machine-code")) return jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-local")).put("status", "ok"))
-            if (uri.startsWith("/api/system/check-update")) return jsonResponse(JSONObject().put("data", JSONObject().put("latest", "0.3.15").put("current", "0.3.15")).put("status", "ok"))
+            if (uri.startsWith("/api/system/check-update")) return jsonResponse(
+                JSONObject()
+                    .put("data", JSONObject()
+                        .put("latest", "3.0.6")
+                        .put("current", "3.0.6")
+                        .put("source", "linzixuanzz/daidai-panel"))
+                    .put("status", "ok")
+            )
             when {
                 session.method == Method.GET &&
                     (session.uri == "/api/v1/health" || session.uri == "/api/health") ->

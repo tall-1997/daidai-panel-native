@@ -137,6 +137,12 @@ func InitDefaultConfigs() error {
 		if def.Key == "max_log_content_size" && strings.TrimSpace(existing.Value) == "102400" {
 			normalizedValue = def.DefaultValue
 		}
+		// repo_file_extensions 的历史默认值漏了 mjs，导致 .mjs 脚本在订阅同步时连扫描都进不去
+		// （表现为「仓库拉取成功但 mjs 不建任务」）。库里存的还正好是那份旧默认，说明用户从没动过
+		// 这项配置，直接抬到新默认；用户自己改过的值一律不动，免得覆盖掉「故意不要某后缀」的意图。
+		if def.Key == "repo_file_extensions" && strings.TrimSpace(existing.Value) == LegacyRepoFileExtensions {
+			normalizedValue = def.DefaultValue
+		}
 		if normalizedValue != existing.Value {
 			updates["value"] = normalizedValue
 		}

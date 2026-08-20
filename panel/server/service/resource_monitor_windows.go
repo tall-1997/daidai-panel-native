@@ -24,9 +24,9 @@ type memoryStatusEx struct {
 }
 
 var (
-	kernel32DLL                = syscall.NewLazyDLL("kernel32.dll")
-	globalMemoryStatusExProc   = kernel32DLL.NewProc("GlobalMemoryStatusEx")
-	getDiskFreeSpaceExWProc    = kernel32DLL.NewProc("GetDiskFreeSpaceExW")
+	kernel32DLL              = syscall.NewLazyDLL("kernel32.dll")
+	globalMemoryStatusExProc = kernel32DLL.NewProc("GlobalMemoryStatusEx")
+	getDiskFreeSpaceExWProc  = kernel32DLL.NewProc("GetDiskFreeSpaceExW")
 )
 
 // fillWindowsResourceInfo 为 Windows 运行态补齐资源信息，避免仪表板和系统设置长期显示 0。

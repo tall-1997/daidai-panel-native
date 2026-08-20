@@ -32,6 +32,7 @@ import '../../features/system/views/panel_log_page.dart';
 import '../../features/system/views/backup_page.dart';
 import '../../features/system/views/health_check_page.dart';
 import '../../features/system/views/config_script_page.dart';
+import '../../features/system/views/capability_unavailable_page.dart';
 import '../../features/openapi/views/open_api_page.dart';
 import '../../features/app_lock/views/app_lock_settings_page.dart';
 import '../../features/settings/views/theme_settings_page.dart';
@@ -39,6 +40,7 @@ import '../../features/profile/views/profile_page.dart';
 import '../../shared/widgets/app_background.dart';
 import '../../shared/widgets/main_scaffold.dart';
 import '../../shared/models/task.dart';
+import '../network/panel_capability_registry.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
@@ -46,6 +48,19 @@ String? _pendingProtectedLocation;
 
 NoTransitionPage<void> _rootPage(Widget child) =>
     NoTransitionPage<void>(child: AppBackground(child: child));
+
+NoTransitionPage<void> _capabilityPage(
+  PanelCapability capability,
+  String title,
+  Widget child, {
+  PanelCapability? mutationCapability,
+}) => _rootPage(
+  (PanelCapabilityRegistry.isUnsupported(capability) ||
+          (mutationCapability != null &&
+              PanelCapabilityRegistry.isUnsupported(mutationCapability)))
+      ? CapabilityUnavailablePage(title: title)
+      : child,
+);
 
 /// 将 auth status 变化转为 Listenable，供 GoRouter.refreshListenable 使用
 class _AuthNotifierBridge extends ChangeNotifier {
@@ -210,27 +225,48 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/installed-packages',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const InstalledPackagesPage()),
+        pageBuilder: (_, state) => _capabilityPage(
+          PanelCapability.installedPackages,
+          '系统依赖清单',
+          const InstalledPackagesPage(),
+        ),
       ),
       GoRoute(
         path: '/android-runtime',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const AndroidRuntimePage()),
+        pageBuilder: (_, state) => _capabilityPage(
+          PanelCapability.androidRuntime,
+          'Android 运行时',
+          const AndroidRuntimePage(),
+          mutationCapability: PanelCapability.runtimeMutation,
+        ),
       ),
       GoRoute(
         path: '/config-script',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const ConfigScriptPage()),
+        pageBuilder: (_, state) => _capabilityPage(
+          PanelCapability.configScript,
+          '高级配置脚本',
+          const ConfigScriptPage(),
+        ),
       ),
       GoRoute(
         path: '/platform-tokens',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const PlatformTokensPage()),
+        pageBuilder: (_, state) => _capabilityPage(
+          PanelCapability.platformTokens,
+          '平台令牌',
+          const PlatformTokensPage(),
+        ),
       ),
       GoRoute(
         path: '/health-check',
         parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const HealthCheckPage()),
+        pageBuilder: (_, state) => _capabilityPage(
+          PanelCapability.healthCheck,
+          '系统健康诊断',
+          const HealthCheckPage(),
+        ),
       ),
       GoRoute(
         path: '/tasks/new',

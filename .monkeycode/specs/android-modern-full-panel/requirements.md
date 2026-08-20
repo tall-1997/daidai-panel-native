@@ -120,3 +120,43 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 9. WHILE Foreground Service 持续健康, Scheduler SHALL 达到 99% 的实际启动任务在计划时间后 60 秒内启动，并单独统计策略跳过任务。
 10. WHEN Android 授予恢复执行窗口, Scheduler SHALL 在窗口开始后 15 分钟内执行补偿或写入明确中断记录。
 11. Release Candidate SHALL 为八类运行时分别记录 Runtime ID、版本、入口、隔离等级、smoke 输出、超时和失败状态。
+
+## Requirement 12：统一任务运行语义
+
+**User Story:** 作为本地面板用户，我希望 Go Core 与 Kotlin fallback 提供一致的任务行为，以便设备兼容路径变化时保持可预期结果。
+
+1. WHEN 任一执行路径启动任务, Executor SHALL 向主命令、前置脚本和后置脚本注入已启用的面板环境变量。
+2. WHEN 任一执行路径停止任务, Executor SHALL 终止对应进程树并持久化唯一终态。
+3. WHEN 任一执行路径产生输出, Executor SHALL 增量持久化 stdout、stderr、游标和运行状态。
+4. WHEN 客户端使用日志游标重连, Local Core SHALL 从游标后继续发送持久日志。
+5. WHEN Python 或 Node.js 任务因缺失依赖失败且自动安装已启用, Dependency Manager SHALL 安装识别出的依赖并按有界次数重跑任务。
+
+## Requirement 13：统一且可配置的镜像源
+
+**User Story:** 作为本地面板用户，我希望使用默认国内镜像并可自由切换，以便在不同网络环境下安装依赖。
+
+1. Local Runtime SHALL 默认使用 Huawei Alpine APK、Alibaba Python pip 和 npmmirror Node.js npm 镜像。
+2. WHEN 管理员保存镜像设置, Local Runtime SHALL 将 pip、npm 和 APK 镜像持久化并应用于后续安装及任务环境。
+3. WHEN 管理员选择任意有效 HTTP(S) 镜像或官方镜像, Local Runtime SHALL 保留管理员选择的地址。
+4. WHEN rootfs 初始化或 App 重启, Local Runtime SHALL 保留已保存镜像并仅为缺失配置写入默认值。
+5. Remote Panel SHALL 继续使用远程后端提供的镜像 API和配置语义。
+
+## Requirement 14：后端版本与能力握手
+
+**User Story:** 作为同时管理本地和远程面板的用户，我希望客户端识别实例版本与能力，以便只看到可用功能。
+
+1. WHEN 客户端连接本地或远程面板, Panel SHALL 返回实例模式、后端版本、API 版本、Schema 版本和细粒度能力状态。
+2. WHEN 旧版远程面板缺少握手接口, Client SHALL 使用端点探测生成 legacy capability profile。
+3. WHEN 后端返回 `PLATFORM_CAPABILITY`, Client SHALL 更新当前实例能力并展示结构化原因。
+4. WHEN 实例 ID、后端版本或 capability revision 变化, Client SHALL 失效旧能力缓存并重新握手。
+5. Embedded Panel SHALL 记录固定上游 Release 与 commit，且构建检查 SHALL 验证记录与导入源码一致。
+
+## Requirement 15：功能可见性与完整远程客户端
+
+**User Story:** 作为面板用户，我希望同一 App 完整管理受支持的远程面板并隐藏不可用功能。
+
+1. WHILE 远程面板声明功能可用, Client SHALL 提供与后端 API 对应的完整管理入口和操作。
+2. IF 页面读取能力为 `unsupported`, Client SHALL 隐藏菜单入口并阻止深链进入。
+3. IF 页面读取能力为 `disabled` 或 `temporaryUnavailable`, Client SHALL 显示页面状态与原因并禁用受影响操作。
+4. IF 写入或执行能力不可用, Client SHALL 保留只读页面并隐藏或禁用对应操作按钮。
+5. WHEN 用户切换本地与远程实例, Client SHALL 使用目标实例独立的角色、版本和能力配置刷新菜单、路由和操作。

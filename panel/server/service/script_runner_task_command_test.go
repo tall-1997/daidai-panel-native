@@ -370,6 +370,13 @@ func TestRunCommandSupportsManagedDependencyCommand(t *testing.T) {
 func requireUsableBash(t *testing.T) {
 	t.Helper()
 
+	// 同 handler/script_runtime_test.go 的那份：Windows 上的 Git Bash 会把
+	// 路径里的反斜杠当转义符吃掉，脚本里的相对重定向落不了盘，用例必失败。
+	// 这些用例验的是 POSIX shell 行为，只在 Linux 上有意义。
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 下的 bash 不提供等价的 POSIX 路径语义，该用例只在 Linux 有意义")
+	}
+
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skipf("bash unavailable: %v", err)
@@ -429,6 +436,44 @@ func TestRunHookScriptHandlesLargeEnvWithoutExecArgLimit(t *testing.T) {
 	}
 	if got, want := string(content), "3145728|arg-one|arg two"; got != want {
 		t.Fatalf("expected large env and args %q, got %q", want, got)
+	}
+}
+
+// desi / conc 的存在意义就是「只跑选中的账号」。如果它们仍然把全量 cookie 塞进
+// 子进程环境，账号越多越容易撞上 execve 的 MAX_ARG_STRLEN，分批执行也就白分了。
+func TestDesiAndConcNarrowEnvToSelectedAccounts(t *testing.T) {
+	full := "cookie-one&cookie-two&cookie-three&cookie-four"
+	envVars := map[string]string{
+		"JD_COOKIE": full,
+		"OTHER":     "keep-me",
+	}
+
+	desiPlan := &CommandExecutionPlan{Mode: commandModeDesi, EnvName: "JD_COOKIE", AccountSpec: "2 3"}
+	desiEnv, err := applyCommandEnvOverrides(desiPlan, envVars)
+	if err != nil {
+		t.Fatalf("apply desi env overrides: %v", err)
+	}
+	if got, want := desiEnv["JD_COOKIE"], "cookie-two&cookie-three"; got != want {
+		t.Fatalf("expected desi env narrowed to %q, got %q", want, got)
+	}
+	if desiEnv["OTHER"] != "keep-me" {
+		t.Fatalf("expected unrelated env untouched, got %q", desiEnv["OTHER"])
+	}
+	if envVars["JD_COOKIE"] != full {
+		t.Fatalf("expected source env map untouched, got %q", envVars["JD_COOKIE"])
+	}
+
+	concPlan := &CommandExecutionPlan{Mode: commandModeConc, EnvName: "JD_COOKIE", AccountSpec: "1-max"}
+	selections, err := resolveTaskAccountSelections(envVars, concPlan.EnvName, concPlan.AccountSpec)
+	if err != nil {
+		t.Fatalf("resolve conc selections: %v", err)
+	}
+	if len(selections) != 4 {
+		t.Fatalf("expected 4 conc selections, got %d", len(selections))
+	}
+	concEnv := applyConcurrentAccountEnv(concPlan, envVars, selections[2])
+	if got, want := concEnv["JD_COOKIE"], "cookie-three"; got != want {
+		t.Fatalf("expected conc env narrowed to %q, got %q", want, got)
 	}
 }
 

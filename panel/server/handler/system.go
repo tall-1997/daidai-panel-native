@@ -65,9 +65,36 @@ func NewSystemHandler() *SystemHandler {
 	return &SystemHandler{}
 }
 
+// systemInfoResponse 在原有资源快照之上追加两项「部署形态」字段。
+//
+// 必须用匿名嵌入而不是 {"resource": info, ...}：ResourceInfo 的字段会被 encoding/json
+// 平铺到同一层，老字段的位置和名字一个都不变。/system/info 是独立发版的 Flutter APP
+// 也在读的接口，换成嵌套结构等于单方面改协议。
+type systemInfoResponse struct {
+	service.ResourceInfo
+	// deployment_type 取值与 CheckUpdate 的 update_target.deployment_type 同一套：
+	// docker / binary / magisk。
+	DeploymentType string `json:"deployment_type"`
+	// magisk_shell_version 是 Magisk/service.sh 注入的模块外壳版本；
+	// 非模块版、或旧外壳（v3.0.3 之前根本没 export 过）都是 0。
+	MagiskShellVersion int `json:"magisk_shell_version"`
+}
+
+// Info 返回资源快照，外加两项「部署形态」字段。
+//
+// 为什么部署形态要挂在这里：前端判断「要不要显示模块版专属功能」原本只能从
+// CheckUpdate 的 update_target.deployment_type 里拿，而那个接口必须联网拉 GitHub
+// Release，前端还把它包在 v-if="updateInfo.has_update" 里 —— 没有新版本时前端
+// 根本拿不到部署形态。外壳版本号更是完全没有 API 出口。
+//
+// 挂在 /system/info 而【不是】/system/panel-settings：后者注册在 JWTAuth 组之外，
+// 是完全公开的接口，没必要把部署形态和外壳版本暴露给未登录访客。
 func (h *SystemHandler) Info(c *gin.Context) {
-	info := systemHealthGetResourceInfo()
-	response.Success(c, gin.H{"data": info})
+	response.Success(c, gin.H{"data": systemInfoResponse{
+		ResourceInfo:       systemHealthGetResourceInfo(),
+		DeploymentType:     detectPanelDeploymentTypeHint(),
+		MagiskShellVersion: resolveMagiskShellVersion(),
+	}})
 }
 
 // MachineCode 单独返回面板机器码，便于外部工具通过接口直接获取（无需解析完整系统信息）。
@@ -424,8 +451,12 @@ func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 	watchtowerCfg := currentWatchtowerRuntimeConfig()
 
 	if watchtowerCfg.Managed {
-		autoUpdateSupported = watchtowerCfg.ManualTriggerSupported
-		if !watchtowerCfg.ManualTriggerSupported {
+		imageName := strings.TrimSpace(os.Getenv("IMAGE_NAME"))
+		pinnedImage := isPinnedPanelImageReference(imageName)
+		autoUpdateSupported = watchtowerCfg.ManualTriggerSupported && !pinnedImage
+		if pinnedImage {
+			updateDisabledReason = "当前容器使用固定版本标签或 digest，Watchtower 不会把它切换到后续版本；请先把 DAIDAI_PANEL_IMAGE 改为同系列浮动标签"
+		} else if !watchtowerCfg.ManualTriggerSupported {
 			updateDisabledReason = "当前由 Watchtower 托管自动更新；面板可展示更新状态，但未配置 Watchtower HTTP API 手动触发能力"
 		}
 		updateTarget = buildWatchtowerUpdateTarget(watchtowerCfg)
@@ -434,6 +465,10 @@ func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 		if planErr != nil {
 			autoUpdateSupported = false
 			updateDisabledReason = planErr.Error()
+			// 构建方案失败时也要把「当前是什么部署形态」告诉前端。
+			// 否则前端只能看到一个空对象，就会退回到「请在宿主机执行 docker compose pull」
+			// 这种兜底文案——对 Android 模块版和裸机二进制部署都是纯粹的误导。
+			updateTarget = gin.H{"deployment_type": detectPanelDeploymentTypeHint()}
 		} else {
 			updateTarget = buildPanelUpdateTarget(plan)
 		}
@@ -456,27 +491,6 @@ func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 }
 
 func (h *SystemHandler) UpdatePanel(c *gin.Context) {
-	if watchtowerCfg := currentWatchtowerRuntimeConfig(); watchtowerCfg.Managed {
-		result, err := triggerWatchtowerUpdate(watchtowerCfg)
-		if err != nil {
-			response.BadRequest(c, err.Error())
-			return
-		}
-
-		response.Success(c, gin.H{
-			"message": "已触发 Watchtower 检查更新",
-			"data": gin.H{
-				"status":              "running",
-				"phase":               "watchtower-triggered",
-				"message":             "已请求 Watchtower 立即检查并执行容器更新",
-				"deployment_type":     "docker",
-				"update_manager":      panelUpdateManagerWatchtower,
-				"watchtower_response": result,
-			},
-		})
-		return
-	}
-
 	plan, err := buildPanelUpdatePlan()
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -488,6 +502,22 @@ func (h *SystemHandler) UpdatePanel(c *gin.Context) {
 		return
 	}
 
+	if plan.UpdateManager == panelUpdateManagerWatchtower {
+		// Watchtower 的 async API 会立即返回接管结果；同步完成这一步后，
+		// 页面、自动更新和 ddp CLI 都能看到同一套 completed/failed 终态。
+		executePanelUpdate(plan)
+		snapshot := panelUpdater.snapshotCopy()
+		if snapshot.Status == "failed" {
+			response.BadRequest(c, snapshot.Error)
+			return
+		}
+		response.Success(c, gin.H{
+			"message": "已触发 Watchtower 检查更新",
+			"data":    snapshot,
+		})
+		return
+	}
+
 	go executePanelUpdate(plan)
 
 	response.Success(c, gin.H{
@@ -495,12 +525,57 @@ func (h *SystemHandler) UpdatePanel(c *gin.Context) {
 	})
 }
 
+// panelProcessExit / panelProcessExitDelay 抽成变量只是为了让 Restart 与 StopPanel
+// 可以被测试覆盖（真跑 os.Exit 会把整个 test 二进制干掉）。生产行为与以前逐字一致。
+var (
+	panelProcessExit      = func(code int) { os.Exit(code) }
+	panelProcessExitDelay = 2 * time.Second
+)
+
+// Restart 只退出进程，由外部（systemd / Docker restart policy / Magisk 存活守护）拉回来。
+//
+// ⚠️ 这里【绝对不能】顺手写 Magisk 的停止开关。restart 的语义是「重来一次」，
+// 一旦写了开关，模块版的存活守护会自退、重启手机也不会再起来 ——
+// 一次正常重启就变成了永久停机，而此时 Web 已经没了，用户在面板上没有任何自救手段。
+// 「停止」是另一个接口（StopPanel），两者共用退出逻辑但绝不共用停止开关。
 func (h *SystemHandler) Restart(c *gin.Context) {
 	response.Success(c, gin.H{"message": "面板将在 2 秒后重启"})
 
 	go func() {
-		time.Sleep(2 * time.Second)
-		os.Exit(1)
+		time.Sleep(panelProcessExitDelay)
+		panelProcessExit(1)
+	}()
+}
+
+// StopPanel 停止面板服务，且跨重启保持停止 —— 只对 Magisk 模块版开放。
+//
+// 与 Restart 的差别就是多写了一个停止开关：service.sh 在开机同步完模块文件后读到它会
+// 直接早退，存活守护读到它也会自退，所以进程退出后不会有任何东西把面板拉回来。
+//
+// 只在模块版放行：其它部署形态（Docker / systemd / 裸机二进制）的进程管理器会立刻重启
+// 面板，这个接口在那些环境里等价于 restart，只会让用户误以为自己停掉了服务。
+func (h *SystemHandler) StopPanel(c *gin.Context) {
+	if !service.IsMagiskModuleRuntime() {
+		response.BadRequest(c, "停止面板服务只支持 Magisk 模块版；其它部署形态请在宿主机停止对应的容器或服务")
+		return
+	}
+	if shellVersion := resolveMagiskShellVersion(); shellVersion < magiskStopSupportedShellVersion {
+		response.BadRequest(c, fmt.Sprintf(
+			"当前模块外壳版本为 %d，不支持手动停止（需要 %d 及以上）。在线升级只替换面板程序与前端，覆盖不到模块脚本；请到 GitHub Releases 下载对应 flavor 的模块 zip 重新刷入一次",
+			shellVersion, magiskStopSupportedShellVersion,
+		))
+		return
+	}
+	if err := writeMagiskStopFlag(); err != nil {
+		response.InternalError(c, "写入停止开关失败："+err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{"message": "面板将在 2 秒后停止；重启手机也不会自动启动，恢复请到模块管理器点动作按钮"})
+
+	go func() {
+		time.Sleep(panelProcessExitDelay)
+		panelProcessExit(0)
 	}()
 }
 
@@ -697,6 +772,9 @@ func (h *SystemHandler) RegisterRoutes(r *gin.RouterGroup) {
 		sys.GET("/update-status", middleware.RequireAdmin(), h.UpdateStatus)
 		sys.POST("/update", middleware.RequireAdmin(), h.UpdatePanel)
 		sys.POST("/restart", middleware.RequireAdmin(), h.Restart)
+		// 停止面板服务：仅 Magisk 模块版可用，handler 内部再做一次运行态与外壳版本门控。
+		// 不挂 OpenAPIAccess —— 这是「让面板彻底消失」的操作，只允许登录管理员本人执行。
+		sys.POST("/stop", middleware.RequireAdmin(), h.StopPanel)
 		sys.GET("/panel-log", middleware.RequireUserToken(), middleware.RequireAdmin(), h.PanelLog)
 		sys.POST("/backup", middleware.OpenAPIAccess("backup"), middleware.RequireRole("admin"), h.Backup)
 		sys.POST("/backup/upload", middleware.OpenAPIAccess("backup"), middleware.RequireRole("admin"), h.UploadBackup)

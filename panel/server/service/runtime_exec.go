@@ -100,6 +100,31 @@ sys.argv = [module_name] + module_args
 runpy.run_module(module_name, run_name="__main__", alter_sys=True)
 `
 
+// shellEnvBootstrap 里那段 __dd_dump_env 只为「任务前置钩子回传环境变量」服务，
+// 且**只有 DAIDAI_HOOK_ENV_DUMP 非空时才装**，其余 bash 任务、订阅钩子、后置钩子
+// 走的仍然是原来的两行逻辑（见 hookEnvDumpPathEnvKey 的注释）。
+//
+// 为什么必须用 trap EXIT、不能把 dump 代码追加在用户脚本尾部：
+// 这里对用户脚本是 `. "$__dd_script"`（source，不是 exec），用户写一句 `exit 0`
+// 会直接终止整个 bootstrap shell，任何追加在其后的代码永远不会执行 —— 而
+// `exit 0` / `[ -z "$X" ] && exit 1` 恰恰是前置脚本里最常见的收尾写法。
+// trap EXIT 装在 source 之前，正常结束、exit、绝大多数异常退出都能兜住
+// （被 SIGKILL 强杀除外，那时 dump 文件不存在，Go 侧跳过合并）。
+//
+// dump 走 NUL 分隔的 "KEY=VALUE\0"，是为了原样承载含换行、含 '=' 的值。
+// 三级降级链：env -0（不依赖 bash 特性，Alpine 容器里未必有真 bash 的 compgen）
+// → bash 内建 compgen -e + ${!k} → 逐行 env（多行值会丢，纯兜底）。
+// 三者都失败就留一个空文件，Go 侧跳过合并并写一行日志，不影响任务继续执行。
+//
+// 采集两次（.base 与最终）而不是只采一次：bootstrap 进程自身的环境里本来就有
+// PATH / HOME / LANG / HTTP_PROXY 等一批不属于 envVars 的键，只采一次的话它们会被
+// 当成「前置脚本新增的变量」合并进任务环境（代理地址还会被冻结成快照）。
+// 以 source 用户脚本之前的快照为基线做差集，得到的才是用户脚本真正改动的那部分。
+//
+// 开关除了「变量非空」还要求同名 .ok 标记文件存在（由 newHookEnvCapture 落盘）。
+// 这一道是防呆：用户完全可以在「环境变量」页手建一条同名变量，值随手填成
+// /app/config.yaml，那样每个 bash 任务都会用 `>` 把它截断。多一个只有面板才会创建的
+// 标记文件，误设的值就只是个空转。
 const shellEnvBootstrap = `__dd_env_file=$1
 __dd_script=$2
 shift 2
@@ -107,10 +132,29 @@ export DAIDAI_RUNTIME_SHELL_ENV_FILE="$__dd_env_file"
 if [ -f "$__dd_env_file" ]; then
   . "$__dd_env_file"
 fi
+if [ -n "$DAIDAI_HOOK_ENV_DUMP" ] && [ -f "${DAIDAI_HOOK_ENV_DUMP}.ok" ]; then
+  __dd_dump_env() {
+    if env -0 >"$1" 2>/dev/null; then
+      return 0
+    fi
+    if { for __dd_key in $(compgen -e 2>/dev/null); do
+           printf '%s=%s\0' "$__dd_key" "${!__dd_key}"
+         done; } >"$1" 2>/dev/null && [ -s "$1" ]; then
+      return 0
+    fi
+    env >"$1" 2>/dev/null || : >"$1" 2>/dev/null || true
+    return 0
+  }
+  __dd_dump_env "${DAIDAI_HOOK_ENV_DUMP}.base"
+  trap '__dd_dump_env "$DAIDAI_HOOK_ENV_DUMP"' EXIT
+fi
 . "$__dd_script" "$@"
 `
 
-const shellEnvExportValueMaxBytes = 128 * 1024
+// bash 任务的 env.sh 里，超过 MAX_ARG_STRLEN 的变量只赋值不 export，
+// 否则 bash 自己往下 exec 任何命令都会直接 E2BIG。
+// 预算上限再额外压一道，避免一堆中等大小的变量叠加撞上 ARG_MAX。
+const shellEnvExportValueMaxBytes = linuxMaxArgStrLenBytes
 const shellEnvExportBudgetBytes = 512 * 1024
 
 const goEnvBootstrapSource = `package main
@@ -142,11 +186,26 @@ func init() {
 }
 `
 
+// BuildManagedRuntimeEnvMap 丢弃脚本凭据的 jti，见
+// BuildManagedRuntimeEnvMapForPythonVersion 上的警告。
 func BuildManagedRuntimeEnvMap(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration) (map[string]string, error) {
 	return BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir, defaultChannelID, ttl, "")
 }
 
+// BuildManagedRuntimeEnvMapForPythonVersion 丢弃脚本凭据的 jti。
+//
+// 警告：丢掉 jti 就等于放弃吊销能力——那枚 operator 凭据会一直有效到 ttl 到期，谁也收不回来。
+// 目前**没有任何生产路径**该走这里，三条注入路径（任务执行、ddp python/shell、脚本调试运行）
+// 全部改用 BuildManagedRuntimeEnvMapWithScriptToken 并在用完后 RevokeScriptToken。
+// 保留这两个包装只是给不关心凭据回收的测试用；新增调用方前请先确认你真的不需要吊销。
 func BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, error) {
+	envMap, _, err := BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, defaultChannelID, ttl, pythonVersion)
+	return envMap, err
+}
+
+// BuildManagedRuntimeEnvMapWithScriptToken 额外返回注入凭据的 jti / 到期时间，
+// 让调用方能在任务结束时调 RevokeScriptToken 立刻作废它。
+func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, *ScriptTokenInfo, error) {
 	var envVarRecords []model.EnvVar
 	// 按稳定顺序读取：置顶 > 组内位置 > 创建时间 > id；避免无 ORDER BY 导致同名变量的相对顺序抖动
 	database.DB.Where("enabled = ?", true).
@@ -192,15 +251,17 @@ func BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir string, defau
 	}
 	AppendScriptHelperPaths(envMap, scriptsDir)
 	var helperErr error
-	if helperEnv, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl); err == nil {
+	var scriptToken *ScriptTokenInfo
+	if helperEnv, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl); err == nil {
 		for key, value := range helperEnv {
 			envMap[key] = value
 		}
+		scriptToken = tokenInfo
 	} else {
 		helperErr = err
 	}
 
-	return envMap, helperErr
+	return envMap, scriptToken, helperErr
 }
 
 func buildManagedPythonPath(existingPythonPath, workDir, scriptsDir, venvSitePackages string) string {
@@ -835,7 +896,7 @@ func createManagedNodeCommand(scriptPath string, scriptArgs []string, workDir st
 	}
 	nodeModulesCleanup := ensureManagedNodeModulesAccess(workDir, runtimePaths.NodeModules)
 
-	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars)
+	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars, model.GetRegisteredConfigBool("detect_silent_exit"))
 	if preloadErr != nil {
 		cleanup()
 		nodeModulesCleanup()
@@ -859,7 +920,7 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 	}
 	nodeModulesCleanup := ensureManagedNodeModulesAccess(workDir, runtimePaths.NodeModules)
 
-	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars)
+	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars, model.GetRegisteredConfigBool("detect_silent_exit"))
 	if preloadErr != nil {
 		cleanup()
 		nodeModulesCleanup()
@@ -1185,20 +1246,10 @@ func writeManagedRuntimeShellEnvFile(envVars map[string]string) (string, string,
 		b.WriteByte('\n')
 	}
 
-	exportedBytes := 0
-	for _, key := range keys {
-		value := envVars[key]
-		if !isValidShellEnvName(key) || isDangerousShellEnvName(key) || strings.ContainsRune(value, 0) {
-			continue
-		}
-		entryBytes := len(key) + 1 + len(value) + 1
-		if entryBytes > shellEnvExportValueMaxBytes || exportedBytes+entryBytes > shellEnvExportBudgetBytes {
-			continue
-		}
+	for _, key := range planShellEnvExport(envVars).Exported {
 		b.WriteString("export ")
 		b.WriteString(key)
 		b.WriteByte('\n')
-		exportedBytes += entryBytes
 	}
 
 	envFile := filepath.Join(tempDir, "env.sh")
@@ -1208,6 +1259,55 @@ func writeManagedRuntimeShellEnvFile(envVars map[string]string) (string, string,
 	}
 
 	return tempDir, envFile, cleanup, nil
+}
+
+// shellEnvExportPlan 是 writeManagedRuntimeShellEnvFile 的导出决策结果。
+// 单独抽出来是为了让诊断提示（buildRuntimeEnvLimitWarnings）能复用同一套规则，
+// 不至于两边阈值各写一份然后慢慢漂移。
+type shellEnvExportPlan struct {
+	// Exported 是真正会写 `export KEY` 的变量名，按 key 升序。
+	Exported []string
+	// SkippedTooLong 是单条就超过 MAX_ARG_STRLEN、只赋值不导出的变量。
+	SkippedTooLong []runtimeEnvEntrySize
+	// SkippedBudget 是单条不超限、但累计超过导出预算被让位的变量。
+	SkippedBudget []runtimeEnvEntrySize
+}
+
+func planShellEnvExport(envVars map[string]string) shellEnvExportPlan {
+	keys := make([]string, 0, len(envVars))
+	for key := range envVars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	plan := shellEnvExportPlan{Exported: make([]string, 0, len(keys))}
+	exportedBytes := 0
+	for _, key := range keys {
+		value := envVars[key]
+		if !isValidShellEnvName(key) || isDangerousShellEnvName(key) || strings.ContainsRune(value, 0) {
+			continue
+		}
+		entry := runtimeEnvEntrySize{Name: key, Bytes: runtimeEnvEntryBytes(key, value)}
+		if entry.Bytes > shellEnvExportValueMaxBytes {
+			plan.SkippedTooLong = append(plan.SkippedTooLong, entry)
+			continue
+		}
+		if exportedBytes+entry.Bytes > shellEnvExportBudgetBytes {
+			plan.SkippedBudget = append(plan.SkippedBudget, entry)
+			continue
+		}
+		plan.Exported = append(plan.Exported, key)
+		exportedBytes += entry.Bytes
+	}
+	return plan
+}
+
+// shellEnvExportSkippedByBudget 只返回「因为预算被挤掉」的变量，按体积降序，
+// 供诊断提示列出来。超过单条上限的那批由 buildRuntimeEnvLimitWarnings 单独讲。
+func shellEnvExportSkippedByBudget(envVars map[string]string) []runtimeEnvEntrySize {
+	skipped := planShellEnvExport(envVars).SkippedBudget
+	sortRuntimeEnvEntries(skipped)
+	return skipped
 }
 
 func isValidShellEnvName(name string) bool {
@@ -1256,7 +1356,85 @@ func cleanManagedProcessArgs(args []string) []string {
 	return cleaned
 }
 
-func writeNodePreloadScript(tempDir, envFile string, envVars map[string]string) (string, error) {
+// silentExitProbeJS 检测「事件循环排空了，但还有 Promise 从未 settle」的半路静默死亡。
+//
+// 触发这种情况的典型写法：一个 Promise 只在 req 上挂了 error 监听，而连接是在响应
+// 开始之后断的（Node 此时只在 res 上出声），于是它永远不 resolve 也不 reject。
+// 等它的 await 就永久卡住，事件循环随后排空，node **以退出码 0 正常退出** ——
+// 从面板外面看和「跑完了」完全一样，任务会被记成成功、不发失败通知。
+//
+// 判据是 beforeExit 时仍有未 settle 的 Promise。实测（Node 26）正常结束与「正常但慢」
+// 两种对照都是 0 个，挂起场景稳定为非 0，信号是干净分离的。
+//
+// 只统计探针启用之后创建的 Promise：preload 自身、helper 的加载过程都在这之前，
+// 不会被算进来。
+const silentExitProbeJS = `
+try {
+  // ---- 三道闸，任一不满足就连 async_hooks 都不 require ----
+  // 1) --require 会被 child_process.fork 继承（实测：子进程 execArgv 与父进程相同），
+  //    不打戳的话每个子进程都会再武装一次，各自往同一条 stdout 刷重复告警。
+  const armedAlready = process.env.DAIDAI_SILENT_EXIT_ARMED === '1';
+  process.env.DAIDAI_SILENT_EXIT_ARMED = '1';
+  // 2) 任务级开关：给某个噪音脚本单独配一条同名环境变量填 0 / off / false 即可关掉，
+  //    不必为了它把全局配置也关掉、连累其余任务。
+  const perTaskSwitch = String(process.env.DAIDAI_SILENT_EXIT_DETECT || '').toLowerCase();
+  const disabledPerTask = perTaskSwitch === '0' || perTaskSwitch === 'off' || perTaskSwitch === 'false';
+  // 3) worker 线程各自有独立事件循环，退出与主线程无关，判定没有意义。
+  let isMainThread = true;
+  try { isMainThread = require('worker_threads').isMainThread; } catch (_) {}
+
+  if (!armedAlready && !disabledPerTask && isMainThread) {
+    const asyncHooks = require('async_hooks');
+    const pendingPromises = new Set();
+    let probing = true;
+    let declaredDone = false;
+
+    // 脚本主流程末尾调一次 globalThis.daidaiDone() 即永久判定为「跑完了」。
+    // 这是唯一能做到零误报的手段：探针分不清「被抛弃的 promise」和「被卡住的 promise」
+    // ——两者在依赖图上完全同构——只有脚本自己知道工作做没做完。
+    // configurable 必须为 true：否则脚本里出现同名变量赋值会抛 TypeError 打断用户脚本。
+    try {
+      Object.defineProperty(globalThis, 'daidaiDone', {
+        value: function daidaiDone() { declaredDone = true; },
+        writable: false, enumerable: false, configurable: true,
+      });
+    } catch (_) {}
+
+    const probe = asyncHooks.createHook({
+      init(asyncId, type) {
+        if (probing && type === 'PROMISE') pendingPromises.add(asyncId);
+      },
+      promiseResolve(asyncId) { pendingPromises.delete(asyncId); },
+      destroy(asyncId) { pendingPromises.delete(asyncId); },
+    });
+    probe.enable();
+
+    process.on('beforeExit', () => {
+      // beforeExit 可能触发多次（回调里又排入了异步工作），只在第一次判定。
+      if (!probing) return;
+      probing = false;
+      probe.disable();
+      if (declaredDone) return;
+      const stuck = pendingPromises.size;
+      if (stuck <= 0) return;
+      process.stdout.write(
+        '\n[任务疑似半路结束] 脚本没跑完就退出了：还有 ' + stuck +
+        ' 个异步操作永远不会完成，常见于请求在响应中途断开、而代码只监听了请求对象的错误。\n' +
+        '[任务疑似半路结束] 已判定为失败。若该脚本本来就会留下未完成的异步操作（属于误报），' +
+        '有三种关法：脚本末尾加一行 globalThis.daidaiDone?.()；' +
+        '给该任务加环境变量 DAIDAI_SILENT_EXIT_DETECT=0；' +
+        '或在「系统设置 - 任务」里关闭「检测脚本半路静默结束」。\n'
+      );
+      // 不覆盖脚本自己设过的退出码：它已经表达了失败，保留它更有信息量。
+      if (!process.exitCode) process.exitCode = 75;
+    });
+  }
+} catch (err) {
+  // 探针本身出任何问题都安静跳过，绝不能因为它让任务跑不起来。
+}
+`
+
+func writeNodePreloadScript(tempDir, envFile string, envVars map[string]string, detectSilentExit bool) (string, error) {
 	helperPath := filepath.ToSlash(strings.TrimSpace(envVars["DAIDAI_SEND_NOTIFY_JS"]))
 	nodePathList := strings.Split(strings.TrimSpace(envVars["NODE_PATH"]), string(os.PathListSeparator))
 	filteredNodePaths := make([]string, 0, len(nodePathList))
@@ -1274,6 +1452,13 @@ func writeNodePreloadScript(tempDir, envFile string, envVars map[string]string) 
 	nodePathsJSON, err := json.Marshal(filteredNodePaths)
 	if err != nil {
 		return "", err
+	}
+
+	// 探针放在 preload 末尾注入：它只统计自己启用之后创建的 Promise，
+	// 放前面会把 helper 加载过程中的异步操作一起算进去，形成误报。
+	probeJS := ""
+	if detectSilentExit {
+		probeJS = silentExitProbeJS
 	}
 
 	script := fmt.Sprintf(`const fs = require('fs');
@@ -1369,7 +1554,7 @@ const helperPath = %s;
 if (helperPath) {
   require(helperPath);
 }
-`, filepath.ToSlash(envFile), string(nodePathsJSON), string(helperJSON))
+%s`, filepath.ToSlash(envFile), string(nodePathsJSON), string(helperJSON), probeJS)
 
 	preloadFile := filepath.Join(tempDir, "node-preload.js")
 	if err := os.WriteFile(preloadFile, []byte(script), 0o600); err != nil {

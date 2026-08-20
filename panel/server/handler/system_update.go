@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ const (
 	defaultDockerHubRegistryHost = "registry-1.docker.io"
 	panelUpdateDeploymentDocker  = "docker"
 	panelUpdateDeploymentBinary  = "binary"
+	panelUpdateDeploymentMagisk  = "magisk"
 	panelUpdateManagerPanel      = "panel"
 	panelUpdateManagerWatchtower = "watchtower"
 )
@@ -37,6 +40,7 @@ type panelUpdateStatusSnapshot struct {
 	StartedAt      time.Time `json:"started_at,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	DeploymentType string    `json:"deployment_type,omitempty"`
+	UpdateManager  string    `json:"update_manager,omitempty"`
 	ContainerName  string    `json:"container_name,omitempty"`
 	ImageName      string    `json:"image_name,omitempty"`
 	PullImageName  string    `json:"pull_image_name,omitempty"`
@@ -56,6 +60,7 @@ type panelUpdateManager struct {
 
 type panelUpdatePlan struct {
 	DeploymentType  string
+	UpdateManager   string
 	ContainerName   string
 	ImageName       string
 	PullImageName   string
@@ -70,9 +75,15 @@ type panelUpdatePlan struct {
 	InstallDir      string
 	BinaryName      string
 	ExecutablePath  string
-	CurrentPID      int
+	// 下面三个只在 Magisk 模块版用到：面板数据目录（新进程的工作目录）、
+	// 前端静态目录、模块本体目录。见 system_update_magisk.go 顶部的路径说明。
+	DataDir    string
+	WebDir     string
+	ModuleDir  string
+	CurrentPID int
 	ServerPID       int
 	ServerPIDFile   string
+	Watchtower      watchtowerRuntimeConfig
 }
 
 type watchtowerRuntimeConfig struct {
@@ -147,6 +158,7 @@ func (m *panelUpdateManager) begin(plan *panelUpdatePlan) error {
 		StartedAt:      now,
 		UpdatedAt:      now,
 		DeploymentType: plan.DeploymentType,
+		UpdateManager:  plan.UpdateManager,
 		ContainerName:  plan.ContainerName,
 		ImageName:      plan.ImageName,
 		PullImageName:  plan.PullImageName,
@@ -178,6 +190,17 @@ func (m *panelUpdateManager) setRestarting(message string) {
 
 	m.snapshot.Status = "restarting"
 	m.snapshot.Phase = "restarting"
+	m.snapshot.Message = message
+	m.snapshot.Error = ""
+	m.snapshot.UpdatedAt = time.Now()
+}
+
+func (m *panelUpdateManager) complete(phase, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.snapshot.Status = "completed"
+	m.snapshot.Phase = phase
 	m.snapshot.Message = message
 	m.snapshot.Error = ""
 	m.snapshot.UpdatedAt = time.Now()
@@ -216,7 +239,8 @@ func currentWatchtowerRuntimeConfig() watchtowerRuntimeConfig {
 	schedule := strings.TrimSpace(os.Getenv("WATCHTOWER_SCHEDULE"))
 	periodicPolls := parseEnvBool(os.Getenv("WATCHTOWER_HTTP_API_PERIODIC_POLLS"))
 
-	managed := manager == panelUpdateManagerWatchtower || apiURL != ""
+	// 只有显式声明更新管理器时才进入 Watchtower 路径，避免裸机残留 URL 覆盖二进制更新。
+	managed := manager == panelUpdateManagerWatchtower
 	manualSupported := managed && apiURL != "" && apiToken != ""
 
 	return watchtowerRuntimeConfig{
@@ -239,7 +263,10 @@ func parseEnvBool(value string) bool {
 }
 
 func buildWatchtowerUpdateTarget(cfg watchtowerRuntimeConfig) gin.H {
-	return gin.H{
+	// Watchtower 更新的是容器当前 Config.Image；固定版本标签不能在这里只改成滚动标签，
+	// 否则页面展示的目标会与 Watchtower 实际检查的镜像不一致。
+	imageName := strings.TrimSpace(os.Getenv("IMAGE_NAME"))
+	target := gin.H{
 		"deployment_type":              panelUpdateDeploymentDocker,
 		"update_manager":               panelUpdateManagerWatchtower,
 		"watchtower_managed":           true,
@@ -248,6 +275,12 @@ func buildWatchtowerUpdateTarget(cfg watchtowerRuntimeConfig) gin.H {
 		"watchtower_trigger_supported": cfg.ManualTriggerSupported,
 		"watchtower_periodic_polls":    cfg.PeriodicPollsEnabled,
 	}
+	if imageName != "" {
+		target["image_name"] = imageName
+		target["pull_image_name"] = imageName
+		target["channel"] = resolvePanelUpdateChannel(imageName)
+	}
+	return target
 }
 
 func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{}, error) {
@@ -265,7 +298,17 @@ func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{
 		Transport: transport,
 	}
 
-	apiURL := strings.TrimRight(cfg.APIURL, "/") + "/v1/update"
+	// async=true 表示请求成功即由 Watchtower 接管后续拉取和重建，
+	// 避免大镜像下载超过面板 HTTP 超时后被误报为触发失败。
+	query := url.Values{}
+	query.Set("async", "true")
+	containerName := strings.TrimSpace(os.Getenv("CONTAINER_NAME"))
+	if containerName == "" {
+		containerName = "daidai-panel"
+	}
+	// Watchtower 的 container 参数支持正则，锚定并转义后只更新当前面板容器。
+	query.Set("container", "^"+regexp.QuoteMeta(containerName)+"$")
+	apiURL := strings.TrimRight(cfg.APIURL, "/") + "/v1/update?" + query.Encode()
 	req, err := http.NewRequest(http.MethodPost, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构建 Watchtower 更新请求失败: %w", err)
@@ -278,14 +321,18 @@ func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{
 	}
 	defer resp.Body.Close()
 
-	var payload map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		// Watchtower 手动触发接口在部分部署里会返回 204 No Content 或 200 + 空响应体。
-		// 这类场景代表“触发成功但无额外 JSON”，不能因为 EOF 就误判成失败。
-		if !(resp.StatusCode < http.StatusBadRequest && errors.Is(err, io.EOF)) {
-			if resp.StatusCode < http.StatusBadRequest {
-				return nil, fmt.Errorf("解析 Watchtower 更新响应失败: %w", err)
-			}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("读取 Watchtower 更新响应失败: %w", err)
+	}
+
+	payload := map[string]interface{}{}
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText != "" {
+		if err := json.Unmarshal(body, &payload); err != nil {
+			// async=true 的标准成功响应是 202 + Accepted 文本，不是 JSON。
+			// 成功状态保留原始消息即可，错误状态则在下面连同 HTTP 状态返回。
+			payload = map[string]interface{}{"message": bodyText}
 		}
 	}
 
@@ -293,12 +340,12 @@ func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{
 		if message, ok := payload["error"].(string); ok && strings.TrimSpace(message) != "" {
 			return nil, fmt.Errorf("Watchtower 更新触发失败: %s", message)
 		}
+		if bodyText != "" {
+			return nil, fmt.Errorf("Watchtower 更新触发失败: HTTP %d: %s", resp.StatusCode, bodyText)
+		}
 		return nil, fmt.Errorf("Watchtower 更新触发失败: HTTP %d", resp.StatusCode)
 	}
 
-	if payload == nil {
-		payload = map[string]interface{}{}
-	}
 	return payload, nil
 }
 
@@ -307,6 +354,43 @@ func buildPanelUpdatePlan() (*panelUpdatePlan, error) {
 }
 
 func buildPanelUpdatePlanForRelease(release *panelReleaseInfo) (*panelUpdatePlan, error) {
+	// 只要部署声明由 Watchtower 托管，页面静默更新和 ddp 都统一走 Watchtower，
+	// 即使 full 镜像里仍有 Docker CLI，也不会绕过既有托管配置直接重建容器。
+	if watchtowerCfg := currentWatchtowerRuntimeConfig(); watchtowerCfg.Managed {
+		// Watchtower 不会重写容器镜像引用，因此保持 Compose 传入的真实 IMAGE_NAME。
+		imageName := strings.TrimSpace(os.Getenv("IMAGE_NAME"))
+		if isPinnedPanelImageReference(imageName) {
+			return nil, fmt.Errorf("当前镜像使用固定版本标签或 digest，Watchtower 只会检查这个固定引用；请把 DAIDAI_PANEL_IMAGE 改为同系列浮动标签后再启用一键或自动更新")
+		}
+		containerName := strings.TrimSpace(os.Getenv("CONTAINER_NAME"))
+		if containerName == "" {
+			containerName = "daidai-panel"
+		}
+		return &panelUpdatePlan{
+			DeploymentType: panelUpdateDeploymentDocker,
+			UpdateManager:  panelUpdateManagerWatchtower,
+			ContainerName:  containerName,
+			ImageName:      imageName,
+			PullImageName:  imageName,
+			Channel:        resolvePanelUpdateChannel(imageName),
+			Watchtower:     watchtowerCfg,
+		}, nil
+	}
+
+	// Magisk 模块版必须排在 Docker 探测之前。
+	// 模块版跑在 Android 的 chroot 容器里，既没有 Docker CLI 也没有 docker.sock，
+	// 走到下面就只会拿到一句「未提供 Docker CLI，请配置 Watchtower」——
+	// 对着手机用户提示 docker compose 是纯粹的误导。
+	magiskPlan, magiskErr := buildMagiskPanelUpdatePlan(release)
+	if magiskErr == nil {
+		return magiskPlan, nil
+	}
+	// 只有「不是模块版」这一种情况才继续往下走；模块版自身的失败（例如外壳版本过旧）
+	// 必须原样抛给用户，否则又会被 Docker 的报错盖掉。
+	if !errors.Is(magiskErr, errMagiskRuntimeNotDetected) {
+		return nil, magiskErr
+	}
+
 	dockerPlan, dockerErr := buildDockerPanelUpdatePlan()
 	if dockerErr == nil {
 		return dockerPlan, nil
@@ -318,6 +402,7 @@ func buildPanelUpdatePlanForRelease(release *panelReleaseInfo) (*panelUpdatePlan
 
 	binaryPlan, binaryErr := buildBinaryPanelUpdatePlan(release)
 	if binaryErr == nil {
+		binaryPlan.UpdateManager = panelUpdateManagerPanel
 		return binaryPlan, nil
 	}
 
@@ -326,7 +411,7 @@ func buildPanelUpdatePlanForRelease(release *panelReleaseInfo) (*panelUpdatePlan
 
 func buildDockerPanelUpdatePlan() (*panelUpdatePlan, error) {
 	if _, err := exec.LookPath("docker"); err != nil {
-		return nil, fmt.Errorf("当前运行环境未提供 Docker CLI，无法使用面板内一键更新")
+		return nil, fmt.Errorf("当前运行环境未提供 Docker CLI；精简镜像请配置 Watchtower 托管更新，如需沿用 docker.sock 一键更新请使用 full 镜像")
 	}
 
 	if _, err := os.Stat(dockerSocketPath); err != nil {
@@ -353,14 +438,22 @@ func buildDockerPanelUpdatePlan() (*panelUpdatePlan, error) {
 		return nil, fmt.Errorf("无法识别当前面板容器名称，请设置环境变量 CONTAINER_NAME")
 	}
 
-	imageName := strings.TrimSpace(os.Getenv("IMAGE_NAME"))
+	// docker inspect 的 Config.Image 是容器真实运行引用，应优先于可能残留的 IMAGE_NAME。
+	// 重建参数会在下面把 IMAGE_NAME 同步成这个真实镜像族，兼容旧 Compose 配置漂移。
+	imageName := strings.TrimSpace(info.Config.Image)
 	if imageName == "" {
-		imageName = strings.TrimSpace(info.Config.Image)
+		imageName = strings.TrimSpace(os.Getenv("IMAGE_NAME"))
 	}
 	if imageName == "" {
 		return nil, fmt.Errorf("无法识别当前容器镜像，请设置环境变量 IMAGE_NAME")
 	}
+	if strings.Contains(imageName, "@") {
+		return nil, fmt.Errorf("当前容器使用 digest 固定镜像，不能自动切换到后续版本；请先在 Compose 中改为对应浮动标签")
+	}
 	imageName = normalizePanelUpdateImageName(imageName)
+	if !supportsDockerSocketPanelUpdate(imageName) {
+		return nil, fmt.Errorf("当前镜像 %s 不包含新版更新辅助容器所需的 Docker CLI；旧 docker.sock 一键更新只支持 latest-full 或 debian-full，请改用 Watchtower 或切换到 full 镜像", imageName)
+	}
 
 	pullImageName, mirrorHost, registryURL := resolveUpdateImageTarget(
 		imageName,
@@ -369,6 +462,7 @@ func buildDockerPanelUpdatePlan() (*panelUpdatePlan, error) {
 
 	return &panelUpdatePlan{
 		DeploymentType:  panelUpdateDeploymentDocker,
+		UpdateManager:   panelUpdateManagerPanel,
 		ContainerName:   containerName,
 		ImageName:       imageName,
 		PullImageName:   pullImageName,
@@ -378,6 +472,21 @@ func buildDockerPanelUpdatePlan() (*panelUpdatePlan, error) {
 		RegistryURL:     registryURL,
 		RunArgs:         buildContainerRunArgs(containerName, imageName, info),
 	}, nil
+}
+
+// detectPanelDeploymentTypeHint 在无法构建更新方案时，给前端一个「当前部署形态」的判断依据。
+// 只用于展示层挑选正确的手动更新指引，不参与任何真正的更新决策。
+func detectPanelDeploymentTypeHint() string {
+	if isMagiskPanelUpdateRuntime() {
+		return panelUpdateDeploymentMagisk
+	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return panelUpdateDeploymentDocker
+	}
+	if _, err := os.Stat(dockerSocketPath); err == nil {
+		return panelUpdateDeploymentDocker
+	}
+	return panelUpdateDeploymentBinary
 }
 
 func shouldRequireDockerPanelUpdate() bool {
@@ -469,8 +578,14 @@ func buildContainerRunArgs(containerName, imageName string, info *dockerInspectI
 	}
 
 	for _, env := range filterContainerEnv(info.Config.Env) {
+		if strings.HasPrefix(env, "IMAGE_NAME=") {
+			continue
+		}
 		runArgs = append(runArgs, "-e", env)
 	}
+	// 版本号标签会被归一化为当前镜像族的滚动标签，重建时必须同步环境变量，
+	// 否则下一次更新会再次读取旧标签并错误判断目标镜像。
+	runArgs = append(runArgs, "-e", "IMAGE_NAME="+imageName)
 
 	runArgs = append(runArgs, imageName)
 	return runArgs
@@ -645,6 +760,25 @@ func executePanelUpdate(plan *panelUpdatePlan) {
 }
 
 func executePanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpdateExecutionOptions) {
+	if plan.UpdateManager == panelUpdateManagerWatchtower {
+		panelUpdater.setRunning("watchtower-triggering", "正在请求 Watchtower 检查并更新面板容器")
+		if _, err := triggerWatchtowerUpdate(plan.Watchtower); err != nil {
+			panelUpdater.fail(err)
+			if options.AutoUpdate {
+				notifyAutoUpdateFailure(options.TargetVersion, err)
+			}
+			return
+		}
+		// HTTP 请求成功只代表 Watchtower 已接管后续检查；这里立即进入终态，
+		// 避免没有新镜像、容器不重启时永久占用更新锁。
+		panelUpdater.complete("watchtower-triggered", "已请求 Watchtower 立即检查并执行容器更新")
+		return
+	}
+
+	if plan.DeploymentType == panelUpdateDeploymentMagisk {
+		executeMagiskPanelUpdateWithOptions(plan, options)
+		return
+	}
 	if plan.DeploymentType == panelUpdateDeploymentBinary {
 		executeBinaryPanelUpdateWithOptions(plan, options)
 		return
@@ -696,6 +830,21 @@ func executeDockerPanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpd
 		rmiCancel()
 	}
 
+	// 更新辅助容器直接使用目标业务镜像执行 docker 命令；拉取后先验证工具，
+	// 避免自定义镜像缺少 Docker CLI 时仍进入 restarting 并留下未完成的更新。
+	panelUpdater.setRunning("validating", "镜像已拉取完成，正在验证更新辅助工具")
+	validateCtx, validateCancel := context.WithTimeout(context.Background(), time.Minute)
+	validateOutput, validateErr := dockerCommandOutput(validateCtx, "run", "--rm", "--entrypoint", "sh", plan.ImageName, "-c", "command -v docker >/dev/null 2>&1")
+	validateCancel()
+	if validateErr != nil {
+		formatted := formatDockerCommandError("目标镜像缺少 Docker CLI，不能继续使用旧 docker.sock 一键更新；请改用 Watchtower 或 full 镜像", validateErr, validateOutput)
+		panelUpdater.fail(formatted)
+		if options.AutoUpdate {
+			notifyAutoUpdateFailure(options.TargetVersion, formatted)
+		}
+		return
+	}
+
 	panelUpdater.setRunning("scheduling", "镜像已拉取完成，正在启动更新辅助容器")
 
 	helperScript := buildPanelUpdateHelperScript(plan)
@@ -723,6 +872,15 @@ func executeDockerPanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpd
 }
 
 func buildPanelUpdateBeginMessage(plan *panelUpdatePlan) string {
+	if plan.UpdateManager == panelUpdateManagerWatchtower {
+		return "更新环境校验通过，准备触发 Watchtower 检查"
+	}
+	if plan.DeploymentType == panelUpdateDeploymentMagisk {
+		if strings.TrimSpace(plan.AssetName) != "" {
+			return fmt.Sprintf("更新环境校验通过，准备下载更新包 %s（只更新面板程序与前端）", plan.AssetName)
+		}
+		return "更新环境校验通过，准备下载更新包（只更新面板程序与前端）"
+	}
 	if plan.DeploymentType == panelUpdateDeploymentBinary {
 		if strings.TrimSpace(plan.AssetName) != "" {
 			return fmt.Sprintf("更新环境校验通过，准备下载二进制更新包 %s", plan.AssetName)
@@ -733,8 +891,23 @@ func buildPanelUpdateBeginMessage(plan *panelUpdatePlan) string {
 }
 
 func buildPanelUpdateTarget(plan *panelUpdatePlan) gin.H {
+	updateManager := plan.UpdateManager
+	if updateManager == "" {
+		updateManager = panelUpdateManagerPanel
+	}
 	target := gin.H{
 		"deployment_type": plan.DeploymentType,
+		"update_manager":  updateManager,
+	}
+
+	if plan.DeploymentType == panelUpdateDeploymentMagisk {
+		target["release_version"] = plan.ReleaseVersion
+		target["asset_name"] = plan.AssetName
+		target["asset_url"] = plan.AssetURL
+		target["web_dir"] = plan.WebDir
+		target["module_dir"] = plan.ModuleDir
+		target["binary_name"] = plan.BinaryName
+		return target
 	}
 
 	if plan.DeploymentType == panelUpdateDeploymentBinary {
@@ -966,14 +1139,59 @@ func respondUpdateConflict(c *gin.Context, message string) {
 }
 
 func normalizePanelUpdateImageName(imageName string) string {
-	baseImage, tag, _ := splitImageTag(strings.TrimSpace(imageName))
+	imageName = strings.TrimSpace(imageName)
+	if strings.Contains(imageName, "@") {
+		// digest 是用户明确锁定的不可变引用，不能静默改成 latest。
+		return imageName
+	}
+	baseImage, tag, _ := splitImageTag(imageName)
 	_, repoRef := splitImageRegistry(baseImage)
 	if repoRef != "linzixuanzz/daidai-panel" {
-		return strings.TrimSpace(imageName)
+		return imageName
 	}
 
-	channel := resolvePanelUpdateChannelFromTag(tag)
-	return baseImage + ":" + channel
+	rollingTag := resolvePanelUpdateRollingTag(tag)
+	if rollingTag == "" {
+		// 未知标签保持原样，避免把测试版或后续新增镜像线静默降级到 latest。
+		return imageName
+	}
+	return baseImage + ":" + rollingTag
+}
+
+func supportsDockerSocketPanelUpdate(imageName string) bool {
+	_, tag, hasTag := splitImageTag(strings.TrimSpace(imageName))
+	if !hasTag {
+		return false
+	}
+
+	// 进入这里前官方固定 full 标签已归一化为滚动标签；自定义仓库也必须显式使用 full 标签，
+	// 防止旧 docker.sock 链先拉取精简镜像，再到辅助容器检查阶段才失败。
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	return tag == "latest-full" || tag == "debian-full"
+}
+
+func isPinnedPanelImageReference(imageName string) bool {
+	imageName = strings.TrimSpace(imageName)
+	if strings.Contains(imageName, "@") {
+		return true
+	}
+
+	baseImage, tag, hasTag := splitImageTag(imageName)
+	_, repoRef := splitImageRegistry(baseImage)
+	if !hasTag || repoRef != "linzixuanzz/daidai-panel" {
+		return false
+	}
+
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	switch tag {
+	case "latest", "debian", "latest-full", "debian-full",
+		"latest-3.10", "latest-3.11", "debian-3.10", "debian-3.11", "latest-all", "debian-all",
+		"latest3.10", "latest3.11", "debian3.10", "debian3.11", "latestall", "debianall":
+		return false
+	}
+
+	// 只阻止能够明确识别的官方固定版本；preview 等自定义浮动通道保持原行为。
+	return resolvePanelUpdateRollingTag(tag) != ""
 }
 
 func resolvePanelUpdateChannel(imageName string) string {
@@ -983,10 +1201,80 @@ func resolvePanelUpdateChannel(imageName string) string {
 
 func resolvePanelUpdateChannelFromTag(tag string) string {
 	tag = strings.ToLower(strings.TrimSpace(tag))
-	if tag == "debian" || strings.HasSuffix(tag, "-debian") {
+	rollingTag := resolvePanelUpdateRollingTag(tag)
+	if rollingTag == "debian" || strings.HasPrefix(rollingTag, "debian-") || tag == "debian" || strings.HasSuffix(tag, "-debian") {
 		return "debian"
 	}
 	return "latest"
+}
+
+func resolvePanelUpdateRollingTag(tag string) string {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	switch tag {
+	case "", "latest":
+		return "latest"
+	case "debian", "latest-full", "debian-full", "latest-3.10", "latest-3.11", "debian-3.10", "debian-3.11", "latest-all", "debian-all":
+		return tag
+	case "latest3.10":
+		return "latest-3.10"
+	case "latest3.11":
+		return "latest-3.11"
+	case "latestall":
+		return "latest-all"
+	case "debian3.10":
+		return "debian-3.10"
+	case "debian3.11":
+		return "debian-3.11"
+	case "debianall":
+		return "debian-all"
+	}
+
+	// 正式版本标签转换为对应滚动标签；同时兼容历史 Debian 无连字符格式。
+	versionSuffixes := []struct {
+		suffix  string
+		rolling string
+	}{
+		{"-debian-3.10", "debian-3.10"},
+		{"-debian3.10", "debian-3.10"},
+		{"-debian-3.11", "debian-3.11"},
+		{"-debian3.11", "debian-3.11"},
+		{"-debian-full", "debian-full"},
+		{"-debian-all", "debian-all"},
+		{"-debianall", "debian-all"},
+		{"-debian", "debian"},
+		{"-3.10", "latest-3.10"},
+		{"-3.11", "latest-3.11"},
+		{"-full", "latest-full"},
+		{"-all", "latest-all"},
+	}
+	for _, item := range versionSuffixes {
+		if strings.HasSuffix(tag, item.suffix) && isPanelVersionTag(strings.TrimSuffix(tag, item.suffix)) {
+			return item.rolling
+		}
+	}
+	if isPanelVersionTag(tag) {
+		return "latest"
+	}
+	return ""
+}
+
+func isPanelVersionTag(tag string) bool {
+	tag = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(tag)), "v")
+	parts := strings.Split(tag, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, ch := range part {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func splitImageTag(imageName string) (base string, tag string, hasTag bool) {

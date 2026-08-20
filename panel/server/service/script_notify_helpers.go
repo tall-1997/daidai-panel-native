@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"daidai-panel/database"
 	"daidai-panel/middleware"
 )
 
@@ -559,7 +560,27 @@ func ensureManagedHelperFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, defaultChannelID *uint, ttl time.Duration) (map[string]string, error) {
+// ScriptTokenInfo 描述注入到脚本环境里的那枚面板凭据。
+// 只带 jti 与到期时间：token 本身已经在 env map 里，这里存的是「事后怎么把它作废」所需的信息。
+type ScriptTokenInfo struct {
+	JTI       string
+	ExpiresAt time.Time
+}
+
+// RevokeScriptToken 把注入脚本环境的面板凭据拉黑。
+// 任务结束（成功、失败、超时、panic）后调用，避免这枚 operator token 在任务之外继续可用。
+// blockToken 内部按 jti 去重，重复调用安全；info 为空时是 no-op。
+func RevokeScriptToken(info *ScriptTokenInfo) {
+	if info == nil || strings.TrimSpace(info.JTI) == "" {
+		return
+	}
+	if database.DB == nil {
+		return
+	}
+	blockToken(info.JTI, "access", nil, info.ExpiresAt)
+}
+
+func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, defaultChannelID *uint, ttl time.Duration) (map[string]string, *ScriptTokenInfo, error) {
 	if ttl <= 0 {
 		ttl = 2 * time.Hour
 	}
@@ -570,29 +591,37 @@ func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, def
 		workDir = absWorkDir
 	}
 	if err := EnsureBuiltinNotifyHelpers(scriptsDir); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := cleanupManagedHelperCopies(scriptsDir, workDir); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	token, err := middleware.GenerateTemporaryAccessToken("internal-script-notify", "operator", ttl)
+	tokenInfo, err := middleware.GenerateTemporaryAccessTokenInfo("internal-script-notify", "operator", ttl)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	apiBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1", serverPort)
+
+	// DAIDAI_NOTIFY_URL / DAIDAI_NOTIFY_TOKEN 是历史契约，内置 notify.py、sendNotify.js
+	// 以及用户既有脚本都在读，只能新增别名、不能改名。
+	// DAIDAI_API_BASE / DAIDAI_TOKEN 是通用入口：脚本不必再对 DAIDAI_NOTIFY_URL
+	// 做字符串截断去拼别的接口，两枚 token 是同一枚凭据。
 	env := map[string]string{
-		"DAIDAI_NOTIFY_URL":     fmt.Sprintf("http://127.0.0.1:%d/api/v1/notifications/send", serverPort),
-		"DAIDAI_NOTIFY_TOKEN":   token,
+		"DAIDAI_NOTIFY_URL":     apiBase + "/notifications/send",
+		"DAIDAI_NOTIFY_TOKEN":   tokenInfo.Token,
 		"DAIDAI_NOTIFY_TIMEOUT": "15000",
 		"DAIDAI_SCRIPTS_DIR":    scriptsDir,
 		"DAIDAI_NOTIFY_PY":      filepath.Join(scriptsDir, notifyPyFilename),
 		"DAIDAI_SEND_NOTIFY_JS": filepath.Join(scriptsDir, sendNotifyJSFilename),
+		"DAIDAI_API_BASE":       apiBase,
+		"DAIDAI_TOKEN":          tokenInfo.Token,
 	}
 	if defaultChannelID != nil && *defaultChannelID > 0 {
 		env["DAIDAI_NOTIFY_CHANNEL_ID"] = fmt.Sprintf("%d", *defaultChannelID)
 	}
-	return env, nil
+	return env, &ScriptTokenInfo{JTI: tokenInfo.JTI, ExpiresAt: tokenInfo.ExpiresAt}, nil
 }
 
 func AppendScriptHelperPaths(envMap map[string]string, scriptsDir string) {

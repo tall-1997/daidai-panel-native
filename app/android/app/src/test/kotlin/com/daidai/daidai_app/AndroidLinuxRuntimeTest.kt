@@ -84,4 +84,95 @@ class AndroidLinuxRuntimeTest {
         assertTrue(flags.contains("-0"))
         assertTrue(flags.windowed(2).any { it[0] == "-k" && it[1] == "4.14.0" })
     }
+
+    @Test
+    fun `mirror defaults use Huawei Alibaba and npmmirror`() {
+        val mirrors = AndroidLinuxRuntime.MirrorConfig()
+
+        assertEquals("https://repo.huaweicloud.com/alpine", mirrors.linuxMirror)
+        assertEquals("https://mirrors.aliyun.com/pypi/simple", mirrors.pipMirror)
+        assertEquals("https://registry.npmmirror.com", mirrors.npmMirror)
+    }
+
+    @Test
+    fun `mirror URL validation accepts custom and official HTTP sources`() {
+        assertEquals("https://pypi.org/simple", AndroidLinuxRuntime.normalizeMirrorUrl(" https://pypi.org/simple/ "))
+        assertEquals("http://mirror.example.test:8080/npm", AndroidLinuxRuntime.normalizeMirrorUrl("http://mirror.example.test:8080/npm"))
+    }
+
+    @Test
+    fun `mirror URL validation rejects unsafe or ambiguous values`() {
+        assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("file:///tmp/mirror"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("https://user:secret@example.test/repo"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("https://example.test/repo#fragment"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("https://example.test:70000/repo"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("https://example.test/repo\nnext"))
+    }
+
+    @Test
+    fun `mirror initialization preserves saved values and only fills missing values`() {
+        assertEquals(
+            "https://pypi.org/simple",
+            AndroidLinuxRuntime.resolveMirrorValue(
+                persisted = "https://pypi.org/simple",
+                imported = "https://mirrors.aliyun.com/pypi/simple",
+                defaultValue = AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX,
+            ),
+        )
+        assertEquals(
+            AndroidLinuxRuntime.ALPINE_APK_HUAWEI_MIRROR,
+            AndroidLinuxRuntime.resolveMirrorValue(null, null, AndroidLinuxRuntime.ALPINE_APK_HUAWEI_MIRROR),
+        )
+    }
+
+    @Test
+    fun `task environment uses one supplied mirror configuration`() {
+        val mirrors = AndroidLinuxRuntime.MirrorConfig(
+            pipMirror = "https://pypi.org/simple",
+            npmMirror = "https://registry.npmjs.org",
+            linuxMirror = "https://dl-cdn.alpinelinux.org/alpine",
+        )
+
+        assertEquals(
+            mapOf(
+                "PIP_INDEX_URL" to mirrors.pipMirror,
+                "NPM_CONFIG_REGISTRY" to mirrors.npmMirror,
+                "npm_config_registry" to mirrors.npmMirror,
+                "DAIDAI_LINUX_MIRROR" to mirrors.linuxMirror,
+            ),
+            AndroidLinuxRuntime.mirrorEnvironment(mirrors),
+        )
+    }
+
+    @Test
+    fun `fallback installers receive configured mirrors as structured arguments`() {
+        assertEquals(
+            listOf("install", "--no-input", "--only-binary=:all:", "-i", "https://pypi.org/simple", "--target", "/deps/python", "requests"),
+            AndroidLinuxRuntime.pipInstallArguments("https://pypi.org/simple", "/deps/python", "requests"),
+        )
+        assertEquals(
+            listOf("install", "--ignore-scripts", "--registry", "https://registry.npmjs.org", "--prefix", "/deps/node", "lodash"),
+            AndroidLinuxRuntime.npmInstallArguments("https://registry.npmjs.org", "/deps/node", "lodash"),
+        )
+    }
+
+    @Test
+    fun `rootfs mirror files use one supplied configuration snapshot`() {
+        val root = Files.createTempDirectory("linux-runtime-mirror-test").toFile()
+        root.resolve("etc/alpine-release").apply { parentFile.mkdirs(); writeText("3.21.2") }
+        val mirrors = AndroidLinuxRuntime.MirrorConfig(
+            pipMirror = "https://pypi.org/simple",
+            npmMirror = "https://registry.npmjs.org",
+            linuxMirror = "https://dl-cdn.alpinelinux.org/alpine",
+        )
+
+        AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors)
+
+        assertEquals(
+            "https://dl-cdn.alpinelinux.org/alpine/v3.21/main\nhttps://dl-cdn.alpinelinux.org/alpine/v3.21/community\n",
+            root.resolve("etc/apk/repositories").readText(),
+        )
+        assertTrue(root.resolve("etc/pip.conf").readText().contains("index-url = https://pypi.org/simple"))
+        assertTrue(root.resolve("etc/npmrc").readText().contains("registry=https://registry.npmjs.org"))
+    }
 }

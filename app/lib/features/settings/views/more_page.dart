@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
@@ -19,6 +20,12 @@ class MorePage extends ConsumerStatefulWidget {
 
 bool showsOperatorAutomation(String? role) =>
     role == 'operator' || role == 'admin';
+
+bool showsPanelCapability(PanelCapability capability, {String? scope}) =>
+    !PanelCapabilityRegistry.isUnsupported(capability, scope: scope);
+
+bool enablesPanelCapability(PanelCapability capability, {String? scope}) =>
+    !PanelCapabilityRegistry.isUnavailable(capability, scope: scope);
 
 class _MorePageState extends ConsumerState<MorePage> {
   AppUpdateInfo? _updateInfo;
@@ -94,6 +101,15 @@ class _MorePageState extends ConsumerState<MorePage> {
     final user = auth.user;
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
+    final capabilityScope = PanelCapabilityRegistry.currentScope;
+    bool shows(PanelCapability capability) =>
+        showsPanelCapability(capability, scope: capabilityScope);
+    VoidCallback? gated(
+      PanelCapability capability,
+      VoidCallback action,
+    ) => enablesPanelCapability(capability, scope: capabilityScope)
+        ? action
+        : null;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -142,25 +158,37 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.push('/env-tools'),
             ),
-            _SettingsItem(
-              icon: Icons.code,
-              title: '脚本管理',
-              isLight: isLight,
-              onTap: () => context.push('/scripts'),
-            ),
-            _SettingsItem(
-              icon: Icons.sync,
-              title: '订阅管理',
-              isLight: isLight,
-              onTap: () => context.push('/subscriptions'),
-            ),
+            if (shows(PanelCapability.scriptExecution))
+              _SettingsItem(
+                icon: Icons.code,
+                title: '脚本管理',
+                isLight: isLight,
+                onTap: gated(
+                  PanelCapability.scriptExecution,
+                  () => context.push('/scripts'),
+                ),
+              ),
+            if (shows(PanelCapability.subscriptionPull))
+              _SettingsItem(
+                icon: Icons.sync,
+                title: '订阅管理',
+                isLight: isLight,
+                onTap: gated(
+                  PanelCapability.subscriptionPull,
+                  () => context.push('/subscriptions'),
+                ),
+              ),
           ],
-          _SettingsItem(
-            icon: Icons.notifications_none,
-            title: '消息通知',
-            isLight: isLight,
-            onTap: () => context.push('/notifications'),
-          ),
+          if (shows(PanelCapability.notificationDispatch))
+            _SettingsItem(
+              icon: Icons.notifications_none,
+              title: '消息通知',
+              isLight: isLight,
+              onTap: gated(
+                PanelCapability.notificationDispatch,
+                () => context.push('/notifications'),
+              ),
+            ),
           _SettingsItem(
             icon: Icons.notifications_active_outlined,
             title: '本地通知',
@@ -178,12 +206,16 @@ class _MorePageState extends ConsumerState<MorePage> {
             const SizedBox(height: 24),
             _SectionLabel('系统管理'),
             const SizedBox(height: 8),
-            _SettingsItem(
-              icon: Icons.inventory_2_outlined,
-              title: '依赖管理',
-              isLight: isLight,
-              onTap: () => context.push('/deps'),
-            ),
+            if (shows(PanelCapability.dependencyMutation))
+              _SettingsItem(
+                icon: Icons.inventory_2_outlined,
+                title: '依赖管理',
+                isLight: isLight,
+                onTap: gated(
+                  PanelCapability.dependencyMutation,
+                  () => context.push('/deps'),
+                ),
+              ),
             _SettingsItem(
               icon: Icons.people_outline,
               title: '用户管理',
@@ -202,42 +234,51 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.push('/ssh-keys'),
             ),
-            _SettingsItem(
-              icon: Icons.token_outlined,
-              title: '平台令牌',
-              isLight: isLight,
-              onTap: () => context.push('/platform-tokens'),
-            ),
-            _SettingsItem(
-              icon: Icons.terminal_outlined,
-              title: '高级配置脚本',
-              isLight: isLight,
-              onTap: () => context.push('/config-script'),
-            ),
-            _SettingsItem(
-              icon: Icons.android_outlined,
-              title: 'Android 运行时',
-              isLight: isLight,
-              onTap: () => context.push('/android-runtime'),
-            ),
-            _SettingsItem(
-              icon: Icons.list_alt_outlined,
-              title: '系统依赖清单',
-              isLight: isLight,
-              onTap: () => context.push('/installed-packages'),
-            ),
+            if (shows(PanelCapability.platformTokens))
+              _SettingsItem(
+                icon: Icons.token_outlined,
+                title: '平台令牌',
+                isLight: isLight,
+                onTap: () => context.push('/platform-tokens'),
+              ),
+            if (shows(PanelCapability.configScript))
+              _SettingsItem(
+                icon: Icons.terminal_outlined,
+                title: '高级配置脚本',
+                isLight: isLight,
+                onTap: () => context.push('/config-script'),
+              ),
+            if (shows(PanelCapability.androidRuntime) &&
+                shows(PanelCapability.runtimeMutation))
+              _SettingsItem(
+                icon: Icons.android_outlined,
+                title: 'Android 运行时',
+                isLight: isLight,
+                onTap: gated(
+                  PanelCapability.runtimeMutation,
+                  () => context.push('/android-runtime'),
+                ),
+              ),
+            if (shows(PanelCapability.installedPackages))
+              _SettingsItem(
+                icon: Icons.list_alt_outlined,
+                title: '系统依赖清单',
+                isLight: isLight,
+                onTap: () => context.push('/installed-packages'),
+              ),
             _SettingsItem(
               icon: Icons.settings,
               title: '系统设置',
               isLight: isLight,
               onTap: () => context.push('/system-settings'),
             ),
-            _SettingsItem(
-              icon: Icons.health_and_safety_outlined,
-              title: '系统健康诊断',
-              isLight: isLight,
-              onTap: () => context.push('/health-check'),
-            ),
+            if (shows(PanelCapability.healthCheck))
+              _SettingsItem(
+                icon: Icons.health_and_safety_outlined,
+                title: '系统健康诊断',
+                isLight: isLight,
+                onTap: () => context.push('/health-check'),
+              ),
             _SettingsItem(
               icon: Icons.palette_outlined,
               title: '面板设置',
@@ -250,12 +291,16 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.push('/panel-log'),
             ),
-            _SettingsItem(
-              icon: Icons.backup_outlined,
-              title: '备份与恢复',
-              isLight: isLight,
-              onTap: () => context.push('/backup'),
-            ),
+            if (shows(PanelCapability.backupMutation))
+              _SettingsItem(
+                icon: Icons.backup_outlined,
+                title: '备份与恢复',
+                isLight: isLight,
+                onTap: gated(
+                  PanelCapability.backupMutation,
+                  () => context.push('/backup'),
+                ),
+              ),
             _SettingsItem(
               icon: Icons.api,
               title: 'Open API',
@@ -644,7 +689,7 @@ class _SettingsItem extends ConsumerWidget {
   final IconData icon;
   final String title;
   final bool isLight;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Widget? trailing;
 
   const _SettingsItem({
@@ -657,18 +702,25 @@ class _SettingsItem extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = onTap != null;
     final rowContent = Row(
       children: [
         Icon(
           icon,
           size: 20,
-          color: isLight ? AppColors.slate500 : AppColors.slate400,
+          color: enabled
+              ? (isLight ? AppColors.slate500 : AppColors.slate400)
+              : AppColors.slate400.withAlpha(100),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             title,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: enabled ? null : AppColors.slate400,
+            ),
           ),
         ),
         if (trailing != null) ...[trailing!, const SizedBox(width: 8)],

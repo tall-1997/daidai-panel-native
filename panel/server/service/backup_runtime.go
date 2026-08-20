@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -254,6 +255,7 @@ func snapshotConfigBundle() (BackupConfigBundle, error) {
 			Name:      channel.Name,
 			Type:      channel.Type,
 			Config:    channel.Config,
+			PushScope: channel.EffectivePushScope(),
 			Enabled:   channel.Enabled,
 			CreatedAt: channel.CreatedAt,
 			UpdatedAt: channel.UpdatedAt,
@@ -407,8 +409,67 @@ func addDirectoryToTar(tw *tar.Writer, sourceDir, archiveRoot string) error {
 		if err != nil {
 			return err
 		}
+
+		// .git 依然照常打包（还原行为完全不变、零数据丢失风险），
+		// 但 .git/config 里存着订阅 Token 鉴权注入到 remote URL 的 PAT，
+		// 必须在写进 tar 之前把凭据清掉。
+		if isGitConfigRelativePath(relPath) {
+			return addSanitizedGitConfigToTar(tw, path, filepath.Join(archiveRoot, relPath))
+		}
+
 		return addFileToTar(tw, path, filepath.Join(archiveRoot, relPath))
 	})
+}
+
+// isGitConfigRelativePath 判断相对路径是不是某个 git 仓库的 .git/config。
+func isGitConfigRelativePath(relPath string) bool {
+	segments := strings.Split(filepath.ToSlash(relPath), "/")
+	if len(segments) < 2 {
+		return false
+	}
+	return strings.EqualFold(segments[len(segments)-2], ".git") &&
+		strings.EqualFold(segments[len(segments)-1], "config")
+}
+
+// gitURLCredentialPattern 匹配 URL 里带密码的 userinfo（形如 https://user:token@host/...）。
+// 刻意要求 userinfo 中含冒号：ssh://git@host/... 这种只有用户名、没有凭据，不能动，
+// 否则还原后 SSH 订阅会连不上。
+var gitURLCredentialPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s:]+:[^/@\s]*@`)
+
+// sanitizeGitConfigCredentials 去掉 git config 内容里 remote URL 内嵌的账号密码。
+// 只作用于写进备份包的那份字节流，不动磁盘上的真实 .git/config ——
+// 动了会让后续 fetch 直接失去鉴权。还原后下一次拉取会由
+// syncGitRemoteWithCallback 重新写回带凭据的 remote URL。
+func sanitizeGitConfigCredentials(content []byte) []byte {
+	return gitURLCredentialPattern.ReplaceAll(content, []byte("$1"))
+}
+
+func addSanitizedGitConfigToTar(tw *tar.Writer, sourcePath, archivePath string) error {
+	info, err := os.Stat(sourcePath)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+
+	raw, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", sourcePath, err)
+	}
+	sanitized := sanitizeGitConfigCredentials(raw)
+
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return fmt.Errorf("build tar header %s: %w", sourcePath, err)
+	}
+	header.Name = filepath.ToSlash(archivePath)
+	header.Size = int64(len(sanitized))
+
+	if err := tw.WriteHeader(header); err != nil {
+		return fmt.Errorf("write tar header %s: %w", sourcePath, err)
+	}
+	if _, err := tw.Write(sanitized); err != nil {
+		return fmt.Errorf("write tar body %s: %w", sourcePath, err)
+	}
+	return nil
 }
 
 func restoreBackupFile(filename, password string) (err error) {
@@ -562,12 +623,15 @@ func restoreLegacyJSONBytes(data []byte) error {
 		},
 	}
 
+	// legacy.Channels 是 []model.NotifyChannel，老备份里 push_scope 是空串，
+	// EffectivePushScope 归一后落成 default —— 老备份本来就没有「绑定推送」这个概念。
 	for _, channel := range legacy.Channels {
 		manifest.Data.Configs.NotifyChannels = append(manifest.Data.Configs.NotifyChannels, BackupNotifyChannel{
 			ID:        channel.ID,
 			Name:      channel.Name,
 			Type:      channel.Type,
 			Config:    channel.Config,
+			PushScope: channel.EffectivePushScope(),
 			Enabled:   channel.Enabled,
 			CreatedAt: channel.CreatedAt,
 			UpdatedAt: channel.UpdatedAt,
@@ -910,10 +974,30 @@ func restoreUsers(tx *gorm.DB, users []BackupUser) (map[uint]uint, error) {
 func restoreNotifyChannels(tx *gorm.DB, channels []BackupNotifyChannel) (map[uint]uint, error) {
 	idMap := make(map[uint]uint, len(channels))
 	for _, item := range channels {
+		// 老备份里可能带着被客户端写坏的 config（例如 smtp_ssl 是 JSON 布尔），
+		// 那种渠道恢复回来会直接发不出任何通知。这里顺手归一一次，让它恢复即可用。
+		//
+		// 归一失败（值是嵌套对象/数组这类修不了的）时保留原文继续恢复：
+		// 恢复流程的首要职责是把数据完整搬回来，不能因为一个渠道配置有问题就整批失败。
+		// 用户后续在通知页编辑保存时会拿到明确的中文报错。
+		config := item.Config
+		if normalized, err := model.NormalizeNotifyChannelConfig(config); err == nil {
+			config = normalized
+		}
+
+		// 老备份没有 push_scope 键，反序列化后是空串；非法值同样按 default 落库。
+		// 归一后一定是 default / bound 之一，不会把「绑定推送」在恢复时悄悄翻成参与广播 ——
+		// 那正是同一行 Enabled 踩过的坑（GORM 省略零值 false，DB 默认 true 反而生效）。
+		pushScope, ok := model.NormalizeNotifyPushScope(item.PushScope)
+		if !ok {
+			pushScope = model.NotifyPushScopeDefault
+		}
+
 		channel := model.NotifyChannel{
 			Name:      item.Name,
 			Type:      item.Type,
-			Config:    item.Config,
+			Config:    config,
+			PushScope: pushScope,
 			Enabled:   item.Enabled,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,

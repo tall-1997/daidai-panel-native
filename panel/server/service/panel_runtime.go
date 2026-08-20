@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	PanelRuntimeModeAuto    = "auto"
-	PanelRuntimeModeStdout  = "stdout"
-	PanelRuntimeModeFile    = "file"
-	PanelServiceManagerNone = "none"
+	PanelRuntimeModeAuto       = "auto"
+	PanelRuntimeModeStdout     = "stdout"
+	PanelRuntimeModeFile       = "file"
+	PanelServiceManagerNone    = "none"
 	PanelServiceManagerSystemd = "systemd"
 )
 

@@ -188,6 +188,10 @@ func getExistingColumns(table string) (map[string]bool, error) {
 }
 
 func ensureTableColumns(table string, columns []columnDef) error {
+	var objectType string
+	if err := DB.Raw("SELECT type FROM sqlite_master WHERE name = ? LIMIT 1", table).Scan(&objectType).Error; err == nil && objectType == "view" {
+		return nil
+	}
 	existing, err := existingColumns(table)
 	if err != nil {
 		return err
@@ -268,6 +272,7 @@ func EnsureColumns() error {
 		{"whitelist", "VARCHAR(512) DEFAULT ''"},
 		{"blacklist", "VARCHAR(512) DEFAULT ''"},
 		{"depend_on", "VARCHAR(512) DEFAULT ''"},
+		{"pre_script", "TEXT DEFAULT ''"},
 		{"hook_script", "TEXT DEFAULT ''"},
 	}); err != nil {
 		return err
@@ -278,6 +283,7 @@ func EnsureColumns() error {
 		{"today_send_date", "VARCHAR(10) DEFAULT ''"},
 		{"last_test_at", "DATETIME"},
 		{"last_test_status", "VARCHAR(16) DEFAULT ''"},
+		{"push_scope", "VARCHAR(16) NOT NULL DEFAULT 'default'"},
 	}); err != nil {
 		return err
 	}

@@ -20,6 +20,22 @@ import (
 	"gorm.io/gorm"
 )
 
+// ============================================================================
+// 死代码警告：本文件是 v1 调度器，已被 SchedulerV2（scheduler_v2.go）整体取代。
+//
+// 证据：InitScheduler 全仓没有任何调用方，main.go 只调 InitSchedulerV2()；
+// 因此 scheduler 这个包级变量恒为 nil，GetScheduler() 恒返回 nil
+// （handler/system.go、handler/task_control.go 都为此做了 nil 判空）。
+// 下面 executeTask 里那份「前置脚本 + task_before.sh + 重试 + 后置脚本」的代码
+// 与 task_executor.go 结构相同但**永远不会执行**，而且它连
+// BuildManagedRuntimeEnvMap 都不调（只读 env_vars 表），既没有 TZ 覆盖也没有
+// notify helper 注入。
+//
+// 【勿在此实现新语义】任何任务执行相关的新行为（例如前置脚本环境变量回传）
+// 都只在 task_executor.go 里做。在这里再写一份，只会造出第二套永不执行、
+// 却会把后来者带偏的实现。删除本文件超出当前范围，故仅留此注释。
+// ============================================================================
+
 type Scheduler struct {
 	mu               sync.Mutex
 	cron             *cron.Cron

@@ -90,9 +90,10 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 		return
 	}
 
-	envMap := buildScriptExecEnv(workDir)
+	envMap, scriptToken := buildScriptExecEnv(workDir)
 	cmd, cleanup, err := newScriptCommand(interpreter, full, nil, workDir, envMap)
 	if err != nil {
+		service.RevokeScriptToken(scriptToken)
 		cleanupFn()
 		response.InternalError(c, fmt.Sprintf("启动失败: %s", err))
 		return
@@ -102,6 +103,7 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 	pipeWriter, scanDone, err := startTrackedCommand(cmd, run)
 	if err != nil {
 		cleanup()
+		service.RevokeScriptToken(scriptToken)
 		cleanupFn()
 		response.InternalError(c, fmt.Sprintf("启动失败: %s", err))
 		return
@@ -121,6 +123,10 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 	startTime := time.Now()
 
 	go func() {
+		// 调试运行结束（正常退出、依赖重试跑完、被手动停止提前 return）都要作废注入的凭据，
+		// 不能只靠 scriptDebugEnvTTL 兜底。
+		defer service.RevokeScriptToken(scriptToken)
+
 		waitErr := waitTrackedCommand(cmd, pipeWriter, scanDone)
 		cleanup()
 		cleanupFn()

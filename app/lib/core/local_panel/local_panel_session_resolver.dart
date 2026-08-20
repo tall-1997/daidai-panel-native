@@ -1,4 +1,5 @@
 import '../storage/secure_storage.dart';
+import '../network/panel_capability_registry.dart';
 import 'local_panel_models.dart';
 
 class ManagedLocalPanelResolution {
@@ -15,6 +16,7 @@ ManagedLocalPanelResolution resolveManagedLocalPanel(
   LocalPanelStatus status, {
   PanelConfig? existing,
 }) {
+  PanelCapabilityRegistry.recordManagedLocalStatus(status);
   return _resolveManagedLocalEndpoint(
     status,
     existing: existing,
@@ -26,6 +28,7 @@ ManagedLocalPanelResolution resolveManagedLocalDiagnostic(
   LocalPanelStatus status, {
   PanelConfig? existing,
 }) {
+  PanelCapabilityRegistry.recordManagedLocalStatus(status);
   if (status.fallbackMode != 'diagnostic') {
     throw StateError('Managed local diagnostic endpoint is unavailable');
   }

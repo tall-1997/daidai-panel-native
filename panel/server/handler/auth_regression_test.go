@@ -3,6 +3,7 @@ package handler_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -327,6 +328,13 @@ func TestCaptchaEnabledRequiresCaptchaOnFirstLogin(t *testing.T) {
 	if got, _ := payload["require_after_failures"].(float64); got != 0 {
 		t.Fatalf("expected require_after_failures 0 for every-login captcha, got %v", got)
 	}
+	// 原有中文文案不许变：Web 与存量 APP 都在读它。
+	if got, _ := payload["error"].(string); got != "请先完成人机验证" {
+		t.Fatalf("expected legacy error text to be preserved, got %q", got)
+	}
+	// 「压根没提交验证码」这条分支也要带稳定的机器可读 code，
+	// APP 才能把它和「密码错」「要两步验证码」区分开——三者都是 401。
+	assertLoginFailureContext(t, payload, handler.LoginCodeCaptchaRequired)
 }
 
 func TestLoginRecordsForwardedPublicIPFromTrustedProxyHop(t *testing.T) {
@@ -572,6 +580,357 @@ func TestCORSAllowsConfiguredAndSameOriginAuthorizationRequests(t *testing.T) {
 	}
 	if foreignRec.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("expected foreign origin to be rejected, got %q", foreignRec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+// mustEnableTwoFactor 给指定用户开启两步验证，返回其 TOTP 密钥。
+func mustEnableTwoFactor(t *testing.T, userID uint) string {
+	t.Helper()
+
+	secret, _, err := service.SetupTwoFactor(userID)
+	if err != nil {
+		t.Fatalf("setup 2fa: %v", err)
+	}
+	if err := database.DB.Model(&model.TwoFactorAuth{}).
+		Where("user_id = ?", userID).
+		Update("enabled", true).Error; err != nil {
+		t.Fatalf("enable 2fa: %v", err)
+	}
+
+	return secret
+}
+
+// mustInvalidTOTPCode 造一个当前一定校验不过的验证码。
+// ValidateTOTP 同时接受 -1/0/+1 三个时间窗口，所以不能随手写死一个 6 位数字，
+// 必须逐个试到确认不命中为止。
+func mustInvalidTOTPCode(t *testing.T, secret string) string {
+	t.Helper()
+
+	for i := 0; i < 32; i++ {
+		candidate := fmt.Sprintf("%06d", 100000+i)
+		if !service.ValidateTOTP(secret, candidate) {
+			return candidate
+		}
+	}
+
+	t.Fatalf("failed to build an invalid totp code")
+	return ""
+}
+
+func countLoginLogs(t *testing.T, username string, status int) int64 {
+	t.Helper()
+
+	var count int64
+	if err := database.DB.Model(&model.LoginLog{}).
+		Where("username = ? AND status = ?", username, status).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count login logs: %v", err)
+	}
+
+	return count
+}
+
+// assertLoginFailureContext 断言登录失败响应里既有稳定的机器可读 code，
+// 也带齐了客户端下一次请求需要的人机验证上下文。
+func assertLoginFailureContext(t *testing.T, payload map[string]interface{}, wantCode string) {
+	t.Helper()
+
+	if got, _ := payload["code"].(string); got != wantCode {
+		t.Fatalf("expected code %q, got %q, body=%v", wantCode, got, payload)
+	}
+	for _, key := range []string{"captcha_required", "captcha_id", "captcha_threshold", "require_after_failures"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("expected response to carry %q, got %v", key, payload)
+		}
+	}
+}
+
+func TestLoginTwoFactorChallengeThenSuccess(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "totp-user", "admin", password)
+	secret := mustEnableTwoFactor(t, user.ID)
+
+	engine := newProtectedRouter()
+	clientIP := "198.51.100.60"
+
+	// 第一步：不带 totp_code，服务端应回 2FA 挑战而不是普通的登录失败。
+	challenge := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"`+user.Username+`","password":"`+password+`"}`, nil, clientIP)
+	if challenge.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 2fa challenge status 401, got %d, body=%s", challenge.Code, challenge.Body.String())
+	}
+
+	payload := decodeJSONMap(t, challenge)
+	if got, _ := payload["two_factor_required"].(bool); !got {
+		t.Fatalf("expected two_factor_required flag, got %v", payload)
+	}
+	// 原有中文文案不许变：Web 与存量 APP 都在读它。
+	if got, _ := payload["error"].(string); got != "请输入两步验证码" {
+		t.Fatalf("expected legacy error text to be preserved, got %q", got)
+	}
+	assertLoginFailureContext(t, payload, handler.LoginCodeTwoFactorRequired)
+
+	// 「要码但还没给码」是中间态，不该被记成登录失败。
+	if got := countLoginLogs(t, user.Username, 1); got != 0 {
+		t.Fatalf("expected 2fa challenge not to write a failed login log, got %d", got)
+	}
+
+	// 第二步：带上正确的 totp_code，应当直接登录成功。
+	success := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"`+user.Username+`","password":"`+password+`","totp_code":"`+service.GenerateCurrentTOTPForTest(secret)+`"}`,
+		nil, clientIP)
+	if success.Code != http.StatusOK {
+		t.Fatalf("expected login with valid totp to succeed, got %d, body=%s", success.Code, success.Body.String())
+	}
+	if token, _ := decodeJSONMap(t, success)["access_token"].(string); token == "" {
+		t.Fatalf("expected access token after 2fa login, got %s", success.Body.String())
+	}
+}
+
+func TestLoginInvalidTOTPIsStillRecordedAsFailure(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "totp-wrong-user", "admin", password)
+	secret := mustEnableTwoFactor(t, user.ID)
+
+	engine := newProtectedRouter()
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"`+user.Username+`","password":"`+password+`","totp_code":"`+mustInvalidTOTPCode(t, secret)+`"}`,
+		nil, "198.51.100.61")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected invalid totp status 401, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	if got, _ := payload["two_factor_required"].(bool); !got {
+		t.Fatalf("expected two_factor_required flag on invalid totp, got %v", payload)
+	}
+	if got, _ := payload["error"].(string); got != "两步验证码错误" {
+		t.Fatalf("expected legacy error text to be preserved, got %q", got)
+	}
+	assertLoginFailureContext(t, payload, handler.LoginCodeInvalidTOTP)
+
+	// 「给了码但错了」是真失败，登录日志照记。
+	if got := countLoginLogs(t, user.Username, 1); got != 1 {
+		t.Fatalf("expected invalid totp to write exactly one failed login log, got %d", got)
+	}
+}
+
+func TestLoginTwoFactorChallengeCarriesEnabledCaptchaContext(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "totp-captcha-user", "admin", password)
+	mustEnableTwoFactor(t, user.ID)
+
+	model.SetConfig("captcha_enabled", "true")
+	model.SetConfig("captcha_id", "captcha-id")
+	model.SetConfig("captcha_key", "secret-key")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":"success"}`))
+	}))
+	defer upstream.Close()
+
+	restore := service.SetGeeTestValidationForTesting(&http.Client{Timeout: time.Second}, upstream.URL)
+	defer restore()
+
+	engine := newProtectedRouter()
+	body := `{"username":"` + user.Username + `","password":"` + password +
+		`","captcha":{"lot_number":"lot-123","captcha_output":"captcha-output","pass_token":"pass-token","gen_time":"1711000000"}}`
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login", body, nil, "198.51.100.62")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 2fa challenge status 401, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	if got, _ := payload["two_factor_required"].(bool); !got {
+		t.Fatalf("expected two_factor_required flag, got %v", payload)
+	}
+	// 验证码是「每次登录都要过」，客户端拿到 2FA 挑战后必须知道第二次 POST 还要重做人机验证。
+	if got, _ := payload["captcha_required"].(bool); !got {
+		t.Fatalf("expected captcha_required true when captcha is enabled, got %v", payload)
+	}
+	if got, _ := payload["captcha_id"].(string); got != "captcha-id" {
+		t.Fatalf("expected captcha_id captcha-id, got %q", got)
+	}
+}
+
+// 验证码「提交了但没过」与「压根没提交」是两条不同分支，都得回同一个 code。
+// 这条覆盖的是校验失败分支（captcha_invalid）。
+func TestLoginInvalidCaptchaCarriesMachineReadableCode(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "captcha-invalid-user", "admin", password)
+
+	model.SetConfig("captcha_enabled", "true")
+	model.SetConfig("captcha_id", "captcha-id")
+	model.SetConfig("captcha_key", "secret-key")
+
+	// 上游返回 200 + result=fail：这是「用户没过人机验证」，不是上游故障，
+	// 因此不能走 503 的 captcha_service_unavailable 那条分支。
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":"fail","reason":"invalid_lot_number"}`))
+	}))
+	defer upstream.Close()
+
+	restore := service.SetGeeTestValidationForTesting(&http.Client{Timeout: time.Second}, upstream.URL)
+	defer restore()
+
+	engine := newProtectedRouter()
+	body := `{"username":"` + user.Username + `","password":"` + password +
+		`","captcha":{"lot_number":"lot-123","captcha_output":"captcha-output","pass_token":"pass-token","gen_time":"1711000000"}}`
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login", body, nil, "198.51.100.81")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected invalid captcha status 401, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	// captcha_invalid 是这条分支独有的标志，用它把自己和「没提交验证码」那条区分开，
+	// 避免两条分支互相顶替、只覆盖到其中一条。
+	if got, _ := payload["captcha_invalid"].(bool); !got {
+		t.Fatalf("expected captcha_invalid flag, got %v", payload)
+	}
+	if got, _ := payload["captcha_reason"].(string); got != "invalid_lot_number" {
+		t.Fatalf("expected captcha_reason invalid_lot_number, got %q", got)
+	}
+	// 原有中文文案不许变：Web 与存量 APP 都在读它。
+	if got, _ := payload["error"].(string); got != "验证码校验失败，请重新完成人机验证" {
+		t.Fatalf("expected legacy error text to be preserved, got %q", got)
+	}
+	assertLoginFailureContext(t, payload, handler.LoginCodeCaptchaRequired)
+}
+
+// 账号锁定回的是 429，且响应体结构与其他登录失败不同（没有 captcha_* 上下文），
+// 所以这里不能复用 assertLoginFailureContext，直接断 code。
+func TestLoginLockedAccountCarriesMachineReadableCode(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "locked-account-user", "admin", password)
+	clientIP := "198.51.100.82"
+
+	// 直接落一条已锁定的 LoginAttempt，而不是真的连发 5 次错误密码：
+	// 登录路由挂着 5 次/分钟的限流中间件，真跑满 5 次之后第 6 个请求会被限流器
+	// 以同样的 429 挡在 handler 之前，锁定分支根本执行不到——断言就变成了
+	// 对限流响应的断言，看着是绿的，实际什么都没测到。
+	now := time.Now()
+	attempt := model.LoginAttempt{
+		IP:        clientIP,
+		Username:  user.Username,
+		Count:     service.MaxLoginAttempts,
+		LockedAt:  &now,
+		ExpiresAt: now.Add(service.LockDuration),
+	}
+	if err := database.DB.Create(&attempt).Error; err != nil {
+		t.Fatalf("seed locked login attempt: %v", err)
+	}
+
+	engine := newProtectedRouter()
+	// 故意用「正确」的密码：锁定检查排在校验密码之前，密码对不对都该被拦下。
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"`+user.Username+`","password":"`+password+`"}`, nil, clientIP)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected locked account status 429, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	if got, _ := payload["code"].(string); got != handler.LoginCodeAccountLocked {
+		t.Fatalf("expected code %q, got %q, body=%v", handler.LoginCodeAccountLocked, got, payload)
+	}
+	// locked / remaining_seconds 是 APP 做倒计时用的，和 code 一起构成锁定响应的契约。
+	if got, _ := payload["locked"].(bool); !got {
+		t.Fatalf("expected locked flag, got %v", payload)
+	}
+	if got, ok := payload["remaining_seconds"].(float64); !ok || got <= 0 {
+		t.Fatalf("expected positive remaining_seconds, got %v", payload["remaining_seconds"])
+	}
+	// 原有中文文案不许变：Web 与存量 APP 都在读它。
+	if got, _ := payload["error"].(string); !strings.HasPrefix(got, "账号已锁定") {
+		t.Fatalf("expected legacy locked error text, got %q", got)
+	}
+}
+
+func TestLoginInvalidCredentialsCarriesMachineReadableCode(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	password := "Password123!"
+	user := testutil.MustCreateLoginUser(t, "wrong-password-user", "admin", password)
+	clientIP := "198.51.100.83"
+
+	engine := newProtectedRouter()
+	rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"`+user.Username+`","password":"WrongPassword456!"}`, nil, clientIP)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected wrong password status 401, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	// 原有中文文案不许变：Web 与存量 APP 都在读它。
+	if got, _ := payload["error"].(string); got != "用户名或密码错误" {
+		t.Fatalf("expected legacy error text to be preserved, got %q", got)
+	}
+	if got, _ := payload["failed_attempts"].(float64); got != 1 {
+		t.Fatalf("expected failed_attempts 1, got %v", payload["failed_attempts"])
+	}
+	assertLoginFailureContext(t, payload, handler.LoginCodeInvalidCredentials)
+
+	// 用户不存在必须和密码错误共用同一个 code：
+	// code 一旦分开，就等于给爆破方提供了「这个用户名存在」的机器可读枚举接口。
+	unknown := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login",
+		`{"username":"no-such-user","password":"WhateverPassword789!"}`, nil, clientIP)
+	if unknown.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unknown user status 401, got %d, body=%s", unknown.Code, unknown.Body.String())
+	}
+
+	unknownPayload := decodeJSONMap(t, unknown)
+	if got, _ := unknownPayload["error"].(string); got != "用户名或密码错误" {
+		t.Fatalf("expected unknown user to reuse the same error text, got %q", got)
+	}
+	assertLoginFailureContext(t, unknownPayload, handler.LoginCodeInvalidCredentials)
+}
+
+func TestLoginRateLimitIsIndependentPerRoutePrefix(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	// router.go 会把同一个 AuthHandler 分别注册到 /api/v1 与 /api，
+	// 限流器如果挂在 handler 字段上，两个前缀就共用同一个按 IP 计数的桶。
+	engine := gin.New()
+	authHandler := handler.NewAuthHandler()
+	authHandler.RegisterRoutes(engine.Group("/api/v1"))
+	authHandler.RegisterRoutes(engine.Group("/api"))
+
+	clientIP := "198.51.100.70"
+	// 故意发不合法 body：限流中间件排在 handler 之前，照样计数，
+	// 又不会碰 LoginAttempt 的锁定逻辑，避免和「账号已锁定」的 429 混淆。
+	body := `{}`
+
+	for i := 1; i <= 5; i++ {
+		rec := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login", body, nil, clientIP)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected /api/v1 login attempt %d to reach handler with 400, got %d, body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	limited := performJSONRequest(engine, http.MethodPost, "/api/v1/auth/login", body, nil, clientIP)
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 6th /api/v1 login to be rate limited with 429, got %d, body=%s", limited.Code, limited.Body.String())
+	}
+
+	legacy := performJSONRequest(engine, http.MethodPost, "/api/auth/login", body, nil, clientIP)
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("expected /api login bucket to be independent (want 400), got %d, body=%s", legacy.Code, legacy.Body.String())
 	}
 }
 

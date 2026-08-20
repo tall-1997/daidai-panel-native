@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "client": {
+    "repository": "https://github.com/tall-1997/daidai-flutter",
+    "version": "1.0.1",
+    "commit": "32cc56d41bfd4d2f5a1cf6d9e048c905a562b518"
+  },
+  "panel": {
+    "repository": "https://github.com/linzixuanzz/daidai-panel",
+    "version": "3.0.6",
+    "commit": "9a7c27e2a03ed30d3ac632adf58fec60009e601c"
+  },
+  "integration": "source-merge-with-android-mobilecore-and-kotlin-fallback"
+}

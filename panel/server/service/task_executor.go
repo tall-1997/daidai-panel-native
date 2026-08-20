@@ -19,6 +19,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// UntimedTaskScriptTokenTTL bounds temporary script notification tokens for tasks without timeout.
+const UntimedTaskScriptTokenTTL = 7 * 24 * time.Hour
+
+var runCommandWithPlanFunc = RunCommandWithPlan
+
 type TaskExecutor struct {
 	scriptsDir       string
 	logDir           string
@@ -153,6 +158,27 @@ func (e *TaskExecutor) OnTaskScheduled(req *ExecutionRequest) {
 	log.Printf("task %d scheduled: %s", req.TaskID, req.Task.Name)
 }
 
+// ResolveExecutionDelay calculates random delay before a worker slot is occupied.
+// Manual runs remain immediate; cron/startup delay is handled by scheduler requeue.
+func (e *TaskExecutor) ResolveExecutionDelay(req *ExecutionRequest) time.Duration {
+	if e == nil || req == nil || req.Task == nil || !shouldApplyRandomDelayForTrigger(req.TriggerType) {
+		return 0
+	}
+	plan := req.CommandPlan
+	if plan == nil {
+		parsed, err := ParseCommandExecutionPlan(req.Task.Command, e.scriptsDir)
+		if err != nil {
+			return 0
+		}
+		plan = parsed
+	}
+	randomDelay := resolveTaskRandomDelaySeconds(req.Task, plan)
+	if randomDelay <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Intn(randomDelay)+1) * time.Second
+}
+
 func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	task := req.Task
 	operationID := strings.TrimSpace(req.OperationID)
@@ -193,15 +219,6 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	}
 	req.CommandPlan = plan
 
-	// 随机延迟只对定时(cron)任务生效；手动执行与开机自启立即运行，避免用户手点后还要等待。
-	if shouldApplyRandomDelayForTrigger(req.TriggerType) {
-		randomDelay := resolveTaskRandomDelaySeconds(task, plan)
-		if randomDelay > 0 {
-			delay := rand.Intn(randomDelay) + 1
-			time.Sleep(time.Duration(delay) * time.Second)
-		}
-	}
-
 	now := time.Now()
 	database.DB.Model(task).Updates(map[string]interface{}{
 		"status":      model.TaskStatusRunning,
@@ -229,14 +246,28 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 	database.DB.Create(taskLog)
 
 	req.TaskLogID = taskLog.ID
-
-	e.runWG.Add(1)
-	go func() {
-		defer e.runWG.Done()
-		e.runTask(req, taskLog, tinyLog)
-	}()
-
+	req.taskLog = taskLog
+	req.tinyLog = tinyLog
 	return nil
+}
+
+func (e *TaskExecutor) RunTask(req *ExecutionRequest) {
+	if e == nil || req == nil {
+		return
+	}
+	taskLog, tinyLog := req.taskLog, req.tinyLog
+	req.taskLog, req.tinyLog = nil, nil
+	if taskLog == nil {
+		if tinyLog != nil {
+			tinyLog.Close()
+			GetTinyLogManager().Remove(tinyLog.LogID)
+		}
+		log.Printf("task %d: missing prepared task log, skip execution", req.TaskID)
+		return
+	}
+	e.runWG.Add(1)
+	defer e.runWG.Done()
+	e.runTask(req, taskLog, tinyLog)
 }
 
 func (e *TaskExecutor) OnTaskStarted(req *ExecutionRequest) {
@@ -580,7 +611,7 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 		if plan.TimeoutOverride != nil && *plan.TimeoutOverride > 0 {
 			effectiveTimeout = *plan.TimeoutOverride
 		}
-		result, _, err := RunCommandWithPlan(plan, effectiveTimeout, envVars, maxLogSize, onOutputWithCollect, onStart)
+		result, _, err := runCommandWithPlanFunc(plan, effectiveTimeout, envVars, maxLogSize, onOutputWithCollect, onStart)
 		if err != nil {
 			onOutput(fmt.Sprintf("[执行错误: %s]\n", err.Error()))
 			if strings.Contains(err.Error(), "illegal instruction") || strings.Contains(err.Error(), "core dumped") {

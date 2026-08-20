@@ -115,7 +115,7 @@ func TestConfigShellMultilineValueReachesNodeProcessEnv(t *testing.T) {
 		t.Fatalf("write runtime env file: %v", err)
 	}
 	defer cleanup()
-	preloadFile, err := writeNodePreloadScript(tempDir, envFile, envMap)
+	preloadFile, err := writeNodePreloadScript(tempDir, envFile, envMap, false)
 	if err != nil {
 		t.Fatalf("write node preload: %v", err)
 	}

@@ -21,6 +21,28 @@ type schedulerRuntime struct {
 
 var schedulerLifecycle schedulerRuntime
 
+const maxConcurrentTasksConfigKey = "max_concurrent_tasks"
+const defaultSchedulerWorkerCount = 4
+
+func resolveSchedulerWorkerCount() int {
+	workerCount := model.GetRegisteredConfigInt(maxConcurrentTasksConfigKey)
+	if workerCount < 1 {
+		return defaultSchedulerWorkerCount
+	}
+	return workerCount
+}
+
+func ApplySchedulerWorkerCount() {
+	scheduler := globalScheduler
+	if scheduler == nil {
+		return
+	}
+	previous, applied := scheduler.SetWorkerCount(resolveSchedulerWorkerCount())
+	if previous != applied {
+		log.Printf("scheduler v2 concurrency limit updated: %d -> %d worker(s)", previous, applied)
+	}
+}
+
 func StartSchedulerV2(ctx context.Context) error {
 	_ = ctx
 	schedulerLifecycle.mu.Lock()
@@ -38,14 +60,11 @@ func StartSchedulerV2(ctx context.Context) error {
 		log.Printf("marked %d launching schedule instance(s) as result_unknown", count)
 	}
 
-	workerCount := model.GetRegisteredConfigInt("max_concurrent_tasks")
-	if workerCount < 1 {
-		workerCount = 4
-	}
+	workerCount := resolveSchedulerWorkerCount()
 
 	cfg := SchedulerConfig{
 		WorkerCount:  workerCount,
-		QueueSize:    100,
+		QueueSize:    1000,
 		RateInterval: 200 * time.Millisecond,
 	}
 
@@ -87,7 +106,7 @@ func StopSchedulerV2(ctx context.Context) error {
 	}
 
 	if globalScheduler != nil {
-		globalScheduler.Stop()
+		globalScheduler.SignalStop()
 	}
 
 	if globalExecutor != nil {
@@ -97,6 +116,12 @@ func StopSchedulerV2(ctx context.Context) error {
 		}
 		if ok := globalExecutor.Wait(5 * time.Second); !ok {
 			log.Println("timed out waiting for running task cleanup")
+		}
+	}
+
+	if globalScheduler != nil {
+		if ok := globalScheduler.WaitWorkers(5 * time.Second); !ok {
+			log.Println("timed out waiting for scheduler workers to finish")
 		}
 	}
 

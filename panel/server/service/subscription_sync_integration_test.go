@@ -324,4 +324,3 @@ func TestSyncSubscriptionTasksDerivesSaveDirFromURL(t *testing.T) {
 		t.Errorf("task command should reference derived saveDir %q, got %q", derivedSaveDir, tasks[0].Command)
 	}
 }
-

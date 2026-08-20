@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -125,6 +126,15 @@ func TestDebugRunFinishDoesNotOverrideStoppedStatus(t *testing.T) {
 
 func requireUsableBash(t *testing.T) {
 	t.Helper()
+
+	// Windows 上通常能找到 Git Bash，但它拿到的是 Windows 形式的路径，
+	// 反斜杠会被当成转义符吃掉（日志里表现为 C:UserslinziAppData...），
+	// 于是脚本里 `> xxx.out` 这种相对重定向根本落不了盘，用例读文件必失败。
+	// 这些用例验的是 POSIX shell 的行为（ARG_MAX、环境变量传递），
+	// 面板的生产环境是 Linux，CI 也在 Linux 上跑全量，这里直接跳过。
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 下的 bash 不提供等价的 POSIX 路径语义，该用例只在 Linux 有意义")
+	}
 
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -572,7 +573,15 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    
+    final systemUpdateAvailable =
+        !PanelCapabilityRegistry.isUnsupported(PanelCapability.systemUpdate) &&
+        !PanelCapabilityRegistry.isUnavailable(PanelCapability.systemUpdate);
+    final systemRestartVisible = !PanelCapabilityRegistry.isUnsupported(
+      PanelCapability.systemRestart,
+    );
+    final systemRestartAvailable = !PanelCapabilityRegistry.isUnavailable(
+      PanelCapability.systemRestart,
+    );
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -771,7 +780,8 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                         width: double.infinity,
                                         height: 42,
                                         child: FilledButton(
-                                          onPressed: _updatingPanel
+                                          onPressed: _updatingPanel ||
+                                                  !systemUpdateAvailable
                                               ? null
                                               : _doUpdate,
                                           child: Text(
@@ -1084,15 +1094,17 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                             isLight: isLight,
                             onTap: () => context.push('/panel-log'),
                           ),
-                          const SizedBox(height: 8),
-                          _ActionBtn(
-                            icon: Icons.restart_alt,
-                            title: '重启面板',
-                            subtitle: '重启面板服务，运行中任务将中断',
-                            isLight: isLight,
-                            onTap: _restart,
-                            danger: true,
-                          ),
+                          if (systemRestartVisible) ...[
+                            const SizedBox(height: 8),
+                            _ActionBtn(
+                              icon: Icons.restart_alt,
+                              title: '重启面板',
+                              subtitle: '重启面板服务，运行中任务将中断',
+                              isLight: isLight,
+                              onTap: systemRestartAvailable ? _restart : null,
+                              danger: true,
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -1326,7 +1338,7 @@ class _ActionBtn extends ConsumerWidget {
   final String title;
   final String subtitle;
   final bool isLight;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool danger;
 
   const _ActionBtn({
@@ -1340,50 +1352,56 @@ class _ActionBtn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    
+    final enabled = onTap != null;
     return AppLiquidGlassSurface(
       onTap: onTap,
       borderRadius: 12,
       performanceMode: true,
-      accentColor: danger ? AppColors.red500 : AppColors.primary,
+      accentColor: enabled
+          ? (danger ? AppColors.red500 : AppColors.primary)
+          : AppColors.slate400,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 20,
-              color: danger ? AppColors.red500 : AppColors.primary,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: danger ? AppColors.red500 : null,
-                    ),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: enabled
+                ? (danger ? AppColors.red500 : AppColors.primary)
+                : AppColors.slate400,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: enabled
+                        ? (danger ? AppColors.red500 : null)
+                        : AppColors.slate400,
                   ),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
-                    ),
+                ),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isLight ? AppColors.slate500 : AppColors.slate400,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: isLight ? AppColors.slate400 : AppColors.slate600,
-            ),
-          ],
-        ),
+          ),
+          Icon(
+            Icons.chevron_right,
+            size: 18,
+            color: isLight ? AppColors.slate400 : AppColors.slate600,
+          ),
+        ],
+      ),
     );
   }
 }

@@ -50,6 +50,10 @@ type Task struct {
 	DependsOn              *uint      `gorm:"index" json:"depends_on"`
 	SortOrder              int        `json:"sort_order"`
 	IsPinned               bool       `json:"is_pinned"`
+	// SubscriptionLocked 表示用户手动调整过该任务的名称或定时。
+	// 置真后订阅同步不再覆盖 name/cron，也不会在候选集缺失时自动删除它。
+	// 刻意不叫 cron_locked：名称与定时是同一把锁，避免重蹈 force_overwrite「名字与作用域不符」的覆辙。
+	SubscriptionLocked bool `gorm:"default:0" json:"subscription_locked"`
 	PID                    *int       `gorm:"column:pid" json:"pid"`
 	LogPath                *string    `gorm:"size:256" json:"log_path"`
 	LastRunningTime        *float64   `json:"last_running_time"`
@@ -97,6 +101,7 @@ func (t *Task) ToDict() map[string]interface{} {
 		"depends_on":               t.DependsOn,
 		"sort_order":               t.SortOrder,
 		"is_pinned":                t.IsPinned,
+		"subscription_locked":      t.SubscriptionLocked,
 		"pid":                      t.PID,
 		"log_path":                 t.LogPath,
 		"last_running_time":        t.LastRunningTime,

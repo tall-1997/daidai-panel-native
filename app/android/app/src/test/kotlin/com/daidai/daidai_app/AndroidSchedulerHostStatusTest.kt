@@ -19,5 +19,9 @@ class AndroidSchedulerHostStatusTest {
 
         assertEquals(1, capabilities.getInt("version"))
         assertEquals("android.scheduler-host", taskExecution.getString("adapterId"))
+        assertEquals(
+            "enabled",
+            capabilities.getJSONObject("capabilities").getJSONObject("system_restart").getString("state"),
+        )
     }
 }

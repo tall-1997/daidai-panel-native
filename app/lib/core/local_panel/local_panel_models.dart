@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import '../network/panel_profile.dart';
+
 enum LocalPanelPhase { stopped, starting, migrating, ready, degraded, failed }
 
 class LocalPanelStatus {
@@ -11,6 +15,7 @@ class LocalPanelStatus {
   final bool foregroundServiceEnabled;
   final String localToken;
   final String fallbackMode;
+  final Map<String, PanelCapabilityStatus> platformCapabilities;
 
   const LocalPanelStatus({
     this.phase = LocalPanelPhase.stopped,
@@ -23,7 +28,14 @@ class LocalPanelStatus {
     this.foregroundServiceEnabled = false,
     this.localToken = '',
     this.fallbackMode = '',
+    this.platformCapabilities = const {},
   });
+
+  PanelCapabilityStatus capabilityStatus(String capabilityId) =>
+      platformCapabilities[capabilityId] ?? const PanelCapabilityStatus();
+
+  PanelCapabilityState capabilityState(String capabilityId) =>
+      capabilityStatus(capabilityId).state;
 
   factory LocalPanelStatus.fromJson(Map<String, dynamic> json) {
     return LocalPanelStatus(
@@ -41,8 +53,38 @@ class LocalPanelStatus {
           json['foreground_service_enabled'] == true,
       localToken: json['local_token']?.toString() ?? '',
       fallbackMode: json['fallback_mode']?.toString() ?? '',
+      platformCapabilities: _platformCapabilities(
+        json['platform_capabilities'],
+      ),
     );
   }
+}
+
+Map<String, PanelCapabilityStatus> _platformCapabilities(dynamic raw) {
+  dynamic decoded = raw;
+  if (raw is String && raw.trim().isNotEmpty) {
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {
+      return const {};
+    }
+  }
+  if (decoded is! Map) return const {};
+  final capabilities = decoded['capabilities'];
+  if (capabilities is! Map) return const {};
+  return Map<String, PanelCapabilityStatus>.fromEntries(
+    capabilities.entries.map((entry) {
+      final details = entry.value is Map ? entry.value as Map : const {};
+      return MapEntry(
+        entry.key.toString(),
+        PanelCapabilityStatus(
+          state: parsePanelCapabilityState(details['state']),
+          reasonCode: details['reasonCode']?.toString() ?? '',
+          adapterId: details['adapterId']?.toString() ?? '',
+        ),
+      );
+    }),
+  );
 }
 
 class LocalPanelCapabilities {

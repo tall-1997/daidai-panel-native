@@ -14,10 +14,11 @@ import (
 )
 
 type taskNotificationChannelInfo struct {
-	ID      uint
-	Name    string
-	Type    string
-	Enabled bool
+	ID        uint
+	Name      string
+	Type      string
+	Enabled   bool
+	PushScope string
 }
 
 func listTaskNotificationChannels() ([]taskNotificationChannelInfo, error) {
@@ -31,10 +32,11 @@ func listTaskNotificationChannels() ([]taskNotificationChannelInfo, error) {
 	items := make([]taskNotificationChannelInfo, 0, len(channels))
 	for _, ch := range channels {
 		items = append(items, taskNotificationChannelInfo{
-			ID:      ch.ID,
-			Name:    strings.TrimSpace(ch.Name),
-			Type:    strings.TrimSpace(ch.Type),
-			Enabled: ch.Enabled,
+			ID:        ch.ID,
+			Name:      strings.TrimSpace(ch.Name),
+			Type:      strings.TrimSpace(ch.Type),
+			Enabled:   ch.Enabled,
+			PushScope: ch.EffectivePushScope(),
 		})
 	}
 	return items, nil
@@ -63,10 +65,11 @@ func loadTaskNotificationChannelMap(tasks []model.Task) map[uint]taskNotificatio
 	result := make(map[uint]taskNotificationChannelInfo, len(channels))
 	for _, ch := range channels {
 		result[ch.ID] = taskNotificationChannelInfo{
-			ID:      ch.ID,
-			Name:    strings.TrimSpace(ch.Name),
-			Type:    strings.TrimSpace(ch.Type),
-			Enabled: ch.Enabled,
+			ID:        ch.ID,
+			Name:      strings.TrimSpace(ch.Name),
+			Type:      strings.TrimSpace(ch.Type),
+			Enabled:   ch.Enabled,
+			PushScope: ch.EffectivePushScope(),
 		}
 	}
 	return result
@@ -149,7 +152,10 @@ func resolveImportedTaskNotificationChannel(taskData map[string]interface{}) (*u
 		return nil, "", err
 	}
 
-	return nil, fmt.Sprintf("通知渠道 %q 不存在，已按全部启用渠道导入", name), nil
+	// 没匹配上就落成「不绑定渠道」，即走广播。广播的含义已经从「全部已启用渠道」
+	// 收窄成「全部默认推送渠道」，设成「绑定推送」的渠道不会收到这个任务的通知，
+	// 提示语必须跟着改，否则是在承诺一个不存在的行为。
+	return nil, fmt.Sprintf("通知渠道 %q 不存在，已按不绑定渠道导入（通知将发往全部默认推送渠道）", name), nil
 }
 
 func (h *TaskHandler) NotificationChannels(c *gin.Context) {
@@ -159,13 +165,16 @@ func (h *TaskHandler) NotificationChannels(c *gin.Context) {
 		return
 	}
 
+	// push_scope 给任务表单用来标出「仅绑定」渠道：这类渠道不参与广播，
+	// 用户不在这里显式选中它，它就一条通知都收不到。
 	data := make([]map[string]interface{}, 0, len(channels))
 	for _, ch := range channels {
 		data = append(data, map[string]interface{}{
-			"id":      ch.ID,
-			"name":    ch.Name,
-			"type":    ch.Type,
-			"enabled": ch.Enabled,
+			"id":         ch.ID,
+			"name":       ch.Name,
+			"type":       ch.Type,
+			"push_scope": ch.PushScope,
+			"enabled":    ch.Enabled,
 		})
 	}
 

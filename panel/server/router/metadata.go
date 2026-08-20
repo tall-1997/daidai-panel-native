@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const upstreamSourceVersion = "0e33d022beb1ed16e68d4de022fef86f9834f2df"
+const upstreamSourceVersion = "9a7c27e2a03ed30d3ac632adf58fec60009e601c"
 
 type RouteMetadata struct {
 	AuthContract    string

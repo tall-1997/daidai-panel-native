@@ -377,4 +377,61 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - Security and minimum recovery precede execution and runtime migration.
 - Eight runtimes each have package, smoke, isolation, and release evidence.
 - Server-only behavior remains represented through Android equivalents or stable capability results.
+
+---
+
+## Milestone 7: Full Parity, Upstream Sync, and Capability UX
+
+### Task 7.1: Integrate Latest Panel Release
+
+**Status:** In progress
+
+- Import `daidai-panel v3.0.6` commit `9a7c27e2a03ed30d3ac632adf58fec60009e601c`.
+- Preserve the verified Flutter v1.0.1 client and Android local adaptations.
+- Require `go test ./...`, route contract, Flutter tests/analyze, Kotlin tests, and snapshot APK build.
+
+### Task 7.2: Close Kotlin Fallback Execution Gaps
+
+**Status:** Pending
+
+- Inject panel env into main commands and before/after hooks.
+- Track task processes and terminate process trees on stop.
+- Persist running logs incrementally and implement cursor-resumable SSE.
+- Detect missing Python/Node dependencies, install with bounded retries, and rerun.
+- Add parity tests shared with Go Core behavior.
+
+### Task 7.3: Unify Runtime Mirror Configuration
+
+**Status:** Pending
+
+- Use Huawei APK, Alibaba pip, and npmmirror npm defaults.
+- Persist arbitrary valid user mirror URLs, including official sources.
+- Wire Flutter mirror settings to Kotlin fallback, rootfs, task env, and Go Core adapters.
+- Preserve user values across rootfs preparation and restart.
+
+### Task 7.4: Add Panel Handshake and Capability Profile
+
+**Status:** Pending
+
+- Add versioned handshake to local and current remote-compatible backend.
+- Parse native `platform_capabilities` into Flutter.
+- Add legacy endpoint probing for older remote backends.
+- Parse capability 409 responses into structured profile updates.
+
+### Task 7.5: Gate Menus, Routes, and Actions
+
+**Status:** Pending
+
+- Hide unsupported menu entries.
+- Guard deep links with an unavailable page.
+- Keep read-only pages visible when only mutation capability is disabled.
+- Apply independent profiles when switching local and remote instances.
+
+### Task 7.6: Consolidate Repository Branches
+
+**Status:** Pending
+
+- Merge verified integration into `main`.
+- Push `main` and complete snapshot APK validation.
+- Remove confirmed local and remote integration/test branches after merge verification.
 - No release is labeled full-featured before Milestones 1-6 all pass.

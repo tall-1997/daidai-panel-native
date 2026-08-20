@@ -172,6 +172,16 @@ func createBinaryUpdateWorkDir(plan *panelUpdatePlan) (string, error) {
 		return "", fmt.Errorf("创建更新目录失败: %w", err)
 	}
 
+	// 清掉上一次留下的工作目录。每次更新会在这里解压出一份完整的二进制 + 前端（约 50MB），
+	// 之前从没人清理，在 Magisk 模块版这种装在手机 /data 上的部署里尤其明显：
+	// 每升一次涨 50MB，还会一起被算进重刷模块时的数据备份。
+	// panelUpdater.begin() 保证同一时刻只有一个更新任务，删掉的一定是已经跑完的。
+	if entries, err := os.ReadDir(baseDir); err == nil {
+		for _, entry := range entries {
+			os.RemoveAll(filepath.Join(baseDir, entry.Name()))
+		}
+	}
+
 	versionPart := sanitizeUpdateFileName(plan.ReleaseVersion)
 	if versionPart == "" {
 		versionPart = time.Now().Format("20060102150405")

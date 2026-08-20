@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"daidai-panel/service"
 )
@@ -21,8 +20,20 @@ import (
 // 这两个子命令在当前 TTY 前台、用与任务一致的环境（venv + 已装依赖 + 面板环境变量）执行，
 // stdin 直通，可交互输入。
 
-// 长 TTL：交互式会话可能持续很久，沿用任务“无超时”场景的 env TTL，保证通知 helper 令牌不过期。
-const ddpRuntimeEnvTTL = 365 * 24 * time.Hour
+// buildRuntimeEnv 给 ddp python / ddp shell 构建与任务一致的运行环境，
+// 并返回注入其中的那枚面板凭据。两个子命令共用这一处，保证 TTL 与吊销语义不分叉。
+//
+// TTL 直接复用 service.UntimedTaskScriptTokenTTL（7 天）：交互式会话没有可推导的运行时长，
+// 与「未设超时的任务」是同一类场景，不该在这里另立一个数字。
+// 它只是兜底 —— 会话结束时凭据会被立刻吊销（见调用方的 defer 与 runForeground）。
+func buildRuntimeEnv(rt *cliRuntime, workDir string) (map[string]string, *service.ScriptTokenInfo) {
+	envMap, scriptToken, envErr := service.BuildManagedRuntimeEnvMapWithScriptToken(
+		workDir, rt.cfg.Data.ScriptsDir, nil, service.UntimedTaskScriptTokenTTL, "")
+	if envErr != nil {
+		rt.warnings = append(rt.warnings, "构建运行环境部分失败（通知/辅助可能不可用）: "+envErr.Error())
+	}
+	return envMap, scriptToken
+}
 
 func runRuntimePython(rt *cliRuntime, args []string) error {
 	if err := rt.bootstrap(); err != nil {
@@ -43,10 +54,10 @@ func runRuntimePython(rt *cliRuntime, args []string) error {
 	}
 
 	workDir := filepath.Dir(scriptPath)
-	envMap, envErr := service.BuildManagedRuntimeEnvMap(workDir, rt.cfg.Data.ScriptsDir, nil, ddpRuntimeEnvTTL)
-	if envErr != nil {
-		rt.warnings = append(rt.warnings, "构建运行环境部分失败（通知/辅助可能不可用）: "+envErr.Error())
-	}
+	envMap, scriptToken := buildRuntimeEnv(rt, workDir)
+	// 注入的是一枚 operator 凭据，会话一结束就作废，不让它在会话之外继续游荡。
+	// defer 覆盖正常返回与异常返回；退出码透传那条路会走 os.Exit，由 runForeground 内部补吊销。
+	defer service.RevokeScriptToken(scriptToken)
 
 	env := mergeEnvMap(os.Environ(), envMap)
 	env = ensureEnvDefault(env, "PYTHONUTF8", "1")
@@ -62,7 +73,7 @@ func runRuntimePython(rt *cliRuntime, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "[ddp] 使用面板 Python: %s\n", pythonBin)
 	fmt.Fprintf(os.Stderr, "[ddp] 工作目录: %s\n", workDir)
-	return runForeground(rt, cmd)
+	return runForeground(rt, cmd, scriptToken)
 }
 
 func runRuntimeShell(rt *cliRuntime, args []string) error {
@@ -73,10 +84,8 @@ func runRuntimeShell(rt *cliRuntime, args []string) error {
 		return fmt.Errorf("用法: ddp shell（无参数；进入面板运行环境的交互 shell）")
 	}
 
-	envMap, envErr := service.BuildManagedRuntimeEnvMap(rt.cfg.Data.ScriptsDir, rt.cfg.Data.ScriptsDir, nil, ddpRuntimeEnvTTL)
-	if envErr != nil {
-		rt.warnings = append(rt.warnings, "构建运行环境部分失败（通知/辅助可能不可用）: "+envErr.Error())
-	}
+	envMap, scriptToken := buildRuntimeEnv(rt, rt.cfg.Data.ScriptsDir)
+	defer service.RevokeScriptToken(scriptToken)
 
 	env := mergeEnvMap(os.Environ(), envMap)
 	env = ensureEnvDefault(env, "PYTHONUTF8", "1")
@@ -94,7 +103,7 @@ func runRuntimeShell(rt *cliRuntime, args []string) error {
 	if pythonBin := service.ResolveManagedPythonBinary(); pythonBin != "" {
 		fmt.Fprintf(os.Stderr, "[ddp] Python: %s\n", pythonBin)
 	}
-	return runForeground(rt, cmd)
+	return runForeground(rt, cmd, scriptToken)
 }
 
 // resolveRunnableScript 优先按面板脚本目录解析（与任务执行一致），退化到用户给的绝对/当前目录路径。
@@ -131,12 +140,16 @@ func resolveInteractiveShell() string {
 }
 
 // runForeground 在前台运行交互命令，并尽量透传子进程的退出码。
-func runForeground(rt *cliRuntime, cmd *exec.Cmd) error {
+// scriptToken 是注入子进程的那枚面板凭据：透传退出码这条路走的是 os.Exit，
+// 而 os.Exit 不执行 defer，所以调用方那句 defer RevokeScriptToken 在这里跑不到，
+// 必须在 os.Exit 之前手动补一次。RevokeScriptToken 按 jti 去重，重复调用安全。
+func runForeground(rt *cliRuntime, cmd *exec.Cmd, scriptToken *service.ScriptTokenInfo) error {
 	err := cmd.Run()
 	if err == nil {
 		return nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
+		service.RevokeScriptToken(scriptToken)
 		rt.printWarnings()
 		os.Exit(exitErr.ExitCode())
 	}

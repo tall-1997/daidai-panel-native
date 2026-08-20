@@ -47,11 +47,14 @@ type BackupOpenApp struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// BackupNotifyChannel 的 PushScope：default = 参与广播，bound = 只有被显式绑定时才推送。
+// 老备份里没有这个键，反序列化后是空串，恢复时按 default 处理，与升级前一致。
 type BackupNotifyChannel struct {
 	ID        uint      `json:"id"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	Config    string    `json:"config"`
+	PushScope string    `json:"push_scope"`
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

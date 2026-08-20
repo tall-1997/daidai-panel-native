@@ -217,6 +217,7 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		Whitelist      string `json:"whitelist"`
 		Blacklist      string `json:"blacklist"`
 		DependOn       string `json:"depend_on"`
+		PreScript      string `json:"pre_script"`
 		HookScript     string `json:"hook_script"`
 		AutoAddTask    bool   `json:"auto_add_task"`
 		AutoDelTask    bool   `json:"auto_del_task"`
@@ -256,6 +257,7 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 		Whitelist:      req.Whitelist,
 		Blacklist:      req.Blacklist,
 		DependOn:       req.DependOn,
+		PreScript:      req.PreScript,
 		HookScript:     req.HookScript,
 		AutoAddTask:    req.AutoAddTask,
 		AutoDelTask:    req.AutoDelTask,
@@ -328,7 +330,7 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 	allowed := map[string]bool{
 		"name": true, "type": true, "url": true, "branch": true,
 		"schedule": true, "whitelist": true, "blacklist": true,
-		"depend_on": true, "hook_script": true, "auto_add_task": true, "auto_del_task": true,
+		"depend_on": true, "pre_script": true, "hook_script": true, "auto_add_task": true, "auto_del_task": true,
 		"save_dir": true, "sub_path": true, "ssh_key_id": true, "auth_type": true, "auth_username": true, "auth_token": true, "alias": true, "force_overwrite": true,
 	}
 	updates := make(map[string]interface{})

@@ -45,9 +45,10 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	envMap := buildScriptExecEnv(tmpDir)
+	envMap, scriptToken := buildScriptExecEnv(tmpDir)
 	cmd, cleanup, err := newScriptCommand(interpreter, tmpFile, nil, tmpDir, envMap)
 	if err != nil {
+		service.RevokeScriptToken(scriptToken)
 		os.Remove(tmpFile)
 		response.InternalError(c, fmt.Sprintf("启动失败: %s", err))
 		return
@@ -57,6 +58,7 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 	pipeWriter, scanDone, err := startTrackedCommand(cmd, run)
 	if err != nil {
 		cleanup()
+		service.RevokeScriptToken(scriptToken)
 		os.Remove(tmpFile)
 		response.InternalError(c, fmt.Sprintf("启动失败: %s", err))
 		return
@@ -72,6 +74,9 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 	startTime := time.Now()
 
 	go func() {
+		// 运行结束（含被手动停止时的提前 return）都要作废注入的凭据。
+		defer service.RevokeScriptToken(scriptToken)
+
 		waitErr := waitTrackedCommand(cmd, pipeWriter, scanDone)
 		cleanup()
 		elapsed := time.Since(startTime).Seconds()

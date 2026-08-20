@@ -24,6 +24,14 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	LoginCodeAccountLocked      = "account_locked"
+	LoginCodeCaptchaRequired    = "captcha_required"
+	LoginCodeInvalidCredentials = "invalid_credentials"
+	LoginCodeTwoFactorRequired  = "two_factor_required"
+	LoginCodeInvalidTOTP        = "invalid_totp"
+)
+
 type AuthHandler struct {
 	authService        *service.AuthService
 	loginLimiter       gin.HandlerFunc
@@ -111,6 +119,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		remainSec := int(remaining.Seconds())
 		c.JSON(429, gin.H{
 			"error":             fmt.Sprintf("账号已锁定，请 %.0f 分钟后重试", remaining.Minutes()),
+			"code":              LoginCodeAccountLocked,
 			"locked":            true,
 			"remaining_seconds": remainSec,
 		})
@@ -131,6 +140,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			case service.ErrCaptchaRequired:
 				c.JSON(401, gin.H{
 					"error":                  err.Error(),
+					"code":                   LoginCodeCaptchaRequired,
 					"captcha_required":       true,
 					"captcha_id":             captchaCfg.CaptchaID,
 					"captcha_threshold":      captchaCfg.RequireAfterFailures,
@@ -158,6 +168,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 			c.JSON(401, gin.H{
 				"error":                  "验证码校验失败，请重新完成人机验证",
+				"code":                   LoginCodeCaptchaRequired,
 				"captcha_required":       true,
 				"captcha_invalid":        true,
 				"captcha_id":             captchaCfg.CaptchaID,
@@ -177,6 +188,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":                  "用户名或密码错误",
+				"code":                   LoginCodeInvalidCredentials,
 				"failed_attempts":        failedAttempts,
 				"captcha_required":       captchaCfg.Enabled,
 				"captcha_id":             captchaCfg.CaptchaID,
@@ -189,14 +201,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		case service.ErrTOTPRequired:
 			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
-				"error":               "请输入两步验证码",
-				"two_factor_required": true,
+				"error":                  "请输入两步验证码",
+				"code":                   LoginCodeTwoFactorRequired,
+				"two_factor_required":    true,
+				"captcha_required":       captchaCfg.Enabled,
+				"captcha_id":             captchaCfg.CaptchaID,
+				"captcha_threshold":      captchaCfg.RequireAfterFailures,
+				"require_after_failures": captchaCfg.RequireAfterFailures,
 			})
 		case service.ErrInvalidTOTP:
 			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
-				"error":               "两步验证码错误",
-				"two_factor_required": true,
+				"error":                  "两步验证码错误",
+				"code":                   LoginCodeInvalidTOTP,
+				"two_factor_required":    true,
+				"captcha_required":       captchaCfg.Enabled,
+				"captcha_id":             captchaCfg.CaptchaID,
+				"captcha_threshold":      captchaCfg.RequireAfterFailures,
+				"require_after_failures": captchaCfg.RequireAfterFailures,
 			})
 		default:
 			service.RecordFailedLogin(ip, req.Username)
@@ -467,11 +489,13 @@ func (h *AuthHandler) ServeAvatar(c *gin.Context) {
 }
 
 func (h *AuthHandler) RegisterRoutes(r *gin.RouterGroup) {
+	// /api and /api/v1 receive independent rate-limit buckets.
+	loginLimiter := middleware.RateLimit(5, time.Minute)
 	auth := r.Group("/auth")
 	{
 		auth.GET("/check-init", h.CheckInit)
 		auth.POST("/init", h.Init)
-		auth.POST("/login", h.loginLimiter, h.Login)
+		auth.POST("/login", loginLimiter, h.Login)
 		auth.POST("/logout", middleware.JWTAuth(), h.Logout)
 		auth.POST("/refresh", h.Refresh)
 		auth.GET("/user", middleware.JWTAuth(), h.GetUser)

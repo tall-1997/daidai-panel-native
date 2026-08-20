@@ -298,6 +298,10 @@ func (h *LogHandler) RegisterRoutes(r *gin.RouterGroup) {
 		logs.POST("/batch-delete", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.BatchDelete)
 		logs.DELETE("/clean", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.Clean)
 		logs.GET("/:id/stream", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("viewer"), h.Stream)
+		logs.GET("/:id/raw-ticket", middleware.JWTAuth(), middleware.OpenAPIAccess("logs"), middleware.RequireRole("viewer"), h.RawDownloadTicket)
+		// 原始日志直传下载：浏览器原生下载无法携带 Authorization 头，所以这条路由不能挂 JWTAuth，
+		// 改由上面的 raw-ticket 接口（鉴权与 /logs/:id 完全一致）签发短期票据，handler 内部验票。
+		logs.GET("/:id/raw", h.DownloadRawLog)
 		logs.GET("/:id", middleware.JWTAuth(), middleware.OpenAPIAccess("logs"), middleware.RequireRole("viewer"), h.Detail)
 		logs.DELETE("/:id", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.Delete)
 	}
