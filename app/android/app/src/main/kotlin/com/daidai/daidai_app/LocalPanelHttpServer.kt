@@ -156,8 +156,7 @@ class LocalPanelHttpServer(
     }
 
     private fun androidRuntime(session:IHTTPSession):Response {
-        val python=AndroidPythonRuntime.ensureReady(context);val node=AndroidNodeRuntime.ensureReady(context)
-        if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",JSONObject().put("supported",true).put("arch",android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown").put("bin_dir",context.applicationInfo.nativeLibraryDir).put("termux_detected",false).put("presets",JSONArray()).put("runtimes",JSONArray().put(JSONObject().put("name","python").put("installed",python!=null).put("path",python?.executable?:"").put("version",if(python!=null)"embedded" else "")).put(JSONObject().put("name","node").put("installed",node!=null).put("path",node?.executable?:"").put("version",if(node!=null)"embedded" else "")))))
+        if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",AndroidLinuxRuntime.statusJson(context)))
         if((session.uri.endsWith("/install")||session.uri.endsWith("/uninstall"))&&session.method==Method.POST)return jsonError(Response.Status.CONFLICT,"Android runtime is embedded and immutable; update the APK to change it")
         return jsonError(Response.Status.NOT_FOUND,"Android runtime endpoint unavailable")
     }
@@ -188,7 +187,7 @@ class LocalPanelHttpServer(
                 .put("npm", true)
                 .put("typescript", true)
                 .put("shell", true)
-                .put("linux_package_manager", false)
+                .put("linux_package_manager", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
                 .put("foreground_scheduler", true)
                 .put("exact_cron", true)
                 .put("portable_backup_envelope", true)
@@ -256,7 +255,7 @@ class LocalPanelHttpServer(
     ).any { java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), it).isFile }
 
     private fun pythonSmokeCommand(): List<String>? = AndroidPythonRuntime.ensureReady(context)?.let {
-        listOf(it.executable, it.home, "-c", "print('PY_OK')")
+        listOf(it.executable, it.wrapperScript, "-c", "print('PY_OK')")
     }
 
     private fun pythonSeedStatusItem(): JSONObject {
@@ -269,11 +268,11 @@ class LocalPanelHttpServer(
     }
 
     private fun nodeSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, "-e", "console.log('NODE_OK')")
+        listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "console.log('NODE_OK')")
     }
 
     private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, "-e", "const ts=require('typescript');const out=ts.transpileModule(\"const msg:string='TS_OK'; console.log(msg)\",{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;eval(out)")
+        listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "const ts=require('typescript');const out=ts.transpileModule(\"const msg:string='TS_OK'; console.log(msg)\",{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;eval(out)")
     }
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {

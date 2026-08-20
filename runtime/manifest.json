@@ -8,6 +8,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libpython_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "language-runtime",
+      "isolation": "android-app-sandbox",
       "capabilities": ["python", "pip", "venv", "ssl", "sqlite"]
     },
     {
@@ -16,6 +18,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libnode_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "language-runtime",
+      "isolation": "android-app-sandbox",
       "capabilities": ["node", "commonjs", "esm", "https"]
     },
     {
@@ -24,6 +28,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libnode_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "toolchain",
+      "isolation": "android-app-sandbox",
       "capabilities": ["typescript"]
     },
     {
@@ -32,6 +38,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libshell_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "linux-container-command",
+      "isolation": "layered-rootfs",
       "capabilities": ["shell"]
     },
     {
@@ -40,6 +48,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libgit_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "linux-container-command",
+      "isolation": "brokered-network",
       "capabilities": ["git"]
     },
     {
@@ -48,6 +58,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libssh_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "linux-container-command",
+      "isolation": "brokered-network",
       "capabilities": ["ssh"]
     },
     {
@@ -56,6 +68,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libyaegi_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "toolchain",
+      "isolation": "isolated-worker",
       "capabilities": ["go-interpret"]
     },
     {
@@ -64,6 +78,8 @@
       "abi": "arm64-v8a",
       "entrypoint": "libgobuilder_exec.so",
       "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "runtime_type": "toolchain",
+      "isolation": "trusted-builder-export-only",
       "capabilities": ["go-build-export-only"]
     }
   ]

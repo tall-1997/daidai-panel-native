@@ -28,7 +28,7 @@ func TestRuntimeComponentManagerRejectsPlaceholderHashByDefault(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.12-android-arm64",
+			ID:         "python-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "libpython_exec.so",
 			SHA256:     "PLACEHOLDER_SHA256_PYTHON",
@@ -37,7 +37,7 @@ func TestRuntimeComponentManagerRejectsPlaceholderHashByDefault(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.12-android-arm64"},
+		RuntimeIDs: []string{"python-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)
@@ -80,7 +80,7 @@ func TestRuntimeComponentManagerAllowsPlaceholderHashWithDevFlag(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.12-android-arm64",
+			ID:         "python-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "libpython_exec.so",
 			SHA256:     "PLACEHOLDER_SHA256_PYTHON",
@@ -89,7 +89,7 @@ func TestRuntimeComponentManagerAllowsPlaceholderHashWithDevFlag(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.12-android-arm64"},
+		RuntimeIDs: []string{"python-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)
@@ -184,16 +184,17 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{
-			{ID: "python-3.12-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: sha256Hex(pythonELF)},
+			{ID: "python-3.14-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: sha256Hex(pythonELF), RuntimeType: "language-runtime", Isolation: "android-app-sandbox"},
 			{ID: "node-lts-android-arm64", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
 			{ID: "typescript-stable", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
 		},
 	}
 	compatibility := RuntimeCompatibility{
-		Version: "1",
-		ABI:     "arm64-v8a",
+		Version:        "1",
+		ABI:            "arm64-v8a",
+		ContainerModel: "layered-linux-runtime",
 		RuntimeIDs: []string{
-			"python-3.12-android-arm64",
+			"python-3.14-android-arm64",
 			"node-lts-android-arm64",
 			"typescript-stable",
 		},
@@ -212,8 +213,8 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load and validate runtime baseline: %v", err)
 	}
-	if len(baseline.SmokeSuites) != 8 {
-		t.Fatalf("smoke suite count=%d want=8", len(baseline.SmokeSuites))
+	if len(baseline.SmokeSuites) != len(manifest.Components) {
+		t.Fatalf("smoke suite count=%d want=%d", len(baseline.SmokeSuites), len(manifest.Components))
 	}
 	if !baseline.ExecutionPolicies.Node.DisableLifecycleScripts {
 		t.Fatal("expected node lifecycle scripts to be disabled by default")
@@ -233,7 +234,14 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	if len(baseline.TrustRecords) == 0 {
 		t.Fatal("expected at least one trust authorization record")
 	}
-	pythonSuite := findRuntimeSuite(baseline.SmokeSuites, "python-3.12-android-arm64")
+	if baseline.ContainerModel != "layered-linux-runtime" {
+		t.Fatalf("container model=%q want=layered-linux-runtime", baseline.ContainerModel)
+	}
+	pythonComponent := findRuntimeComponent(baseline.Components, "python-3.14-android-arm64")
+	if pythonComponent == nil || pythonComponent.RuntimeType == "" || pythonComponent.Isolation == "" {
+		t.Fatalf("component runtime metadata missing: %+v", pythonComponent)
+	}
+	pythonSuite := findRuntimeSuite(baseline.SmokeSuites, "python-3.14-android-arm64")
 	if pythonSuite == nil {
 		t.Fatal("python runtime suite missing")
 	}
@@ -261,7 +269,7 @@ func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.12-android-arm64",
+			ID:         "python-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "../escape.so",
 			SHA256:     strings.Repeat("a", 64),
@@ -270,7 +278,7 @@ func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.12-android-arm64"},
+		RuntimeIDs: []string{"python-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)
@@ -365,6 +373,15 @@ func findRuntimeSuite(suites []RuntimeSmokeSuite, runtimeID string) *RuntimeSmok
 	for i := range suites {
 		if suites[i].RuntimeID == runtimeID {
 			return &suites[i]
+		}
+	}
+	return nil
+}
+
+func findRuntimeComponent(components []RuntimeComponentStatus, runtimeID string) *RuntimeComponentStatus {
+	for i := range components {
+		if components[i].ID == runtimeID {
+			return &components[i]
 		}
 	}
 	return nil

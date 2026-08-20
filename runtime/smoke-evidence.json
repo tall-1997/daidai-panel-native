@@ -9,7 +9,7 @@
       "entry": "libpython_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "trusted-runner",
+      "isolation_level": "android-app-sandbox",
       "timeout_seconds": 10,
       "checks": [{"id": "PY_OK_SSL_SQLITE_VENV_PIP", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -19,7 +19,7 @@
       "entry": "libnode_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "trusted-runner",
+      "isolation_level": "android-app-sandbox",
       "timeout_seconds": 10,
       "checks": [{"id": "COMMONJS_ESM_HTTPS", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -29,7 +29,7 @@
       "entry": "libnode_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "trusted-runner",
+      "isolation_level": "android-app-sandbox",
       "timeout_seconds": 10,
       "checks": [{"id": "TS_OK", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -39,7 +39,7 @@
       "entry": "libshell_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "trusted-runner",
+      "isolation_level": "layered-rootfs",
       "timeout_seconds": 10,
       "checks": [{"id": "SHELL_PIPE_EXIT_STOP", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -49,7 +49,7 @@
       "entry": "libgit_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "broker",
+      "isolation_level": "brokered-network",
       "timeout_seconds": 30,
       "checks": [{"id": "GIT_CLONE_FETCH_SPARSE", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -59,7 +59,7 @@
       "entry": "libssh_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "broker",
+      "isolation_level": "brokered-network",
       "timeout_seconds": 30,
       "checks": [{"id": "SSH_HOSTKEY", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     },
@@ -79,7 +79,7 @@
       "entry": "libgobuilder_exec.so",
       "status": "blocked",
       "evidence_source": "none",
-      "isolation_level": "trusted-builder",
+      "isolation_level": "trusted-builder-export-only",
       "timeout_seconds": 60,
       "checks": [{"id": "GO_BUILD_EXPORT_ONLY", "status": "blocked", "reason": "runtime-placeholder-elf"}]
     }

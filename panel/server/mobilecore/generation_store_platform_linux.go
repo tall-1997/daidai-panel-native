@@ -296,7 +296,7 @@ func platformProbeRecoveryMetadata(ops string) error {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return err
 	}
-	cleanup := func() error { return cleanupProbeOperation(ops, dir) }
+	cleanup := func() error { return cleanupLinuxProbeOperation(ops, dir) }
 	if err := platformSyncDirectory(ops); err != nil {
 		return errors.Join(err, cleanup())
 	}
@@ -355,7 +355,7 @@ func platformProbeRecoveryMetadata(ops string) error {
 	return cleanup()
 }
 
-func cleanupProbeOperation(ops, dir string) error {
+func cleanupLinuxProbeOperation(ops, dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err

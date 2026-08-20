@@ -12,6 +12,7 @@ object AndroidRuntimeMetadataBridge {
         "runtimeManifestPath" to "manifest.json",
         "runtimeCompatibilityPath" to "compatibility.json",
         "runtimeSmokeEvidencePath" to "smoke-evidence.json",
+        "runtimeDependenciesPath" to "dependencies.json",
     )
 
     fun metadataOptions(context: Context): Map<String, String> {
@@ -38,10 +39,11 @@ object AndroidRuntimeMetadataBridge {
                 if (!runtimeManifest.exists()) {
                     runtimeManifest.writeText("""{"runtime":"python","version":"3.14","platform":"android-arm64","status":"fallback","pip_available":false}""")
                 }
-                """{"runtimes":[{"name":"python-3.14","language":"python","version":"3.14","platform":"android-arm64","status":"fallback","prefix":"${pythonRuntimeDir.absolutePath}"},{"name":"shell","language":"shell","version":"android-16","status":"active"},{"name":"node-lts","language":"node","version":"lts","status":"fallback"},{"name":"git","language":"git","version":"android","status":"fallback"},{"name":"ssh","language":"ssh","version":"android","status":"fallback"}],"fallback_mode":true}"""
+                """{"version":"fallback","container_model":"layered-linux-runtime","runtimes":[{"name":"python-3.14","language":"python","version":"3.14","platform":"android-arm64","status":"fallback","prefix":"${pythonRuntimeDir.absolutePath}"},{"name":"shell","language":"shell","version":"android-16","status":"active"},{"name":"node-lts","language":"node","version":"lts","status":"fallback"},{"name":"git","language":"git","version":"android","status":"fallback"},{"name":"ssh","language":"ssh","version":"android","status":"fallback"}],"fallback_mode":true}"""
             }
-            "compatibility.json" -> """{"compatibility":"android-16-fallback","python":"limited","shell":"active"}"""
+            "compatibility.json" -> """{"compatibility":"android-16-fallback","container_model":"layered-linux-runtime","python":"limited","shell":"active"}"""
             "smoke-evidence.json" -> """{"status":"fallback","evidence":[]}"""
+            "dependencies.json" -> """{"version":"fallback","python":{"runtime":"python-3.14-android-arm64"},"nodejs":{"runtime":"node-lts-android-arm64"}}"""
             else -> "{}"
         }
         output.writeText(content)

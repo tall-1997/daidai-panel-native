@@ -34,7 +34,7 @@ object AndroidNodeRuntime {
     }
 
     private fun doEnsureReady(context: Context): NodeRuntimePaths? {
-        val nativeDir = context.applicationInfo.nativeLibraryDir.orEmpty()
+        val nativeDir = AndroidLinuxRuntime.nativeLibraryDir(context).absolutePath
         val launcherExe = File(nativeDir, "libnodelauncher.so")
         if (!launcherExe.isFile) return null
 
@@ -54,47 +54,25 @@ object AndroidNodeRuntime {
         val modules = File(home, "lib/node_modules")
         if (!File(modules, "npm/bin/npm-cli.js").isFile) return null
 
-        // Create compat-lib with versioned .so copies
         val compatLibDir = File(home, "compat-lib")
-        compatLibDir.mkdirs()
-        val versionedLibs = mapOf(
-            "libicudata_v78.so" to listOf("libicudata.so.78"),
-            "libicui18n_v78.so" to listOf("libicui18n.so.78"),
-            "libicuuc_v78.so" to listOf("libicuuc.so.78"),
-            "libicuio_v78.so" to listOf("libicuio.so.78"),
-            "libicutu_v78.so" to listOf("libicutu.so.78"),
-            "libicutest_v78.so" to listOf("libicutest.so.78"),
-            "libcares.so" to listOf("libcares.so.2"),
-            "libssl_v3.so" to listOf("libssl.so.3"),
-            "libcrypto_v3.so" to listOf("libcrypto.so.3"),
-            "libz.so" to listOf("libz.so.1"),
-            "libsqlite3.so" to listOf("libsqlite3.so.0"),
-            "libffi.so" to listOf("libffi.so.8"),
-        )
-        for ((source, targets) in versionedLibs) {
-            val sourceFile = File(nativeDir, source)
-            if (sourceFile.exists()) {
-                for (target in targets) {
-                    val targetFile = File(compatLibDir, target)
-                    if (!targetFile.exists()) {
-                        try { sourceFile.copyTo(targetFile, overwrite = true) } catch (_: Exception) { }
-                    }
-                }
-            }
-        }
+        AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
 
-        // Create wrapper script
-        val wrapper = File(home, "bin/node-wrapper.sh")
-        wrapper.parentFile?.mkdirs()
-        wrapper.writeText(
-            "#!/system/bin/sh\n" +
-            "export LD_LIBRARY_PATH=\"$compatLibDir:$nativeDir:${home}/lib:\$LD_LIBRARY_PATH\"\n" +
-            "export NODE_PATH=\"${modules}:\${NODE_PATH:-}\"\n" +
-            "export HOME=\"$home\"\n" +
-            "exec \"$launcherExe\" \"\$@\"\n"
+        val wrapper = AndroidLinuxRuntime.writeShellWrapper(
+            output = File(home, "bin/node-wrapper.sh"),
+            env = mapOf(
+                "LD_LIBRARY_PATH" to "$compatLibDir:$nativeDir:${home}/lib:\$LD_LIBRARY_PATH",
+                "NODE_PATH" to "${modules}:\${NODE_PATH:-}",
+                "HOME" to home.absolutePath,
+                "DAIDAI_RUNTIME_LANGUAGE" to "node",
+                "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
+                "npm_config_ignore_scripts" to "true",
+                "NPM_CONFIG_REGISTRY" to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
+                "npm_config_registry" to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
+            ),
+            executable = launcherExe,
         )
 
-        marker.writeText("ready")
+        marker.writeText("ready:$VERSION")
 
         return NodeRuntimePaths(
             executable = "/system/bin/sh",
@@ -104,6 +82,21 @@ object AndroidNodeRuntime {
     }
 
     @Volatile var wrapperPath: String = ""
+
+    private val VERSIONED_LIBS = mapOf(
+        "libicudata_v78.so" to listOf("libicudata.so.78"),
+        "libicui18n_v78.so" to listOf("libicui18n.so.78"),
+        "libicuuc_v78.so" to listOf("libicuuc.so.78"),
+        "libicuio_v78.so" to listOf("libicuio.so.78"),
+        "libicutu_v78.so" to listOf("libicutu.so.78"),
+        "libicutest_v78.so" to listOf("libicutest.so.78"),
+        "libcares.so" to listOf("libcares.so.2"),
+        "libssl_v3.so" to listOf("libssl.so.3"),
+        "libcrypto_v3.so" to listOf("libcrypto.so.3"),
+        "libz.so" to listOf("libz.so.1"),
+        "libsqlite3.so" to listOf("libsqlite3.so.0"),
+        "libffi.so" to listOf("libffi.so.8"),
+    )
 
     private fun extractZipAsset(context: Context, dest: File) {
         dest.mkdirs()

@@ -1771,7 +1771,8 @@ fun serveDashboardStats(): JSONObject {
         val nativeDir = appContext.applicationInfo.nativeLibraryDir.orEmpty()
         fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile && isRuntimeEntryVerified(it) }?.absolutePath
         return when {
-            ext == "sh" || languageHint.equals("shell", ignoreCase = true) -> listOf("/system/bin/sh", file.absolutePath)
+            ext == "sh" || languageHint.equals("shell", ignoreCase = true) ->
+                AndroidLinuxRuntime.shellCommand(appContext, file, file.parentFile ?: scriptsRoot()) ?: listOf("/system/bin/sh", file.absolutePath)
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
                 val pyRuntime = AndroidPythonRuntime.ensureReady(appContext)
                 if (pyRuntime != null) {
@@ -1875,25 +1876,25 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun runtimeEnvironment(workingDir: File = scriptsRoot()): MutableMap<String, String> {
-        val env = mutableMapOf(
-            "HOME" to appContext.filesDir.absolutePath,
-            "TMPDIR" to appContext.cacheDir.absolutePath,
-            "DAIDAI_ANDROID_LOCAL" to "1",
-            "QL_DIR" to scriptsRoot().absolutePath,
-            "QL_DATA_DIR" to appContext.filesDir.absolutePath,
-            "QL_SCRIPT_DIR" to workingDir.absolutePath,
-            "PWD" to workingDir.absolutePath,
-            "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
-            "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
-            "LD_LIBRARY_PATH" to appContext.applicationInfo.nativeLibraryDir.orEmpty(),
-            "PYTHONPATH" to File(appContext.filesDir, "deps/python").absolutePath,
-            "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
-            "NODE_PATH" to listOf(
-                AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
-                File(AndroidNodeRuntime.depsDir(appContext), "node_modules").absolutePath,
-            ).filter(String::isNotBlank).joinToString(File.pathSeparator),
-            "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
-        )
+        val env = AndroidLinuxRuntime.baseEnvironment(appContext, workingDir).apply {
+            putAll(
+                mapOf(
+                    "DAIDAI_ANDROID_LOCAL" to "1",
+                    "QL_DIR" to scriptsRoot().absolutePath,
+                    "QL_DATA_DIR" to appContext.filesDir.absolutePath,
+                    "QL_SCRIPT_DIR" to workingDir.absolutePath,
+                    "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
+                    "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", false)) "1" else "0",
+                    "PYTHONPATH" to File(appContext.filesDir, "deps/python").absolutePath,
+                    "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
+                    "NODE_PATH" to listOf(
+                        AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
+                        File(AndroidNodeRuntime.depsDir(appContext), "node_modules").absolutePath,
+                    ).filter(String::isNotBlank).joinToString(File.pathSeparator),
+                    "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
+                )
+            )
+        }
         AndroidPythonRuntime.ensureReady(appContext)?.let { runtime ->
             env["PYTHONHOME"] = runtime.home
             env["PYTHONPATH"] = listOf(runtime.sitePackages, File(appContext.filesDir, "deps/python").absolutePath)
@@ -2706,7 +2707,7 @@ fun serveDashboardStats(): JSONObject {
     private fun createDependencies(json: JSONObject): NanoHTTPD.Response {
         val names = json.optJSONArray("names") ?: JSONArray()
         val depType = normalizeDependencyType(json.optString("type", "nodejs"))
-            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback only supports pip/python and npm/nodejs")
+            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback supports pip/python, npm/nodejs, and rootfs system packages")
         val now = Instant.now().toString()
         val ids = JSONArray()
         val statuses = JSONArray()
@@ -2808,6 +2809,7 @@ fun serveDashboardStats(): JSONObject {
     private fun normalizeDependencyType(raw: String): String? = when (raw.trim().lowercase()) {
         "python", "pip" -> "python"
         "node", "nodejs", "npm" -> "nodejs"
+        "system", "linux", "os", "apk", "apt", "apt-get", "yum", "dnf" -> raw.trim().lowercase()
         else -> null
     }
 
@@ -2869,7 +2871,7 @@ fun serveDashboardStats(): JSONObject {
                 ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
             installScript.parentFile?.mkdirs()
-            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(['install', '--no-input', '--only-binary=:all:', '--trusted-host', 'pypi.org', '--trusted-host', 'files.pythonhosted.org', '--target', sp, sys.argv[1]])\nsys.exit(result)\n")
+            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(['install', '--no-input', '--only-binary=:all:', '-i', '${AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX}', '--trusted-host', '${AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_HOST}', '--target', sp, sys.argv[1]])\nsys.exit(result)\n")
 
             val command = listOf(runtime.executable, runtime.wrapperScript, installScript.absolutePath, name)
             val logs = JSONArray()
@@ -2893,7 +2895,7 @@ fun serveDashboardStats(): JSONObject {
             return AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
                 val deps = AndroidNodeRuntime.depsDir(appContext)
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-                val registry = configValue("npm_mirror", "https://registry.npmjs.org").ifBlank { "https://registry.npmjs.org" }
+                val registry = configValue("npm_mirror", AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY).ifBlank { AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY }
                 val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "install", "--ignore-scripts", "--registry", registry, "--prefix", deps.absolutePath, name)
                 val logs = JSONArray()
                     .put("Installing Node dependency from network source: $name")
@@ -2907,6 +2909,23 @@ fun serveDashboardStats(): JSONObject {
                     else "failed" to "$text\nPOST_VERIFY_FAILED: npm list did not report $name"
                 }
             } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
+        }
+        if (depType in setOf("system", "linux", "os", "apk", "apt", "apt-get", "yum", "dnf")) {
+            val preferredManager = when (depType) {
+                "apk", "apt", "apt-get", "yum", "dnf" -> depType
+                else -> ""
+            }
+            if (!AndroidLinuxRuntime.isSafeSystemPackageSpec(name)) {
+                return "blocked" to "UNSAFE_SYSTEM_PACKAGE_SPEC: only package names with letters, digits, dots, underscores, plus, colon, and dash are allowed"
+            }
+            val command = AndroidLinuxRuntime.systemPackageInstallCommand(appContext, name, preferredManager)
+                ?: return "unavailable" to "ROOTFS_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs, PRoot, BusyBox, or supported package manager is missing"
+            val logs = JSONArray()
+                .put("Installing rootfs system package: $name")
+                .put("preferred_package_manager=${preferredManager.ifBlank { "auto" }}")
+            val result = runLocalProcess(command, appContext.filesDir, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine)
+            val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+            return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
     }
@@ -3039,7 +3058,7 @@ fun serveDashboardStats(): JSONObject {
             .put("pip_mirror", "https://pypi.org/simple")
             .put("npm_mirror", "https://registry.npmjs.org")
             .put("linux_mirror", "")
-            .put("linux_package_manager", "android-local")
+            .put("linux_package_manager", AndroidLinuxRuntime.statusJson(appContext).optJSONObject("rootfs")?.optString("package_manager").orEmpty().ifBlank { "android-local" })
             .put("linux_distribution", "android")
             .put("linux_mirror_supported", true)
             .put("linux_mirror_label", "Android Local")

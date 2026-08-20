@@ -28,3 +28,21 @@
   - Node runtime: `prepare-android-node-runtime.sh` 需在 CI 中运行  
   - 这两个脚本负责下载和准备 Android runtime 包，Gradle 构建依赖它们的输出
   - `verify-runtime-contract.go` 的结构体需与 runtime metadata JSON 格式同步
+
+### 本地验证入口限制
+- Date: 2026-08-20
+- Context: Agent 在执行 Android runtime 重构验证时发现
+- Category: 构建编译
+- Instructions:
+  - 当前工作区没有 `app/android/gradlew`，环境中也没有可用的 `gradle` 或 `flutter` 命令，Android 单元测试需在具备 Gradle/Flutter SDK 的环境运行
+  - 根目录 `go.work` 只包含 `./panel/server`；`scripts/` 没有独立 `go.mod`，验证脚本测试需用 `GO111MODULE=off go test` 加显式文件列表执行
+
+### Android Alpine rootfs 构建入口
+- Date: 2026-08-20
+- Context: Agent 在接入完整 rootfs 执行层时发现
+- Category: 构建编译
+- Instructions:
+  - Android 内置 Alpine rootfs 资产通过 `app/scripts/prepare-android-alpine-rootfs.sh` 生成
+  - Android PRoot/BusyBox native 工具通过 `app/scripts/prepare-android-proot-busybox.sh` 从 Termux aarch64 包提取到 `app/android/app/src/main/jniLibs/arm64-v8a/`
+  - 默认镜像源：Alpine APK 使用 Huawei，Python pip 使用 Alibaba，Node.js npm 使用 npmmirror
+  - APK 构建前 `verifyLinuxRootfsRuntime` 会校验 `android-runtime/arm64-v8a/rootfs.tar.gz.bin`、checksum、PRoot 和 BusyBox 是否存在

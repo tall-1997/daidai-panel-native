@@ -139,13 +139,13 @@ func validTestContract(t *testing.T) runtimeContract {
 	smoke := smokeEvidence{Version: "1", Matrix: []string{"api35-16k"}}
 	for i, id := range canonicalRuntimeIDs {
 		entry := strings.ReplaceAll(id, "-", "_") + ".so"
-		component := runtimeComponent{ID: id, Version: "v" + string(rune('1'+i)), ABI: "arm64-v8a", Entrypoint: entry, SHA256: strings.Repeat("0", 64)}
+		component := runtimeComponent{ID: id, Version: "v" + string(rune('1'+i)), ABI: "arm64-v8a", Entrypoint: entry, SHA256: strings.Repeat("0", 64), RuntimeType: "language-runtime", Isolation: "android-app-sandbox"}
 		manifest.Components = append(manifest.Components, component)
 		compatibility.Runtimes = append(compatibility.Runtimes, compatibilityRuntime{ID: id, Version: component.Version, Entry: entry})
 		compatibility.RuntimeIDs = append(compatibility.RuntimeIDs, id)
 		smoke.Records = append(smoke.Records, smokeRecord{
 			RuntimeID: id, Version: component.Version, Entry: entry, Status: "blocked", EvidenceSource: "none",
-			IsolationLevel: "trusted-runner", TimeoutSeconds: 10,
+			IsolationLevel: "android-app-sandbox", TimeoutSeconds: 10,
 			Checks: []smokeCheck{{ID: "CHECK", Status: "blocked", Reason: "runtime-placeholder-elf"}},
 		})
 	}

@@ -38,11 +38,18 @@ object AndroidPythonRuntime {
         }.start()
     }
 
+    fun isCompatibleWheel(filename: String): Boolean {
+        val lower = filename.lowercase()
+        if (listOf("cp312", "manylinux", "musllinux", "linux_aarch64", "android_28_x86_64").any(lower::contains)) return false
+        return lower.endsWith("-py3-none-any.whl") ||
+            Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_arm64_v8a\\.whl").matches(lower)
+    }
+
     private fun doEnsureReady(context: Context): PythonRuntimePaths? {
 
         val home = File(context.filesDir, "runtimes/python-$VERSION/prefix")
         val marker = File(home, ".daidai-python-ready")
-        val nativeDir = context.applicationInfo.nativeLibraryDir.orEmpty()
+        val nativeDir = AndroidLinuxRuntime.nativeLibraryDir(context).absolutePath
         val libDir = File(home, "lib")
         val compatLibDir = File(home, "compat-lib")
 
@@ -54,29 +61,10 @@ object AndroidPythonRuntime {
             home.mkdirs()
             try {
                 extractZipAsset(context, home)
-                // Create compat-lib directory with versioned library copies
-                compatLibDir.mkdirs()
-                val versionedLibs = mapOf(
-                    "libssl_v3.so" to listOf("libssl.so.3"),
-                    "libcrypto_v3.so" to listOf("libcrypto.so.3"),
-                    "libz.so" to listOf("libz.so.1"),
-                    "libsqlite3.so" to listOf("libsqlite3.so.0"),
-                    "libffi.so" to listOf("libffi.so.8", "libffi.so.7"),
-                    "libexpat_termux.so" to listOf("libexpat.so.1"),
-                    "libbz2_termux.so" to listOf("libbz2.so.1.0", "libbz2.so.1"),
-                    "liblzma_termux.so" to listOf("liblzma.so.5"),
-                )
-                for ((source, targets) in versionedLibs) {
-                    val sourceFile = File(nativeDir, source)
-                    if (sourceFile.exists()) {
-                        for (target in targets) {
-                            try { sourceFile.copyTo(File(compatLibDir, target), overwrite = true) } catch (_: Exception) { }
-                        }
-                    }
-                }
+                AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
                 // Bootstrap pip
                 bootstrapPip(context, home, nativeDir, compatLibDir)
-                marker.writeText("ready")
+                marker.writeText("ready:$VERSION")
             } catch (e: Exception) {
                 return null
             }
@@ -84,25 +72,7 @@ object AndroidPythonRuntime {
 
         // Ensure compatLibDir exists even if marker was already set
         if (!compatLibDir.exists()) {
-            compatLibDir.mkdirs()
-            val versionedLibs = mapOf(
-                "libssl.so" to listOf("libssl.so.3"),
-                "libcrypto.so" to listOf("libcrypto.so.3"),
-                "libz.so" to listOf("libz.so.1"),
-                "libsqlite3.so" to listOf("libsqlite3.so.0"),
-                "libffi.so" to listOf("libffi.so.8", "libffi.so.7"),
-                "libexpat_termux.so" to listOf("libexpat.so.1"),
-                "libbz2_termux.so" to listOf("libbz2.so.1.0", "libbz2.so.1"),
-                "liblzma_termux.so" to listOf("liblzma.so.5"),
-            )
-            for ((source, targets) in versionedLibs) {
-                val sourceFile = File(nativeDir, source)
-                if (sourceFile.exists()) {
-                    for (target in targets) {
-                        try { sourceFile.copyTo(File(compatLibDir, target), overwrite = true) } catch (_: Exception) { }
-                    }
-                }
-            }
+            AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
         }
 
         // Use libpylauncher.so from nativeLibraryDir - it's a PIE executable with exec permission
@@ -110,14 +80,16 @@ object AndroidPythonRuntime {
         if (!launcherExe.isFile) return null
 
         // Create wrapper script
-        val wrapper = File(home, "bin/python3.14-wrapper.sh")
-        wrapper.writeText(
-            "#!/system/bin/sh\n" +
-            "export LD_LIBRARY_PATH=\"$compatLibDir:$libDir:$nativeDir:\$LD_LIBRARY_PATH\"\n" +
-            "export PYTHONHOME=\"$home\"\n" +
-            "export PYTHONPATH=\"$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages\"\n" +
-            "export HOME=\"$home\"\n" +
-            "exec \"$launcherExe\" \"\$@\"\n"
+        val wrapper = AndroidLinuxRuntime.writeShellWrapper(
+            output = File(home, "bin/python3.14-wrapper.sh"),
+            env = mapOf(
+                "LD_LIBRARY_PATH" to "$compatLibDir:$libDir:$nativeDir:\$LD_LIBRARY_PATH",
+                "PYTHONHOME" to home.absolutePath,
+                "PYTHONPATH" to "$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages",
+                "HOME" to home.absolutePath,
+                "DAIDAI_RUNTIME_LANGUAGE" to "python",
+            ),
+            executable = launcherExe,
         )
 
         cached = PythonRuntimePaths(
@@ -154,6 +126,20 @@ object AndroidPythonRuntime {
             }
         }
     }
+
+    private val VERSIONED_LIBS = mapOf(
+        "libssl_v3.so" to listOf("libssl.so.3"),
+        "libssl_python.so" to listOf("libssl.so.3"),
+        "libcrypto_v3.so" to listOf("libcrypto.so.3"),
+        "libcrypto_python.so" to listOf("libcrypto.so.3"),
+        "libz.so" to listOf("libz.so.1"),
+        "libsqlite3.so" to listOf("libsqlite3.so.0"),
+        "libsqlite3_python.so" to listOf("libsqlite3.so.0"),
+        "libffi.so" to listOf("libffi.so.8", "libffi.so.7"),
+        "libexpat_termux.so" to listOf("libexpat.so.1"),
+        "libbz2_termux.so" to listOf("libbz2.so.1.0", "libbz2.so.1"),
+        "liblzma_termux.so" to listOf("liblzma.so.5"),
+    )
 
     private fun readAssetManifest(context: Context): JSONObject {
         return context.assets.open(ASSET_MANIFEST).use { input ->

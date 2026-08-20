@@ -1,6 +1,11 @@
 {
   "version": "1",
   "updated_at": "2026-07-29T00:00:00Z",
+  "mirrors": {
+    "alpine_apk": "https://repo.huaweicloud.com/alpine",
+    "python_pip": "https://mirrors.aliyun.com/pypi/simple/",
+    "node_npm": "https://registry.npmmirror.com"
+  },
   "python": {
     "runtime": "python-3.14-android-arm64",
     "wheelhouse_signature_scope": "apk-signed-asset-sha256",

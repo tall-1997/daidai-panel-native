@@ -185,6 +185,35 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
     }
 }
 
+val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
+    group = "verification"
+    description = "Fails when the packaged Alpine/Ubuntu rootfs or PRoot runner is missing."
+    doLast {
+        val abi = "arm64-v8a"
+        val rootfs = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin")
+        val rootfsSha = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin.sha256")
+        val nativeDir = file("src/main/jniLibs/$abi")
+        val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
+        val busybox = listOf("libdaidai_busybox.so", "liboperit_busybox.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
+        check(rootfs.isFile) {
+            "Missing Android Linux rootfs asset: ${rootfs.path}. Run app/scripts/prepare-android-alpine-rootfs.sh."
+        }
+        check(rootfsSha.isFile) {
+            "Missing Android Linux rootfs checksum: ${rootfsSha.path}. Run app/scripts/prepare-android-alpine-rootfs.sh."
+        }
+        check(proot != null && isAndroidElf(proot)) {
+            "Missing Android PRoot runner in $nativeDir. Expected libdaidai_proot.so or liboperit_proot.so."
+        }
+        check(busybox != null && isAndroidElf(busybox)) {
+            "Missing Android BusyBox runner in $nativeDir. Expected libdaidai_busybox.so or liboperit_busybox.so."
+        }
+        val expected = rootfsSha.readText().trim().substringBefore(' ')
+        check(expected.length == 64 && expected.equals(sha256(rootfs), ignoreCase = true)) {
+            "Android Linux rootfs checksum mismatch: ${rootfs.path}."
+        }
+    }
+}
+
 val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
     group = "verification"
     description = "Fails when the Android Node, npm, npx, or TypeScript bundle is incomplete or inconsistent."
@@ -355,6 +384,7 @@ fun sha256(file: File): String {
 tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
+    dependsOn(verifyLinuxRootfsRuntime)
     
 }
 

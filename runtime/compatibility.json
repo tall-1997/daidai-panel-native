@@ -2,6 +2,7 @@
   "version": "1",
   "updated_at": "2026-07-29T00:00:00Z",
   "abi": "arm64-v8a",
+  "container_model": "layered-linux-runtime",
   "required_checks": [
     "aarch64-bionic",
     "pie",

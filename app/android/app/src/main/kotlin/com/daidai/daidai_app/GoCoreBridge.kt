@@ -48,6 +48,7 @@ object GoCoreBridge {
             .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))
             .put("runtimeCompatibilityPath", runtimeMetadata.getValue("runtimeCompatibilityPath"))
             .put("runtimeSmokeEvidencePath", runtimeMetadata.getValue("runtimeSmokeEvidencePath"))
+            .put("runtimeDependenciesPath", runtimeMetadata.getValue("runtimeDependenciesPath"))
             .put("platformCapabilities", AndroidSchedulerHostStatus.platformCapabilities(context))
             .put(
                 "schedulerGuarantee",

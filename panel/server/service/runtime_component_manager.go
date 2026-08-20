@@ -29,6 +29,8 @@ type RuntimeManifestComponent struct {
 	Entrypoint   string   `json:"entrypoint"`
 	SHA256       string   `json:"sha256"`
 	Capabilities []string `json:"capabilities"`
+	RuntimeType  string   `json:"runtime_type,omitempty"`
+	Isolation    string   `json:"isolation,omitempty"`
 }
 
 type RuntimeCompatibility struct {
@@ -37,6 +39,7 @@ type RuntimeCompatibility struct {
 	ABI            string   `json:"abi"`
 	RequiredChecks []string `json:"required_checks"`
 	RuntimeIDs     []string `json:"runtime_ids"`
+	ContainerModel string   `json:"container_model,omitempty"`
 }
 
 type RuntimeComponentStatus struct {
@@ -46,6 +49,8 @@ type RuntimeComponentStatus struct {
 	Verified     bool   `json:"verified"`
 	FailureClass string `json:"failure_class,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	RuntimeType  string `json:"runtime_type,omitempty"`
+	Isolation    string `json:"isolation,omitempty"`
 }
 
 type RuntimeComponentBaseline struct {
@@ -55,6 +60,7 @@ type RuntimeComponentBaseline struct {
 	NativeLibraryDir  string                   `json:"native_library_dir"`
 	ManifestVersion   string                   `json:"manifest_version"`
 	CompatibilityABI  string                   `json:"compatibility_abi"`
+	ContainerModel    string                   `json:"container_model,omitempty"`
 	Checks            []string                 `json:"checks"`
 	Components        []RuntimeComponentStatus `json:"components"`
 	SmokeSuites       []RuntimeSmokeSuite      `json:"smoke_suites"`
@@ -167,6 +173,7 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 		NativeLibraryDir:  manager.nativeLibraryDir,
 		ManifestVersion:   manifest.Version,
 		CompatibilityABI:  compatibility.ABI,
+		ContainerModel:    compatibility.ContainerModel,
 		Checks:            append([]string{}, compatibility.RequiredChecks...),
 		Components:        make([]RuntimeComponentStatus, 0, len(manifest.Components)),
 		SecretStore:       RuntimeSecretStoreInstance().Status(),
@@ -180,7 +187,7 @@ func (manager *RuntimeComponentManager) LoadAndValidate() (RuntimeComponentBasel
 	}
 
 	for _, component := range manifest.Components {
-		status := RuntimeComponentStatus{ID: component.ID, Entrypoint: component.Entrypoint}
+		status := RuntimeComponentStatus{ID: component.ID, Entrypoint: component.Entrypoint, RuntimeType: component.RuntimeType, Isolation: component.Isolation}
 		if component.ID == "" || component.Entrypoint == "" {
 			blockRuntimeComponent(&status, "metadata-integrity", "invalid-manifest-entry")
 			result.Components = append(result.Components, status)
@@ -259,71 +266,41 @@ func blockRuntimeComponent(status *RuntimeComponentStatus, failureClass, reason 
 }
 
 func buildRuntimeSmokeSuites(components []RuntimeComponentStatus) []RuntimeSmokeSuite {
-	statusByID := make(map[string]RuntimeComponentStatus, len(components))
+	result := make([]RuntimeSmokeSuite, 0, len(components))
 	for _, component := range components {
-		statusByID[component.ID] = component
+		checkIDs := runtimeSmokeCheckIDs(component.ID)
+		if len(checkIDs) == 0 {
+			checkIDs = []string{"evidence"}
+		}
+		suite := RuntimeSmokeSuite{RuntimeID: component.ID, Checks: make([]RuntimeSmokeCheck, 0, len(checkIDs))}
+		for _, checkID := range checkIDs {
+			suite.Checks = append(suite.Checks, newRuntimeSmokeCheck(checkID, component))
+		}
+		result = append(result, suite)
 	}
-	return []RuntimeSmokeSuite{
-		{
-			RuntimeID: "python-3.12-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("PY_OK", statusByID["python-3.12-android-arm64"]),
-				newRuntimeSmokeCheck("SSL", statusByID["python-3.12-android-arm64"]),
-				newRuntimeSmokeCheck("SQLite", statusByID["python-3.12-android-arm64"]),
-				newRuntimeSmokeCheck("venv", statusByID["python-3.12-android-arm64"]),
-				newRuntimeSmokeCheck("wheel", statusByID["python-3.12-android-arm64"]),
-			},
-		},
-		{
-			RuntimeID: "node-lts-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("CommonJS", statusByID["node-lts-android-arm64"]),
-				newRuntimeSmokeCheck("ESM", statusByID["node-lts-android-arm64"]),
-				newRuntimeSmokeCheck("HTTPS", statusByID["node-lts-android-arm64"]),
-			},
-		},
-		{
-			RuntimeID: "typescript-stable",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("TS_OK", statusByID["typescript-stable"]),
-			},
-		},
-		{
-			RuntimeID: "shell-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("SHELL_PIPE", statusByID["shell-android-arm64"]),
-				newRuntimeSmokeCheck("SHELL_EXIT", statusByID["shell-android-arm64"]),
-				newRuntimeSmokeCheck("SHELL_STOP", statusByID["shell-android-arm64"]),
-			},
-		},
-		{
-			RuntimeID: "git-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("GIT_CLONE", statusByID["git-android-arm64"]),
-				newRuntimeSmokeCheck("GIT_FETCH", statusByID["git-android-arm64"]),
-				newRuntimeSmokeCheck("GIT_SPARSE_CHECKOUT", statusByID["git-android-arm64"]),
-			},
-		},
-		{
-			RuntimeID: "ssh-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("SSH_HOSTKEY_OK", statusByID["ssh-android-arm64"]),
-				newRuntimeSmokeCheck("SSH_HOSTKEY_REJECT", statusByID["ssh-android-arm64"]),
-			},
-		},
-		{
-			RuntimeID: "yaegi-go",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("GO_INTERPRET_OK", statusByID["yaegi-go"]),
-			},
-		},
-		{
-			RuntimeID: "go-builder-android-arm64",
-			Checks: []RuntimeSmokeCheck{
-				newRuntimeSmokeCheck("GO_BUILD_EXPORT_ONLY", statusByID["go-builder-android-arm64"]),
-			},
-		},
+	return result
+}
+
+func runtimeSmokeCheckIDs(runtimeID string) []string {
+	switch {
+	case strings.HasPrefix(runtimeID, "python-"):
+		return []string{"PY_OK", "SSL", "SQLite", "venv", "wheel"}
+	case runtimeID == "node-lts-android-arm64":
+		return []string{"CommonJS", "ESM", "HTTPS"}
+	case runtimeID == "typescript-stable":
+		return []string{"TS_OK"}
+	case runtimeID == "shell-android-arm64":
+		return []string{"SHELL_PIPE", "SHELL_EXIT", "SHELL_STOP"}
+	case runtimeID == "git-android-arm64":
+		return []string{"GIT_CLONE", "GIT_FETCH", "GIT_SPARSE_CHECKOUT"}
+	case runtimeID == "ssh-android-arm64":
+		return []string{"SSH_HOSTKEY_OK", "SSH_HOSTKEY_REJECT"}
+	case runtimeID == "yaegi-go":
+		return []string{"GO_INTERPRET_OK"}
+	case runtimeID == "go-builder-android-arm64":
+		return []string{"GO_BUILD_EXPORT_ONLY"}
 	}
+	return nil
 }
 
 func buildRuntimeSmokeSuitesFromEvidence(manifest RuntimeManifest, evidence RuntimeSmokeEvidence, components []RuntimeComponentStatus) []RuntimeSmokeSuite {
@@ -478,11 +455,13 @@ func runtimeSmokeIsolationLevel(checkID string) string {
 	case "GO_INTERPRET_OK":
 		return "isolated-worker"
 	case "GO_BUILD_EXPORT_ONLY":
-		return "trusted-builder"
+		return "trusted-builder-export-only"
 	case "GIT_CLONE", "GIT_FETCH", "GIT_SPARSE_CHECKOUT", "SSH_HOSTKEY_OK", "SSH_HOSTKEY_REJECT":
-		return "broker"
+		return "brokered-network"
+	case "SHELL_PIPE", "SHELL_EXIT", "SHELL_STOP":
+		return "layered-rootfs"
 	default:
-		return "trusted-runner"
+		return "android-app-sandbox"
 	}
 }
 

@@ -39,17 +39,19 @@ type runtimeManifest struct {
 }
 
 type runtimeComponent struct {
-	ID             string            `json:"id"`
-	Version        string            `json:"version"`
-	ABI            string            `json:"abi"`
-	PythonTag      string            `json:"python_tag,omitempty"`
-	Entrypoint     string            `json:"entrypoint"`
-	SHA256         string            `json:"sha256"`
-	RuntimeSHA256  string            `json:"runtime_sha256,omitempty"`
-	ArtifactCount  int               `json:"artifact_count,omitempty"`
-	AssetRevision  string            `json:"asset_revision,omitempty"`
-	Capabilities   []string          `json:"capabilities,omitempty"`
-	Artifacts      []runtimeArtifact `json:"artifacts,omitempty"`
+	ID            string            `json:"id"`
+	Version       string            `json:"version"`
+	ABI           string            `json:"abi"`
+	PythonTag     string            `json:"python_tag,omitempty"`
+	Entrypoint    string            `json:"entrypoint"`
+	SHA256        string            `json:"sha256"`
+	RuntimeSHA256 string            `json:"runtime_sha256,omitempty"`
+	RuntimeType   string            `json:"runtime_type,omitempty"`
+	Isolation     string            `json:"isolation,omitempty"`
+	ArtifactCount int               `json:"artifact_count,omitempty"`
+	AssetRevision string            `json:"asset_revision,omitempty"`
+	Capabilities  []string          `json:"capabilities,omitempty"`
+	Artifacts     []runtimeArtifact `json:"artifacts,omitempty"`
 }
 
 type runtimeArtifact struct {
@@ -64,6 +66,7 @@ type compatibilityMatrix struct {
 	ABI               string                 `json:"abi"`
 	RequiredChecks    []string               `json:"required_checks,omitempty"`
 	RuntimeIDs        []string               `json:"runtime_ids"`
+	ContainerModel    string                 `json:"container_model,omitempty"`
 	PythonWheelPolicy map[string]any         `json:"python_wheel_policy,omitempty"`
 	Runtimes          []compatibilityRuntime `json:"runtimes"`
 }

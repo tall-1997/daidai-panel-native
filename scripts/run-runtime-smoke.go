@@ -54,14 +54,14 @@ func buildBlockedEvidence(updatedAt string) evidence {
 		id, version, entry, isolation, checkID string
 		timeout                                int
 	}{
-		{"python-3.14-android-arm64", "3.14.6", "libpython_exec.so", "trusted-runner", "PY_OK_SSL_SQLITE_VENV_PIP", 10},
-		{"node-lts-android-arm64", "18.20.4", "libnode_exec.so", "trusted-runner", "COMMONJS_ESM_HTTPS", 10},
-		{"typescript-stable", "5.9.3", "libnode_exec.so", "trusted-runner", "TS_OK", 10},
-		{"shell-android-arm64", "blocked-placeholder", "libshell_exec.so", "trusted-runner", "SHELL_PIPE_EXIT_STOP", 10},
-		{"git-android-arm64", "blocked-placeholder", "libgit_exec.so", "broker", "GIT_CLONE_FETCH_SPARSE", 30},
-		{"ssh-android-arm64", "blocked-placeholder", "libssh_exec.so", "broker", "SSH_HOSTKEY", 30},
+		{"python-3.14-android-arm64", "3.14.6", "libpython_exec.so", "android-app-sandbox", "PY_OK_SSL_SQLITE_VENV_PIP", 10},
+		{"node-lts-android-arm64", "18.20.4", "libnode_exec.so", "android-app-sandbox", "COMMONJS_ESM_HTTPS", 10},
+		{"typescript-stable", "5.9.3", "libnode_exec.so", "android-app-sandbox", "TS_OK", 10},
+		{"shell-android-arm64", "blocked-placeholder", "libshell_exec.so", "layered-rootfs", "SHELL_PIPE_EXIT_STOP", 10},
+		{"git-android-arm64", "blocked-placeholder", "libgit_exec.so", "brokered-network", "GIT_CLONE_FETCH_SPARSE", 30},
+		{"ssh-android-arm64", "blocked-placeholder", "libssh_exec.so", "brokered-network", "SSH_HOSTKEY", 30},
 		{"yaegi-go", "blocked-placeholder", "libyaegi_exec.so", "isolated-worker", "GO_INTERPRET_OK", 10},
-		{"go-builder-android-arm64", "blocked-placeholder", "libgobuilder_exec.so", "trusted-builder", "GO_BUILD_EXPORT_ONLY", 60},
+		{"go-builder-android-arm64", "blocked-placeholder", "libgobuilder_exec.so", "trusted-builder-export-only", "GO_BUILD_EXPORT_ONLY", 60},
 	}
 	result := evidence{
 		Version:   "1",

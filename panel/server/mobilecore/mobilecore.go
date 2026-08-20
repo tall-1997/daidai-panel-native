@@ -61,6 +61,7 @@ type options struct {
 	RuntimeManifestPath  string                             `json:"runtimeManifestPath"`
 	RuntimeCompatPath    string                             `json:"runtimeCompatibilityPath"`
 	RuntimeSmokePath     string                             `json:"runtimeSmokeEvidencePath"`
+	RuntimeDepsPath      string                             `json:"runtimeDependenciesPath"`
 	PlatformCapabilities router.CapabilitySnapshot          `json:"platformCapabilities"`
 	SchedulerGuarantee   service.SchedulerGuaranteeSnapshot `json:"schedulerGuarantee"`
 }
@@ -527,6 +528,9 @@ func applyRuntimeMetadataPathEnv(parsed options) {
 	}
 	if value := strings.TrimSpace(parsed.RuntimeSmokePath); value != "" {
 		_ = os.Setenv("DAIDAI_RUNTIME_SMOKE_EVIDENCE_PATH", value)
+	}
+	if value := strings.TrimSpace(parsed.RuntimeDepsPath); value != "" {
+		_ = os.Setenv("DAIDAI_RUNTIME_DEPENDENCIES_PATH", value)
 	}
 }
 
