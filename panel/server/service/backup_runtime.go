@@ -25,16 +25,33 @@ import (
 )
 
 type LegacyBackupData struct {
-	Version   string                `json:"version"`
-	CreatedAt time.Time             `json:"created_at"`
-	Tasks     []model.Task          `json:"tasks"`
-	EnvVars   []BackupEnvVar        `json:"env_vars"`
-	Subs      []model.Subscription  `json:"subscriptions"`
-	Channels  []model.NotifyChannel `json:"notify_channels"`
-	SSHKeys   []model.SSHKey        `json:"ssh_keys"`
-	Configs   []model.SystemConfig  `json:"system_configs"`
-	Scripts   []ScriptFile          `json:"scripts,omitempty"`
-	Deps      []model.Dependency    `json:"dependencies,omitempty"`
+	Version   string                      `json:"version"`
+	CreatedAt time.Time                   `json:"created_at"`
+	Tasks     []model.Task                `json:"tasks"`
+	EnvVars   []BackupEnvVar              `json:"env_vars"`
+	Subs      []model.Subscription        `json:"subscriptions"`
+	Channels  []LegacyBackupNotifyChannel `json:"notify_channels"`
+	SSHKeys   []model.SSHKey              `json:"ssh_keys"`
+	Configs   []model.SystemConfig        `json:"system_configs"`
+	Scripts   []LegacyBackupScriptFile    `json:"scripts,omitempty"`
+	Deps      []model.Dependency          `json:"dependencies,omitempty"`
+}
+
+type LegacyBackupNotifyChannel struct {
+	ID        uint            `json:"id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Config    json.RawMessage `json:"config"`
+	PushScope string          `json:"push_scope"`
+	Enabled   bool            `json:"enabled"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type LegacyBackupScriptFile struct {
+	Path          string `json:"path"`
+	Content       string `json:"content"`
+	ContentBase64 string `json:"content_base64"`
 }
 
 func createBackupArchive(options BackupCreateOptions) (string, error) {
@@ -146,7 +163,9 @@ func buildBackupManifest(selection BackupSelection) (BackupManifest, error) {
 		}
 		manifest.Data.EnvVars = make([]BackupEnvVar, 0, len(envVars))
 		for _, envVar := range envVars {
-			manifest.Data.EnvVars = append(manifest.Data.EnvVars, backupEnvVarFromModel(envVar))
+			item := backupEnvVarFromModel(envVar)
+			item.Secret = envVar.Secret
+			manifest.Data.EnvVars = append(manifest.Data.EnvVars, item)
 		}
 	}
 
@@ -511,7 +530,7 @@ func restoreBackupFile(filename, password string) (err error) {
 		return nil
 	}
 	if looksLikeJSON(rawData) {
-		if err := restoreLegacyJSONBytes(rawData); err != nil {
+		if err := restoreJSONBytes(rawData); err != nil {
 			return err
 		}
 		CompleteRestoreProgress("数据已恢复完成，正在准备重启面板...")
@@ -519,6 +538,55 @@ func restoreBackupFile(filename, password string) (err error) {
 	}
 
 	return fmt.Errorf("无法识别的备份格式")
+}
+
+func restoreJSONBytes(data []byte) error {
+	var probe struct {
+		Format string          `json:"format"`
+		Data   json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return fmt.Errorf("failed to parse backup: %w", err)
+	}
+	if probe.Format != "daidai-panel-backup" || len(probe.Data) == 0 || string(probe.Data) == "null" {
+		return restoreLegacyJSONBytes(data)
+	}
+
+	var manifest BackupManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("解析现代备份清单失败: %w", err)
+	}
+	if manifest.Format != "daidai-panel-backup" || strings.TrimSpace(manifest.Version) == "" {
+		return fmt.Errorf("不支持的备份清单")
+	}
+	tempDir, err := os.MkdirTemp("", "daidai-json-restore-*")
+	if err != nil {
+		return fmt.Errorf("创建 JSON 备份临时目录失败: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+	for _, script := range manifest.Data.Scripts {
+		if err := writePortableScript(tempDir, script.Path, script.Content); err != nil {
+			return err
+		}
+	}
+	BindRestoreProgressPlan(manifest.Source, manifest.Selection)
+	return restoreBackupManifest(manifest, tempDir)
+}
+
+func writePortableScript(root, path, encoded string) error {
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("非法脚本路径: %s", path)
+	}
+	content, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("脚本 %s 的 base64 无效: %w", path, err)
+	}
+	target := filepath.Join(root, "files", "scripts", clean)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(target, content, 0o755)
 }
 
 func looksLikeGzip(data []byte) bool {
@@ -586,7 +654,11 @@ func restoreLegacyJSONBytes(data []byte) error {
 		if strings.Contains(scriptFile.Path, "..") {
 			continue
 		}
-		content, err := base64.StdEncoding.DecodeString(scriptFile.Content)
+		encoded := scriptFile.ContentBase64
+		if encoded == "" {
+			encoded = scriptFile.Content
+		}
+		content, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			continue
 		}
@@ -623,15 +695,26 @@ func restoreLegacyJSONBytes(data []byte) error {
 		},
 	}
 
-	// legacy.Channels 是 []model.NotifyChannel，老备份里 push_scope 是空串，
-	// EffectivePushScope 归一后落成 default —— 老备份本来就没有「绑定推送」这个概念。
 	for _, channel := range legacy.Channels {
+		configValue := strings.TrimSpace(string(channel.Config))
+		if len(channel.Config) == 0 || configValue == "null" {
+			configValue = "{}"
+		} else if strings.HasPrefix(configValue, `"`) {
+			var decoded string
+			if json.Unmarshal(channel.Config, &decoded) == nil {
+				configValue = decoded
+			}
+		}
+		pushScope, ok := model.NormalizeNotifyPushScope(channel.PushScope)
+		if !ok {
+			pushScope = model.NotifyPushScopeDefault
+		}
 		manifest.Data.Configs.NotifyChannels = append(manifest.Data.Configs.NotifyChannels, BackupNotifyChannel{
 			ID:        channel.ID,
 			Name:      channel.Name,
 			Type:      channel.Type,
-			Config:    channel.Config,
-			PushScope: channel.EffectivePushScope(),
+			Config:    configValue,
+			PushScope: pushScope,
 			Enabled:   channel.Enabled,
 			CreatedAt: channel.CreatedAt,
 			UpdatedAt: channel.UpdatedAt,
@@ -1070,6 +1153,7 @@ func backupEnvVarFromModel(item model.EnvVar) BackupEnvVar {
 		Position:  item.Position,
 		SortOrder: item.SortOrder,
 		Group:     item.Group,
+		Secret:    item.Secret,
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
 	}

@@ -86,6 +86,7 @@ type BackupEnvVar struct {
 	Position  float64   `json:"position"`
 	SortOrder int       `json:"sort_order"`
 	Group     string    `json:"group"`
+	Secret    bool      `json:"secret,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -128,6 +129,7 @@ type BackupPayload struct {
 	Dependencies  []BackupDependency   `json:"dependencies,omitempty"`
 	TaskLogs      []BackupTaskLog      `json:"task_logs,omitempty"`
 	TaskViews     []model.TaskView     `json:"task_views,omitempty"`
+	Scripts       []ScriptFile         `json:"scripts,omitempty"`
 }
 
 type BackupManifest struct {

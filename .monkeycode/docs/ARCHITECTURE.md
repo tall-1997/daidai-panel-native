@@ -112,7 +112,7 @@ managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel
 
 ### Backup Interoperability
 
-Flutter 备份页使用 Android SAF 的 unrestricted picker，再按完整文件名接受 `.json`、`.enc`、`.tgz` 和 `.tar.gz`。该策略避免系统文件提供器将未知 MIME 的 tgz/enc 隐藏。Kotlin fallback 在读取上传或恢复文件前检查 64 MiB 存储上限，并继续使用完整解析、staging、数据库事务和原子目录切换。Go manifest 备份在 fallback 中恢复支持类别；未来需继续补齐 Go 全量类别和旧 Portable envelope 的兼容提示。
+Flutter 备份页使用 Android SAF 的 unrestricted picker，再按完整文件名接受 `.json`、`.enc`、`.tgz` 和 `.tar.gz`。该策略避免系统文件提供器将未知 MIME 的 tgz/enc 隐藏。Go Core 与 Kotlin fallback 统一生成和消费 `daidai-panel-backup` 0.4.0 canonical manifest；fallback 可生成 `.tgz` 和 Go AES-GCM `.enc`，并完整映射配置、任务、环境变量、订阅、SSH Key、通知渠道、依赖、任务日志、Task View 和脚本。恢复通过通知渠道、SSH Key 与任务 ID 映射回填外键，目标设备用户、会话、2FA 和设备绑定凭据保持现状。
 
 ### Notification Channels
 

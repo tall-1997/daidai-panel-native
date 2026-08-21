@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -754,6 +755,76 @@ func TestCreateBackupSkipsQuarantinedScriptEntriesInArchive(t *testing.T) {
 	}
 	if foundQuarantined {
 		t.Fatal("expected quarantined script entry to be excluded from backup archive")
+	}
+}
+
+func TestRestoreModernKotlinJSONUsesManifestSelectionAndScriptContent(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	keep := model.EnvVar{Name: "KEEP_ENV", Value: "keep", Enabled: true}
+	if err := database.DB.Create(&keep).Error; err != nil {
+		t.Fatalf("create preserved env: %v", err)
+	}
+
+	manifest := BackupManifest{
+		Format:  "daidai-panel-backup",
+		Version: "0.4.0",
+		Source:  "android-kotlin-fallback",
+		Selection: BackupSelection{
+			Tasks:   true,
+			Scripts: true,
+		},
+		Data: BackupPayload{
+			Tasks:   []model.Task{{ID: 42, Name: "kotlin-task", Command: "echo ok", TaskType: model.TaskTypeManual, Status: model.TaskStatusEnabled, Labels: "mobile,backup"}},
+			Scripts: []ScriptFile{{Path: "nested/contract.sh", Content: base64.StdEncoding.EncodeToString([]byte("echo contract\n"))}},
+		},
+	}
+	payload, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := restoreJSONBytes(payload); err != nil {
+		t.Fatalf("restore modern Kotlin JSON: %v", err)
+	}
+
+	var envCount int64
+	if err := database.DB.Model(&model.EnvVar{}).Where("name = ?", "KEEP_ENV").Count(&envCount).Error; err != nil || envCount != 1 {
+		t.Fatalf("unselected env vars must be preserved: count=%d err=%v", envCount, err)
+	}
+	var task model.Task
+	if err := database.DB.Where("name = ?", "kotlin-task").First(&task).Error; err != nil {
+		t.Fatalf("restored task missing: %v", err)
+	}
+	if task.Labels != "mobile,backup" {
+		t.Fatalf("task labels were not preserved: %q", task.Labels)
+	}
+	script, err := os.ReadFile(filepath.Join(config.C.Data.ScriptsDir, "nested", "contract.sh"))
+	if err != nil || string(script) != "echo contract\n" {
+		t.Fatalf("portable script mismatch: %q err=%v", script, err)
+	}
+}
+
+func TestRestoreLegacyKotlinJSONPreservesNotificationConfigAndContentBase64(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	payload := []byte(`{
+  "version":"0.4.0-kotlin-json",
+  "created_at":"2026-08-21T00:00:00Z",
+  "tasks":[],"env_vars":[],"subscriptions":[],"system_configs":[],"dependencies":[],
+  "notify_channels":[{"id":7,"name":"contract","type":"webhook","config":{"url":"https://example.invalid/hook"},"push_scope":"bound","enabled":true}],
+  "scripts":[{"path":"legacy.sh","content_base64":"ZWNobyBsZWdhY3kK"}]
+}`)
+	if err := restoreLegacyJSONBytes(payload); err != nil {
+		t.Fatalf("restore legacy Kotlin JSON: %v", err)
+	}
+	var channel model.NotifyChannel
+	if err := database.DB.Where("name = ?", "contract").First(&channel).Error; err != nil {
+		t.Fatalf("restored notification missing: %v", err)
+	}
+	if !strings.Contains(channel.Config, "example.invalid") || channel.PushScope != model.NotifyPushScopeBound {
+		t.Fatalf("notification config mismatch: %+v", channel)
+	}
+	script, err := os.ReadFile(filepath.Join(config.C.Data.ScriptsDir, "legacy.sh"))
+	if err != nil || string(script) != "echo legacy\n" {
+		t.Fatalf("legacy script mismatch: %q err=%v", script, err)
 	}
 }
 

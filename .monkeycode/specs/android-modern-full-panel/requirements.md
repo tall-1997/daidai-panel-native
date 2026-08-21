@@ -252,7 +252,11 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 1. WHEN 用户选择备份文件, Client SHALL 允许 `.json`、`.enc`、`.tgz` 和 `.tar.gz` 文件进入内容校验流程。
 2. IF 文件扩展名不在支持集合, Client SHALL 在上传前展示文件名与支持格式。
 3. WHEN fallback 接收备份文件, Backup Service SHALL 在读取内容前执行文件大小限制。
-4. WHEN Go `.tgz` 或 `.enc` 备份包含 fallback 未支持类别, Restore Result SHALL 保留支持类别并报告跳过类别。
+4. Backup Service SHALL 使用 `daidai-panel-backup` 0.4.0 canonical manifest 导入和导出配置、任务、环境变量、订阅、SSH Key、依赖、任务日志、Task View 与脚本。
+5. WHEN Go Core 或 Kotlin fallback 恢复对端备份, Backup Service SHALL 重映射通知渠道、SSH Key、任务依赖和任务日志外键。
+6. WHEN manifest 明确提供 selection, Restore Service SHALL 仅替换选中类别并保留未选类别。
+7. WHEN Kotlin fallback 创建带密码备份, Backup Service SHALL 生成与 Go Core 相同的 SHA-256 密钥派生 AES-GCM `.enc` 文件。
+8. WHILE 恢复跨设备备份, Restore Service SHALL 保留目标设备用户、会话、2FA 和设备绑定凭据。
 
 ## Requirement 26：通知渠道与任务终态推送
 

@@ -73,7 +73,7 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 14
+        const val SCHEMA_VERSION = 15
         private const val MAX_SCRIPT_LOG_LINES = 500
         private const val MAX_SCRIPT_LOG_LINE_CHARS = 4096
         private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 256_000
@@ -156,6 +156,21 @@ class LocalPanelStore(
                 last_run_status TEXT NOT NULL DEFAULT '',
                 last_run_logs TEXT NOT NULL DEFAULT '[]',
                 last_log_id INTEGER NOT NULL DEFAULT 0,
+                last_startup_auto_run_date TEXT NOT NULL DEFAULT '',
+                last_run_at TEXT,
+                timeout INTEGER NOT NULL DEFAULT 0,
+                success_exit_codes TEXT NOT NULL DEFAULT '0',
+                random_delay_seconds INTEGER,
+                max_retries INTEGER NOT NULL DEFAULT 0,
+                retry_interval INTEGER NOT NULL DEFAULT 0,
+                depends_on INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                subscription_locked INTEGER NOT NULL DEFAULT 0,
+                log_path TEXT,
+                last_running_time REAL,
+                allow_multiple_instances INTEGER NOT NULL DEFAULT 0,
+                schedule_policy TEXT NOT NULL DEFAULT 'skip',
+                stop_schedule TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""".trimIndent()
@@ -236,6 +251,7 @@ class LocalPanelStore(
             addColumnIfMissing(db, "notification_channels", "last_test_at", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing(db, "notification_channels", "last_test_status", "TEXT NOT NULL DEFAULT ''")
         }
+        if (oldVersion < 15) ensureBackupCompatibilityColumns(db)
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, declaration: String) {
@@ -250,6 +266,7 @@ class LocalPanelStore(
         db.execSQL("""CREATE TABLE IF NOT EXISTS task_views (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, filters TEXT NOT NULL DEFAULT '[]', sort_rules TEXT NOT NULL DEFAULT '[]', hidden INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS subscription_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, subscription_id INTEGER NOT NULL, level TEXT NOT NULL DEFAULT 'info', message TEXT NOT NULL, created_at TEXT NOT NULL)""")
         runCatching { db.execSQL("ALTER TABLE tasks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0") }
+        ensureBackupCompatibilityColumns(db)
     }
 
     private fun createManagementTables(db: SQLiteDatabase) {
@@ -1394,10 +1411,56 @@ fun serveDashboardStats(): JSONObject {
                 enabled INTEGER NOT NULL DEFAULT 0,
                 type TEXT NOT NULL DEFAULT 'public-remote',
                 last_sync TEXT,
+                branch TEXT NOT NULL DEFAULT '',
+                schedule TEXT NOT NULL DEFAULT '',
+                whitelist TEXT NOT NULL DEFAULT '',
+                blacklist TEXT NOT NULL DEFAULT '',
+                depend_on TEXT NOT NULL DEFAULT '',
+                pre_script TEXT NOT NULL DEFAULT '',
+                hook_script TEXT NOT NULL DEFAULT '',
+                auto_add_task INTEGER NOT NULL DEFAULT 0,
+                auto_del_task INTEGER NOT NULL DEFAULT 0,
+                status INTEGER NOT NULL DEFAULT 0,
+                last_pull_at TEXT,
+                save_dir TEXT NOT NULL DEFAULT '',
+                ssh_key_id INTEGER,
+                auth_type TEXT NOT NULL DEFAULT '',
+                auth_username TEXT NOT NULL DEFAULT '',
+                ca_cert_path TEXT NOT NULL DEFAULT '',
+                sub_path TEXT NOT NULL DEFAULT '',
+                alias TEXT NOT NULL DEFAULT '',
+                force_overwrite INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        ensureBackupCompatibilityColumns(db)
+    }
+
+    private fun ensureBackupCompatibilityColumns(db: SQLiteDatabase) {
+        val taskColumns = mapOf(
+            "last_startup_auto_run_date" to "TEXT NOT NULL DEFAULT ''", "last_run_at" to "TEXT",
+            "timeout" to "INTEGER NOT NULL DEFAULT 0", "success_exit_codes" to "TEXT NOT NULL DEFAULT '0'",
+            "random_delay_seconds" to "INTEGER", "max_retries" to "INTEGER NOT NULL DEFAULT 0",
+            "retry_interval" to "INTEGER NOT NULL DEFAULT 0", "depends_on" to "INTEGER",
+            "sort_order" to "INTEGER NOT NULL DEFAULT 0", "subscription_locked" to "INTEGER NOT NULL DEFAULT 0",
+            "log_path" to "TEXT", "last_running_time" to "REAL", "allow_multiple_instances" to "INTEGER NOT NULL DEFAULT 0",
+            "schedule_policy" to "TEXT NOT NULL DEFAULT 'skip'", "stop_schedule" to "TEXT NOT NULL DEFAULT ''",
+        )
+        taskColumns.forEach { (name, declaration) -> addColumnIfMissing(db, "tasks", name, declaration) }
+        val subscriptionColumns = mapOf(
+            "branch" to "TEXT NOT NULL DEFAULT ''", "schedule" to "TEXT NOT NULL DEFAULT ''",
+            "whitelist" to "TEXT NOT NULL DEFAULT ''", "blacklist" to "TEXT NOT NULL DEFAULT ''",
+            "depend_on" to "TEXT NOT NULL DEFAULT ''", "pre_script" to "TEXT NOT NULL DEFAULT ''",
+            "hook_script" to "TEXT NOT NULL DEFAULT ''", "auto_add_task" to "INTEGER NOT NULL DEFAULT 0",
+            "auto_del_task" to "INTEGER NOT NULL DEFAULT 0", "status" to "INTEGER NOT NULL DEFAULT 0",
+            "last_pull_at" to "TEXT", "save_dir" to "TEXT NOT NULL DEFAULT ''", "ssh_key_id" to "INTEGER",
+            "auth_type" to "TEXT NOT NULL DEFAULT ''", "auth_username" to "TEXT NOT NULL DEFAULT ''",
+            "ca_cert_path" to "TEXT NOT NULL DEFAULT ''", "sub_path" to "TEXT NOT NULL DEFAULT ''",
+            "alias" to "TEXT NOT NULL DEFAULT ''", "force_overwrite" to "INTEGER NOT NULL DEFAULT 1",
+        )
+        val hasSubscriptions = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_subscriptions'", null).use { it.moveToFirst() }
+        if (hasSubscriptions) subscriptionColumns.forEach { (name, declaration) -> addColumnIfMissing(db, "local_subscriptions", name, declaration) }
     }
 
     fun serveSubscriptions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {

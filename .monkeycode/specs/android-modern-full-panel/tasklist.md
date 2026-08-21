@@ -537,6 +537,9 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - Use Android-compatible unrestricted file selection followed by strict suffix validation.
 - Accept JSON, encrypted, tgz, and tar.gz backups.
 - Enforce fallback backup size limits before loading file content.
+- Generate canonical `.tgz` and Go-compatible AES-GCM `.enc` backups from Kotlin fallback.
+- Preserve all canonical data categories and remap cross-record IDs in both directions.
+- Honor manifest selection without clearing unselected categories.
 
 ### Task 10.2: Align Notification Channels and Task Dispatch
 
