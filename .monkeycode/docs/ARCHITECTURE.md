@@ -90,11 +90,25 @@ LifecycleHost       接收前台服务和重启请求
 
 本地实例适配器通过 Platform Channel 调用 `StartCore`、`StopCore`、`Status` 和 `Endpoint`。Core 就绪后，Dio 与 SSE 使用动态回环端点，业务页面继续使用现有 API Repository。
 
+实例切换保留完整 `PanelConfig` 类型。本地实例通过 Android Host 重新解析动态 endpoint、instance ID 和 local token，再由连接 monitor 原子更新持久化实例与 Dio session；远程实例继续使用网络健康检查。Android Host 每次启动请求都会复核 Core/fallback 状态，避免返回已失效端口缓存。
+
 ### Task Logs and Dependencies
 
 Go Core 与 Kotlin fallback 使用统一任务日志契约：排队状态持续跟踪，运行输出通过增量 cursor 推送，内存日志释放后回读持久日志。日志文件响应包含 `filename`、`path`、`log_id`、大小和创建时间，日志列表关联任务名称。
 
 本地依赖以类型、规范包名和运行时版本作为安装身份。并发任务共享同一安装操作；Python 用户依赖位于运行时目录之外，npm 与 pip 使用共享目录和有界缓存。fallback 使用固定并发 2、队列 32，并限制内存日志窗口。
+
+依赖 spec 保留请求版本并按规范包名查重。显式 Python runtime 请求只安装目标版本；精确 pip/npm 版本必须与已安装版本一致。Go 与 Kotlin tokenizer 保留显式空 argv，多账号环境变量使用带转义的无损 split/join 契约，平台通知凭据与 runtime 路径禁止被数据库变量覆盖。
+
+### Background Idle Policy
+
+Flutter 本地连接 monitor 仅在前台执行 30 秒 reconcile，进入后台后取消 Timer，恢复时立即复核。Kotlin fallback scheduler 启动时检查当前分钟，随后按分钟边界唤醒。WorkManager 通过 `Configuration.Provider` 按需初始化，周期恢复仅在持续调度开启时注册。持续调度 Foreground Service 与原生任务通知行为保持不变。
+
+非持续模式的完整 Core idle shutdown 仍需要持久化 next-run、系统单次唤醒和任务完成回执；当前版本保留 Core 调度以避免后台定时任务丢失。
+
+### Instance-Aware Settings
+
+managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel` 管理方式、前台服务、调度保障、恢复触发、可用内存和 Python runtime。APK 本地实例将后端自更新与 runtime mutation 声明为 unsupported，本地 Core 重启通过 MethodChannel 完成并采用返回的新 endpoint。服务器实例继续展示后端更新与 service manager 信息。
 
 ### Loopback Web Access
 
