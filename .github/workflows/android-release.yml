@@ -427,7 +427,7 @@ jobs:
           cat > release-notes.md <<'EOF'
           # 呆呆面板本机版 ${{ github.ref_name }}
 
-          - Android ARM64 构建版。
+          - Android ARM64 正式签名构建版。
           - App 内嵌 Go 面板 Core，使用动态回环端口。
           - 支持本地管理员初始化、认证和任务管理 API。
           - 使用安装级 token、严格 Host 与 Origin 校验。
