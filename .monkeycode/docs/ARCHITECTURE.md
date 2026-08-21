@@ -90,6 +90,16 @@ LifecycleHost       接收前台服务和重启请求
 
 本地实例适配器通过 Platform Channel 调用 `StartCore`、`StopCore`、`Status` 和 `Endpoint`。Core 就绪后，Dio 与 SSE 使用动态回环端点，业务页面继续使用现有 API Repository。
 
+### Task Logs and Dependencies
+
+Go Core 与 Kotlin fallback 使用统一任务日志契约：排队状态持续跟踪，运行输出通过增量 cursor 推送，内存日志释放后回读持久日志。日志文件响应包含 `filename`、`path`、`log_id`、大小和创建时间，日志列表关联任务名称。
+
+本地依赖以类型、规范包名和运行时版本作为安装身份。并发任务共享同一安装操作；Python 用户依赖位于运行时目录之外，npm 与 pip 使用共享目录和有界缓存。fallback 使用固定并发 2、队列 32，并限制内存日志窗口。
+
+### Loopback Web Access
+
+Android 构建将 Panel Web 以 `/local-ui/` base 打包到 APK。Go Core 与 Kotlin fallback 仅在动态 `127.0.0.1` 端口托管静态资源。App 生成 30 秒单次票据并放入 URL fragment；页面通过 POST 兑换 15 分钟 `HttpOnly`、`SameSite=Strict` Cookie。Cookie 仅替代本地传输层 Token，业务 API 继续执行 JWT 与角色授权。静态响应启用 CSP、frame deny、no-referrer 与 nosniff。
+
 ## 数据流
 
 ```mermaid

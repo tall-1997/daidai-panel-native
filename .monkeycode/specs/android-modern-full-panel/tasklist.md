@@ -384,7 +384,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.1: Integrate Latest Panel Release
 
-**Status:** In progress
+**Status:** Complete
 
 - Import `daidai-panel v3.0.6` commit `9a7c27e2a03ed30d3ac632adf58fec60009e601c`.
 - Preserve the verified Flutter v1.0.1 client and Android local adaptations.
@@ -392,7 +392,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.2: Close Kotlin Fallback Execution Gaps
 
-**Status:** Pending
+**Status:** Complete
 
 - Inject panel env into main commands and before/after hooks.
 - Track task processes and terminate process trees on stop.
@@ -402,7 +402,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.3: Unify Runtime Mirror Configuration
 
-**Status:** Pending
+**Status:** Complete
 
 - Use Huawei APK, Alibaba pip, and npmmirror npm defaults.
 - Persist arbitrary valid user mirror URLs, including official sources.
@@ -411,7 +411,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.4: Add Panel Handshake and Capability Profile
 
-**Status:** Pending
+**Status:** Complete
 
 - Add versioned handshake to local and current remote-compatible backend.
 - Parse native `platform_capabilities` into Flutter.
@@ -420,7 +420,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.5: Gate Menus, Routes, and Actions
 
-**Status:** Pending
+**Status:** Complete
 
 - Hide unsupported menu entries.
 - Guard deep links with an unavailable page.
@@ -429,7 +429,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 7.6: Consolidate Repository Branches
 
-**Status:** Pending
+**Status:** Complete
 
 - Merge verified integration into `main`.
 - Push `main` and complete snapshot APK validation.
@@ -442,7 +442,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 8.1: Unify Live and Persistent Task Logs
 
-**Status:** In progress
+**Status:** Complete
 
 - Keep queued tasks tracked without a fixed 15-second cutoff.
 - Fall back from TinyLog to the latest persisted TaskLog.
@@ -451,7 +451,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 8.2: Support Unicode Task Commands
 
-**Status:** Pending
+**Status:** Complete
 
 - Share quoted command parsing semantics between Go and Kotlin paths.
 - Cover Chinese names, spaces, percent literals, plus signs, and arguments.
@@ -459,7 +459,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 8.3: Deduplicate Dependencies and Bound Storage
 
-**Status:** In progress
+**Status:** Complete
 
 - Add normalized dependency identities and per-key installation coordination.
 - Move fallback Python dependencies outside the runtime image.
@@ -468,7 +468,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 8.4: Bound Background Runtime Resources
 
-**Status:** Pending
+**Status:** Complete
 
 - Replace cached thread pools with bounded executors and queues.
 - Bound in-memory log windows and batch persistence.
@@ -477,7 +477,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 
 ### Task 8.5: Add Secure Loopback Web Access
 
-**Status:** Pending
+**Status:** Complete
 
 - Package the Panel Web build into Android assets.
 - Serve static files only on loopback with strict browser security headers.
