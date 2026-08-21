@@ -115,7 +115,10 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs("../../../runtime", layout.buildDirectory.dir("generated/localWebAssets"))
+            assets.srcDirs(
+                "../../../runtime",
+                layout.buildDirectory.dir("generated/localWebAssets").get().asFile,
+            )
             // Python and Node payloads are packaged as archives under src/main/assets.
             // The generated pythonAssets/nodeAssets trees are build-time verification inputs;
             // adding them as Android asset roots duplicates archive metadata paths.
