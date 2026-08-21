@@ -14,7 +14,6 @@ import '../../../core/network/sse_client.dart';
 import '../../../core/services/local_notification_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/task.dart';
-import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
