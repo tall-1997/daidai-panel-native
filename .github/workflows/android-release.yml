@@ -434,6 +434,10 @@ jobs:
           - 使用 Android `:panel` 专用进程隔离 Core 生命周期。
           - 包含 Milestone 1-4 的 Core 恢复、运行时安全基线、执行 Operation、日志 cursor、SecretStore、依赖/Git/订阅/集成改进。
           - 包含 Milestone 5-6 的调度恢复、资源保护、备份恢复与发布证据结构。
+          - 优化任务实时日志与日志文件关联，支持持久日志回读和增量 cursor。
+          - 完善中文脚本、带空格路径、参数转义和 fallback 命令解析。
+          - 增加依赖复用、安装去重、缓存限制和后台执行资源保护。
+          - 增加仅监听本机回环地址的浏览器面板入口和一次性会话票据。
 
           本 Release 已通过严格 runtime、Android device 与正式签名门禁。
           EOF
