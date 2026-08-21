@@ -110,6 +110,18 @@ Flutter 本地连接 monitor 仅在前台执行 30 秒 reconcile，进入后台�
 
 managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel` 管理方式、前台服务、调度保障、恢复触发、可用内存和 Python runtime。APK 本地实例将后端自更新与 runtime mutation 声明为 unsupported，本地 Core 重启通过 MethodChannel 完成并采用返回的新 endpoint。服务器实例继续展示后端更新与 service manager 信息。
 
+### Backup Interoperability
+
+Flutter 备份页使用 Android SAF 的 unrestricted picker，再按完整文件名接受 `.json`、`.enc`、`.tgz` 和 `.tar.gz`。该策略避免系统文件提供器将未知 MIME 的 tgz/enc 隐藏。Kotlin fallback 在读取上传或恢复文件前检查 64 MiB 存储上限，并继续使用完整解析、staging、数据库事务和原子目录切换。Go manifest 备份在 fallback 中恢复支持类别；未来需继续补齐 Go 全量类别和旧 Portable envelope 的兼容提示。
+
+### Notification Channels
+
+Go notification registry 是渠道类型和字段 schema 的权威来源。Flutter 动态表单解析 `widget`、`default`、`show_when` 与 `push_scope`，条件字段只在命中消息类型时参与展示和必填校验。脱敏配置使用 `********` 占位，Go 更新接口逐字段保留原凭据。
+
+Kotlin fallback schema 14 持久化任务的成功、失败、终止通知开关和绑定渠道 ID。任务终态统一经过通知 dispatcher：绑定任务只发送目标渠道，未绑定任务发送 enabled default 渠道。fallback 支持 Android local、Webhook、Telegram、钉钉、飞书、Bark、PushPlus、Server酱、PushDeer、Discord、Slack、ntfy、Gotify 与 WxPusher，并验证供应商业务响应。`pludplus` 历史拼写会迁移为标准 `pushplus`；Go PushPlus 使用 HTTPS。
+
+删除通知渠道时，Go 与 fallback 在同一事务中清空任务绑定，避免悬空渠道 ID。任务进入 Go `OnTaskFailed` 前置失败路径时也会触发 failure 通知。
+
 ### Loopback Web Access
 
 Android 构建将 Panel Web 以 `/local-ui/` base 打包到 APK。Go Core 与 Kotlin fallback 仅在动态 `127.0.0.1` 端口托管静态资源。App 生成 30 秒单次票据并放入 URL fragment；页面通过 POST 兑换 15 分钟 `HttpOnly`、`SameSite=Strict` Cookie。Cookie 仅替代本地传输层 Token，业务 API 继续执行 JWT 与角色授权。静态响应启用 CSP、frame deny、no-referrer 与 nosniff。
