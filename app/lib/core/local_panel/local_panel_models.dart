@@ -15,6 +15,13 @@ class LocalPanelStatus {
   final bool foregroundServiceEnabled;
   final String localToken;
   final String fallbackMode;
+  final String coreStatus;
+  final String schedulerHostState;
+  final String schedulerRecoveryTrigger;
+  final String schedulerGuaranteeState;
+  final String schedulerGuaranteeReason;
+  final String schedulerIntervention;
+  final Map<String, dynamic> resourceSnapshot;
   final Map<String, PanelCapabilityStatus> platformCapabilities;
 
   const LocalPanelStatus({
@@ -28,6 +35,13 @@ class LocalPanelStatus {
     this.foregroundServiceEnabled = false,
     this.localToken = '',
     this.fallbackMode = '',
+    this.coreStatus = '',
+    this.schedulerHostState = '',
+    this.schedulerRecoveryTrigger = '',
+    this.schedulerGuaranteeState = '',
+    this.schedulerGuaranteeReason = '',
+    this.schedulerIntervention = '',
+    this.resourceSnapshot = const {},
     this.platformCapabilities = const {},
   });
 
@@ -53,6 +67,19 @@ class LocalPanelStatus {
           json['foreground_service_enabled'] == true,
       localToken: json['local_token']?.toString() ?? '',
       fallbackMode: json['fallback_mode']?.toString() ?? '',
+      coreStatus: json['core_status']?.toString() ?? '',
+      schedulerHostState: json['scheduler_host_state']?.toString() ?? '',
+      schedulerRecoveryTrigger:
+          json['scheduler_recovery_trigger']?.toString() ?? '',
+      schedulerGuaranteeState:
+          json['scheduler_guarantee_state']?.toString() ?? '',
+      schedulerGuaranteeReason:
+          json['scheduler_guarantee_reason']?.toString() ?? '',
+      schedulerIntervention:
+          json['scheduler_intervention']?.toString() ?? '',
+      resourceSnapshot: json['resource_snapshot'] is Map
+          ? Map<String, dynamic>.from(json['resource_snapshot'] as Map)
+          : const {},
       platformCapabilities: _platformCapabilities(
         json['platform_capabilities'],
       ),

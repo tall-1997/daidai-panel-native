@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"daidai-panel/config"
@@ -38,6 +39,13 @@ func TestDependencyInstalledNodeJSAcceptsVersionSpec(t *testing.T) {
 		if err := os.MkdirAll(pkg, 0o755); err != nil {
 			t.Fatalf("mkdir node dependency: %v", err)
 		}
+		version := "7.0.0"
+		if strings.Contains(pkg, filepath.Join("@scope", "pkg")) {
+			version = "1.2.3"
+		}
+		if err := os.WriteFile(filepath.Join(pkg, "package.json"), []byte(`{"version":"`+version+`"}`), 0o644); err != nil {
+			t.Fatalf("write package manifest: %v", err)
+		}
 	}
 
 	if !DependencyInstalledForPythonVersion(model.DepTypeNodeJS, "http-proxy-agent@7.0.0", "") {
@@ -45,6 +53,9 @@ func TestDependencyInstalledNodeJSAcceptsVersionSpec(t *testing.T) {
 	}
 	if !DependencyInstalledForPythonVersion(model.DepTypeNodeJS, "@scope/pkg@1.2.3", "") {
 		t.Fatal("expected scoped versioned node dependency to be detected as installed")
+	}
+	if DependencyInstalledForPythonVersion(model.DepTypeNodeJS, "http-proxy-agent@6.0.0", "") {
+		t.Fatal("expected mismatched exact node dependency to require installation")
 	}
 }
 

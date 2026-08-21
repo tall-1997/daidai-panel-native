@@ -456,3 +456,51 @@ func TestPythonDependencyCreateInstallsOnlySingleRuntimeVersion(t *testing.T) {
 		t.Fatalf("expected dependency only for python 3.12 in single image, got %+v", stored)
 	}
 }
+
+func TestPythonDependencyCreateHonorsExplicitVersion(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	installed := make(chan struct{}, 1)
+	originalRunner := dependencyInstallRunner
+	defer func() { dependencyInstallRunner = originalRunner }()
+	dependencyInstallRunner = func(id uint, depType, name string) {
+		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("status", model.DepStatusInstalled)
+		installed <- struct{}{}
+	}
+
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	rec := performDepsJSONRequest(engine, http.MethodPost, "/api/v1/deps", map[string]any{
+		"type": model.DepTypePython, "names": []string{"requests"}, "python_version": "3.11",
+	}, map[string]string{"Authorization": "Bearer " + token})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	<-installed
+
+	var stored []model.Dependency
+	if err := database.DB.Where("type = ? AND name = ?", model.DepTypePython, "requests").Find(&stored).Error; err != nil {
+		t.Fatalf("reload dependencies: %v", err)
+	}
+	if len(stored) != 1 || stored[0].PythonVersion != "3.11" {
+		t.Fatalf("expected only python 3.11 dependency, got %+v", stored)
+	}
+}
+
+func TestPythonDependencyCreateRejectsUnsupportedExplicitVersion(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	rec := performDepsJSONRequest(engine, http.MethodPost, "/api/v1/deps", map[string]any{
+		"type": model.DepTypePython, "names": []string{"requests"}, "python_version": "3.9",
+	}, map[string]string{"Authorization": "Bearer " + token})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var count int64
+	if err := database.DB.Model(&model.Dependency{}).Count(&count).Error; err != nil {
+		t.Fatalf("count dependencies: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no dependency records, got %d", count)
+	}
+}

@@ -6,6 +6,8 @@ import '../../../core/auth/token_refresh_coordinator.dart';
 import '../../../core/auth/auth_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/local_panel/managed_local_connection_monitor.dart';
+import '../../../core/local_panel/local_panel_session_resolver.dart';
+import '../../../core/local_panel/method_channel_local_panel_host.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
@@ -151,24 +153,37 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
   }
 
   Future<void> _switchToPanel(
-    String finalUrl, {
+    PanelConfig panel, {
     required bool skipAutoLogin,
+    String? localToken,
   }) async {
     TokenRefreshCoordinator.invalidate();
     final previousUrl = DioClient.instance.baseUrl;
-    await ManagedLocalConnectionMonitor.instance.stopAndDrain(
-      remoteCommit: () async {
-        DioClient.instance.setBaseUrl(finalUrl);
-        try {
-          await SecureStorage.saveServerUrl(finalUrl);
-          await SecureStorage.clearAuthSession();
-        } catch (_) {
-          DioClient.instance.setBaseUrl(previousUrl);
-          await SecureStorage.saveServerUrl(previousUrl);
-          rethrow;
-        }
-      },
-    );
+    if (panel.type == PanelType.managedLocal) {
+      final token = localToken;
+      if (token == null || token.isEmpty) {
+        throw StateError('本地面板授权信息不可用');
+      }
+      final adopted = await ManagedLocalConnectionMonitor.instance.adoptHealthy(
+        ManagedLocalPanelResolution(panel: panel, localToken: token),
+      );
+      if (!adopted) throw StateError('本地面板切换已取消');
+      await SecureStorage.clearAuthSession();
+    } else {
+      await ManagedLocalConnectionMonitor.instance.stopAndDrain(
+        remoteCommit: () async {
+          DioClient.instance.setBaseUrl(panel.url);
+          try {
+            await SecureStorage.activatePanel(panel);
+            await SecureStorage.clearAuthSession();
+          } catch (_) {
+            DioClient.instance.setBaseUrl(previousUrl);
+            await SecureStorage.saveServerUrl(previousUrl);
+            rethrow;
+          }
+        },
+      );
+    }
     if (!mounted) return;
     ref.invalidate(dashboardProvider);
     ref.read(authProvider.notifier).setUnauthenticated();
@@ -222,21 +237,27 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
       }
     }
 
-    final authService = AuthService();
-    var ok = await authService.checkHealth(finalUrl);
-    if (!mounted) return;
-
-    if (!ok) {
-      setState(() {
-        _checking = false;
-        _error = _buildConnectError(finalUrl);
-      });
-      return;
+    PanelConfig panelToSave;
+    PanelConfig? existingPanel = selectedPanel;
+    String? localToken;
+    if (selectedPanel?.type == PanelType.managedLocal) {
+      panelToSave = selectedPanel!;
+    } else {
+      final authService = AuthService();
+      final ok = await authService.checkHealth(finalUrl);
+      if (!mounted) return;
+      if (!ok) {
+        setState(() {
+          _checking = false;
+          _error = _buildConnectError(finalUrl);
+        });
+        return;
+      }
+      existingPanel = _panels.where((p) => p.url == finalUrl).firstOrNull;
+      panelToSave = _panelForSave(finalUrl, existingPanel);
     }
-
-    final existing = _panels.where((p) => p.url == finalUrl).firstOrNull;
-    final panelToSave = _panelForSave(finalUrl, existing);
-    if (existing == null || panelToSave.name != existing.name) {
+    if (panelToSave.type != PanelType.managedLocal &&
+        (existingPanel == null || panelToSave.name != existingPanel.name)) {
       await SecureStorage.savePanel(panelToSave);
       if (!mounted) return;
     }
@@ -264,8 +285,29 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
       }
     }
 
+    if (panelToSave.type == PanelType.managedLocal) {
+      try {
+        final status = await MethodChannelLocalPanelHost().ensureStarted();
+        final resolved = resolveManagedLocalPanel(status, existing: panelToSave);
+        panelToSave = resolved.panel;
+        localToken = resolved.localToken;
+        finalUrl = panelToSave.url;
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _checking = false;
+          _error = '本地面板启动失败，请稍后重试';
+        });
+        return;
+      }
+    }
+
     _activeServerUrl = finalUrl;
-    await _switchToPanel(finalUrl, skipAutoLogin: skipAutoLogin);
+    await _switchToPanel(
+      panelToSave,
+      skipAutoLogin: skipAutoLogin,
+      localToken: localToken,
+    );
   }
 
   Future<void> _deletePanel(PanelConfig panel) async {

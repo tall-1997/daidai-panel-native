@@ -51,15 +51,18 @@ internal object LocalTaskFallbackSemantics {
         val current = StringBuilder()
         var quote: Char? = null
         var escaped = false
+        var tokenStarted = false
 
         fun flush() {
-            if (current.isNotEmpty()) tokens += current.toString()
+            if (tokenStarted) tokens += current.toString()
             current.clear()
+            tokenStarted = false
         }
 
         command.forEach { char ->
             when {
                 escaped -> {
+                    tokenStarted = true
                     if (char == '\'' || char == '"' || char == '\\' || char.isWhitespace()) {
                         current.append(char)
                     } else {
@@ -67,13 +70,22 @@ internal object LocalTaskFallbackSemantics {
                     }
                     escaped = false
                 }
-                char == '\\' && quote != '\'' -> escaped = true
+                char == '\\' && quote != '\'' -> {
+                    tokenStarted = true
+                    escaped = true
+                }
                 quote != null -> {
                     if (char == quote) quote = null else current.append(char)
                 }
-                char == '\'' || char == '"' -> quote = char
+                char == '\'' || char == '"' -> {
+                    tokenStarted = true
+                    quote = char
+                }
                 char.isWhitespace() -> flush()
-                else -> current.append(char)
+                else -> {
+                    tokenStarted = true
+                    current.append(char)
+                }
             }
         }
         if (escaped) current.append('\\')
@@ -144,7 +156,7 @@ internal object LocalTaskFallbackSemantics {
         if (plan.mode == "desi") {
             val selected = indices.map { values[it - 1] }
             return listOf(TaskEnvironment(0, mapOf(
-                plan.envName to selected.joinToString("&"),
+                plan.envName to joinEnvironmentValues(selected),
                 "envParam" to plan.envName,
                 "numParam" to indices.joinToString(" "),
                 "TASK_EXEC_MODE" to plan.mode,
@@ -163,9 +175,64 @@ internal object LocalTaskFallbackSemantics {
         )) }
     }
 
-    private fun splitEnvironmentValues(raw: String): List<String> {
-        val separator = if (raw.contains("&&")) "&&" else "&"
-        return raw.split(separator).map(String::trim).filter(String::isNotEmpty)
+    internal fun splitEnvironmentValues(raw: String): List<String> {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            runCatching {
+                val array = org.json.JSONArray(trimmed)
+                return List(array.length()) { array.getString(it) }
+            }
+        }
+        val separator = if (hasUnescapedSeparator(raw, "&&")) "&&" else "&"
+        val values = mutableListOf<String>()
+        val current = StringBuilder()
+        var escaped = false
+        var index = 0
+        while (index < raw.length) {
+            val char = raw[index]
+            when {
+                escaped -> {
+                    current.append(char)
+                    escaped = false
+                }
+                char == '\\' -> escaped = true
+                raw.startsWith(separator, index) -> {
+                    values += current.toString()
+                    current.clear()
+                    index += separator.length - 1
+                }
+                else -> current.append(char)
+            }
+            index++
+        }
+        if (escaped) current.append('\\')
+        values += current.toString()
+        return values
+    }
+
+    internal fun joinEnvironmentValues(values: List<String>): String {
+        if (values.isEmpty()) return ""
+        if (values.size == 1) return values[0]
+        val separator = if (values.any { '&' in it }) "&&" else "&"
+        return values.joinToString(separator) { value ->
+            value.replace("\\", "\\\\").let {
+                it.replace("&", "\\&")
+            }
+        }
+    }
+
+    private fun hasUnescapedSeparator(raw: String, separator: String): Boolean {
+        var escaped = false
+        raw.indices.forEach { index ->
+            if (escaped) {
+                escaped = false
+            } else if (raw[index] == '\\') {
+                escaped = true
+            } else if (raw.startsWith(separator, index)) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun parseAccountSpec(raw: String, total: Int): List<Int> {

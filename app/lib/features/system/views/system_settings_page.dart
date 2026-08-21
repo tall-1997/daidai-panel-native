@@ -5,6 +5,11 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/local_panel/method_channel_local_panel_host.dart';
+import '../../../core/local_panel/local_panel_models.dart';
+import '../../../core/local_panel/local_panel_session_resolver.dart';
+import '../../../core/local_panel/managed_local_connection_monitor.dart';
+import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -28,6 +33,8 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   bool _checking = false;
   bool _savingConfigs = false;
   bool _updatingPanel = false;
+  bool _managedLocal = false;
+  LocalPanelStatus? _localStatus;
 
   final _concurrencyC = TextEditingController();
   final _logRetentionC = TextEditingController();
@@ -80,6 +87,13 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
+      final currentPanel = await SecureStorage.getCurrentPanel();
+      LocalPanelStatus? localStatus;
+      if (currentPanel?.type == PanelType.managedLocal) {
+        try {
+          localStatus = await MethodChannelLocalPanelHost().getStatus();
+        } catch (_) {}
+      }
       final results = await Future.wait([
         DioClient.instance.dio.get(ApiEndpoints.systemVersion),
         DioClient.instance.dio.get(ApiEndpoints.configs),
@@ -145,6 +159,8 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
       );
 
       setState(() {
+        _managedLocal = currentPanel?.type == PanelType.managedLocal;
+        _localStatus = localStatus;
         _versionInfo = versionData is Map<String, dynamic> ? versionData : null;
         _panelSettings = panelData is Map<String, dynamic> ? panelData : null;
         _pythonRuntimes = _parsePythonRuntimes(runtimeRaw);
@@ -179,6 +195,19 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
       return raw['default_version'].toString();
     }
     return '';
+  }
+
+  String _formatBytes(dynamic raw) {
+    final bytes = raw is num ? raw.toInt() : int.tryParse(raw?.toString() ?? '');
+    if (bytes == null || bytes < 0) return '-';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return '${value.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
   }
 
   String _getConfigValue(
@@ -447,17 +476,33 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
     );
     if (confirm == true) {
       try {
-        await DioClient.instance.dio.post(
-          '${ApiEndpoints.baseApi}/system/restart',
-        );
+        if (_managedLocal) {
+          final status = await MethodChannelLocalPanelHost().restart();
+          final currentPanel = await SecureStorage.getCurrentPanel();
+          final resolved = resolveManagedLocalPanel(status, existing: currentPanel);
+          final adopted = await ManagedLocalConnectionMonitor.instance.adoptHealthy(resolved);
+          if (!adopted) throw StateError('本地核心状态更新已取消');
+        } else {
+          await DioClient.instance.dio.post(
+            '${ApiEndpoints.baseApi}/system/restart',
+          );
+        }
         if (mounted) {
           AppGlassNotice.show(
             context,
-            '面板将在 2 秒后重启',
+            _managedLocal ? '本地核心已重启' : '面板将在 2 秒后重启',
             type: AppGlassNoticeType.info,
           );
         }
-      } catch (_) {}
+      } catch (error) {
+        if (mounted) {
+          AppGlassNotice.show(
+            context,
+            extractErrorMessage(error, '重启失败'),
+            type: AppGlassNoticeType.error,
+          );
+        }
+      }
     }
   }
 
@@ -574,6 +619,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   Widget build(BuildContext context) {
     final isLight = Theme.of(context).brightness == Brightness.light;
     final systemUpdateAvailable =
+        !_managedLocal &&
         !PanelCapabilityRegistry.isUnsupported(PanelCapability.systemUpdate) &&
         !PanelCapabilityRegistry.isUnavailable(PanelCapability.systemUpdate);
     final systemRestartVisible = !PanelCapabilityRegistry.isUnsupported(
@@ -654,35 +700,77 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            _SectionTitle('部署与运行时'),
+                            _SectionTitle(_managedLocal ? '本地实例与运行时' : '部署与运行时'),
                             _Card(
                               isLight: isLight,
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   _KVRow(
-                                    '运行模式',
-                                    _panelSettings?['panel_runtime_mode']
-                                            ?.toString() ??
-                                        '-',
+                                    '实例模式',
+                                    _managedLocal
+                                        ? 'Android 本地面板'
+                                        : (_panelSettings?['panel_runtime_mode']?.toString() ?? '-'),
                                     isLight,
                                   ),
                                   const Divider(height: 16),
                                   _KVRow(
-                                    '服务管理',
-                                    _panelSettings?['panel_service_manager']
-                                            ?.toString() ??
-                                        '-',
+                                    _managedLocal ? 'API 地址' : '服务管理',
+                                    _managedLocal
+                                        ? DioClient.instance.baseUrl
+                                        : (_panelSettings?['panel_service_manager']?.toString() ?? '-'),
                                     isLight,
                                   ),
                                   const Divider(height: 16),
                                   _KVRow(
-                                    '服务名称',
-                                    _panelSettings?['panel_service_name']
-                                            ?.toString() ??
-                                        '-',
+                                    _managedLocal ? '核心管理' : '服务名称',
+                                    _managedLocal
+                                        ? 'Android :panel 进程'
+                                        : (_panelSettings?['panel_service_name']?.toString() ?? '-'),
                                     isLight,
                                   ),
+                                  if (_managedLocal) ...[
+                                    const Divider(height: 16),
+                                    _KVRow(
+                                      'Core 状态',
+                                      _localStatus?.coreStatus.isNotEmpty == true
+                                          ? _localStatus!.coreStatus
+                                          : (_localStatus?.phase.name ?? '-'),
+                                      isLight,
+                                    ),
+                                    const Divider(height: 16),
+                                    _KVRow(
+                                      '前台服务',
+                                      _localStatus?.foregroundServiceEnabled == true
+                                          ? '持续运行'
+                                          : '系统补偿',
+                                      isLight,
+                                    ),
+                                    const Divider(height: 16),
+                                    _KVRow(
+                                      '调度保障',
+                                      _localStatus?.schedulerGuaranteeState.isNotEmpty == true
+                                          ? _localStatus!.schedulerGuaranteeState
+                                          : '-',
+                                      isLight,
+                                    ),
+                                    const Divider(height: 16),
+                                    _KVRow(
+                                      '恢复触发',
+                                      _localStatus?.schedulerRecoveryTrigger.isNotEmpty == true
+                                          ? _localStatus!.schedulerRecoveryTrigger
+                                          : '-',
+                                      isLight,
+                                    ),
+                                    const Divider(height: 16),
+                                    _KVRow(
+                                      '可用内存',
+                                      _formatBytes(
+                                        _localStatus?.resourceSnapshot['available_memory_bytes'],
+                                      ),
+                                      isLight,
+                                    ),
+                                  ],
                                   if (_pythonRuntimes.isNotEmpty) ...[
                                     const Divider(height: 16),
                                     Text(
@@ -723,6 +811,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                 ],
                               ),
                             ),
+                            if (!_managedLocal) ...[
                             const SizedBox(height: 8),
                             SizedBox(
                               height: 40,
@@ -795,6 +884,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                   ],
                                 ),
                               ),
+                            ],
                             ],
                           ],
 
@@ -1079,27 +1169,14 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           // ── 系统操作 ──
                           _SectionTitle('系统操作'),
                           const SizedBox(height: 8),
-                          _ActionBtn(
-                            icon: Icons.backup,
-                            title: '备份恢复',
-                            subtitle: '创建备份、恢复、管理备份文件',
-                            isLight: isLight,
-                            onTap: () => context.push('/backup'),
-                          ),
-                          const SizedBox(height: 8),
-                          _ActionBtn(
-                            icon: Icons.article_outlined,
-                            title: '面板日志',
-                            subtitle: '查看面板运行日志，支持级别与关键字筛选',
-                            isLight: isLight,
-                            onTap: () => context.push('/panel-log'),
-                          ),
                           if (systemRestartVisible) ...[
                             const SizedBox(height: 8),
                             _ActionBtn(
                               icon: Icons.restart_alt,
-                              title: '重启面板',
-                              subtitle: '重启面板服务，运行中任务将中断',
+                              title: _managedLocal ? '重启本地核心' : '重启面板',
+                              subtitle: _managedLocal
+                                  ? '重新创建本地 API 服务，运行中任务将中断'
+                                  : '重启面板服务，运行中任务将中断',
                               isLight: isLight,
                               onTap: systemRestartAvailable ? _restart : null,
                               danger: true,

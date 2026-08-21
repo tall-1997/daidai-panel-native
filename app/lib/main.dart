@@ -36,6 +36,9 @@ class _AppLifecycleHandler extends WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _pausedAt = DateTime.now();
+      if (Platform.isAndroid) {
+        ManagedLocalConnectionMonitor.instance.handleAppPaused();
+      }
     } else if (state == AppLifecycleState.resumed) {
       if (Platform.isAndroid) {
         unawaited(ManagedLocalConnectionMonitor.instance.handleAppResumed());

@@ -198,4 +198,50 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 3. WHEN App 停止或重启本地实例, Android Host SHALL 清除旧端点缓存并验证新端点。
 4. Local Web SHALL 仅监听动态 `127.0.0.1` 端口并托管构建时签名打包的静态前端。
 5. WHEN 用户从 App 请求浏览器访问, Local Web SHALL 使用短时一次性票据换取 HttpOnly、SameSite=Strict 的本机浏览器会话。
+
+## Requirement 20：实例切换一致性
+
+**User Story:** 作为同时使用本地与远程面板的用户，我希望切换实例后所有请求立即使用目标实例，以便可靠返回本地面板。
+
+1. WHEN 用户切换到 managed-local 实例, Client SHALL 从 Android Host 获取实时 endpoint、instance ID 和 local token。
+2. WHEN managed-local endpoint 发生变化, Client SHALL 原子更新活动实例、Dio session 和持久化 endpoint。
+3. WHEN 用户切换实例, Client SHALL 失效旧认证 epoch、token、能力缓存和实例数据状态。
+4. IF Android Host 缓存的 endpoint 已失效, Android Host SHALL 重新验证 Core 状态并返回新 endpoint。
+
+## Requirement 21：后台空闲与调度保障
+
+**User Story:** 作为 Android 用户，我希望 App 后台空闲时进入系统缓存状态，同时保留定时任务与通知能力。
+
+1. WHILE App 位于前台, Client SHALL 保持本地连接监控和即时管理能力。
+2. WHEN App 进入后台, Client SHALL 暂停 UI 连接轮询和页面级网络活动。
+3. WHEN fallback scheduler 空闲, Scheduler SHALL 按分钟边界检查任务并避免秒级空转。
+4. WHEN Android 创建调度恢复任务, App SHALL 使用已初始化的 WorkManager。
+5. WHILE 持续调度启用, Foreground Service SHALL 保持任务和本地通知执行能力。
+
+## Requirement 22：版本化依赖安装
+
+**User Story:** 作为脚本作者，我希望安装脚本要求的准确依赖版本，以便脚本使用兼容 API。
+
+1. WHEN Python 依赖请求包含 `python_version`, Dependency Manager SHALL 仅安装到目标运行时。
+2. WHEN 依赖包含精确版本或范围, Dependency Manager SHALL 比较已安装版本并在约束不满足时执行安装。
+3. Dependency Manager SHALL 使用规范包名执行查重、验证和卸载，并保留原始请求 spec。
+4. IF 依赖 spec 以命令选项前缀开头, Dependency Manager SHALL 拒绝请求并返回参数错误。
+
+## Requirement 23：脚本参数与变量同构
+
+**User Story:** 作为自动化用户，我希望 Go Core 与 fallback 完整保留参数和变量，以便脚本在两条执行路径得到相同输入。
+
+1. WHEN 命令包含显式空引号参数, Executor SHALL 在 argv 中保留对应空字符串位置。
+2. WHEN 同名环境变量包含多个账号值, Executor SHALL 按稳定顺序无损合并空值、反斜杠和字面 `&`。
+3. WHEN 用户变量名称属于平台保留集合, Executor SHALL 保留平台提供的通知凭据和运行时路径。
+4. WHEN `desi` 或 `conc` 选择账号, Executor SHALL 使用统一的环境变量 split/join 契约。
+
+## Requirement 24：按实例模式展示系统设置
+
+**User Story:** 作为管理员，我希望系统页面仅显示当前实例可用的操作和完整状态，以便避免调用无效服务器功能。
+
+1. WHILE 当前实例为 managed-local, Client SHALL 展示本地 endpoint、Android Core 管理方式和 runtime 摘要。
+2. WHILE 当前实例为 managed-local, Client SHALL 隐藏后端自更新、systemd 服务和 runtime mutation 操作。
+3. WHEN 用户重启 managed-local Core, Client SHALL 使用 Android Host lifecycle API 并采用返回的新 endpoint。
+4. WHILE 当前实例为 remote, Client SHALL 保留后端更新和服务管理信息。
 6. WHILE 浏览器会话有效, 业务 API SHALL 继续执行 JWT、角色和权限校验。

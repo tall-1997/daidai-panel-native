@@ -2224,8 +2224,8 @@ fun serveDashboardStats(): JSONObject {
                 appendScriptRunLog(runId, "Dependency install failed: $type/$name (${result.first})")
                 return false
             }
-            val version = if (type == "python") queryPipInstalledPackages()[normalizePackageName(name)].orEmpty()
-                else queryNpmInstalledPackages()[normalizePackageName(name)].orEmpty()
+            val version = if (type == "python") queryPipInstalledPackages()[DependencyStorage.normalizedName(type, name)].orEmpty()
+                else queryNpmInstalledPackages()[DependencyStorage.normalizedName(type, name)].orEmpty()
             upsertInstalledDependency(name, type, version, "Auto-installed while running script")
         }
         return true
@@ -2298,6 +2298,7 @@ fun serveDashboardStats(): JSONObject {
         AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
             env["NPM_CONFIG_GLOBALCONFIG"] = File(runtime.home, "etc/npmrc").absolutePath
         }
+        val grouped = linkedMapOf<String, MutableList<String>>()
         readableDatabase.query(
             "envs",
             arrayOf("name", "value"),
@@ -2305,15 +2306,42 @@ fun serveDashboardStats(): JSONObject {
             null,
             null,
             null,
-            null
+            "id ASC"
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 val name = cursor.string("name").trim()
-                if (name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) env[name] = cursor.string("value")
+                if (name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && name !in reservedRuntimeEnvironmentNames) {
+                    grouped.getOrPut(name) { mutableListOf() } += cursor.string("value")
+                }
             }
         }
+        grouped.forEach { (name, values) -> env[name] = LocalTaskFallbackSemantics.joinEnvironmentValues(values) }
         return env
     }
+
+    private val reservedRuntimeEnvironmentNames = setOf(
+        "DAIDAI_ANDROID_LOCAL",
+        "DAIDAI_SCRIPTS_DIR",
+        "DAIDAI_NOTIFY_PY",
+        "DAIDAI_SEND_NOTIFY_JS",
+        "DAIDAI_NOTIFY_URL",
+        "DAIDAI_NOTIFY_ORIGIN",
+        "DAIDAI_NOTIFY_TOKEN",
+        "DAIDAI_NOTIFY_TIMEOUT",
+        "QL_DIR",
+        "QL_DATA_DIR",
+        "QL_SCRIPT_DIR",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PIP_TARGET",
+        "NODE_PATH",
+        "NODE_OPTIONS",
+        "NPM_CONFIG_GLOBALCONFIG",
+        "NPM_CONFIG_IGNORE_SCRIPTS",
+        "NPM_CONFIG_CACHE",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+    )
 
     private fun recordDetectedDependencies(logs: JSONArray) {
         val missingPython = Regex("ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
@@ -3333,7 +3361,7 @@ fun serveDashboardStats(): JSONObject {
         writableDatabase.beginTransaction()
         try {
             for (triple in results) {
-                val ver = installedPkgs[normalizePackageName(triple.first)] ?: ""
+                val ver = installedPkgs[DependencyStorage.normalizedName(triple.second, triple.first)] ?: ""
                 val normalizedName = DependencyStorage.normalizedName(triple.second, triple.first)
                 val runtimeVersion = if (triple.second == "python") "3.14" else ""
                 val values = ContentValues().apply {
@@ -3431,15 +3459,6 @@ fun serveDashboardStats(): JSONObject {
         else -> null
     }
 
-    private fun normalizePackageName(spec: String): String {
-        val value = spec.trim()
-        return when {
-            value.startsWith("@") -> value.indexOf('@', 1).let { versionAt -> if (versionAt > 0) value.substring(0, versionAt) else value }
-            else -> value.substringBefore("==").substringBefore(">=").substringBefore("<=")
-                .substringBefore("~=").substringBefore('>').substringBefore('<').substringBefore('@')
-        }.lowercase().replace('_', '-')
-    }
-
     private fun installedPipResponse(): NanoHTTPD.Response {
         if (AndroidPythonRuntime.ensureReady(appContext) == null) {
             return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready")
@@ -3463,7 +3482,7 @@ fun serveDashboardStats(): JSONObject {
         return try {
             val dependencies = JSONObject(text.substring(start, end)).optJSONObject("dependencies") ?: JSONObject()
             dependencies.keys().asSequence().associate { name ->
-                normalizePackageName(name) to dependencies.optJSONObject(name)?.optString("version").orEmpty()
+                DependencyStorage.normalizedName("nodejs", name) to dependencies.optJSONObject(name)?.optString("version").orEmpty()
             }
         } catch (_: Exception) { emptyMap() }
     }
@@ -3523,7 +3542,7 @@ fun serveDashboardStats(): JSONObject {
                 val noWheel = text.contains("No matching distribution found", true) || text.contains("Could not find a version", true)
                 return "failed" to if (noWheel) "$text\nANDROID_WHEEL_UNAVAILABLE: no compatible Android wheel; source builds are disabled" else text
             }
-            val verified = queryPipInstalledPackages().containsKey(normalizePackageName(name))
+            val verified = queryPipInstalledPackages().containsKey(DependencyStorage.normalizedName("python", name))
             return if (verified) "installed" to "$text\nPost-install verification: pip list confirmed $name"
             else "failed" to "$text\nPOST_VERIFY_FAILED: pip list did not report $name"
         }
@@ -3547,7 +3566,7 @@ fun serveDashboardStats(): JSONObject {
                 DependencyStorage.trimDirectory(cache, DependencyStorage.MAX_CACHE_BYTES)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) "failed" to text else {
-                    val verified = queryNpmInstalledPackages().containsKey(normalizePackageName(name))
+                    val verified = queryNpmInstalledPackages().containsKey(DependencyStorage.normalizedName("nodejs", name))
                     if (verified) "installed" to "$text\nPost-install verification: npm list confirmed $name"
                     else "failed" to "$text\nPOST_VERIFY_FAILED: npm list did not report $name"
                 }
@@ -3698,8 +3717,8 @@ fun serveDashboardStats(): JSONObject {
         val result = installDependencyForFallback(depType, record.first)
         val status = if (result.first == "installed") "installed" else "failed"
         val version = when (depType) {
-            "python" -> queryPipInstalledPackages()[normalizePackageName(record.first)].orEmpty()
-            else -> queryNpmInstalledPackages()[normalizePackageName(record.first)].orEmpty()
+            "python" -> queryPipInstalledPackages()[DependencyStorage.normalizedName("python", record.first)].orEmpty()
+            else -> queryNpmInstalledPackages()[DependencyStorage.normalizedName("nodejs", record.first)].orEmpty()
         }
         updateDependencyRecord(id, status, result.second, version)
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status).put("version", version)))

@@ -1,7 +1,7 @@
 # Android Modern 全功能本机面板设计
 
 Feature Name: android-modern-full-panel
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 ## Description
 
@@ -138,6 +138,22 @@ PanelProfile
 ### Fallback Execution Parity
 
 Kotlin fallback 仅承担 Go Core 无法启动时的兼容执行路径，但任务语义必须保持一致：结构化 argv、完整环境注入、进程句柄映射、可终止进程树、运行中日志增量落盘、游标 SSE、缺失 pip/npm 依赖识别与有界重跑。共享 contract tests 对 Go Core 和 fallback 运行同一组输入输出断言。
+
+### Instance Switching and Idle Lifecycle
+
+实例身份使用 `PanelConfig.type` 与稳定 instance ID，动态 endpoint 仅作为连接属性。切换到 managed-local 时，Flutter 直接向 Android Host 请求实时状态，解析 endpoint 和 local token 后通过 `ManagedLocalConnectionMonitor.adoptHealthy` 原子提交。远程健康检查仅用于 remote 实例。
+
+Flutter 连接 monitor 仅在前台运行周期 reconcile，进入后台后取消 Timer，恢复前台时立即复核。Android Host 每次 `ensureStarted` 都复核 Core/fallback 健康状态，缓存仅作为状态快照。WorkManager 使用 AndroidX Startup 完成初始化；fallback cron 对齐分钟边界，减少空闲唤醒。
+
+### Dependency and Environment Contracts
+
+依赖请求拆分为原始 spec、规范包名、版本约束和运行时版本。显式 Python runtime 请求只创建一个安装操作；未指定 runtime 时保留兼容客户端的全支持版本语义。安装、singleflight、后置验证和卸载共享同一规范包名。
+
+Go 与 Kotlin tokenizer 使用 `tokenStarted` 保留显式空 argv。多账号变量使用支持 JSON array、转义反斜杠、字面 `&` 和空元素的 split/join contract。平台保留变量在用户变量合并后覆盖，保护 local token、通知 endpoint、解释器和依赖路径。
+
+### Instance-Aware System Settings
+
+系统设置按 managed-local 与 remote 两种模式渲染。managed-local 展示动态 endpoint、Android `:panel` 管理方式和 runtime 摘要，Core 重启调用 MethodChannel lifecycle API；服务器自更新、systemd service 和 runtime mutation 对 APK 本地实例声明为 unsupported。remote 保留后端更新和服务管理能力。
 
 ### Android Executable Packaging
 

@@ -483,3 +483,44 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - Serve static files only on loopback with strict browser security headers.
 - Exchange a short-lived one-time ticket for a local HttpOnly session.
 - Keep JWT and role checks on all business APIs.
+
+---
+
+## Milestone 9: Instance Recovery, Idle Runtime, and Execution Parity
+
+### Task 9.1: Repair Managed-Local Switching
+
+**Status:** In progress
+
+- Preserve `PanelConfig.type` through the switch transaction.
+- Resolve managed-local endpoint and token through Android Host.
+- Revalidate Android runtime endpoint cache before reuse.
+- Add lifecycle and endpoint-rotation regression tests.
+
+### Task 9.2: Reduce Idle Background Activity
+
+**Status:** In progress
+
+- Pause Flutter local connection polling in background.
+- Restore WorkManager initialization.
+- Align fallback cron checks to minute boundaries.
+- Preserve persistent Foreground Service scheduling and native notification execution.
+
+### Task 9.3: Align Dependency, Script, and Variable Semantics
+
+**Status:** In progress
+
+- Honor explicit Python runtime versions.
+- Preserve explicit empty argv entries.
+- Share escaped multi-account environment split/join behavior.
+- Protect platform runtime and notification environment variables.
+- Reject package specs that masquerade as installer options.
+
+### Task 9.4: Make System Settings Instance-Aware
+
+**Status:** In progress
+
+- Hide server-only update and runtime mutation controls for managed-local.
+- Display local endpoint and Android Core management mode.
+- Route local Core restart through MethodChannel.
+- Remove duplicate system action links already present in the More page.

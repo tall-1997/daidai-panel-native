@@ -135,6 +135,33 @@ void main() {
     );
   });
 
+  test('pauses scheduled reconciliation in background and resumes immediately', () async {
+    final host = FakeLocalPanelHost([
+      ready(oldPanel.url, 'old-token', oldPanel.instanceId),
+      ready('http://127.0.0.1:22222', 'new-token', 'new'),
+    ]);
+    final scheduler = ManualMonitorScheduler();
+    var stored = oldPanel;
+    final monitor = ManagedLocalConnectionMonitor(
+      host: host,
+      scheduler: scheduler.schedule,
+      loadCurrentPanel: () async => stored,
+      activatePanel: (panel) async => stored = panel,
+      setManagedSession: (_, _) {},
+      clearManagedSession: () {},
+    );
+
+    await monitor.startManaged(oldPanel);
+    monitor.handleAppPaused();
+    await scheduler.fire();
+    expect(host.ensureCalls, 1);
+    expect(scheduler.cancelled, isTrue);
+
+    await monitor.handleAppResumed();
+    expect(host.ensureCalls, 2);
+    expect(stored.url, 'http://127.0.0.1:22222');
+  });
+
   test('late storage read cannot restart local after remote stop', () async {
     final storageResult = Completer<PanelConfig?>();
     final host = FakeLocalPanelHost([

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,12 +42,23 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 	case model.DepTypeNodeJS:
 		modDir := filepath.Join(depsDir, "nodejs", "node_modules", filepath.FromSlash(NormalizeNodeDependencyPackageName(name)))
 		if info, err := os.Stat(modDir); err == nil {
-			return info.IsDir()
+			if !info.IsDir() {
+				return false
+			}
+			requested, constrained := exactNodeDependencyVersion(name)
+			if !constrained {
+				return !strings.ContainsAny(nodeDependencyVersionSpec(name), "<>=~^*")
+			}
+			return requested == nodeDependencyInstalledVersion(modDir)
 		}
 	case model.DepTypePython:
 		pythonVersion = NormalizeDependencyPythonVersion(pythonVersion)
-		if pythonDistributionInstalled(ManagedPythonSitePackagesDir(pythonVersion), name) {
-			return true
+		if installed, ok := pythonDistributionVersion(ManagedPythonSitePackagesDir(pythonVersion), name); ok {
+			requested, constrained := exactPythonDependencyVersion(name)
+			if constrained {
+				return requested == installed
+			}
+			return !strings.ContainsAny(name, "<>=!~")
 		}
 		candidates := []string{
 			ResolveManagedPipBinaryForPythonVersion(pythonVersion),
@@ -64,7 +76,7 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 				showCmd := exec.Command(pipBin, "show", name)
 				showCmd.Env = SanitizePipEnv(os.Environ())
 				if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
-					return true
+					return pythonShowVersionSatisfies(name, string(out))
 				}
 			}
 		}
@@ -74,7 +86,7 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 		}
 		showCmd.Env = SanitizePipEnv(os.Environ())
 		if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
-			return true
+			return pythonShowVersionSatisfies(name, string(out))
 		}
 	case model.DepTypeLinux:
 		if _, err := exec.LookPath(name); err == nil {
@@ -103,9 +115,14 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 }
 
 func pythonDistributionInstalled(sitePackages, name string) bool {
+	_, ok := pythonDistributionVersion(sitePackages, name)
+	return ok
+}
+
+func pythonDistributionVersion(sitePackages, name string) (string, bool) {
 	entries, err := os.ReadDir(sitePackages)
 	if err != nil {
-		return false
+		return "", false
 	}
 	want := canonicalPythonDependencyName(name)
 	for _, entry := range entries {
@@ -117,10 +134,71 @@ func pythonDistributionInstalled(sitePackages, name string) bool {
 			base = base[:index]
 		}
 		if canonicalPythonDependencyName(base) == want {
-			return true
+			metadata, err := os.ReadFile(filepath.Join(sitePackages, entry.Name(), "METADATA"))
+			if err == nil {
+				for _, line := range strings.Split(string(metadata), "\n") {
+					if strings.HasPrefix(line, "Version:") {
+						return strings.TrimSpace(strings.TrimPrefix(line, "Version:")), true
+					}
+				}
+			}
+			if index := strings.LastIndex(strings.TrimSuffix(entry.Name(), ".dist-info"), "-"); index > 0 {
+				return strings.TrimSuffix(entry.Name(), ".dist-info")[index+1:], true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
+func exactPythonDependencyVersion(spec string) (string, bool) {
+	for _, separator := range []string{"===", "=="} {
+		if index := strings.Index(spec, separator); index >= 0 {
+			version := strings.TrimSpace(strings.SplitN(spec[index+len(separator):], ";", 2)[0])
+			return version, version != ""
+		}
+	}
+	return "", false
+}
+
+func pythonShowVersionSatisfies(spec, output string) bool {
+	requested, exact := exactPythonDependencyVersion(spec)
+	if !exact {
+		return !strings.ContainsAny(spec, "<>=!~")
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "Version:") {
+			return requested == strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
 		}
 	}
 	return false
+}
+
+func nodeDependencyVersionSpec(spec string) string {
+	name := NormalizeNodeDependencyPackageName(spec)
+	return strings.TrimPrefix(strings.TrimSpace(spec[len(name):]), "@")
+}
+
+func exactNodeDependencyVersion(spec string) (string, bool) {
+	version := nodeDependencyVersionSpec(spec)
+	if version == "" || version == "latest" || strings.ContainsAny(version, "<>=~^*") {
+		return "", false
+	}
+	return version, true
+}
+
+func nodeDependencyInstalledVersion(moduleDir string) string {
+	payload, err := os.ReadFile(filepath.Join(moduleDir, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(payload, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Version)
 }
 
 func NormalizeNodeDependencyPackageName(spec string) string {

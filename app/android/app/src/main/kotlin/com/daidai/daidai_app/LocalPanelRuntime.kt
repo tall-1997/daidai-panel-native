@@ -13,13 +13,13 @@ object LocalPanelRuntime {
     private var initializing = false
 
     fun tryEnsureStarted(context: Context, localToken: String): Map<String, Any> {
-        cachedResult?.let { return it }
+        val current = status(localToken)
+        if (!requiresFallback(current) || fallbackServer != null) return current
         return ensureStarted(context, localToken)
     }
 
     @Synchronized
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
-        cachedResult?.let { return it }
         initializing = true
         try {
             val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)

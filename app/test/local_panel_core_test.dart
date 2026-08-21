@@ -59,6 +59,27 @@ void main() {
     expect(status.toString(), isNot(contains('local-token-value')));
   });
 
+  test('LocalPanelStatus parses scheduler and resource details', () {
+    final status = LocalPanelStatus.fromJson(const {
+      'phase': 'ready',
+      'core_status': 'degraded-ready',
+      'scheduler_host_state': 'system_compensation',
+      'scheduler_recovery_trigger': 'network',
+      'scheduler_guarantee_state': 'resource_limited',
+      'scheduler_guarantee_reason': 'low_memory',
+      'scheduler_intervention': 'wait',
+      'resource_snapshot': {'available_memory_bytes': 1024},
+    });
+
+    expect(status.coreStatus, 'degraded-ready');
+    expect(status.schedulerHostState, 'system_compensation');
+    expect(status.schedulerRecoveryTrigger, 'network');
+    expect(status.schedulerGuaranteeState, 'resource_limited');
+    expect(status.schedulerGuaranteeReason, 'low_memory');
+    expect(status.schedulerIntervention, 'wait');
+    expect(status.resourceSnapshot['available_memory_bytes'], 1024);
+  });
+
   test('managed local headers use exact origin for Dio and SSE', () {
     final session = ManagedLocalSession();
     final client = DioClient.forTesting(Dio(), managedLocalSession: session);

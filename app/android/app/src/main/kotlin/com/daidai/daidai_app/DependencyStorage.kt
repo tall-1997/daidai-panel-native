@@ -23,6 +23,7 @@ internal object DependencyStorage {
 
     fun normalizedName(type: String, spec: String): String {
         val value = spec.trim()
+        require(!value.startsWith("-")) { "依赖名称不能以选项前缀开头" }
         val packageName = when (type) {
             "python" -> value.substringBefore(';').substringBefore('[')
                 .takeWhile { it !in "=<>!~ \t\r\n(," }

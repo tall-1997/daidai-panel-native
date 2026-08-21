@@ -28,7 +28,9 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
 
     fun start() {
         if (started.compareAndSet(false, true)) {
-            ticker.scheduleAtFixedRate(::tickSafely, 0, 1, TimeUnit.SECONDS)
+            tickSafely()
+            val initialDelay = 60 - (System.currentTimeMillis() / 1000 % 60)
+            ticker.scheduleAtFixedRate(::tickSafely, initialDelay, 60, TimeUnit.SECONDS)
         }
     }
 

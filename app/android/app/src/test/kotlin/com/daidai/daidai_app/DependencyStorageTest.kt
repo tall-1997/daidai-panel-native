@@ -6,6 +6,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,5 +68,14 @@ class DependencyStorageTest {
         assertFalse(DependencyStorage.satisfies("python", "requests==2.31.0", "2.32.0"))
         assertFalse(DependencyStorage.satisfies("python", "requests>=2.31.0", "2.32.0"))
         assertTrue(DependencyStorage.satisfies("nodejs", "lodash@4.17.21", "4.17.21"))
+    }
+
+    @Test
+    fun `python extras share canonical package identity and options are rejected`() {
+        assertEquals("requests", DependencyStorage.normalizedName("python", "Requests[security]==2.32.0"))
+        assertEquals("@scope/pkg", DependencyStorage.normalizedName("nodejs", "@scope/pkg@1.2.3"))
+        assertThrows(IllegalArgumentException::class.java) {
+            DependencyStorage.normalizedName("python", "--pre")
+        }
     }
 }

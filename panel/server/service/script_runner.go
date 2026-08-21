@@ -310,17 +310,20 @@ func splitCommandTokens(command string) ([]string, error) {
 	var current strings.Builder
 	var quote rune
 	escaped := false
+	tokenStarted := false
 
 	flush := func() {
-		if current.Len() == 0 {
+		if !tokenStarted {
 			return
 		}
 		tokens = append(tokens, current.String())
 		current.Reset()
+		tokenStarted = false
 	}
 
 	for _, r := range command {
 		if escaped {
+			tokenStarted = true
 			if r == '\'' || r == '"' || r == '\\' || unicode.IsSpace(r) {
 				current.WriteRune(r)
 			} else {
@@ -332,6 +335,7 @@ func splitCommandTokens(command string) ([]string, error) {
 		}
 
 		if r == '\\' && quote != '\'' {
+			tokenStarted = true
 			escaped = true
 			continue
 		}
@@ -346,6 +350,7 @@ func splitCommandTokens(command string) ([]string, error) {
 		}
 
 		if r == '\'' || r == '"' {
+			tokenStarted = true
 			quote = r
 			continue
 		}
@@ -356,6 +361,7 @@ func splitCommandTokens(command string) ([]string, error) {
 		}
 
 		current.WriteRune(r)
+		tokenStarted = true
 	}
 
 	if escaped {

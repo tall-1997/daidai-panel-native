@@ -43,10 +43,8 @@ object AndroidSchedulerHostStatus {
             "script_execution",
             "dependency_mutation",
             "subscription_pull",
-            "system_update",
             "system_restart",
             "backup_mutation",
-            "runtime_mutation",
             "notification_dispatch",
         ).forEach { id ->
             capabilities.put(
@@ -55,6 +53,15 @@ object AndroidSchedulerHostStatus {
                     .put("state", capabilityState)
                     .put("reasonCode", reasonCode)
                     .put("adapterId", "android.scheduler-host"),
+            )
+        }
+        listOf("system_update", "runtime_mutation").forEach { id ->
+            capabilities.put(
+                id,
+                JSONObject()
+                    .put("state", "unsupported")
+                    .put("reasonCode", "ANDROID_BUNDLED_IMMUTABLE")
+                    .put("adapterId", "android.app-update"),
             )
         }
         return JSONObject()

@@ -136,11 +136,18 @@ func normalizeDependencyPythonVersion(depType, raw string) (string, error) {
 	return service.NormalizePythonVersionStrict(raw)
 }
 
-func dependencyPythonInstallVersions(depType string) []string {
+func dependencyPythonInstallVersions(depType, requested string) ([]string, error) {
 	if depType != model.DepTypePython {
-		return []string{""}
+		return []string{""}, nil
 	}
-	return service.SupportedPythonVersions()
+	if strings.TrimSpace(requested) == "" {
+		return service.SupportedPythonVersions(), nil
+	}
+	version, err := service.NormalizePythonVersionStrict(requested)
+	if err != nil {
+		return nil, err
+	}
+	return []string{version}, nil
 }
 
 func (h *DepsHandler) List(c *gin.Context) {
@@ -199,12 +206,17 @@ func (h *DepsHandler) Create(c *gin.Context) {
 	created := []map[string]interface{}{}
 	unsupported := []map[string]interface{}{}
 	skipped := 0
+	pythonVersions, err := dependencyPythonInstallVersions(req.Type, req.PythonVersion)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	for _, name := range req.Names {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
-		for _, pythonVersion := range dependencyPythonInstallVersions(req.Type) {
+		for _, pythonVersion := range pythonVersions {
 			compatibility := service.EvaluateDependencyCompatibility(req.Type, name, pythonVersion)
 			projectedBytes := dependencyProjectedUsageBytes(req.Type, name, pythonVersion)
 			compatibility.Quota = service.ProjectedDependencyQuotaDetails(projectedBytes)

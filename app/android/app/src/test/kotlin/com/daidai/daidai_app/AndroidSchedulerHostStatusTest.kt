@@ -23,5 +23,13 @@ class AndroidSchedulerHostStatusTest {
             "enabled",
             capabilities.getJSONObject("capabilities").getJSONObject("system_restart").getString("state"),
         )
+        assertEquals(
+            "unsupported",
+            capabilities.getJSONObject("capabilities").getJSONObject("system_update").getString("state"),
+        )
+        assertEquals(
+            "unsupported",
+            capabilities.getJSONObject("capabilities").getJSONObject("runtime_mutation").getString("state"),
+        )
     }
 }

@@ -83,6 +83,7 @@ class ManagedLocalConnectionMonitor {
   final _writes = _AsyncSerialQueue();
   int _generation = 0;
   bool _remoteTransition = false;
+  bool _isForeground = true;
 
   Future<void> initializeFromStorage() async {
     if (_remoteTransition) return;
@@ -113,16 +114,13 @@ class ManagedLocalConnectionMonitor {
     final generation = ++_generation;
     _panel = panel;
     _localToken = localToken;
-    _schedule?.cancel();
-    _schedule = _scheduler(interval, reconcileNow);
+    _replaceSchedule();
     if (reconcileImmediately) await _reconcile(generation);
   }
 
   Future<bool> adoptHealthy(ManagedLocalPanelResolution resolved) async {
     if (_remoteTransition) return false;
     final generation = ++_generation;
-    _schedule?.cancel();
-    _schedule = _scheduler(interval, reconcileNow);
     return _writes.run(() async {
       if (generation != _generation) return false;
       await _activatePanel(resolved.panel);
@@ -130,6 +128,7 @@ class ManagedLocalConnectionMonitor {
       _panel = resolved.panel;
       _localToken = resolved.localToken;
       _setManagedSession(resolved.panel.url, resolved.localToken);
+      _replaceSchedule();
       return true;
     });
   }
@@ -137,11 +136,19 @@ class ManagedLocalConnectionMonitor {
   Future<void> reconcileNow() => _reconcile(_generation);
 
   Future<void> handleAppResumed() async {
+    _isForeground = true;
+    _replaceSchedule();
     if (_panel == null) {
       await initializeFromStorage();
     } else {
       await reconcileNow();
     }
+  }
+
+  void handleAppPaused() {
+    _isForeground = false;
+    _schedule?.cancel();
+    _schedule = null;
   }
 
   Future<void> stopAndDrain({
@@ -213,6 +220,13 @@ class ManagedLocalConnectionMonitor {
     } catch (_) {
       // Keep the last healthy in-memory session and retry on the next tick.
     }
+  }
+
+  void _replaceSchedule() {
+    _schedule?.cancel();
+    _schedule = _isForeground && _panel != null
+        ? _scheduler(interval, reconcileNow)
+        : null;
   }
 
   static MonitorScheduleHandle _timerScheduler(

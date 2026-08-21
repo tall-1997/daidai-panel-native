@@ -114,7 +114,7 @@ class LocalTaskFallbackSemanticsTest {
             "python '中文 目录/脚本.py' --name \"张 三\"" to listOf("python", "中文 目录/脚本.py", "--name", "张 三"),
             "script\\ path.py plus+ percent%" to listOf("script path.py", "plus+", "percent%"),
             "cmd \\\\server\\file" to listOf("cmd", "\\server\\file"),
-            "cmd '' \"\"" to listOf("cmd"),
+            "cmd '' \"\"" to listOf("cmd", "", ""),
         )
         cases.forEach { (command, expected) -> assertEquals(command, expected, LocalTaskFallbackSemantics.tokenize(command)) }
     }
@@ -134,6 +134,20 @@ class LocalTaskFallbackSemanticsTest {
         ).single()
         assertEquals("乙&丙", desi.values["账号"])
         assertEquals("2 3", desi.values["numParam"])
+
+        listOf(
+            listOf("甲&一", "", "乙\\二"),
+            listOf("a&", "b"),
+            listOf("a", "&b"),
+            listOf("a&", "&b"),
+        ).forEach { special ->
+            assertEquals(
+                special,
+                LocalTaskFallbackSemantics.splitEnvironmentValues(
+                    LocalTaskFallbackSemantics.joinEnvironmentValues(special),
+                ),
+            )
+        }
     }
 
     @Test
