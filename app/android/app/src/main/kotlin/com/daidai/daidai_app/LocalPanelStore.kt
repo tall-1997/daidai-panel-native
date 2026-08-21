@@ -810,10 +810,10 @@ class LocalPanelStore(
                 try {
                     sendChannel(cursor.string("type"), JSONObject(cursor.string("config")), title, content); sent++
                     val today = java.time.LocalDate.now().toString()
-                    writableDatabase.execSQL("UPDATE notification_channels SET today_send_count=CASE WHEN today_send_date=? THEN today_send_count+1 ELSE 1 END,today_send_date=? WHERE id=?", arrayOf(today, today, id))
-                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='success' WHERE id=?", arrayOf(Instant.now().toString(), id))
+                    writableDatabase.execSQL("UPDATE notification_channels SET today_send_count=CASE WHEN today_send_date=? THEN today_send_count+1 ELSE 1 END,today_send_date=? WHERE id=?", arrayOf<Any?>(today, today, id))
+                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='success' WHERE id=?", arrayOf<Any?>(Instant.now().toString(), id))
                 } catch (e: Exception) {
-                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='failed' WHERE id=?", arrayOf(Instant.now().toString(), id))
+                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='failed' WHERE id=?", arrayOf<Any?>(Instant.now().toString(), id))
                     failures.put(JSONObject().put("id", id).put("error", e.message ?: "发送失败"))
                 }
             }

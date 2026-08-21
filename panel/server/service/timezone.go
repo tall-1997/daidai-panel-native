@@ -10,9 +10,11 @@ import (
 
 var panelTimezoneState = struct {
 	sync.RWMutex
-	name string
+	name     string
+	location *time.Location
 }{
-	name: model.DefaultPanelTimezone,
+	name:     model.DefaultPanelTimezone,
+	location: time.Local,
 }
 
 type PanelTimezoneState struct {
@@ -33,13 +35,14 @@ func ApplyPanelTimezone(value string) error {
 		return err
 	}
 
-	// Go 进程内的 time.Now() 使用 time.Local；子进程和脚本再通过 TZ 继承同一个面板时区。
-	time.Local = location
-	_ = os.Setenv("TZ", normalized)
-
 	panelTimezoneState.Lock()
+	// time.Local is a process-global pointer read implicitly by time.Now and formatters.
+	// Mutating it while workers run creates an unavoidable race, so runtime code uses
+	// this guarded location and passes TZ explicitly to child processes.
 	panelTimezoneState.name = normalized
+	panelTimezoneState.location = location
 	panelTimezoneState.Unlock()
+	_ = os.Setenv("TZ", normalized)
 	return nil
 }
 
@@ -63,7 +66,7 @@ func CapturePanelTimezoneState() PanelTimezoneState {
 	defer panelTimezoneState.RUnlock()
 	tz, exists := os.LookupEnv("TZ")
 	return PanelTimezoneState{
-		Location: time.Local,
+		Location: panelTimezoneState.location,
 		Name:     panelTimezoneState.name,
 		TZ:       tz,
 		TZSet:    exists,
@@ -74,7 +77,10 @@ func RestorePanelTimezoneState(state PanelTimezoneState) error {
 	if state.Location == nil {
 		state.Location = time.UTC
 	}
-	time.Local = state.Location
+	panelTimezoneState.Lock()
+	panelTimezoneState.name = state.Name
+	panelTimezoneState.location = state.Location
+	panelTimezoneState.Unlock()
 	if state.TZSet {
 		if err := os.Setenv("TZ", state.TZ); err != nil {
 			return err
@@ -82,8 +88,5 @@ func RestorePanelTimezoneState(state PanelTimezoneState) error {
 	} else if err := os.Unsetenv("TZ"); err != nil {
 		return err
 	}
-	panelTimezoneState.Lock()
-	panelTimezoneState.name = state.Name
-	panelTimezoneState.Unlock()
 	return nil
 }

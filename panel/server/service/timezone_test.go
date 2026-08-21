@@ -37,7 +37,7 @@ func TestRestorePanelTimezoneStateRestoresUnsetTZ(t *testing.T) {
 	}
 }
 
-func TestApplyPanelTimezoneUpdatesLocalAndEnv(t *testing.T) {
+func TestApplyPanelTimezoneUpdatesStateAndEnv(t *testing.T) {
 	restorePanelTimezoneForTest(t)
 
 	if err := ApplyPanelTimezone("Asia/Tokyo"); err != nil {
@@ -50,8 +50,8 @@ func TestApplyPanelTimezoneUpdatesLocalAndEnv(t *testing.T) {
 	if got := os.Getenv("TZ"); got != "Asia/Tokyo" {
 		t.Fatalf("expected TZ=Asia/Tokyo, got %q", got)
 	}
-	if got := time.Local.String(); got != "Asia/Tokyo" {
-		t.Fatalf("expected time.Local Asia/Tokyo, got %q", got)
+	if state := CapturePanelTimezoneState(); state.Location == nil || state.Location.String() != "Asia/Tokyo" {
+		t.Fatalf("expected guarded location Asia/Tokyo, got %#v", state.Location)
 	}
 }
 

@@ -322,12 +322,10 @@ func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
 }
 
 func TestConfigBatchSetTimezoneAppliesImmediately(t *testing.T) {
-	oldLocal := time.Local
 	oldTZ, hadTZ := os.LookupEnv("TZ")
 	oldName := service.CurrentPanelTimezone()
 	t.Cleanup(func() {
 		_ = service.ApplyPanelTimezone(oldName)
-		time.Local = oldLocal
 		if hadTZ {
 			_ = os.Setenv("TZ", oldTZ)
 		} else {
@@ -356,9 +354,6 @@ func TestConfigBatchSetTimezoneAppliesImmediately(t *testing.T) {
 	}
 	if got := os.Getenv("TZ"); got != "UTC" {
 		t.Fatalf("expected process TZ=UTC after save, got %q", got)
-	}
-	if got := time.Local.String(); got != "UTC" {
-		t.Fatalf("expected time.Local UTC after save, got %q", got)
 	}
 
 	invalidBody := `{"configs":{"timezone":"Bad/Zone"}}`

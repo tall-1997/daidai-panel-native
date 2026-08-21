@@ -1252,9 +1252,12 @@ func TestServeFailureConcurrentWithStopLeavesNoCore(t *testing.T) {
 }
 
 func TestStopRestoresTimezoneEnvironmentAndGinMode(t *testing.T) {
-	oldLocal := time.Local
 	oldTZ, oldTZSet := os.LookupEnv("TZ")
 	oldTimezone := service.CurrentPanelTimezone()
+	oldLocation, err := time.LoadLocation(oldTimezone)
+	if err != nil {
+		t.Fatal(err)
+	}
 	oldGinMode := gin.Mode()
 	if err := service.ApplyPanelTimezone("Asia/Tokyo"); err != nil {
 		t.Fatal(err)
@@ -1262,7 +1265,7 @@ func TestStopRestoresTimezoneEnvironmentAndGinMode(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() {
 		_ = service.RestorePanelTimezoneState(service.PanelTimezoneState{
-			Location: oldLocal,
+			Location: oldLocation,
 			Name:     oldTimezone,
 			TZSet:    oldTZSet,
 			TZ:       oldTZ,
@@ -1274,7 +1277,7 @@ func TestStopRestoresTimezoneEnvironmentAndGinMode(t *testing.T) {
 	if result := decodeResult(t, StopCore(1000)); !result.OK {
 		t.Fatalf("stop core: %+v", result)
 	}
-	if time.Local.String() != "Asia/Tokyo" || service.CurrentPanelTimezone() != "Asia/Tokyo" {
+	if service.CurrentPanelTimezone() != "Asia/Tokyo" {
 		t.Fatal("timezone state was not restored")
 	}
 	if value, exists := os.LookupEnv("TZ"); !exists || value != "Asia/Tokyo" {
