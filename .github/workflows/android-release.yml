@@ -463,7 +463,8 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.verify-build.outputs.artifact_name }}
+          pattern: '*-${{ needs.verify-build.outputs.version }}-release-arm64'
+          merge-multiple: true
 
       - name: Download release evidence artifact
         uses: actions/download-artifact@v4
@@ -476,7 +477,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > release-notes.md <<'EOF'
-          # 呆呆面板本机版 ${{ github.ref_name }}
+          # 呆呆面板本机版 v${{ needs.verify-build.outputs.version }}
 
           - Android ARM64 正式签名构建版。
           - App 内嵌 Go 面板 Core，使用动态回环端口。
@@ -494,7 +495,13 @@ jobs:
           GitHub 云 runner 不支持 ARM64 Android 模拟器，附件证据将对应 ARM64 设备矩阵记录为 blocked，等待真机补充验证。
           EOF
           VERSION="${{ needs.verify-build.outputs.version }}"
-          ARTIFACT_NAME="${{ needs.verify-build.outputs.artifact_name }}"
+          APK_PATH="$(find . -maxdepth 1 -type f -name "*-${VERSION}-release-arm64.apk" -print -quit)"
+          if [[ -z "${APK_PATH}" ]]; then
+            printf 'Signed release APK was not downloaded\n' >&2
+            exit 1
+          fi
+          ARTIFACT_NAME="${APK_PATH#./}"
+          ARTIFACT_NAME="${ARTIFACT_NAME%.apk}"
           tar -czf "release-evidence-${VERSION}.tar.gz" release-evidence
           gh release create "v${VERSION}" \
             "${ARTIFACT_NAME}.apk" \
