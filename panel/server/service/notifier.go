@@ -120,7 +120,7 @@ func RedactNotificationConfig(rawConfig string) string {
 	if err := json.Unmarshal([]byte(rawConfig), &cfg); err != nil {
 		return `{"redacted":true}`
 	}
-	for _, key := range []string{"token", "secret", "password", "smtp_pass", "app_token", "authorization", "api_key"} {
+	for _, key := range []string{"token", "secret", "password", "smtp_pass", "app_token", "authorization", "api_key", "key", "bearer_token"} {
 		if _, ok := cfg[key]; ok {
 			cfg[key] = "********"
 		}
@@ -270,6 +270,9 @@ func openSealedNotificationConfig(key, raw string) ([]byte, error) {
 }
 
 func sendToChannel(ch model.NotifyChannel, title, content string, context map[string]string) error {
+	if strings.EqualFold(strings.TrimSpace(ch.Type), "pludplus") {
+		ch.Type = "pushplus"
+	}
 	cfg, err := loadNotificationConfig(ch)
 	if err != nil {
 		return err
@@ -1035,7 +1038,7 @@ func sendPushplus(cfg map[string]string, title, content string) error {
 	if token == "" {
 		return fmt.Errorf("PushPlus Token 为空")
 	}
-	apiURL := "http://www.pushplus.plus/send"
+	apiURL := "https://www.pushplus.plus/send"
 	body := map[string]string{
 		"token":   token,
 		"title":   title,

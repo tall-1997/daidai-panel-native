@@ -94,8 +94,8 @@ internal class LocalBackupService(
 
     fun saveUpload(uploaded: File, requestedName: String?): JSONObject {
         require(uploaded.isFile) { "缺少备份文件" }
+        require(uploaded.length() in 1..MAX_BACKUP_BYTES.toLong()) { "备份文件为空或过大" }
         val bytes = uploaded.readBytes()
-        require(bytes.size <= MAX_BACKUP_BYTES) { "备份文件过大" }
         val rawName = requestedName?.takeIf { it.isNotBlank() } ?: uploaded.name
         val clean = rawName.substringAfterLast('/').substringAfterLast('\\')
         require(supportedName(clean)) { "仅支持 .json、.tgz、.tar.gz 或 .enc 备份" }
@@ -123,6 +123,7 @@ internal class LocalBackupService(
     fun restore(request: JSONObject): JSONObject {
         val filename = request.optString("filename")
         val file = resolve(filename) ?: throw NoSuchElementException("备份文件不存在")
+        require(file.length() in 1..MAX_BACKUP_BYTES.toLong()) { "备份文件为空或过大" }
         // Authentication, decompression and complete validation happen before staging, DB
         // transactions, or live script changes, preserving data on wrong password/format.
         val prepared = prepareBytes(file.readBytes(), file.name, request.optString("password"))
@@ -455,11 +456,11 @@ internal class LocalBackupService(
             return lower.endsWith(".json") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz") || lower.endsWith(".enc")
         }
 
-        private val taskColumns = setOf("id", "name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after", "status", "labels", "last_run_status", "last_run_logs", "last_log_id", "created_at", "updated_at")
+        private val taskColumns = setOf("id", "name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after", "notify_on_failure", "notify_on_success", "notify_on_abort", "notification_channel_id", "status", "labels", "last_run_status", "last_run_logs", "last_log_id", "created_at", "updated_at")
         private val envColumns = setOf("id", "name", "value", "remarks", "enabled", "groups_json", "sort_order", "created_at", "updated_at")
         private val configColumns = setOf("key", "value", "updated_at")
         private val subscriptionColumns = setOf("id", "name", "url", "enabled", "type", "last_sync", "created_at", "updated_at")
-        private val notificationColumns = setOf("id", "name", "type", "config", "enabled", "created_at", "updated_at")
+        private val notificationColumns = setOf("id", "name", "type", "config", "push_scope", "enabled", "today_send_count", "today_send_date", "last_test_at", "last_test_status", "created_at", "updated_at")
         private val dependencyColumns = setOf("id", "name", "type", "python_version", "version", "status", "log", "created_at", "updated_at")
     }
 }

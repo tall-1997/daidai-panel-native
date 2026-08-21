@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -64,6 +65,11 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
+		return
+	}
+	req.Type = normalizeNotificationChannelType(req.Type)
+	if _, exists := model.GetNotifyChannelDefinition(req.Type); !exists {
+		response.BadRequest(c, "不支持的通知渠道类型")
 		return
 	}
 
@@ -146,7 +152,26 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 				response.BadRequest(c, err.Error())
 				return
 			}
-			updates[k] = normalizedConfig
+			mergedConfig, err := preserveRedactedNotificationFields(ch.Config, normalizedConfig)
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			updates[k] = mergedConfig
+			continue
+		}
+		if k == "type" {
+			rawType, ok := v.(string)
+			if !ok {
+				response.BadRequest(c, "通知渠道类型必须是字符串")
+				return
+			}
+			rawType = normalizeNotificationChannelType(rawType)
+			if _, exists := model.GetNotifyChannelDefinition(rawType); !exists {
+				response.BadRequest(c, "不支持的通知渠道类型")
+				return
+			}
+			updates[k] = rawType
 			continue
 		}
 		updates[k] = v
@@ -160,9 +185,60 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 	response.Success(c, gin.H{"message": "更新成功", "data": notificationChannelResponse(ch)})
 }
 
+func normalizeNotificationChannelType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "pludplus" {
+		return "pushplus"
+	}
+	return normalized
+}
+
+func preserveRedactedNotificationFields(existingConfig, incomingConfig string) (string, error) {
+	var existing map[string]interface{}
+	var incoming map[string]interface{}
+	if err := json.Unmarshal([]byte(existingConfig), &existing); err != nil {
+		return "", fmt.Errorf("现有通知渠道配置无效")
+	}
+	if err := json.Unmarshal([]byte(incomingConfig), &incoming); err != nil {
+		return "", fmt.Errorf("通知渠道配置无效")
+	}
+	for key, value := range incoming {
+		if text, ok := value.(string); ok && text == "********" {
+			if previous, exists := existing[key]; exists {
+				incoming[key] = previous
+			} else {
+				delete(incoming, key)
+			}
+		}
+	}
+	encoded, err := json.Marshal(incoming)
+	if err != nil {
+		return "", fmt.Errorf("通知渠道配置编码失败")
+	}
+	return string(encoded), nil
+}
+
 func (h *NotificationHandler) Delete(c *gin.Context) {
 	chID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	database.DB.Where("id = ?", chID).Delete(&model.NotifyChannel{})
+	transaction := database.DB.Begin()
+	if transaction.Error != nil {
+		response.InternalError(c, "删除通知渠道失败")
+		return
+	}
+	if err := transaction.Model(&model.Task{}).Where("notification_channel_id = ?", chID).Update("notification_channel_id", nil).Error; err != nil {
+		transaction.Rollback()
+		response.InternalError(c, "清理任务通知渠道绑定失败")
+		return
+	}
+	if err := transaction.Where("id = ?", chID).Delete(&model.NotifyChannel{}).Error; err != nil {
+		transaction.Rollback()
+		response.InternalError(c, "删除通知渠道失败")
+		return
+	}
+	if err := transaction.Commit().Error; err != nil {
+		response.InternalError(c, "提交通知渠道删除失败")
+		return
+	}
 	response.Success(c, gin.H{"message": "删除成功"})
 }
 

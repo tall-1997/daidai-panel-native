@@ -155,6 +155,12 @@ Go 与 Kotlin tokenizer 使用 `tokenStarted` 保留显式空 argv。多账号�
 
 系统设置按 managed-local 与 remote 两种模式渲染。managed-local 展示动态 endpoint、Android `:panel` 管理方式和 runtime 摘要，Core 重启调用 MethodChannel lifecycle API；服务器自更新、systemd service 和 runtime mutation 对 APK 本地实例声明为 unsupported。remote 保留后端更新和服务管理能力。
 
+### Backup Interoperability and Notification Dispatch
+
+Android 文件选择器使用 `FileType.any` 避免 SAF MIME 映射隐藏 `.tgz/.enc`，选中后按完整文件名校验 `.json/.enc/.tgz/.tar.gz`。Kotlin backup service 在 `readBytes` 前检查存储文件大小，并继续使用临时文件、完整解析和原子 rename。
+
+通知渠道以 Go registry schema 为客户端字段来源，Flutter 支持 `widget`、`default`、`show_when` 和 `push_scope`。fallback tasks 持久化成功、失败、终止开关与渠道 ID；终态统一进入 dispatcher。渠道 config 的脱敏占位符在后端逐字段合并，PushPlus 使用 HTTPS 并兼容 `pludplus` 历史拼写。
+
 ### Android Executable Packaging
 
 所有固定 ELF 以 `lib<runtime>_exec.so` 形式放入 `android/app/src/main/jniLibs/arm64-v8a/`，Gradle 使用 `jniLibs.useLegacyPackaging = true`，Manifest 设置 `android:extractNativeLibs="true"`。Android Host 只从 `ApplicationInfo.nativeLibraryDir` 解析可执行入口，禁止从 App 可写目录执行 ELF。运行时只持久化逻辑 Runtime ID，每次启动均重新读取 `ApplicationInfo.nativeLibraryDir`。

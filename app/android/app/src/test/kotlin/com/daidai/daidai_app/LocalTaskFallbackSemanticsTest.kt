@@ -3,6 +3,8 @@ package com.daidai.daidai_app
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -76,6 +78,14 @@ class LocalTaskFallbackSemanticsTest {
         assertEquals("/runtime/bin", target["PATH"])
         assertEquals("enabled", target["PANEL_ENV"])
         assertEquals("1", target["DAIDAI_ANDROID_LOCAL"])
+    }
+
+    @Test
+    fun `task notification switches match terminal status`() {
+        assertTrue(LocalTaskFallbackSemantics.shouldNotify("success", false, true, false))
+        assertTrue(LocalTaskFallbackSemantics.shouldNotify("failed", true, false, false))
+        assertTrue(LocalTaskFallbackSemantics.shouldNotify("aborted", false, false, true))
+        assertFalse(LocalTaskFallbackSemantics.shouldNotify("success", true, false, true))
     }
 
     @Test

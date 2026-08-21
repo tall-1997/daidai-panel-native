@@ -525,3 +525,24 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - Display local endpoint and Android Core management mode.
 - Route local Core restart through MethodChannel.
 - Remove duplicate system action links already present in the More page.
+
+---
+
+## Milestone 10: Backup Interoperability and Notifications
+
+### Task 10.1: Accept Backend Backup Formats
+
+**Status:** Complete
+
+- Use Android-compatible unrestricted file selection followed by strict suffix validation.
+- Accept JSON, encrypted, tgz, and tar.gz backups.
+- Enforce fallback backup size limits before loading file content.
+
+### Task 10.2: Align Notification Channels and Task Dispatch
+
+**Status:** Complete
+
+- Persist fallback task notification flags and bound channel IDs.
+- Dispatch success, failure, and abort notifications through configured channels.
+- Add push scope, send counters, test state, PushPlus compatibility, and common fallback senders.
+- Parse conditional notification field schema and preserve redacted credentials on update.

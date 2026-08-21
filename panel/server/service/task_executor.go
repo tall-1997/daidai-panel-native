@@ -346,6 +346,13 @@ func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
 		_ = DefaultOperationStore().Fail(req.OperationID, &code, "execution_failed", 0)
 		clearTaskOperation(req.TaskID, req.OperationID)
 	}
+	if task.NotifyOnFailure {
+		title, content, context := buildTaskExecutionNotification(task, req.TaskLogID, model.RunFailed, 1, 0, now, err.Error())
+		SendNotificationWithOptions(title, content, NotificationDispatchOptions{
+			ChannelIDs: buildTaskNotificationChannelIDs(task.NotificationChannelID),
+			Context:    context,
+		})
+	}
 }
 
 func KillProcessGroup(p *os.Process) {

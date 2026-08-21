@@ -46,6 +46,13 @@ internal object LocalTaskFallbackSemantics {
         target.putAll(runtime)
     }
 
+    fun shouldNotify(status: String, notifyFailure: Boolean, notifySuccess: Boolean, notifyAbort: Boolean): Boolean =
+        when (status) {
+            "success" -> notifySuccess
+            "aborted" -> notifyAbort
+            else -> notifyFailure
+        }
+
     fun tokenize(command: String): List<String> {
         val tokens = mutableListOf<String>()
         val current = StringBuilder()

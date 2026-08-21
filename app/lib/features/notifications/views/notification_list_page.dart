@@ -66,6 +66,9 @@ class NotificationFieldOption {
   final String type;
   final String hint;
   final bool required;
+  final String defaultValue;
+  final String showWhenKey;
+  final List<String> showWhenValues;
   final List<NotificationFieldChoice> options;
 
   const NotificationFieldOption({
@@ -74,6 +77,9 @@ class NotificationFieldOption {
     this.type = 'text',
     this.hint = '',
     this.required = false,
+    this.defaultValue = '',
+    this.showWhenKey = '',
+    this.showWhenValues = const [],
     this.options = const [],
   });
 
@@ -93,6 +99,9 @@ class NotificationFieldOption {
         normalizedKey.contains('api_key') ||
         normalizedKey.contains('apikey');
   }
+
+  bool isVisible(String Function(String key) valueFor) =>
+      showWhenKey.isEmpty || showWhenValues.contains(valueFor(showWhenKey));
 }
 
 class NotificationFieldChoice {
@@ -153,12 +162,18 @@ List<NotificationFieldOption> parseNotificationFields(
     if (key.isEmpty) return null;
     final label = field['label']?.toString().trim();
     final rawRequired = field['required'];
+    final showWhen = field['show_when'];
     return NotificationFieldOption(
       key: key,
       label: label == null || label.isEmpty ? key : label,
-      type: (field['type'] ?? field['input'] ?? 'text').toString(),
+      type: (field['widget'] ?? field['type'] ?? field['input'] ?? 'text').toString(),
       hint: (field['hint'] ?? field['placeholder'] ?? '').toString(),
       required: requiredKeys.contains(key) || _configBool(rawRequired),
+      defaultValue: field['default']?.toString() ?? '',
+      showWhenKey: showWhen is Map ? showWhen['key']?.toString() ?? '' : '',
+      showWhenValues: showWhen is Map && showWhen['values'] is List
+          ? (showWhen['values'] as List).map((value) => value.toString()).toList()
+          : const [],
       options: _parseFieldChoices(
         field['options'] ?? field['choices'] ?? field['enum'],
       ),
@@ -997,6 +1012,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       ...loadedTypes,
     ];
     String selectedType = channel?.type ?? availableTypes.first.type;
+    String pushScope = channel?.pushScope == 'bound' ? 'bound' : 'default';
 
     void disposeFieldControllers() {
       for (final c in fieldControllers.values) {
@@ -1008,6 +1024,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     TextEditingController getFieldController(
       String key, {
       bool credential = false,
+      String defaultValue = '',
     }) {
       final keepsExistingConfig = channel != null && selectedType == channel.type;
       final activeConfig = keepsExistingConfig
@@ -1020,7 +1037,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
               ? const JsonEncoder.withIndent('  ').convert(activeConfig)
               : credential && keepsExistingConfig
               ? ''
-              : activeConfig[key]?.toString() ?? '',
+              : activeConfig[key]?.toString() ?? defaultValue,
         ),
       );
     }
@@ -1066,6 +1083,19 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                   (field) =>
                       selectedType != 'email' ||
                       !smtpSslAliases.contains(field.key),
+                )
+                .where(
+                  (field) => field.isVisible(
+                    (key) {
+                      final controllerField = fieldDefinitions
+                          .where((candidate) => candidate.key == key)
+                          .firstOrNull;
+                      return getFieldController(
+                        key,
+                        defaultValue: controllerField?.defaultValue ?? '',
+                      ).text;
+                    },
+                  ),
                 )
                 .toList();
             return Padding(
@@ -1115,6 +1145,18 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                         }
                       },
                     ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: pushScope,
+                      decoration: const InputDecoration(labelText: '推送范围'),
+                      items: const [
+                        DropdownMenuItem(value: 'default', child: Text('默认推送（未绑定任务也发送）')),
+                        DropdownMenuItem(value: 'bound', child: Text('绑定推送（仅指定任务发送）')),
+                      ],
+                      onChanged: (value) => setSheetState(
+                        () => pushScope = value == 'bound' ? 'bound' : 'default',
+                      ),
+                    ),
                     if (fields.isNotEmpty || supportsSmtpSsl) ...[
                       const SizedBox(height: 16),
                       const Divider(height: 1),
@@ -1128,6 +1170,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                     final controller = getFieldController(
                                       f.key,
                                       credential: f.isCredential,
+                                      defaultValue: f.defaultValue,
                                     );
                                     final choices = notificationFieldChoices(
                                       f.options,
@@ -1151,8 +1194,9 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                             ),
                                           )
                                           .toList(),
-                                      onChanged: (value) =>
-                                          controller.text = value ?? '',
+                                      onChanged: (value) => setSheetState(
+                                        () => controller.text = value ?? '',
+                                      ),
                                     );
                                   },
                                 )
@@ -1160,6 +1204,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                   controller: getFieldController(
                                     f.key,
                                     credential: f.isCredential,
+                                    defaultValue: f.defaultValue,
                                   ),
                                   obscureText:
                                       f.isCredential &&
@@ -1189,6 +1234,8 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                           )
                                         : null,
                                   ),
+                                  maxLines: f.type == 'textarea' ? 5 : 1,
+                                  onChanged: (_) => setSheetState(() {}),
                                 ),
                         ),
                       ),
@@ -1322,6 +1369,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                           'name': name,
                           'type': selectedType,
                           'config': jsonEncode(configMap),
+                          'push_scope': pushScope,
                         };
 
                         try {

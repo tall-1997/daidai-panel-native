@@ -73,7 +73,7 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 13
+        const val SCHEMA_VERSION = 14
         private const val MAX_SCRIPT_LOG_LINES = 500
         private const val MAX_SCRIPT_LOG_LINE_CHARS = 4096
         private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 256_000
@@ -147,6 +147,10 @@ class LocalPanelStore(
                 python_version TEXT NOT NULL DEFAULT '',
                 task_before TEXT NOT NULL DEFAULT '',
                 task_after TEXT NOT NULL DEFAULT '',
+                notify_on_failure INTEGER NOT NULL DEFAULT 0,
+                notify_on_success INTEGER NOT NULL DEFAULT 0,
+                notify_on_abort INTEGER NOT NULL DEFAULT 0,
+                notification_channel_id INTEGER,
                 status REAL NOT NULL DEFAULT 1,
                 labels TEXT NOT NULL DEFAULT '[]',
                 last_run_status TEXT NOT NULL DEFAULT '',
@@ -221,6 +225,25 @@ class LocalPanelStore(
             db.execSQL("ALTER TABLE task_logs_local ADD COLUMN log_cursor INTEGER NOT NULL DEFAULT 0")
         }
         if (oldVersion < 13) normalizeAndDeduplicateDependencies(db)
+        if (oldVersion < 14) {
+            addColumnIfMissing(db, "tasks", "notify_on_failure", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "tasks", "notify_on_success", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "tasks", "notify_on_abort", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "tasks", "notification_channel_id", "INTEGER")
+            addColumnIfMissing(db, "notification_channels", "push_scope", "TEXT NOT NULL DEFAULT 'default'")
+            addColumnIfMissing(db, "notification_channels", "today_send_count", "INTEGER NOT NULL DEFAULT 0")
+            addColumnIfMissing(db, "notification_channels", "today_send_date", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing(db, "notification_channels", "last_test_at", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing(db, "notification_channels", "last_test_status", "TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, declaration: String) {
+        val exists = db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }.any { it == column }
+        }
+        if (!exists) db.execSQL("ALTER TABLE $table ADD COLUMN $column $declaration")
     }
 
     private fun createFallbackCoreTables(db: SQLiteDatabase) {
@@ -298,7 +321,12 @@ class LocalPanelStore(
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
                 config TEXT NOT NULL DEFAULT '{}',
+                push_scope TEXT NOT NULL DEFAULT 'default',
                 enabled INTEGER NOT NULL DEFAULT 1,
+                today_send_count INTEGER NOT NULL DEFAULT 0,
+                today_send_date TEXT NOT NULL DEFAULT '',
+                last_test_at TEXT NOT NULL DEFAULT '',
+                last_test_status TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""".trimIndent()
@@ -324,6 +352,7 @@ class LocalPanelStore(
             ensureMirrorDefaults(db)
         }
         normalizeAndDeduplicateDependencies(db)
+        db.execSQL("UPDATE notification_channels SET type='pushplus' WHERE lower(type)='pludplus'")
         cleanupStorage(db)
     }
 
@@ -682,9 +711,9 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("notification_channels", notificationRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createNotification(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateNotification(id, body(session))
-            id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("notification_channels", id)
+            id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> deleteNotification(id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") -> setNotificationEnabled(id, action == "enable")
-            id != null && session.method == NanoHTTPD.Method.POST && action == "test" -> sendNotificationByIds("呆呆面板测试通知", "通知渠道配置正常", setOf(id), includeDisabled = true)
+            id != null && session.method == NanoHTTPD.Method.POST && action == "test" -> sendNotificationByIds("呆呆面板测试通知", "通知渠道配置正常", setOf(id), includeDisabled = true, isTest = true)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "通知接口不存在")
         }
     }
@@ -700,14 +729,26 @@ class LocalPanelStore(
     private fun notificationJson(cursor: Cursor) = JSONObject().apply {
         put("id", cursor.long("id")); put("name", cursor.string("name")); put("type", cursor.string("type"))
         put("config", try { JSONObject(cursor.string("config")) } catch (_: Exception) { JSONObject() })
-        put("enabled", cursor.int("enabled") != 0); put("created_at", cursor.string("created_at")); put("updated_at", cursor.string("updated_at"))
+        put("push_scope", cursor.string("push_scope")); put("enabled", cursor.int("enabled") != 0)
+        put("today_send_count", cursor.int("today_send_count")); put("last_test_at", cursor.string("last_test_at")); put("last_test_status", cursor.string("last_test_status"))
+        put("created_at", cursor.string("created_at")); put("updated_at", cursor.string("updated_at"))
     }
 
     private fun notificationTypes(): NanoHTTPD.Response = ok(JSONObject().put("data", JSONArray()
         .put(JSONObject().put("type", "android_local").put("name", "Android 本地通知"))
         .put(JSONObject().put("type", "webhook").put("name", "Webhook"))
+        .put(JSONObject().put("type", "telegram").put("name", "Telegram"))
+        .put(JSONObject().put("type", "dingtalk").put("name", "钉钉"))
+        .put(JSONObject().put("type", "feishu").put("name", "飞书"))
+        .put(JSONObject().put("type", "bark").put("name", "Bark"))
+        .put(JSONObject().put("type", "pushplus").put("name", "PushPlus"))
+        .put(JSONObject().put("type", "serverchan").put("name", "Server酱"))
+        .put(JSONObject().put("type", "pushdeer").put("name", "PushDeer"))
+        .put(JSONObject().put("type", "discord").put("name", "Discord"))
+        .put(JSONObject().put("type", "slack").put("name", "Slack"))
         .put(JSONObject().put("type", "ntfy").put("name", "ntfy"))
-        .put(JSONObject().put("type", "gotify").put("name", "Gotify"))))
+        .put(JSONObject().put("type", "gotify").put("name", "Gotify"))
+        .put(JSONObject().put("type", "wxpusher").put("name", "WxPusher"))))
 
     private fun configString(json: JSONObject): String {
         val value = json.opt("config")
@@ -715,20 +756,27 @@ class LocalPanelStore(
     }
 
     private fun createNotification(json: JSONObject): NanoHTTPD.Response {
-        val name = json.optString("name").trim(); val type = json.optString("type").trim()
-        if (name.isEmpty() || type !in setOf("android_local", "webhook", "ntfy", "gotify")) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道名称或类型无效")
+        val name = json.optString("name").trim(); val type = normalizeNotificationType(json.optString("type"))
+        if (name.isEmpty() || type !in supportedNotificationTypes) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道名称或类型无效")
         val now = Instant.now().toString()
         val id = writableDatabase.insertOrThrow("notification_channels", null, ContentValues().apply {
-            put("name", name); put("type", type); put("config", configString(json)); put("enabled", if (json.optBoolean("enabled", true)) 1 else 0); put("created_at", now); put("updated_at", now)
+            put("name", name); put("type", type); put("config", configString(json)); put("push_scope", normalizePushScope(json.optString("push_scope"))); put("enabled", if (json.optBoolean("enabled", true)) 1 else 0); put("created_at", now); put("updated_at", now)
         })
         return ok(JSONObject().put("data", JSONObject().put("id", id)).put("message", "创建成功"))
     }
 
     private fun updateNotification(id: Long, json: JSONObject): NanoHTTPD.Response {
+        if (json.has("type") && normalizeNotificationType(json.optString("type")) !in supportedNotificationTypes) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道类型无效")
+        }
+        if (json.has("name") && json.optString("name").trim().isEmpty()) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道名称不能为空")
+        }
         val values = ContentValues().apply {
             if (json.has("name")) put("name", json.optString("name").trim())
-            if (json.has("type")) put("type", json.optString("type").trim())
+            if (json.has("type")) put("type", normalizeNotificationType(json.optString("type")))
             if (json.has("config")) put("config", configString(json))
+            if (json.has("push_scope")) put("push_scope", normalizePushScope(json.optString("push_scope")))
             if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
             put("updated_at", Instant.now().toString())
         }
@@ -752,43 +800,109 @@ class LocalPanelStore(
         return sendNotificationByIds(title, content, ids, includeDisabled = false)
     }
 
-    private fun sendNotificationByIds(title: String, content: String, ids: Set<Long>?, includeDisabled: Boolean): NanoHTTPD.Response {
+    private fun sendNotificationByIds(title: String, content: String, ids: Set<Long>?, includeDisabled: Boolean, isTest: Boolean = false): NanoHTTPD.Response {
         val failures = JSONArray(); var sent = 0
-        readableDatabase.query("notification_channels", arrayOf("id", "type", "config", "enabled"), null, null, null, null, "id ASC").use { cursor ->
+        readableDatabase.query("notification_channels", arrayOf("id", "type", "config", "push_scope", "enabled"), null, null, null, null, "id ASC").use { cursor ->
             while (cursor.moveToNext()) {
                 val id = cursor.long("id"); if (ids != null && id !in ids) continue
+                if (ids == null && cursor.string("push_scope") == "bound") continue
                 if (!includeDisabled && cursor.int("enabled") == 0) continue
-                try { sendChannel(cursor.string("type"), JSONObject(cursor.string("config")), title, content); sent++ }
-                catch (e: Exception) { failures.put(JSONObject().put("id", id).put("error", e.message ?: "发送失败")) }
+                try {
+                    sendChannel(cursor.string("type"), JSONObject(cursor.string("config")), title, content); sent++
+                    val today = java.time.LocalDate.now().toString()
+                    writableDatabase.execSQL("UPDATE notification_channels SET today_send_count=CASE WHEN today_send_date=? THEN today_send_count+1 ELSE 1 END,today_send_date=? WHERE id=?", arrayOf(today, today, id))
+                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='success' WHERE id=?", arrayOf(Instant.now().toString(), id))
+                } catch (e: Exception) {
+                    if (isTest) writableDatabase.execSQL("UPDATE notification_channels SET last_test_at=?,last_test_status='failed' WHERE id=?", arrayOf(Instant.now().toString(), id))
+                    failures.put(JSONObject().put("id", id).put("error", e.message ?: "发送失败"))
+                }
             }
         }
         if (sent == 0 && failures.length() > 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, failures.optJSONObject(0)?.optString("error") ?: "发送失败")
+        if (sent == 0 && ids != null) return error(NanoHTTPD.Response.Status.NOT_FOUND, "未找到已启用的目标通知渠道")
         return ok(JSONObject().put("message", "已发送 $sent 个渠道").put("sent", sent).put("failures", failures))
+    }
+
+    private fun normalizePushScope(value: String): String = if (value.trim().lowercase() == "bound") "bound" else "default"
+    private fun normalizeNotificationType(value: String): String = when (value.trim().lowercase()) {
+        "pludplus" -> "pushplus"
+        else -> value.trim().lowercase()
+    }
+
+    private fun deleteNotification(id: Long): NanoHTTPD.Response {
+        writableDatabase.beginTransaction()
+        return try {
+            writableDatabase.execSQL("UPDATE tasks SET notification_channel_id=NULL WHERE notification_channel_id=?", arrayOf(id))
+            val deleted = writableDatabase.delete("notification_channels", "id=?", arrayOf(id.toString()))
+            if (deleted == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "通知渠道不存在")
+            writableDatabase.setTransactionSuccessful()
+            ok(JSONObject().put("data", JSONObject().put("id", id)))
+        } finally {
+            writableDatabase.endTransaction()
+        }
     }
 
     private fun sendChannel(type: String, config: JSONObject, title: String, content: String) {
         when (type) {
             "android_local" -> postAndroidNotification("panel_channel", title, content)
             "webhook" -> httpPost(config.optString("url").ifBlank { config.optString("webhook") }, JSONObject().put("title", title).put("content", content), emptyMap())
+            "telegram" -> requireBusinessSuccess("telegram", httpPost(config.optString("api_host", "https://api.telegram.org").trimEnd('/') + "/bot" + config.optString("token") + "/sendMessage", JSONObject().put("chat_id", config.optString("chat_id")).put("text", "$title\n$content"), emptyMap()))
+            "dingtalk" -> {
+                require(config.optString("secret").isBlank()) { "Kotlin fallback 暂不支持钉钉加签，请使用完整 Go Core 或移除 secret" }
+                requireBusinessSuccess("dingtalk", httpPost(config.optString("webhook"), JSONObject().put("msgtype", "markdown").put("markdown", JSONObject().put("title", title).put("text", "### $title\n$content")), emptyMap()))
+            }
+            "feishu" -> {
+                require(config.optString("secret").isBlank()) { "Kotlin fallback 暂不支持飞书加签，请使用完整 Go Core 或移除 secret" }
+                requireBusinessSuccess("feishu", httpPost(config.optString("webhook"), JSONObject().put("msg_type", "text").put("content", JSONObject().put("text", "$title\n$content")), emptyMap()))
+            }
+            "bark" -> requireBusinessSuccess("bark", httpPost(config.optString("server", "https://api.day.app").trimEnd('/') + "/push", JSONObject().put("device_key", config.optString("key")).put("title", title).put("body", content), emptyMap()))
+            "pushplus" -> requireBusinessSuccess("pushplus", httpPost("https://www.pushplus.plus/send", JSONObject().put("token", config.optString("token")).put("title", title).put("content", content).put("topic", config.optString("topic")).put("template", config.optString("template", "html")), emptyMap()))
+            "serverchan" -> requireBusinessSuccess("serverchan", httpPost("https://sctapi.ftqq.com/" + config.optString("key") + ".send", "title=" + java.net.URLEncoder.encode(title, "UTF-8") + "&desp=" + java.net.URLEncoder.encode(content, "UTF-8"), emptyMap(), "application/x-www-form-urlencoded"))
+            "pushdeer" -> requireBusinessSuccess("pushdeer", httpPost(config.optString("server", "https://api2.pushdeer.com").trimEnd('/') + "/message/push", JSONObject().put("pushkey", config.optString("key")).put("text", title).put("desp", content), emptyMap()))
+            "discord" -> httpPost(config.optString("webhook"), JSONObject().put("content", "**$title**\n$content"), emptyMap())
+            "slack" -> httpPost(config.optString("webhook"), JSONObject().put("text", "*$title*\n$content"), emptyMap())
             "ntfy" -> {
                 val base = config.optString("server", "https://ntfy.sh").trimEnd('/'); val topic = config.optString("topic")
                 val headers = mutableMapOf("Title" to title); config.optString("token").takeIf { it.isNotBlank() }?.let { headers["Authorization"] = "Bearer $it" }
                 httpPost("$base/$topic", content, headers, "text/plain; charset=utf-8")
             }
             "gotify" -> httpPost(config.optString("server").trimEnd('/') + "/message?token=" + java.net.URLEncoder.encode(config.optString("token"), "UTF-8"), JSONObject().put("title", title).put("message", content).put("priority", 5), emptyMap())
+            "wxpusher" -> requireBusinessSuccess("wxpusher", httpPost(config.optString("server", "https://wxpusher.zjiecode.com").trimEnd('/') + "/api/send/message", JSONObject().put("appToken", config.optString("app_token")).put("summary", title).put("content", content).put("contentType", 1).put("uids", JSONArray(config.optString("uids").split(',').map(String::trim).filter(String::isNotEmpty))), emptyMap()))
             else -> throw IllegalArgumentException("不支持的通知类型")
         }
     }
 
-    private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8") {
+    private val supportedNotificationTypes = setOf("android_local", "webhook", "telegram", "dingtalk", "feishu", "bark", "pushplus", "serverchan", "pushdeer", "discord", "slack", "ntfy", "gotify", "wxpusher")
+
+    private fun requireBusinessSuccess(type: String, responseBody: String) {
+        val response = runCatching { JSONObject(responseBody) }.getOrElse { throw IllegalStateException("$type 返回无效 JSON") }
+        val success = when (type) {
+            "telegram" -> response.optBoolean("ok", false)
+            "pushplus" -> response.optInt("code", -1) == 200
+            "dingtalk" -> response.optInt("errcode", -1) == 0
+            "feishu" -> response.optInt("code", response.optInt("StatusCode", -1)) == 0
+            "bark" -> response.optInt("code", -1) == 200
+            "serverchan" -> response.optInt("code", response.optInt("errno", -1)) == 0
+            "pushdeer" -> response.optInt("code", -1) == 0
+            "wxpusher" -> response.optInt("code", -1) in setOf(0, 1000)
+            else -> true
+        }
+        if (!success) throw IllegalStateException(response.optString("msg").ifBlank { response.optString("errmsg").ifBlank { "$type 业务响应失败" } })
+    }
+
+    private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8"): String {
         val uri = URI(url); if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) throw IllegalArgumentException("仅支持 HTTP(S) 地址")
         if (InetAddress.getAllByName(uri.host).any(::isPrivateNotificationTarget)) throw IllegalArgumentException("拒绝 localhost/private 通知目标")
         val connection = uri.toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 5000; connection.readTimeout = 10000; connection.instanceFollowRedirects = false; connection.requestMethod = "POST"; connection.doOutput = true
         connection.setRequestProperty("Content-Type", contentType); headers.forEach(connection::setRequestProperty)
         connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-        val code = connection.responseCode; connection.disconnect()
+        val code = connection.responseCode
+        val responseBody = (if (code in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        connection.disconnect()
         if (code !in 200..299) throw IllegalStateException("通知服务返回 HTTP $code")
+        return responseBody
     }
 
     private fun isPrivateNotificationTarget(address: InetAddress): Boolean {
@@ -802,7 +916,9 @@ class LocalPanelStore(
     }
 
     private fun postAndroidNotification(channelId: String, title: String, content: String) {
-        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            throw IllegalStateException("POST_NOTIFICATIONS_DENIED: 请在系统设置中允许通知")
+        }
         val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (android.os.Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channelId, if (channelId == "task_channel") "任务通知" else "面板通知", NotificationManager.IMPORTANCE_DEFAULT))
         manager.notify((System.nanoTime() and 0x7fffffff).toInt(), NotificationCompat.Builder(appContext, channelId).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(title).setContentText(content).setStyle(NotificationCompat.BigTextStyle().bigText(content)).setAutoCancel(true).build())
@@ -1507,6 +1623,10 @@ fun serveDashboardStats(): JSONObject {
             .put("python_version", cursor.string("python_version"))
             .put("task_before", cursor.string("task_before"))
             .put("task_after", cursor.string("task_after"))
+            .put("notify_on_failure", cursor.int("notify_on_failure") != 0)
+            .put("notify_on_success", cursor.int("notify_on_success") != 0)
+            .put("notify_on_abort", cursor.int("notify_on_abort") != 0)
+            .put("notification_channel_id", if (cursor.isNull(cursor.getColumnIndexOrThrow("notification_channel_id"))) JSONObject.NULL else cursor.long("notification_channel_id"))
             .put("status", cursor.double("status"))
             .put("labels", JSONArray(cursor.string("labels")))
             .put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
@@ -2609,6 +2729,10 @@ fun serveDashboardStats(): JSONObject {
         .put("updated_at", Instant.ofEpochMilli(file.lastModified()).toString())
 
     private fun createTask(json: JSONObject): NanoHTTPD.Response {
+        val channelId = taskNotificationChannelId(json)
+            ?: if (json.has("notification_channel_id") && !json.isNull("notification_channel_id") && json.optLong("notification_channel_id") > 0) {
+                return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道不存在")
+            } else null
         val now = Instant.now().toString()
         val values = ContentValues().apply {
             put("name", json.optString("name", "未命名任务"))
@@ -2618,6 +2742,10 @@ fun serveDashboardStats(): JSONObject {
             put("python_version", json.optString("python_version"))
             put("task_before", json.optString("task_before"))
             put("task_after", json.optString("task_after"))
+            put("notify_on_failure", if (json.optBoolean("notify_on_failure")) 1 else 0)
+            put("notify_on_success", if (json.optBoolean("notify_on_success")) 1 else 0)
+            put("notify_on_abort", if (json.optBoolean("notify_on_abort")) 1 else 0)
+            channelId?.let { put("notification_channel_id", it) }
             put("status", json.optDouble("status", 1.0))
             put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("created_at", now)
@@ -2640,6 +2768,10 @@ fun serveDashboardStats(): JSONObject {
                 put("python_version", cursor.string("python_version"))
                 put("task_before", cursor.string("task_before"))
                 put("task_after", cursor.string("task_after"))
+                put("notify_on_failure", cursor.int("notify_on_failure") != 0)
+                put("notify_on_success", cursor.int("notify_on_success") != 0)
+                put("notify_on_abort", cursor.int("notify_on_abort") != 0)
+                put("notification_channel_id", if (cursor.isNull(cursor.getColumnIndexOrThrow("notification_channel_id"))) JSONObject.NULL else cursor.long("notification_channel_id"))
                 put("labels", JSONArray(cursor.string("labels")))
                 put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
                 put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
@@ -2656,9 +2788,20 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun updateTask(id: Long, json: JSONObject): NanoHTTPD.Response {
+        val channelId = taskNotificationChannelId(json)
+        if (json.has("notification_channel_id") && !json.isNull("notification_channel_id") && json.optLong("notification_channel_id") > 0 && channelId == null) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道不存在")
+        }
         val values = ContentValues().apply {
             listOf("name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after").forEach { key ->
                 if (json.has(key)) put(key, json.optString(key))
+            }
+            listOf("notify_on_failure", "notify_on_success", "notify_on_abort").forEach { key ->
+                if (json.has(key)) put(key, if (json.optBoolean(key)) 1 else 0)
+            }
+            if (json.has("notification_channel_id")) {
+                if (json.isNull("notification_channel_id")) putNull("notification_channel_id")
+                else if (channelId == null) putNull("notification_channel_id") else put("notification_channel_id", channelId)
             }
             if (json.has("status")) put("status", json.optDouble("status"))
             if (json.has("labels")) put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
@@ -2666,6 +2809,14 @@ fun serveDashboardStats(): JSONObject {
         }
         writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         return taskDetail(id)
+    }
+
+    private fun taskNotificationChannelId(json: JSONObject): Long? {
+        if (!json.has("notification_channel_id") || json.isNull("notification_channel_id")) return null
+        val id = json.optLong("notification_channel_id")
+        if (id <= 0) return null
+        return readableDatabase.query("notification_channels", arrayOf("id"), "id=?", arrayOf(id.toString()), null, null, null)
+            .use { if (it.moveToFirst()) id else null }
     }
 
     private fun updateTaskStatus(id: Long, action: String): NanoHTTPD.Response {
@@ -2872,15 +3023,63 @@ fun serveDashboardStats(): JSONObject {
             val result = final.first
             val logId = final.second
             appLog("Task", "Task $id result: ${result.status} exit=${result.exitCode}")
-            try {
-                val taskName = readableDatabase.rawQuery("SELECT name FROM tasks WHERE id=?", arrayOf(id.toString())).use { c -> if (c.moveToFirst()) c.getString(0) else "任务 $id" }
-                postAndroidNotification("task_channel", taskName, if (result.status == "success") "任务执行成功" else "任务执行失败（exit=${result.exitCode ?: "unknown"}）")
-            } catch (e: Exception) { appLog("Notification", "Task notification skipped: ${e.message}") }
+            dispatchTaskCompletionNotification(id, result)
             return result to logId
         } finally {
             if (ownsLifecycle) clearTaskRun(id)
         }
     }
+
+    private fun dispatchTaskCompletionNotification(taskId: Long, result: LocalScriptResult) {
+        try {
+            val settings = readableDatabase.query(
+                "tasks",
+                arrayOf("name", "notify_on_failure", "notify_on_success", "notify_on_abort", "notification_channel_id"),
+                "id=?",
+                arrayOf(taskId.toString()),
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) return
+                val channelIndex = cursor.getColumnIndexOrThrow("notification_channel_id")
+                TaskNotificationSettings(
+                    name = cursor.string("name"),
+                    notifyFailure = cursor.int("notify_on_failure") != 0,
+                    notifySuccess = cursor.int("notify_on_success") != 0,
+                    notifyAbort = cursor.int("notify_on_abort") != 0,
+                    channelId = if (cursor.isNull(channelIndex)) null else cursor.getLong(channelIndex),
+                )
+            }
+            val enabled = LocalTaskFallbackSemantics.shouldNotify(
+                result.status,
+                settings.notifyFailure,
+                settings.notifySuccess,
+                settings.notifyAbort,
+            )
+            if (!enabled) return
+            val content = when (result.status) {
+                "success" -> "任务执行成功"
+                "aborted" -> "任务已终止"
+                else -> "任务执行失败（exit=${result.exitCode ?: "unknown"}）"
+            }
+            val response = sendNotificationByIds(settings.name, content, settings.channelId?.let(::setOf), includeDisabled = false)
+            if (response.status.requestStatus >= 400) {
+                throw IllegalStateException("通知渠道发送失败（HTTP ${response.status.requestStatus}）")
+            }
+            appLog("Notification", "Task $taskId notification dispatched: ${result.status}")
+        } catch (error: Exception) {
+            appLog("Notification", "Task $taskId notification failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+    }
+
+    private data class TaskNotificationSettings(
+        val name: String,
+        val notifyFailure: Boolean,
+        val notifySuccess: Boolean,
+        val notifyAbort: Boolean,
+        val channelId: Long?,
+    )
 
     private fun runTaskNow(id: Long, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         return readableDatabase.query(

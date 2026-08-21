@@ -1,4 +1,5 @@
 import 'package:daidai_app/features/notifications/views/notification_list_page.dart';
+import 'package:daidai_app/shared/models/notify_channel.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -20,6 +21,24 @@ void main() {
     expect(choices.map((choice) => choice.value), ['future-value', 'known']);
     expect(choices.first.label, 'future-value（当前值）');
     expect(notificationFieldChoices(options, 'known'), same(options));
+  });
+
+  test('notification channel parses push scope and delivery state', () {
+    final channel = NotifyChannel.fromJson({
+      'id': 1,
+      'name': 'Task only',
+      'push_scope': 'bound',
+      'today_send_count': 3,
+      'last_test_at': '2026-08-21T00:00:00Z',
+      'last_test_status': 'success',
+      'created_at': '2026-08-21T00:00:00Z',
+      'updated_at': '2026-08-21T00:00:00Z',
+    });
+
+    expect(channel.pushScope, 'bound');
+    expect(channel.todaySendCount, 3);
+    expect(channel.lastTestStatus, 'success');
+    expect(channel.lastTestAt, isNotNull);
   });
 
   group('NotificationTypeOption', () {
@@ -95,6 +114,33 @@ void main() {
 
       expect(option.hasFieldsSchema, isTrue);
       expect(option.fields, isEmpty);
+    });
+
+    test('parses widget defaults and show_when conditions', () {
+      final option = NotificationTypeOption.fromJson({
+        'type': 'wecom',
+        'fields': [
+          {
+            'key': 'msg_type',
+            'widget': 'select',
+            'default': 'text',
+          },
+          {
+            'key': 'image_base64',
+            'widget': 'textarea',
+            'show_when': {
+              'key': 'msg_type',
+              'values': ['image'],
+            },
+          },
+        ],
+      });
+
+      expect(option.fields.first.type, 'select');
+      expect(option.fields.first.defaultValue, 'text');
+      expect(option.fields.last.type, 'textarea');
+      expect(option.fields.last.isVisible((_) => 'text'), isFalse);
+      expect(option.fields.last.isVisible((_) => 'image'), isTrue);
     });
 
     test('safely ignores invalid field entries', () {

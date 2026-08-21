@@ -6,6 +6,10 @@ class NotifyChannel {
   final String type;
   final Map<String, dynamic> config;
   final bool enabled;
+  final String pushScope;
+  final int todaySendCount;
+  final DateTime? lastTestAt;
+  final String lastTestStatus;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -15,6 +19,10 @@ class NotifyChannel {
     this.type = '',
     this.config = const {},
     this.enabled = true,
+    this.pushScope = 'default',
+    this.todaySendCount = 0,
+    this.lastTestAt,
+    this.lastTestStatus = '',
     required this.createdAt,
     required this.updatedAt,
   });
@@ -26,6 +34,10 @@ class NotifyChannel {
       type: json['type']?.toString() ?? '',
       config: _config(json['config']),
       enabled: _bool(json['enabled'], fallback: true),
+      pushScope: json['push_scope']?.toString() ?? 'default',
+      todaySendCount: _int(json['today_send_count']),
+      lastTestAt: _date(json['last_test_at']),
+      lastTestStatus: json['last_test_status']?.toString() ?? '',
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       updatedAt: _date(json['updated_at']) ?? DateTime.now(),
     );
@@ -35,6 +47,7 @@ class NotifyChannel {
     'name': name,
     'type': type,
     'config': jsonEncode(config),
+    'push_scope': pushScope,
   };
 }
 

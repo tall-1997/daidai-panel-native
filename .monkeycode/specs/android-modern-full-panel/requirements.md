@@ -244,4 +244,24 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 2. WHILE 当前实例为 managed-local, Client SHALL 隐藏后端自更新、systemd 服务和 runtime mutation 操作。
 3. WHEN 用户重启 managed-local Core, Client SHALL 使用 Android Host lifecycle API 并采用返回的新 endpoint。
 4. WHILE 当前实例为 remote, Client SHALL 保留后端更新和服务管理信息。
+
+## Requirement 25：跨实例备份导入
+
+**User Story:** 作为面板管理员，我希望把远程面板导出的备份导入本地实例，以便迁移任务和配置。
+
+1. WHEN 用户选择备份文件, Client SHALL 允许 `.json`、`.enc`、`.tgz` 和 `.tar.gz` 文件进入内容校验流程。
+2. IF 文件扩展名不在支持集合, Client SHALL 在上传前展示文件名与支持格式。
+3. WHEN fallback 接收备份文件, Backup Service SHALL 在读取内容前执行文件大小限制。
+4. WHEN Go `.tgz` 或 `.enc` 备份包含 fallback 未支持类别, Restore Result SHALL 保留支持类别并报告跳过类别。
+
+## Requirement 26：通知渠道与任务终态推送
+
+**User Story:** 作为自动化用户，我希望任务结束后按配置渠道收到通知，以便及时了解执行结果。
+
+1. Notification Registry SHALL 以 `pushplus` 作为 PushPlus 标准类型并兼容历史 `pludplus` 拼写。
+2. WHEN 任务进入成功、失败或终止状态, Executor SHALL 按对应开关分派一次通知。
+3. WHEN 任务绑定渠道, Dispatcher SHALL 仅发送到目标渠道；未绑定任务 SHALL 发送到 enabled default 渠道。
+4. WHEN 客户端编辑脱敏凭据, Backend SHALL 保留原始凭据字段。
+5. WHEN 通知字段包含 `show_when`, Client SHALL 仅展示和校验当前条件命中的字段。
+6. Kotlin fallback SHALL 支持 Android local、Webhook、Telegram、钉钉、飞书、Bark、PushPlus、Server酱、PushDeer、Discord、Slack、ntfy、Gotify 和 WxPusher 渠道。
 6. WHILE 浏览器会话有效, 业务 API SHALL 继续执行 JWT、角色和权限校验。

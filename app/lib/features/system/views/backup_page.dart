@@ -14,6 +14,14 @@ import '../../../shared/widgets/app_card.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 
+bool isSupportedBackupFilename(String filename) {
+  final normalized = filename.trim().toLowerCase();
+  return normalized.endsWith('.json') ||
+      normalized.endsWith('.enc') ||
+      normalized.endsWith('.tgz') ||
+      normalized.endsWith('.tar.gz');
+}
+
 class BackupPage extends ConsumerStatefulWidget {
   const BackupPage({super.key});
 
@@ -520,8 +528,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       allowMultiple: false,
       withData: false,
       withReadStream: true,
-      type: FileType.custom,
-      allowedExtensions: const ['json', 'enc', 'tgz', 'gz'],
+      type: FileType.any,
       dialogTitle: '选择备份文件',
     );
     if (result == null || result.files.isEmpty) {
@@ -529,6 +536,10 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     }
 
     final file = result.files.first;
+    if (!isSupportedBackupFilename(file.name)) {
+      _showMessage('不支持的备份格式：${file.name}。请选择 .json、.enc、.tgz 或 .tar.gz 文件');
+      return;
+    }
     final multipart = await _toMultipartFile(file);
     if (multipart == null) {
       _showMessage('无法读取所选备份文件');
