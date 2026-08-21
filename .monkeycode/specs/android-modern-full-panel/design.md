@@ -143,7 +143,7 @@ Kotlin fallback 仅承担 Go Core 无法启动时的兼容执行路径，但任�
 
 实例身份使用 `PanelConfig.type` 与稳定 instance ID，动态 endpoint 仅作为连接属性。切换到 managed-local 时，Flutter 直接向 Android Host 请求实时状态，解析 endpoint 和 local token 后通过 `ManagedLocalConnectionMonitor.adoptHealthy` 原子提交。远程健康检查仅用于 remote 实例。
 
-Flutter 连接 monitor 仅在前台运行周期 reconcile，进入后台后取消 Timer，恢复前台时立即复核。Android Host 每次 `ensureStarted` 都复核 Core/fallback 健康状态，缓存仅作为状态快照。WorkManager 使用 AndroidX Startup 完成初始化；fallback cron 对齐分钟边界，减少空闲唤醒。
+Flutter 连接 monitor 仅在前台运行周期 reconcile，进入后台后取消 Timer，恢复前台时立即复核。Android Host 每次 `ensureStarted` 都复核 Core/fallback 健康状态，缓存仅作为状态快照。WorkManager 通过 `Configuration.Provider` 按需初始化；fallback cron 对齐分钟边界，减少空闲唤醒。
 
 ### Dependency and Environment Contracts
 

@@ -502,7 +502,7 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 **Status:** In progress
 
 - Pause Flutter local connection polling in background.
-- Restore WorkManager initialization.
+- Verify WorkManager on-demand initialization through `Configuration.Provider`.
 - Align fallback cron checks to minute boundaries.
 - Preserve persistent Foreground Service scheduling and native notification execution.
 
