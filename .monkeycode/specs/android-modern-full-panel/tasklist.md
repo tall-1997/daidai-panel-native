@@ -435,3 +435,51 @@ Run 100 Core cycles, API matrix, 24-hour and seven-day tests, low-storage, Doze,
 - Push `main` and complete snapshot APK validation.
 - Remove confirmed local and remote integration/test branches after merge verification.
 - No release is labeled full-featured before Milestones 1-6 all pass.
+
+---
+
+## Milestone 8: Task UX, Storage, and Local Web
+
+### Task 8.1: Unify Live and Persistent Task Logs
+
+**Status:** In progress
+
+- Keep queued tasks tracked without a fixed 15-second cutoff.
+- Fall back from TinyLog to the latest persisted TaskLog.
+- Use incremental cursors in polling and SSE.
+- Align fallback log-file fields and task-name joins with Go Core.
+
+### Task 8.2: Support Unicode Task Commands
+
+**Status:** Pending
+
+- Share quoted command parsing semantics between Go and Kotlin paths.
+- Cover Chinese names, spaces, percent literals, plus signs, and arguments.
+- Preserve UTF-8 names in logs and downloads.
+
+### Task 8.3: Deduplicate Dependencies and Bound Storage
+
+**Status:** In progress
+
+- Add normalized dependency identities and per-key installation coordination.
+- Move fallback Python dependencies outside the runtime image.
+- Skip satisfied installations and bound pip/npm caches.
+- Add log, backup, temporary-file, and runtime-storage cleanup policies.
+
+### Task 8.4: Bound Background Runtime Resources
+
+**Status:** Pending
+
+- Replace cached thread pools with bounded executors and queues.
+- Bound in-memory log windows and batch persistence.
+- Clear stopped Core endpoint caches and terminate all fallback processes.
+- Schedule recovery work only while persistent scheduling is enabled.
+
+### Task 8.5: Add Secure Loopback Web Access
+
+**Status:** Pending
+
+- Package the Panel Web build into Android assets.
+- Serve static files only on loopback with strict browser security headers.
+- Exchange a short-lived one-time ticket for a local HttpOnly session.
+- Keep JWT and role checks on all business APIs.

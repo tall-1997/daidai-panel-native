@@ -38,12 +38,14 @@ object GoCoreBridge {
         val foregroundActive = LocalPanelHostService.isPersistentSchedulingEnabled(context)
         val hostStatus = AndroidSchedulerHostStatus.status(context, foregroundActive, recoveryTrigger = "app-start")
         val dataDir = File(context.filesDir, "local-panel").apply { mkdirs() }.canonicalPath
+        val webDir = LocalWebAssets.ensureExtracted(context).canonicalPath
         val options = JSONObject()
             .put("dataDir", dataDir)
             .put("bindHost", "127.0.0.1")
             .put("port", 0)
             .put("localToken", localToken)
             .put("nativeLibraryDir", context.applicationInfo.nativeLibraryDir)
+            .put("webDir", webDir)
             .put("androidKeystoreMasterKey", AndroidRuntimeSecretBridge.runtimeMasterKey(context))
             .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))
             .put("runtimeCompatibilityPath", runtimeMetadata.getValue("runtimeCompatibilityPath"))
@@ -84,6 +86,15 @@ object GoCoreBridge {
             arrayOf(STOP_TIMEOUT_MILLIS),
         )
         return GoCoreResultMapper.toStatus(raw, localToken)
+    }
+
+    @Synchronized
+    fun createBrowserUrl(): String = invokeString(
+        GoCoreReflectionContract.CREATE_BROWSER_URL,
+        emptyArray(),
+        emptyArray(),
+    ).also { value ->
+        require(value.startsWith("http://127.0.0.1:")) { "Go core returned an invalid browser URL" }
     }
 
     private fun mapResultWithEndpoint(raw: String, localToken: String): Map<String, Any> {

@@ -11,5 +11,7 @@ abstract interface class LocalPanelHost {
 
   Future<LocalPanelStatus> setPersistentSchedulingEnabled(bool enabled);
 
+  Future<String> openBrowserPanel();
+
   Stream<LocalPanelStatus> watchStatus();
 }

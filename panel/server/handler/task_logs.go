@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -39,37 +40,76 @@ func (h *TaskHandler) LatestLog(c *gin.Context) {
 
 func (h *TaskHandler) LiveLogs(c *gin.Context) {
 	taskID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+	cursor := service.ParseLogCursor(c.Query("cursor"))
 
 	var task model.Task
 	database.DB.First(&task, taskID)
+	done := task.Status != model.TaskStatusRunning && task.Status != model.TaskStatusQueued
+	status := interface{}(task.Status)
+	content := ""
+	nextCursor := cursor
+	logID := uint(0)
 
-	done := task.Status != model.TaskStatusRunning
-
-	var lines []string
-	manager := service.GetTinyLogManager()
-	tinyLog := manager.FindByTaskID(uint(taskID))
-	if tinyLog != nil {
-		data, _ := tinyLog.ReadLastLines(200)
-		if len(data) > 0 {
-			lines = strings.Split(string(data), "\n")
+	var taskLog model.TaskLog
+	if task.Status != model.TaskStatusQueued {
+		if err := database.DB.Where("task_id = ?", taskID).Order("started_at DESC, id DESC").First(&taskLog).Error; err == nil {
+			logID = taskLog.ID
+			if taskLog.Status != nil {
+				status = *taskLog.Status
+			}
 		}
 	}
 
-	if lines == nil {
-		lines = []string{}
+	manager := service.GetTinyLogManager()
+	tinyLog := manager.FindByTaskID(uint(taskID))
+	if tinyLog != nil {
+		data, _ := tinyLog.ReadAll()
+		if cursor > int64(len(data)) {
+			cursor = int64(len(data))
+		}
+		content = string(data[cursor:])
+		nextCursor = int64(len(data))
+		done = false
+		status = model.LogStatusRunning
+	} else if logID != 0 {
+		if persisted, next, err := service.ReadTaskLogFromCursor(&taskLog, cursor); err == nil {
+			content = persisted
+			nextCursor = next
+		}
+	}
+
+	lines := []string{}
+	if content != "" {
+		normalized := strings.TrimSuffix(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		if normalized != "" {
+			lines = strings.Split(normalized, "\n")
+		}
 	}
 
 	response.Success(c, gin.H{
-		"logs":   lines,
-		"done":   done,
-		"status": task.Status,
-		"cursor": len(strings.Join(lines, "\n")),
+		"logs":    lines,
+		"content": content,
+		"done":    done,
+		"status":  status,
+		"cursor":  nextCursor,
+		"log_id":  logID,
 	})
 }
 
 func (h *TaskHandler) LogFiles(c *gin.Context) {
 	taskID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	files := service.ListLogFiles(uint(taskID), config.C.Data.LogDir)
+	var logs []model.TaskLog
+	database.DB.Select("id", "log_path").Where("task_id = ? AND log_path IS NOT NULL", taskID).Find(&logs)
+	idsByPath := make(map[string]uint, len(logs))
+	for _, taskLog := range logs {
+		if taskLog.LogPath != nil {
+			idsByPath[filepath.ToSlash(*taskLog.LogPath)] = taskLog.ID
+		}
+	}
+	for i := range files {
+		files[i].LogID = idsByPath[filepath.ToSlash(files[i].Path)]
+	}
 	response.Success(c, files)
 }
 

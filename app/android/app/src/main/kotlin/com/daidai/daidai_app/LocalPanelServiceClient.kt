@@ -33,6 +33,8 @@ class LocalPanelServiceClient(context: Context) {
     fun setPersistentSchedulingEnabled(enabled: Boolean, callback: (Result<String>) -> Unit) =
         call({ it.setPersistentSchedulingEnabled(enabled) }, callback)
 
+    fun createBrowserUrl(callback: (Result<String>) -> Unit) = call({ it.createBrowserUrl() }, callback)
+
     @Synchronized
     fun close() {
         if (closed) return

@@ -2,6 +2,7 @@ package com.daidai.daidai_app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -27,12 +28,33 @@ class LocalTaskFallbackSemanticsTest {
 
     @Test
     fun `cursor resumes after acknowledged line`() {
-        assertEquals(2L, LocalTaskFallbackSemantics.cursor("2", "1"))
+        assertEquals(1L, LocalTaskFallbackSemantics.cursor("2", "1"))
         assertEquals(3L, LocalTaskFallbackSemantics.cursor(null, "3"))
         assertEquals(0L, LocalTaskFallbackSemantics.cursor("invalid", null))
         assertEquals(listOf(3L to "c", 4L to "d"), LocalTaskFallbackSemantics.linesAfterCursor(listOf("a", "b", "c", "d"), 2))
         assertEquals(emptyList<Pair<Long, String>>(), LocalTaskFallbackSemantics.linesAfterCursor(listOf("a"), 9))
         assertEquals(listOf(9L to "c", 10L to "d"), LocalTaskFallbackSemantics.linesAfterCursor(listOf("c", "d"), 8, 10))
+    }
+
+    @Test
+    fun `log query contract supports filters and bounded pagination`() {
+        val query = LocalLogQueryContract.build(
+            mapOf("task_id" to "12", "status" to "1", "keyword" to "错误", "page" to "3", "page_size" to "500"),
+        )
+        assertEquals(" WHERE l.task_id = ? AND l.status = ? AND (t.name LIKE ? OR l.content LIKE ?)", query.where)
+        assertEquals(listOf("12", "1", "%错误%", "%错误%"), query.args.toList())
+        assertEquals(20, query.limit)
+        assertEquals(40, query.offset)
+    }
+
+    @Test
+    fun `fallback log file exposes unified fields`() {
+        val file = LocalLogQueryContract.logFile(12, 34, 56, "2026-08-21T10:00:00Z")
+        assertEquals("task-12-34.log", file["filename"])
+        assertEquals("task_12/task-12-34.log", file["path"])
+        assertEquals(34L, file["log_id"])
+        assertEquals(56L, file["size"])
+        assertEquals("2026-08-21T10:00:00Z", file["created_at"])
     }
 
     @Test
@@ -54,6 +76,64 @@ class LocalTaskFallbackSemanticsTest {
         assertEquals("/runtime/bin", target["PATH"])
         assertEquals("enabled", target["PANEL_ENV"])
         assertEquals("1", target["DAIDAI_ANDROID_LOCAL"])
+    }
+
+    @Test
+    fun `task tokenizer and parser preserve unicode paths and arguments`() {
+        data class Case(val command: String, val path: String, val args: List<String>, val mode: String, val timeout: Long = 300)
+        val cases = listOf(
+            Case("task '中文 目录/签到+通知%脚本.py' now -- --名称 '张 三' + %", "中文 目录/签到+通知%脚本.py", listOf("--名称", "张 三", "+", "%"), "now"),
+            Case("task -m 5m -l 中文\\ 目录/脚本.py -- --flag=value", "中文 目录/脚本.py", listOf("--flag=value"), "normal", 300),
+            Case("task \"目录/脚本.sh\" conc JD_COOKIE 1-2", "目录/脚本.sh", emptyList(), "conc"),
+            Case("task '目录/脚本.js' desi TOKEN 2", "目录/脚本.js", emptyList(), "desi"),
+        )
+
+        cases.forEach { case ->
+            val plan = LocalTaskFallbackSemantics.parseTaskCommand(case.command) { it == case.path }
+            assertEquals(case.command, case.path, plan.scriptPath)
+            assertEquals(case.command, case.args, plan.scriptArgs)
+            assertEquals(case.command, case.mode, plan.mode)
+            assertEquals(case.command, case.timeout, plan.timeoutSeconds)
+        }
+    }
+
+    @Test
+    fun `task parser reports malformed quotes and missing unicode paths`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalTaskFallbackSemantics.parseTaskCommand("task '中文/脚本.py") { true }
+        }
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            LocalTaskFallbackSemantics.parseTaskCommand("task '不存在 目录/脚本.py' now") { false }
+        }
+        assertEquals("脚本不存在或路径无效: 不存在 目录/脚本.py", error.message)
+    }
+
+    @Test
+    fun `tokenizer matches Go escaping semantics`() {
+        val cases = listOf(
+            "python '中文 目录/脚本.py' --name \"张 三\"" to listOf("python", "中文 目录/脚本.py", "--name", "张 三"),
+            "script\\ path.py plus+ percent%" to listOf("script path.py", "plus+", "percent%"),
+            "cmd \\\\server\\file" to listOf("cmd", "\\server\\file"),
+            "cmd '' \"\"" to listOf("cmd"),
+        )
+        cases.forEach { (command, expected) -> assertEquals(command, expected, LocalTaskFallbackSemantics.tokenize(command)) }
+    }
+
+    @Test
+    fun `task modes produce compatible environment selections`() {
+        val conc = LocalTaskFallbackSemantics.taskEnvironments(
+            LocalTaskFallbackSemantics.TaskCommandPlan("脚本.py", mode = "conc", envName = "账号", accountSpec = "1-2"),
+            mapOf("账号" to "甲&乙&丙"),
+        )
+        assertEquals(listOf(1, 2), conc.map { it.index })
+        assertEquals(listOf("甲", "乙"), conc.map { it.values["账号"] })
+
+        val desi = LocalTaskFallbackSemantics.taskEnvironments(
+            LocalTaskFallbackSemantics.TaskCommandPlan("脚本.py", mode = "desi", envName = "账号", accountSpec = "2,max"),
+            mapOf("账号" to "甲&乙&丙"),
+        ).single()
+        assertEquals("乙&丙", desi.values["账号"])
+        assertEquals("2 3", desi.values["numParam"])
     }
 
     @Test

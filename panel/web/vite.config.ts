@@ -64,6 +64,7 @@ function localMonacoAssetsPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: process.env.VITE_LOCAL_WEB_BUILD === 'true' ? '/local-ui/' : '/',
   plugins: [
     vue(),
     localMonacoAssetsPlugin(),
@@ -108,6 +109,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['.monkeycode-ai.online'],
     proxy: {
       '/api': {
         target: 'http://localhost:5701',

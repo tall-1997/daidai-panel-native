@@ -1,8 +1,11 @@
 package com.daidai.daidai_app
 
 import java.time.ZonedDateTime
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,9 +15,15 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
     private val ticker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "android-fallback-cron").apply { isDaemon = true }
     }
-    private val workers = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "android-fallback-task").apply { isDaemon = true }
-    }
+    private val workers = ThreadPoolExecutor(
+        2,
+        2,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(32),
+        { runnable -> Thread(runnable, "android-fallback-task").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     @Volatile private var lastCheckedMinute = Long.MIN_VALUE
 
     fun start() {
@@ -31,7 +40,13 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             lastCheckedMinute = minute
             store.enabledScheduledTasks()
                 .filter { CronExpression.matches(it.cronExpression, now) }
-                .forEach { task -> workers.execute { store.executeTaskAndSave(task.id) } }
+                .forEach { task ->
+                    try {
+                        workers.execute { store.executeTaskAndSave(task.id) }
+                    } catch (_: RejectedExecutionException) {
+                        store.appLog("Cron", "Task ${task.id} rejected: fallback queue is full")
+                    }
+                }
         } catch (error: Exception) {
             store.appLog("Cron", error.message ?: error.javaClass.simpleName)
         }

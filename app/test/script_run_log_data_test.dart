@@ -10,10 +10,12 @@ void main() {
       'exit_code': 2,
       'error': 'ValueError: 坏值',
       'log_count': 3,
+      'cursor': 3,
     });
 
     expect(data.logs, ['\u001b[31m错误 原文\u001b[0m', '', 'ValueError: 坏值']);
     expect(data.logCount, 3);
+    expect(data.cursor, 3);
     expect(data.statusText, '执行失败（exit code 2）：ValueError: 坏值');
   });
 
@@ -26,5 +28,6 @@ void main() {
 
     expect(data.logs, ['第一行', '', '第三行']);
     expect(data.statusText, '运行中...');
+    expect(data.cursor, 3);
   });
 }

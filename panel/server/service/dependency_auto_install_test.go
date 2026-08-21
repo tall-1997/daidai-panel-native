@@ -140,7 +140,7 @@ func TestIsExternallyManagedErrorMatches(t *testing.T) {
 
 func TestBuildPipInstallArgsKeepsOrder(t *testing.T) {
 	got := BuildPipInstallArgs([]string{"--break-system-packages", "--user"}, "requests")
-	want := []string{"install", "--break-system-packages", "--user", "requests"}
+	want := []string{"install", "--no-cache-dir", "--break-system-packages", "--user", "requests"}
 	if len(got) != len(want) {
 		t.Fatalf("len mismatch: got=%v want=%v", got, want)
 	}

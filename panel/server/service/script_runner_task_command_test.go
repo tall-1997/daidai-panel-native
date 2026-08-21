@@ -24,6 +24,14 @@ func TestParseCommandExecutionPlanSupportsTaskModesAndArgs(t *testing.T) {
 		t.Fatalf("write spaced script: %v", err)
 	}
 
+	unicodeScript := filepath.Join(config.C.Data.ScriptsDir, "中文 目录", "签到+通知%脚本.py")
+	if err := os.MkdirAll(filepath.Dir(unicodeScript), 0755); err != nil {
+		t.Fatalf("mkdir unicode script dir: %v", err)
+	}
+	if err := os.WriteFile(unicodeScript, []byte("print('中文')\n"), 0644); err != nil {
+		t.Fatalf("write unicode script: %v", err)
+	}
+
 	simpleScript := filepath.Join(config.C.Data.ScriptsDir, "simple.sh")
 	if err := os.WriteFile(simpleScript, []byte("echo ok\n"), 0755); err != nil {
 		t.Fatalf("write simple script: %v", err)
@@ -70,6 +78,19 @@ func TestParseCommandExecutionPlanSupportsTaskModesAndArgs(t *testing.T) {
 		}
 		if !reflect.DeepEqual(plan.ScriptArgs, []string{"-u", "whyour", "-p", "password"}) {
 			t.Fatalf("unexpected script args: %#v", plan.ScriptArgs)
+		}
+	})
+
+	t.Run("preserves quoted unicode percent plus path and arguments", func(t *testing.T) {
+		plan, err := ParseCommandExecutionPlan(`task "中文 目录/签到+通知%脚本.py" now -- --名称 "张 三" + %`, config.C.Data.ScriptsDir)
+		if err != nil {
+			t.Fatalf("parse unicode task plan: %v", err)
+		}
+		if !reflect.DeepEqual(plan.ScriptArgs, []string{"--名称", "张 三", "+", "%"}) {
+			t.Fatalf("unexpected unicode task args: %#v", plan.ScriptArgs)
+		}
+		if plan.FullPath != unicodeScript {
+			t.Fatalf("expected unicode path %q, got %q", unicodeScript, plan.FullPath)
 		}
 	})
 

@@ -74,7 +74,11 @@ func (h *LogHandler) List(c *gin.Context) {
 func (h *LogHandler) Stream(c *gin.Context) {
 	taskIDStr := c.Param("id")
 	taskID, _ := strconv.ParseUint(taskIDStr, 10, 32)
-	cursor := service.ParseLogCursor(c.DefaultQuery("cursor", c.GetHeader("Last-Event-ID")))
+	rawCursor := c.GetHeader("Last-Event-ID")
+	if rawCursor == "" {
+		rawCursor = c.Query("cursor")
+	}
+	cursor := service.ParseLogCursor(rawCursor)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")

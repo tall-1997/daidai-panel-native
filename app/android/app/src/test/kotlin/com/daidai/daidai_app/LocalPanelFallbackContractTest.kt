@@ -66,6 +66,11 @@ class LocalPanelFallbackContractTest {
             NanoHTTPD.Response.Status.UNAUTHORIZED,
             expected.copy(localToken = "").rejection(valid + ("x-daidai-local-token" to "")),
         )
+        assertEquals(null, expected.rejection(valid - "x-daidai-local-token" - "origin", browserSession = true))
+        assertEquals(
+            NanoHTTPD.Response.Status.FORBIDDEN,
+            expected.rejection(valid - "x-daidai-local-token" + ("origin" to "http://evil.invalid"), browserSession = true),
+        )
     }
 
     @Test

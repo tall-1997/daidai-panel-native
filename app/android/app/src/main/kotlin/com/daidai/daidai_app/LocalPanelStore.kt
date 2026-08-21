@@ -17,14 +17,15 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.URI
-import java.net.URLDecoder
 import java.time.Instant
 import java.security.SecureRandom
 import java.time.format.DateTimeFormatter
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -52,15 +53,15 @@ class LocalPanelStore(
     private val taskRunLocks = ConcurrentHashMap<Long, Any>()
     private val taskFinalizedIds = ConcurrentHashMap.newKeySet<Long>()
     private val taskRunLogsMemory = ConcurrentHashMap<Long, MutableList<String>>()
+    private val taskRunLogCharacters = ConcurrentHashMap<Long, Int>()
+    private val taskRunPendingPersistence = ConcurrentHashMap<Long, Int>()
     private val taskRunStartedAt = ConcurrentHashMap<Long, Instant>()
-    private val scriptRunExecutor = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "local-script-run").apply { isDaemon = true }
-    }
-    private val taskRunExecutor = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "local-task-run").apply { isDaemon = true }
-    }
+    private val scriptRunExecutor = boundedExecutor("local-script-run")
+    private val taskRunExecutor = boundedExecutor("local-task-run")
     private val scriptProcesses = ConcurrentHashMap<String, Process>()
     private val scriptRunLogsMemory = ConcurrentHashMap<String, MutableList<String>>()
+    private val scriptRunLogCharacters = ConcurrentHashMap<String, Int>()
+    private val scriptRunPendingPersistence = ConcurrentHashMap<String, Int>()
     private val scriptRunLocks = ConcurrentHashMap<String, Any>()
     private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
 
@@ -72,31 +73,37 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 12
-        private const val MAX_SCRIPT_LOG_LINES = 2000
-        private const val MAX_SCRIPT_LOG_LINE_CHARS = 8192
-        private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 1_000_000
+        const val SCHEMA_VERSION = 13
+        private const val MAX_SCRIPT_LOG_LINES = 500
+        private const val MAX_SCRIPT_LOG_LINE_CHARS = 4096
+        private const val MAX_SCRIPT_LOG_TOTAL_CHARS = 256_000
+        private const val MAX_APP_LOG_BYTES = 512L * 1024
+        private const val FALLBACK_WORKERS = 2
+        private const val FALLBACK_QUEUE_CAPACITY = 32
+        private const val LOG_PERSIST_BATCH_SIZE = 16
+
+        private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
+            FALLBACK_WORKERS,
+            FALLBACK_WORKERS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(FALLBACK_QUEUE_CAPACITY),
+            { runnable -> Thread(runnable, threadName).apply { isDaemon = true } },
+            ThreadPoolExecutor.AbortPolicy(),
+        )
 
 
         internal fun normalizeScriptPath(rawPath: String, allowRootAlias: Boolean = false): String {
-            // NanoHTTPD already decodes form/query values. Decode percent escapes only when
-            // they are still present, and preserve literal '+' in valid script names.
-            val decoded = if ('%' in rawPath) {
-                runCatching { URLDecoder.decode(rawPath.replace("+", "%2B"), "UTF-8") }
-                    .getOrElse { rawPath }
-            } else {
-                rawPath
-            }
-            if (allowRootAlias && (decoded.isEmpty() || decoded == "/")) return ""
-            require(decoded.isNotBlank()) { "脚本路径不能为空" }
-            require(!decoded.startsWith("//") && !decoded.startsWith('\\')) { "脚本路径不能是绝对路径" }
-            require(!Regex("^[A-Za-z]:").containsMatchIn(decoded)) { "脚本路径不能是绝对路径" }
-            require('\\' !in decoded) { "脚本路径不能包含反斜杠" }
-            val workspacePath = decoded.removePrefix("/")
-            require(!workspacePath.startsWith("data/") && !workspacePath.startsWith("system/") && !workspacePath.startsWith("sdcard/")) { "脚本路径不能指向系统绝对路径" }
+            if (allowRootAlias && (rawPath.isEmpty() || rawPath == "/")) return ""
+            require(rawPath.isNotBlank()) { "脚本路径不能为空" }
+            require(!rawPath.startsWith("//") && !rawPath.startsWith('\\')) { "脚本路径必须位于脚本目录内: $rawPath" }
+            require(!Regex("^[A-Za-z]:").containsMatchIn(rawPath)) { "脚本路径必须位于脚本目录内: $rawPath" }
+            require('\\' !in rawPath) { "脚本路径不能包含反斜杠: $rawPath" }
+            val workspacePath = rawPath.removePrefix("/")
+            require(!workspacePath.startsWith("data/") && !workspacePath.startsWith("system/") && !workspacePath.startsWith("sdcard/")) { "脚本路径不能指向系统目录: $rawPath" }
             val segments = workspacePath.split('/')
-            require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段" }
-            require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段" }
+            require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段: $rawPath" }
+            require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段: $rawPath" }
             return segments.joinToString("/")
         }
 
@@ -172,7 +179,8 @@ class LocalPanelStore(
                 status TEXT NOT NULL DEFAULT 'queued',
                 log TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                UNIQUE(type, name, python_version)
             )""".trimIndent()
         )
         createScriptRuntimeTables(db)
@@ -212,6 +220,7 @@ class LocalPanelStore(
         if (oldVersion in 4..11) {
             db.execSQL("ALTER TABLE task_logs_local ADD COLUMN log_cursor INTEGER NOT NULL DEFAULT 0")
         }
+        if (oldVersion < 13) normalizeAndDeduplicateDependencies(db)
     }
 
     private fun createFallbackCoreTables(db: SQLiteDatabase) {
@@ -314,6 +323,37 @@ class LocalPanelStore(
         synchronized(AndroidLinuxRuntime.mirrorConfigLock) {
             ensureMirrorDefaults(db)
         }
+        normalizeAndDeduplicateDependencies(db)
+        cleanupStorage(db)
+    }
+
+    private fun normalizeAndDeduplicateDependencies(db: SQLiteDatabase) {
+        val rows = mutableListOf<Pair<Long, Triple<String, String, String>>>()
+        db.query("dependencies", arrayOf("id", "type", "name", "python_version"), null, null, null, null, "updated_at DESC, id DESC").use { cursor ->
+            while (cursor.moveToNext()) {
+                val type = normalizeDependencyType(cursor.string("type")) ?: cursor.string("type")
+                val version = if (type == "python") cursor.string("python_version").ifBlank { DependencyStorage.PYTHON_VERSION } else ""
+                rows += cursor.long("id") to Triple(type, DependencyStorage.normalizedName(type, cursor.string("name")), version)
+            }
+        }
+        val seen = mutableSetOf<Triple<String, String, String>>()
+        val retained = rows.filter { (_, identity) -> seen.add(identity) }
+        rows.filterNot { it in retained }.forEach { (id, _) -> db.delete("dependencies", "id = ?", arrayOf(id.toString())) }
+        retained.forEach { (id, identity) ->
+            db.update("dependencies", ContentValues().apply {
+                put("type", identity.first); put("name", identity.second); put("python_version", identity.third)
+            }, "id = ?", arrayOf(id.toString()))
+        }
+        runCatching { db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_dependencies_identity ON dependencies(type, name, python_version)") }
+    }
+
+    private fun cleanupStorage(db: SQLiteDatabase) {
+        db.execSQL("DELETE FROM task_logs_local WHERE id NOT IN (SELECT id FROM task_logs_local ORDER BY id DESC LIMIT ${DependencyStorage.MAX_TASK_LOGS})")
+        db.execSQL("DELETE FROM script_runs WHERE id NOT IN (SELECT id FROM script_runs ORDER BY updated_at DESC LIMIT ${DependencyStorage.MAX_SCRIPT_RUNS})")
+        DependencyStorage.retainNewest(backupsRoot(), DependencyStorage.MAX_BACKUPS)
+        DependencyStorage.removeExpired(File(appContext.cacheDir, "script-runs"), DependencyStorage.TEMP_MAX_AGE_MILLIS)
+        DependencyStorage.removeExpired(File(appContext.cacheDir, "portable-backups"), DependencyStorage.TEMP_MAX_AGE_MILLIS)
+        DependencyStorage.trimDirectory(DependencyStorage.npmCache(appContext.filesDir), DependencyStorage.MAX_CACHE_BYTES)
     }
 
     private fun ensureMirrorDefaults(db: SQLiteDatabase) {
@@ -391,6 +431,10 @@ class LocalPanelStore(
 
     fun appLog(tag: String, message: String) {
         synchronized(appLogFile) {
+            if (appLogFile.length() > MAX_APP_LOG_BYTES) {
+                val tail = appLogFile.readText().takeLast((MAX_APP_LOG_BYTES / 2).toInt())
+                appLogFile.writeText("=== daidai-panel-native runtime log (trimmed) ===\n$tail")
+            }
             appLogFile.appendText(Instant.now().toString() + " [" + tag + "] " + message + "\n")
         }
     }
@@ -809,22 +853,20 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.DELETE && normalizedUri == "/logs/clean" -> cleanLogs(session)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/logs/clean" -> cleanLogs(session)
             session.method == NanoHTTPD.Method.GET -> {
-                val taskLogs = JSONArray()
-                readableDatabase.query("task_logs_local", arrayOf("id", "task_id", "status", "content", "duration", "started_at", "ended_at", "created_at"), null, null, null, null, "id DESC", "50").use { cursor ->
-                    while (cursor.moveToNext()) {
-                        taskLogs.put(JSONObject().apply {
-                            put("id", cursor.long("id"))
-                            put("task_id", cursor.long("task_id"))
-                            put("status", cursor.int("status"))
-                            put("content", cursor.string("content"))
-                            put("duration", cursor.getDouble(cursor.getColumnIndexOrThrow("duration")))
-                            put("started_at", cursor.string("started_at"))
-                            put("ended_at", cursor.string("ended_at"))
-                            put("created_at", cursor.string("created_at"))
-                        })
-                    }
+                val query = LocalLogQueryContract.build(session.parms)
+                val source = " FROM task_logs_local l LEFT JOIN tasks t ON t.id = l.task_id${query.where}"
+                val total = readableDatabase.rawQuery("SELECT COUNT(*)$source", query.args).use {
+                    if (it.moveToFirst()) it.getLong(0) else 0L
                 }
-                ok(JSONObject().put("data", taskLogs).put("total", taskLogs.length()).put("page", 1).put("page_size", taskLogs.length()))
+                val taskLogs = queryRows(
+                    "SELECT l.*, t.name task_name$source ORDER BY l.started_at DESC, l.id DESC LIMIT ? OFFSET ?",
+                    query.args + arrayOf(query.limit.toString(), query.offset.toString()),
+                ) { taskLogJson(it).optJSONObject("data") ?: JSONObject() }
+                ok(JSONObject()
+                    .put("data", taskLogs)
+                    .put("total", total)
+                    .put("page", query.offset / query.limit + 1)
+                    .put("page_size", query.limit))
             }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "日志接口尚未实现")
         }
@@ -878,7 +920,7 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/format" -> formatScript(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run" -> runScript(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/scripts/run-code" -> runCode(body(session))
-            session.method == NanoHTTPD.Method.GET && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "logs" -> scriptRunLogs(segments[2])
+            session.method == NanoHTTPD.Method.GET && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "logs" -> scriptRunLogs(segments[2], session)
             session.method == NanoHTTPD.Method.PUT && segments.size == 4 && segments[0] == "scripts" && segments[1] == "run" && segments[3] == "stop" -> stopScriptRun(segments[2])
             session.method == NanoHTTPD.Method.DELETE && segments.size == 3 && segments[0] == "scripts" && segments[1] == "run" -> clearScriptRun(segments[2])
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本接口尚未实现")
@@ -1386,7 +1428,20 @@ fun serveDashboardStats(): JSONObject {
         val j=readableDatabase.query("tasks",null,"id=?",arrayOf(id.toString()),null,null,null).use { c -> if(!c.moveToFirst()) null else JSONObject().put("name",c.string("name")+" 副本").put("command",c.string("command")).put("cron_expression",c.string("cron_expression")).put("task_type",c.string("task_type")).put("python_version",c.string("python_version")).put("task_before",c.string("task_before")).put("task_after",c.string("task_after")).put("labels",JSONArray(c.string("labels"))) } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND,"task not found")
         return createTask(j)
     }
-    private fun taskLogFiles(id: Long): NanoHTTPD.Response { val rows=queryRows("SELECT id,created_at,length(content) size FROM task_logs_local WHERE task_id=? ORDER BY id DESC",arrayOf(id.toString())){c->JSONObject().put("id",c.long("id")).put("name","task-${id}-${c.long("id")}.log").put("size",c.long("size")).put("created_at",c.string("created_at"))};return ok(JSONObject().put("data",rows)) }
+    private fun taskLogFiles(id: Long): NanoHTTPD.Response {
+        val rows = queryRows(
+            "SELECT id,created_at,length(content) size FROM task_logs_local WHERE task_id=? ORDER BY id DESC",
+            arrayOf(id.toString()),
+        ) { cursor ->
+            JSONObject(LocalLogQueryContract.logFile(
+                taskId = id,
+                logId = cursor.long("id"),
+                size = cursor.long("size"),
+                createdAt = cursor.string("created_at"),
+            ))
+        }
+        return ok(JSONObject().put("data", rows))
+    }
 
     private fun deleteLogs(json: JSONObject): NanoHTTPD.Response { val ids=json.optJSONArray("ids")?:json.optJSONArray("log_ids")?:JSONArray();var n=0;for(i in 0 until ids.length())n+=writableDatabase.delete("task_logs_local","id=?",arrayOf(ids.optLong(i).toString()));return ok(JSONObject().put("data",JSONObject().put("deleted",n))) }
     private fun cleanLogs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response { val days=session.parms["days"]?.toIntOrNull();val n=if(days==null)writableDatabase.delete("task_logs_local",null,null) else writableDatabase.delete("task_logs_local","created_at < datetime('now', ?)",arrayOf("-$days days"));return ok(JSONObject().put("data",JSONObject().put("deleted",n))) }
@@ -1553,6 +1608,7 @@ fun serveDashboardStats(): JSONObject {
             stream.fd.sync()
         }
         source.deleteRecursively()
+        DependencyStorage.retainNewest(backupsRoot(), DependencyStorage.MAX_BACKUPS)
         return ok(
             JSONObject()
                 .put("filename", filename)
@@ -1592,6 +1648,7 @@ fun serveDashboardStats(): JSONObject {
             stream.write(bytes)
             stream.fd.sync()
         }
+        DependencyStorage.retainNewest(backupsRoot(), DependencyStorage.MAX_BACKUPS)
         return ok(JSONObject().put("filename", output.name).put("size", output.length()).put("encrypted", true))
     }
 
@@ -1631,7 +1688,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun buildPortableBackupSource(): File {
-        val source = File(appContext.cacheDir, "portable-backup-${System.nanoTime()}").apply { mkdirs() }
+        val source = File(appContext.cacheDir, "portable-backups/portable-backup-${System.nanoTime()}").apply { mkdirs() }
         readableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
         readableDatabase.path?.let { path ->
             val database = File(path)
@@ -1845,7 +1902,13 @@ fun serveDashboardStats(): JSONObject {
         }
         val temp = File(appContext.cacheDir, "script-runs/$runId$ext").apply { parentFile?.mkdirs(); writeText(code) }
         createRunningScriptRun(runId)
-        scriptRunExecutor.execute { executeAsyncScriptRun(runId, temp, "inline-$language$ext", language, true) }
+        try {
+            scriptRunExecutor.execute { executeAsyncScriptRun(runId, temp, "inline-$language$ext", language, true) }
+        } catch (_: RejectedExecutionException) {
+            finishScriptRun(runId, "failed", 75)
+            temp.delete()
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "脚本执行队列已满，请稍后重试")
+        }
         return startedScriptRun(runId)
     }
 
@@ -1855,7 +1918,12 @@ fun serveDashboardStats(): JSONObject {
         if (!file.exists() || !file.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
         val runId = "android-local-${UUID.randomUUID()}"
         createRunningScriptRun(runId)
-        scriptRunExecutor.execute { executeAsyncScriptRun(runId, file, path, json.optString("language"), false) }
+        try {
+            scriptRunExecutor.execute { executeAsyncScriptRun(runId, file, path, json.optString("language"), false) }
+        } catch (_: RejectedExecutionException) {
+            finishScriptRun(runId, "failed", 75)
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "脚本执行队列已满，请稍后重试")
+        }
         return startedScriptRun(runId)
     }
 
@@ -1895,18 +1963,21 @@ fun serveDashboardStats(): JSONObject {
             if (scriptRunStatus(runId) != "stopped") { appendScriptRunLog(runId, "Script start failed: ${error.message ?: error.javaClass.simpleName}"); finishScriptRun(runId, "failed", 127) }
         } finally {
             scriptProcesses.remove(runId); scriptRunLocks.remove(runId); scriptRunLogsMemory.remove(runId)
+            scriptRunLogCharacters.remove(runId); scriptRunPendingPersistence.remove(runId)
             if (deleteAfter) runCatching { file.delete() }
         }
     }
 
-    private fun executeShellCommand(command: String, taskId: Long? = null, onLine: ((String) -> Unit)? = null): LocalScriptResult {
+    private fun executeStructuredCommand(command: String, taskId: Long? = null, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing shell command: $command")
         onLine?.invoke("Android local fallback executing shell command: $command")
-        val parts = command.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val parts = try { LocalTaskFallbackSemantics.tokenize(command) } catch (error: IllegalArgumentException) {
+            return LocalScriptResult(logs.put(error.message), "failed", true, 2)
+        }
         if (parts.isEmpty()) {
             return LocalScriptResult(logs.put("Empty command"), "failed", true, 1)
         }
-        val pb = ProcessBuilder(listOf("sh", "-c", command))
+        val pb = ProcessBuilder(parts)
         pb.directory(appContext.filesDir)
         pb.redirectErrorStream(true)
         LocalTaskFallbackSemantics.applyRuntimeEnvironment(pb.environment(), runtimeEnvironment(appContext.filesDir))
@@ -1933,7 +2004,24 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun executeScriptFile(file: File, displayPath: String, languageHint: String = "", onLine: ((String) -> Unit)? = null, taskId: Long? = null): LocalScriptResult {
+    private fun executeHookCommand(command: String, taskId: Long, onLine: ((String) -> Unit)? = null): LocalScriptResult {
+        val hook = File(appContext.cacheDir, "task-hooks/${UUID.randomUUID()}.sh")
+        return try {
+            hook.parentFile?.mkdirs()
+            hook.writeText(command, Charsets.UTF_8)
+            runLocalProcess(
+                listOf("/system/bin/sh", hook.absolutePath),
+                appContext.filesDir,
+                JSONArray().put("Android local fallback executing task hook"),
+                onLine = onLine,
+                taskId = taskId,
+            )
+        } finally {
+            hook.delete()
+        }
+    }
+
+    private fun executeScriptFile(file: File, displayPath: String, languageHint: String = "", args: List<String> = emptyList(), timeoutSeconds: Long = 300, extraEnvironment: Map<String, String> = emptyMap(), onLine: ((String) -> Unit)? = null, taskId: Long? = null): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
@@ -1943,7 +2031,7 @@ fun serveDashboardStats(): JSONObject {
                 127,
             )
 
-        return runLocalProcess(command, file.parentFile ?: scriptsRoot(), logs, onLine = onLine, taskId = taskId).also { result ->
+        return runLocalProcess(command + args, file.parentFile ?: scriptsRoot(), logs, timeoutSeconds, onLine, taskId, extraEnvironment).also { result ->
             recordDetectedDependencies(result.logs)
         }
     }
@@ -1988,13 +2076,16 @@ fun serveDashboardStats(): JSONObject {
             "const out=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;" +
             "vm.runInThisContext(out,{filename:file});"
 
-    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null): LocalScriptResult {
+    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null, extraEnvironment: Map<String, String> = emptyMap()): LocalScriptResult {
         logs.put("Command: ${command.first().substringAfterLast('/')}")
         return try {
             val process = ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true)
-                .apply { LocalTaskFallbackSemantics.applyRuntimeEnvironment(environment(), runtimeEnvironment(workingDir)) }
+                .apply {
+                    LocalTaskFallbackSemantics.applyRuntimeEnvironment(environment(), runtimeEnvironment(workingDir))
+                    environment().putAll(extraEnvironment)
+                }
                 .start()
             if (taskId != null && !registerTaskProcess(taskId, process)) {
                 return LocalScriptResult(logs.put("Task aborted before process start"), "aborted", true, 130)
@@ -2084,13 +2175,14 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun upsertInstalledDependency(name: String, type: String, version: String = "", log: String) {
-        val normalizedName = normalizePackageName(name)
+        val normalizedName = DependencyStorage.normalizedName(type, name)
+        val runtimeVersion = if (type == "python") DependencyStorage.PYTHON_VERSION else ""
         val now = Instant.now().toString()
         val existingId = readableDatabase.query(
             "dependencies",
             arrayOf("id"),
-            "LOWER(REPLACE(name, '_', '-')) = ? AND type = ?",
-            arrayOf(normalizedName, type),
+            "name = ? AND type = ? AND python_version = ?",
+            arrayOf(normalizedName, type, runtimeVersion),
             null,
             null,
             null,
@@ -2099,7 +2191,7 @@ fun serveDashboardStats(): JSONObject {
         val values = ContentValues().apply {
             put("name", normalizedName)
             put("type", type)
-            put("python_version", if (type == "python") "3.14" else "")
+            put("python_version", runtimeVersion)
             put("version", version)
             put("status", "installed")
             put("log", log)
@@ -2181,9 +2273,9 @@ fun serveDashboardStats(): JSONObject {
                     "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", true)) "1" else "0",
                     "PYTHONPATH" to listOf(
                         scriptsRoot().absolutePath,
-                        File(appContext.filesDir, "deps/python").absolutePath,
+                        DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
                     ).joinToString(File.pathSeparator),
-                    "PIP_TARGET" to File(appContext.filesDir, "deps/python").absolutePath,
+                    "PIP_TARGET" to DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
                     "NODE_PATH" to listOf(
                         scriptsRoot().absolutePath,
                         AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
@@ -2191,6 +2283,7 @@ fun serveDashboardStats(): JSONObject {
                     ).filter(String::isNotBlank).joinToString(File.pathSeparator),
                     "NODE_OPTIONS" to "--require=${File(scriptsRoot(), "sendNotify.js").absolutePath}",
                     "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
+                    "NPM_CONFIG_CACHE" to DependencyStorage.npmCache(appContext.filesDir).absolutePath,
                 )
             )
         }
@@ -2199,7 +2292,7 @@ fun serveDashboardStats(): JSONObject {
             env["PYTHONPATH"] = listOf(
                 scriptsRoot().absolutePath,
                 runtime.sitePackages,
-                File(appContext.filesDir, "deps/python").absolutePath,
+                DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
             ).joinToString(File.pathSeparator)
         }
         AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
@@ -2243,7 +2336,7 @@ fun serveDashboardStats(): JSONObject {
         writableDatabase.insert("dependencies", null, values)
     }
 
-    private fun scriptRunLogs(runId: String): NanoHTTPD.Response {
+    private fun scriptRunLogs(runId: String, session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         return readableDatabase.query(
             "script_runs",
             arrayOf("status", "logs_json", "done", "exit_code"),
@@ -2254,15 +2347,19 @@ fun serveDashboardStats(): JSONObject {
             null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use error(NanoHTTPD.Response.Status.NOT_FOUND, "运行记录不存在")
-            val logs = JSONArray(cursor.string("logs_json"))
-            val logLines = (0 until logs.length()).map { logs.optString(it) }
+            val persisted = JSONArray(cursor.string("logs_json"))
+            val logLines = scriptRunLogsMemory[runId]?.let { memory -> synchronized(memory) { memory.toList() } }
+                ?: (0 until persisted.length()).map { persisted.optString(it) }
+            val requestedCursor = requestLogCursor(session).coerceAtMost(logLines.size.toLong()).toInt()
+            val incrementalLines = logLines.drop(requestedCursor)
             val status = cursor.string("status")
             val failed = status == "failed" || status == "stopped" ||
                 (!cursor.isNull(cursor.getColumnIndexOrThrow("exit_code")) && cursor.int("exit_code") != 0)
             val payload = JSONObject()
-                .put("logs", logs)
-                .put("content", logLines.joinToString("\n"))
+                .put("logs", JSONArray(incrementalLines))
+                .put("content", incrementalLines.joinToString("\n"))
                 .put("log_count", logLines.size)
+                .put("cursor", logLines.size)
                 .put("done", cursor.int("done") == 1)
                 .put("status", status)
             ScriptRunLogPresentation.errorSummary(logLines, failed)?.let { payload.put("error", it) }
@@ -2288,12 +2385,15 @@ fun serveDashboardStats(): JSONObject {
         val status = scriptRunStatus(runId) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "运行记录不存在")
         if (status == "running") return error(NanoHTTPD.Response.Status.CONFLICT, "运行中的记录不能清除")
         writableDatabase.delete("script_runs", "id = ?", arrayOf(runId)); scriptRunLogsMemory.remove(runId)
+        scriptRunLogCharacters.remove(runId); scriptRunPendingPersistence.remove(runId); scriptRunLocks.remove(runId)
         return ok(JSONObject().put("message", "已清除"))
     }
 
     private fun createRunningScriptRun(runId: String) {
         val now = Instant.now().toString()
         scriptRunLogsMemory[runId] = Collections.synchronizedList(mutableListOf())
+        scriptRunLogCharacters[runId] = 0
+        scriptRunPendingPersistence[runId] = 0
         writableDatabase.insertOrThrow("script_runs", null, ContentValues().apply {
             put("id", runId); put("status", "running"); put("logs_json", "[]"); put("done", 0)
             putNull("exit_code"); put("created_at", now); put("updated_at", now)
@@ -2307,16 +2407,30 @@ fun serveDashboardStats(): JSONObject {
     private fun appendScriptRunLog(runId: String, rawLine: String) {
         synchronized(scriptRunLocks.computeIfAbsent(runId) { Any() }) {
             val memory = scriptRunLogsMemory.computeIfAbsent(runId) { Collections.synchronizedList(mutableListOf()) }
-            memory += rawLine.take(MAX_SCRIPT_LOG_LINE_CHARS)
-            while (memory.size > MAX_SCRIPT_LOG_LINES || memory.sumOf { it.length } > MAX_SCRIPT_LOG_TOTAL_CHARS) memory.removeAt(0)
-            val logs = JSONArray(); memory.forEach { logs.put(it) }
-            /* Persist every bounded snapshot so GET polling observes each increment. */
-            writableDatabase.update("script_runs", ContentValues().apply { put("logs_json", logs.toString()); put("updated_at", Instant.now().toString()) }, "id = ?", arrayOf(runId))
+            val line = rawLine.take(MAX_SCRIPT_LOG_LINE_CHARS)
+            memory += line
+            var characters = (scriptRunLogCharacters[runId] ?: 0) + line.length
+            while (memory.size > MAX_SCRIPT_LOG_LINES || characters > MAX_SCRIPT_LOG_TOTAL_CHARS) {
+                characters -= memory.removeAt(0).length
+            }
+            scriptRunLogCharacters[runId] = characters
+            val pending = (scriptRunPendingPersistence[runId] ?: 0) + 1
+            scriptRunPendingPersistence[runId] = pending
+            if (pending >= LOG_PERSIST_BATCH_SIZE) persistScriptRunLogs(runId, memory)
         }
+    }
+
+    private fun persistScriptRunLogs(runId: String, memory: List<String>) {
+        val logs = JSONArray(); memory.forEach { logs.put(it) }
+        writableDatabase.update("script_runs", ContentValues().apply {
+            put("logs_json", logs.toString()); put("updated_at", Instant.now().toString())
+        }, "id = ?", arrayOf(runId))
+        scriptRunPendingPersistence[runId] = 0
     }
 
     private fun finishScriptRun(runId: String, status: String, exitCode: Int) {
         synchronized(scriptRunLocks.computeIfAbsent(runId) { Any() }) {
+            scriptRunLogsMemory[runId]?.let { persistScriptRunLogs(runId, it) }
             writableDatabase.update("script_runs", ContentValues().apply {
                 put("status", status); put("done", 1); put("exit_code", exitCode); put("updated_at", Instant.now().toString())
             }, "id = ?", arrayOf(runId))
@@ -2626,16 +2740,23 @@ fun serveDashboardStats(): JSONObject {
         if (!runningTaskIds.add(id)) return false
         val startedAt = Instant.now()
         initializeTaskRun(id, startedAt, "任务已入队，正在启动...")
-        taskRunExecutor.execute {
-            try {
-                executeTaskAndSave(id, alreadyClaimed = true)
-            } catch (error: Throwable) {
-                appendTaskRunLog(id, "任务执行异常: ${error.message ?: error.javaClass.simpleName}")
-                finishCrashedTask(id, startedAt)
-                appLog("Task", "Task $id crashed: ${error.message ?: error.javaClass.simpleName}")
-            } finally {
-                clearTaskRun(id)
+        try {
+            taskRunExecutor.execute {
+                try {
+                    executeTaskAndSave(id, alreadyClaimed = true)
+                } catch (error: Throwable) {
+                    appendTaskRunLog(id, "任务执行异常: ${error.message ?: error.javaClass.simpleName}")
+                    finishCrashedTask(id, startedAt)
+                    appLog("Task", "Task $id crashed: ${error.message ?: error.javaClass.simpleName}")
+                } finally {
+                    clearTaskRun(id)
+                }
             }
+        } catch (_: RejectedExecutionException) {
+            appendTaskRunLog(id, "任务执行队列已满，请稍后重试")
+            finishCrashedTask(id, startedAt)
+            clearTaskRun(id)
+            return false
         }
         return true
     }
@@ -2645,6 +2766,8 @@ fun serveDashboardStats(): JSONObject {
         taskRunLocks.computeIfAbsent(id) { Any() }
         taskFinalizedIds.remove(id)
         taskRunLogsMemory[id] = Collections.synchronizedList(mutableListOf(initialLine))
+        taskRunLogCharacters[id] = initialLine.length
+        taskRunPendingPersistence[id] = 0
         taskRunCursors[id] = 1L
         taskRunLogIds[id] = createRunningTaskLog(id, startedAt, initialLine)
     }
@@ -2652,6 +2775,7 @@ fun serveDashboardStats(): JSONObject {
     private fun clearTaskRun(id: Long) {
         runningTaskIds.remove(id); taskProcesses.remove(id); taskAbortRequested.remove(id); taskFinalizedIds.remove(id)
         taskRunLogIds.remove(id); taskRunCursors.remove(id); taskRunStartedAt.remove(id); taskRunLogsMemory.remove(id)
+        taskRunLogCharacters.remove(id); taskRunPendingPersistence.remove(id)
         taskRunLocks.remove(id)
     }
 
@@ -2673,14 +2797,23 @@ fun serveDashboardStats(): JSONObject {
     private fun appendTaskRunLog(id: Long, line: String) {
         val logs = taskRunLogsMemory[id] ?: return
         val snapshot = synchronized(logs) {
-            logs += line.take(MAX_SCRIPT_LOG_LINE_CHARS)
-            while (logs.size > MAX_SCRIPT_LOG_LINES) logs.removeAt(0)
+            val boundedLine = line.take(MAX_SCRIPT_LOG_LINE_CHARS)
+            logs += boundedLine
+            var characters = (taskRunLogCharacters[id] ?: 0) + boundedLine.length
+            while (logs.size > MAX_SCRIPT_LOG_LINES || characters > MAX_SCRIPT_LOG_TOTAL_CHARS) {
+                characters -= logs.removeAt(0).length
+            }
+            taskRunLogCharacters[id] = characters
             logs.toList()
         }
         val cursor = taskRunCursors.compute(id) { _, current -> (current ?: 0L) + 1L } ?: snapshot.size.toLong()
-        taskRunLogIds[id]?.let { logId -> writableDatabase.update("task_logs_local", ContentValues().apply {
-            put("content", snapshot.joinToString("\n")); put("logs_json", JSONArray(snapshot).toString()); put("log_cursor", cursor)
-        }, "id = ?", arrayOf(logId.toString())) }
+        val pending = taskRunPendingPersistence.compute(id) { _, value -> (value ?: 0) + 1 } ?: 1
+        if (pending >= LOG_PERSIST_BATCH_SIZE) {
+            taskRunLogIds[id]?.let { logId -> writableDatabase.update("task_logs_local", ContentValues().apply {
+                put("content", snapshot.joinToString("\n")); put("logs_json", JSONArray(snapshot).toString()); put("log_cursor", cursor)
+            }, "id = ?", arrayOf(logId.toString())) }
+            taskRunPendingPersistence[id] = 0
+        }
     }
 
     /** Unified manual/cron execution path. A task cannot overlap itself. */
@@ -2739,29 +2872,44 @@ fun serveDashboardStats(): JSONObject {
             val after = cursor.string("task_after").trim()
             val logs = JSONArray()
             if (before.isNotEmpty()) {
-                val hook = executeShellCommand(before, id) { line -> onLine?.invoke("[before] $line") }
+                val hook = executeHookCommand(before, id) { line -> onLine?.invoke("[before] $line") }
                 logs.put("[before] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[before] ${hook.logs.optString(i)}")
             }
-            val path = when {
-                command.startsWith("task ") -> command.removePrefix("task ").trim()
-                command.startsWith("script ") -> command.removePrefix("script ").trim()
-                command.contains("/") || command.contains(".") -> command
-                else -> ""
-            }
             val main = if (taskAbortRequested.contains(id)) {
                 LocalScriptResult(JSONArray().put("Task aborted before main command"), "aborted", true, 130)
-            } else if (path.isBlank()) {
-                executeWithAutoInstall(id, runtimeForCommand(command), onLine) { executeShellCommand(command, id, onLine) }
+            } else if (Regex("^task(?:\\s|$)").containsMatchIn(command)) {
+                val plan = try {
+                    LocalTaskFallbackSemantics.parseTaskCommand(command) { candidate ->
+                        runCatching { scriptFile(candidate).isFile }.getOrDefault(false)
+                    }
+                } catch (error: IllegalArgumentException) {
+                    return@use LocalScriptResult(logs.put(error.message ?: "任务命令无效"), "failed", true, 2)
+                }
+                val file = scriptFile(plan.scriptPath)
+                val environments = try {
+                    LocalTaskFallbackSemantics.taskEnvironments(plan, runtimeEnvironment(file.parentFile ?: scriptsRoot()))
+                } catch (error: IllegalArgumentException) {
+                    return@use LocalScriptResult(logs.put(error.message ?: "任务环境无效"), "failed", true, 2)
+                }
+                var result = LocalScriptResult(JSONArray(), "success", true, 0)
+                for (selected in environments) {
+                    val prefixedOutput: ((String) -> Unit)? = if (plan.mode == "conc") {
+                        { line -> onLine?.invoke("[${plan.envName}#${selected.index}] $line") }
+                    } else onLine
+                    result = executeWithAutoInstall(id, runtimeForFile(file), prefixedOutput) {
+                        executeScriptFile(file, plan.scriptPath, args = plan.scriptArgs, timeoutSeconds = plan.timeoutSeconds, extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
+                    }
+                    if (result.status != "success") break
+                }
+                result
             } else {
-                val file = scriptFile(path)
-                if (!file.exists()) LocalScriptResult(JSONArray().put("Script does not exist: $path"), "failed", true, 404)
-                else executeWithAutoInstall(id, runtimeForFile(file), onLine) { executeScriptFile(file, path, onLine = onLine, taskId = id) }
+                executeWithAutoInstall(id, runtimeForCommand(command), onLine) { executeStructuredCommand(command, id, onLine) }
             }
             for (i in 0 until main.logs.length()) logs.put(main.logs.optString(i))
             // after always runs, including when the main command failed. Its failure is diagnostic only.
             if (after.isNotEmpty() && !taskAbortRequested.contains(id)) {
-                val hook = executeShellCommand(after, id) { line -> onLine?.invoke("[after] $line") }
+                val hook = executeHookCommand(after, id) { line -> onLine?.invoke("[after] $line") }
                 logs.put("[after] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[after] ${hook.logs.optString(i)}")
             }
@@ -2832,11 +2980,20 @@ fun serveDashboardStats(): JSONObject {
                 .put("logs", JSONArray(resumed.map { it.second }))
                 .put("content", resumed.joinToString("\n") { it.second })
                 .put("cursor", latestCursor)
+                .put("log_id", taskRunLogIds[id] ?: JSONObject.NULL)
                 .put("started_at", startedAt)
             return ok(JSONObject(data.toString()).put("data", data))
         }
         val payload = latestTaskLogJson(id)
-            ?: return ok(JSONObject().put("data", JSONObject().put("task_id", id).put("status", 2).put("run_status", "pending").put("done", false).put("logs", JSONArray()).put("content", "")))
+            ?: return ok(JSONObject().put("data", JSONObject()
+                .put("task_id", id)
+                .put("status", 0.5)
+                .put("run_status", "pending")
+                .put("done", false)
+                .put("logs", JSONArray())
+                .put("content", "")
+                .put("cursor", requestedCursor)
+                .put("log_id", JSONObject.NULL)))
         val data = payload.optJSONObject("data") ?: return ok(payload)
         val lines = data.optJSONArray("logs")?.let { logs -> (0 until logs.length()).map { logs.optString(it) } }.orEmpty()
         val resumed = LocalTaskFallbackSemantics.linesAfterCursor(lines, requestedCursor, data.optLong("cursor", lines.size.toLong()))
@@ -2846,15 +3003,9 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun latestTaskLogJson(taskId: Long): JSONObject? {
-        return readableDatabase.query(
-            "task_logs_local",
-            arrayOf("id", "task_id", "content", "logs_json", "status", "exit_code", "duration", "started_at", "ended_at", "created_at", "log_cursor"),
-            "task_id = ?",
+        return readableDatabase.rawQuery(
+            "SELECT l.*, t.name task_name FROM task_logs_local l LEFT JOIN tasks t ON t.id=l.task_id WHERE l.task_id=? ORDER BY l.id DESC LIMIT 1",
             arrayOf(taskId.toString()),
-            null,
-            null,
-            "id DESC",
-            "1"
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             taskLogJson(cursor)
@@ -2862,14 +3013,9 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun taskLogByIdJson(logId: Long): JSONObject? {
-        return readableDatabase.query(
-            "task_logs_local",
-            arrayOf("id", "task_id", "content", "logs_json", "status", "exit_code", "duration", "started_at", "ended_at", "created_at", "log_cursor"),
-            "id = ?",
+        return readableDatabase.rawQuery(
+            "SELECT l.*, t.name task_name FROM task_logs_local l LEFT JOIN tasks t ON t.id=l.task_id WHERE l.id=?",
             arrayOf(logId.toString()),
-            null,
-            null,
-            null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             taskLogJson(cursor)
@@ -2878,7 +3024,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun taskLogJson(cursor: Cursor): JSONObject {
         val logs = runCatching { JSONArray(cursor.string("logs_json")) }.getOrDefault(JSONArray())
-        return JSONObject()
+        val payload = JSONObject()
             .put("id", cursor.long("id"))
             .put("task_id", cursor.long("task_id"))
             .put("content", cursor.string("content"))
@@ -2892,7 +3038,11 @@ fun serveDashboardStats(): JSONObject {
             .put("ended_at", cursor.string("ended_at"))
             .put("created_at", cursor.string("created_at"))
             .put("cursor", cursor.long("log_cursor"))
-            .let { payload -> JSONObject(payload.toString()).put("data", payload) }
+            .put("log_id", cursor.long("id"))
+        cursor.getColumnIndex("task_name").takeIf { it >= 0 }?.let { index ->
+            payload.put("task_name", cursor.getString(index) ?: "")
+        }
+        return JSONObject(payload.toString()).put("data", payload)
     }
 
     private fun taskLogStream(id: Long, session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
@@ -3184,24 +3334,34 @@ fun serveDashboardStats(): JSONObject {
         try {
             for (triple in results) {
                 val ver = installedPkgs[normalizePackageName(triple.first)] ?: ""
+                val normalizedName = DependencyStorage.normalizedName(triple.second, triple.first)
+                val runtimeVersion = if (triple.second == "python") "3.14" else ""
                 val values = ContentValues().apply {
-                    put("name", triple.first)
+                    put("name", normalizedName)
                     put("type", triple.second)
-                    put("python_version", if (triple.second == "python") "3.14" else json.optString("python_version"))
+                    put("python_version", runtimeVersion)
                     put("version", ver)
                     put("status", triple.third.first)
                     put("log", triple.third.second)
-                    put("created_at", now)
                     put("updated_at", now)
                 }
-                ids.put(writableDatabase.insertOrThrow("dependencies", null, values))
+                val existingId = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf(triple.second, normalizedName, runtimeVersion), null, null, null).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.long("id") else null
+                }
+                if (existingId == null) {
+                    values.put("created_at", now)
+                    ids.put(writableDatabase.insertOrThrow("dependencies", null, values))
+                } else {
+                    writableDatabase.update("dependencies", values, "id = ?", arrayOf(existingId.toString()))
+                    ids.put(existingId)
+                }
             }
             if (installedPkgs.isNotEmpty()) {
                 val existingNames = results.map { it.first.lowercase() }.toSet()
                 val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
                 for ((pkgName, pkgVer) in installedPkgs) {
                     if (pkgName in existingNames || pkgName in skipNames) continue
-                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "name = ?", arrayOf(pkgName), null, null, null)
+                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf("python", pkgName, "3.14"), null, null, null)
                     val exists = cursor.count > 0
                     cursor.close()
                     if (!exists) {
@@ -3228,18 +3388,19 @@ fun serveDashboardStats(): JSONObject {
 
     private fun queryPipInstalledPackages(): Map<String, String> {
         val runtime = AndroidPythonRuntime.ensureReady(appContext) ?: return emptyMap()
+        val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
         val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_list.py")
         script.parentFile?.mkdirs()
         val pyCode = listOf(
             "import sys,os,json",
-            "sp=os.path.join(os.environ.get('PYTHONHOME',''),'lib/python3.14/site-packages')",
+            "sp=os.environ.get('PIP_TARGET','')",
             "sys.path.insert(0,sp)",
             "from pip._internal.cli.main import main as pip_main",
             "import io",
             "old=sys.stdout",
             "sys.stdout=io.StringIO()",
             "try:",
-            "    pip_main(['list','--format=json'])",
+            "    pip_main(['list','--format=json','--path',sp])",
             "except: pass",
             "out=sys.stdout.getvalue()",
             "sys.stdout=old",
@@ -3248,7 +3409,7 @@ fun serveDashboardStats(): JSONObject {
         script.writeText(pyCode)
         val command = listOf(runtime.executable, runtime.wrapperScript, script.absolutePath)
         val logs = JSONArray()
-        val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs)
+        val result = runLocalProcess(command, target, logs)
         val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         return try {
             val start = text.indexOf("[")
@@ -3319,6 +3480,25 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
+        val runtimeVersion = when (depType) {
+            "python" -> DependencyStorage.PYTHON_VERSION
+            "nodejs" -> DependencyStorage.NODE_VERSION
+            else -> "rootfs"
+        }
+        return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
+            val installedVersion = when (depType) {
+                "python" -> queryPipInstalledPackages()[DependencyStorage.normalizedName(depType, name)]
+                "nodejs" -> queryNpmInstalledPackages()[DependencyStorage.normalizedName(depType, name)]
+                else -> null
+            }
+            if (DependencyStorage.satisfies(depType, name, installedVersion)) {
+                return@withInstallLock "installed" to "Already installed${installedVersion?.let { ": $it" }.orEmpty()}; skipped network installation"
+            }
+            installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
+        }
+    }
+
+    private fun installDependencyForFallbackUnlocked(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val mirrors = AndroidLinuxRuntime.mirrorConfig(appContext)
         if (depType == "python") {
             val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
@@ -3331,12 +3511,13 @@ fun serveDashboardStats(): JSONObject {
             installScript.parentFile?.mkdirs()
             installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(sys.argv[1:])\nsys.exit(result)\n")
 
-            val pipArguments = AndroidLinuxRuntime.pipInstallArguments(mirrors.pipMirror, runtime.sitePackages, name)
+            val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
+            val pipArguments = AndroidLinuxRuntime.pipInstallArguments(mirrors.pipMirror, target.absolutePath, name)
             val command = listOf(runtime.executable, runtime.wrapperScript, installScript.absolutePath) + pipArguments
             val logs = JSONArray()
                 .put("Installing Python dependency: " + name)
                 .put("pip_index=${mirrors.pipMirror}")
-            val result = runLocalProcess(command, File(appContext.filesDir, "deps/python").also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+            val result = runLocalProcess(command, target, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             if (result.exitCode != 0) {
                 val noWheel = text.contains("No matching distribution found", true) || text.contains("Could not find a version", true)
@@ -3354,14 +3535,16 @@ fun serveDashboardStats(): JSONObject {
             }
             return AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
                 val deps = AndroidNodeRuntime.depsDir(appContext)
+                val cache = DependencyStorage.npmCache(appContext.filesDir).apply { mkdirs() }
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-                val npmArguments = AndroidLinuxRuntime.npmInstallArguments(mirrors.npmMirror, deps.absolutePath, name)
+                val npmArguments = AndroidLinuxRuntime.npmInstallArguments(mirrors.npmMirror, deps.absolutePath, cache.absolutePath, name)
                 val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath) + npmArguments
                 val logs = JSONArray()
                     .put("Installing Node dependency from network source: $name")
                     .put("npm_registry=${mirrors.npmMirror}")
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
                 val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                DependencyStorage.trimDirectory(cache, DependencyStorage.MAX_CACHE_BYTES)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) "failed" to text else {
                     val verified = queryNpmInstalledPackages().containsKey(normalizePackageName(name))
@@ -3449,10 +3632,56 @@ fun serveDashboardStats(): JSONObject {
 
     private fun deleteDependencies(json: JSONObject): NanoHTTPD.Response {
         val ids = json.optJSONArray("ids") ?: JSONArray()
+        val statuses = JSONArray()
         for (index in 0 until ids.length()) {
-            writableDatabase.delete("dependencies", "id = ?", arrayOf(ids.optLong(index).toString()))
+            val id = ids.optLong(index)
+            val record = readableDatabase.query("dependencies", arrayOf("name", "type"), "id = ?", arrayOf(id.toString()), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.string("name") to cursor.string("type") else null
+            }
+            if (record == null) continue
+            val result = uninstallDependencyForFallback(record.second, record.first)
+            if (result.first) writableDatabase.delete("dependencies", "id = ?", arrayOf(id.toString()))
+            else updateDependencyRecord(id, "failed", result.second, "")
+            statuses.put(JSONObject().put("id", id).put("status", if (result.first) "removed" else "failed").put("log", result.second))
         }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
+        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
+    }
+
+    private fun uninstallDependencyForFallback(depType: String, name: String): Pair<Boolean, String> {
+        val normalized = DependencyStorage.normalizedName(depType, name)
+        val runtimeVersion = if (depType == "python") DependencyStorage.PYTHON_VERSION else DependencyStorage.NODE_VERSION
+        return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
+            val runtime = if (depType == "python") AndroidPythonRuntime.ensureReady(appContext) else null
+            val command = when (depType) {
+                "python" -> {
+                    runtime ?: return@withInstallLock false to "Python runtime is not ready"
+                    val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_uninstall.py")
+                    script.parentFile?.mkdirs()
+                    script.writeText(
+                        "import importlib.metadata,os,shutil,sys\n" +
+                            "root=os.path.realpath(os.environ['PIP_TARGET'])\n" +
+                            "dist=importlib.metadata.distribution(sys.argv[1])\n" +
+                            "for item in (dist.files or []):\n" +
+                            " p=os.path.realpath(os.path.join(root,str(item)))\n" +
+                            " if p.startswith(root+os.sep):\n" +
+                            "  shutil.rmtree(p,ignore_errors=True) if os.path.isdir(p) else os.path.exists(p) and os.remove(p)\n" +
+                            "shutil.rmtree(os.path.realpath(str(dist._path)),ignore_errors=True)\n",
+                    )
+                    listOf(runtime.executable, runtime.wrapperScript, script.absolutePath, normalized)
+                }
+                "nodejs" -> {
+                    val node = AndroidNodeRuntime.ensureReady(appContext) ?: return@withInstallLock false to "Node runtime is not ready"
+                    val deps = AndroidNodeRuntime.depsDir(appContext)
+                    val npm = File(node.modules, "npm/bin/npm-cli.js")
+                    listOf(node.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "uninstall", "--ignore-scripts", "--cache", DependencyStorage.npmCache(appContext.filesDir).absolutePath, "--prefix", deps.absolutePath, normalized)
+                }
+                else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
+            }
+            val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else AndroidNodeRuntime.depsDir(appContext)
+            val result = runLocalProcess(command, workingDir.apply { mkdirs() }, JSONArray(), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
+            val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+            (result.exitCode == 0) to log
+        }
     }
 
     private fun reinstallDependency(id: Long): NanoHTTPD.Response {
@@ -3758,12 +3987,26 @@ fun serveDashboardStats(): JSONObject {
     private fun Cursor.int(column: String): Int = getInt(getColumnIndexOrThrow(column))
     private fun Cursor.double(column: String): Double = getDouble(getColumnIndexOrThrow(column))
     override fun close() {
-        scriptProcesses.values.forEach { process -> runCatching { process.destroyForcibly() } }
+        scriptProcesses.values.forEach(::terminateTaskProcess)
+        taskProcesses.values.forEach(::terminateTaskProcess)
         scriptProcesses.clear()
+        taskProcesses.clear()
         scriptRunExecutor.shutdownNow()
         taskRunExecutor.shutdownNow()
+        runningTaskIds.clear()
+        taskAbortRequested.clear()
+        taskRunLogIds.clear()
+        taskRunCursors.clear()
+        taskRunLocks.clear()
+        taskFinalizedIds.clear()
         taskRunLogsMemory.clear()
+        taskRunLogCharacters.clear()
+        taskRunPendingPersistence.clear()
         taskRunStartedAt.clear()
+        scriptRunLogsMemory.clear()
+        scriptRunLogCharacters.clear()
+        scriptRunPendingPersistence.clear()
+        scriptRunLocks.clear()
         super.close()
     }
 

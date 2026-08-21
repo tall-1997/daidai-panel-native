@@ -5,6 +5,7 @@ class ScriptRunLogData {
   final int? exitCode;
   final String? error;
   final int logCount;
+  final int cursor;
 
   const ScriptRunLogData({
     required this.logs,
@@ -13,6 +14,7 @@ class ScriptRunLogData {
     required this.exitCode,
     required this.error,
     required this.logCount,
+    required this.cursor,
   });
 
   factory ScriptRunLogData.fromMap(Map<dynamic, dynamic> data) {
@@ -30,6 +32,7 @@ class ScriptRunLogData {
           : int.tryParse(rawExitCode?.toString() ?? ''),
       error: _nonBlank(data['error']?.toString()),
       logCount: (data['log_count'] as num?)?.toInt() ?? logs.length,
+      cursor: (data['cursor'] as num?)?.toInt() ?? logs.length,
     );
   }
 

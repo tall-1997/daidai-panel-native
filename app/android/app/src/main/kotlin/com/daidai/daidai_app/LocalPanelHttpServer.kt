@@ -24,6 +24,7 @@ class LocalPanelHttpServer(
         localTokenProvider = { localToken },
     )
     private val cronScheduler = AndroidFallbackCronScheduler(store)
+    private val browserAccess = LocalBrowserAccess(context) { endpoint }
     @Volatile
     private var goCoreFallbackReason = goCoreFallbackReason
     @Volatile
@@ -48,13 +49,17 @@ class LocalPanelHttpServer(
         val origin: String,
         val localToken: String,
     ) {
-        fun rejection(headers: Map<String, String>): Response.Status? {
+        fun rejection(headers: Map<String, String>, browserSession: Boolean = false): Response.Status? {
             val host = singleHeader(headers, "host")
             val requestOrigin = singleHeader(headers, "origin")
             val token = singleHeader(headers, "x-daidai-local-token")
             if (host != authority) return Response.Status.BAD_REQUEST
-            if (requestOrigin != origin) return Response.Status.FORBIDDEN
-            if (localToken.isBlank() || token != localToken) return Response.Status.UNAUTHORIZED
+            if (browserSession) {
+                if (requestOrigin != null && requestOrigin != origin) return Response.Status.FORBIDDEN
+            } else {
+                if (requestOrigin != origin) return Response.Status.FORBIDDEN
+                if (localToken.isBlank() || token != localToken) return Response.Status.UNAUTHORIZED
+            }
             return null
         }
 
@@ -72,19 +77,26 @@ class LocalPanelHttpServer(
 
     internal fun startScheduler() = cronScheduler.start()
 
+    internal fun createBrowserUrl(): String = browserAccess.createUrl()
+
     fun shutdown() {
         cronScheduler.close()
+        browserAccess.clear()
         stop()
         store.close()
     }
 
     override fun serve(session: IHTTPSession): Response {
         return try {
+            if (session.uri == "/local-ui" || session.uri.startsWith("/local-ui/")) {
+                return browserAccess.serve(session, "127.0.0.1:$listeningPort")
+            }
+            val browserSession = browserAccess.hasSession(session.headers)
             RequestBoundary(
                 authority = "127.0.0.1:$listeningPort",
                 origin = endpoint,
                 localToken = localToken,
-            ).rejection(session.headers)?.let { status ->
+            ).rejection(session.headers, browserSession)?.let { status ->
                 return jsonError(status, "Invalid local diagnostic request boundary")
             }
             if (!isFallbackRouteAllowed(session.method, session.uri)) {
@@ -92,6 +104,9 @@ class LocalPanelHttpServer(
             }
             if (session.uri.startsWith("/api/auth")) {
                 return store.serveAuth(session)
+            }
+            if (browserSession && !store.isAuthorized(session)) {
+                return jsonError(Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
             }
             if (session.uri.startsWith("/api/security")) {
                 return store.serveSecurity(session)

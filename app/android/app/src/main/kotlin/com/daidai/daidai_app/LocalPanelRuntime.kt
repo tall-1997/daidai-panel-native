@@ -38,8 +38,9 @@ object LocalPanelRuntime {
 
     @Synchronized
     fun stop(localToken: String): Map<String, Any> {
+        cachedResult = null
         stopFallback()
-        return GoCoreBridge.stop(localToken)
+        return GoCoreBridge.stop(localToken).also { cachedResult = null }
     }
 
     @Synchronized
@@ -48,17 +49,28 @@ object LocalPanelRuntime {
 
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
-        cachedResult?.let { return it }
         val coreStatus = GoCoreBridge.status(localToken)
         if (!requiresFallback(coreStatus)) {
             stopFallback()
+            cachedResult = coreStatus
             return coreStatus
         }
         return fallbackServer?.let { server ->
             val reason = lastFallbackReason.ifBlank { fallbackReason(coreStatus) }
             server.updateBoundary(reason, localToken)
             fallbackStatus(server, localToken, reason)
-        } ?: coreStatus
+        } ?: coreStatus.also { cachedResult = null }
+    }
+
+    @Synchronized
+    fun createBrowserUrl(context: Context, localToken: String): String {
+        val status = ensureStarted(context, localToken)
+        val fallback = fallbackServer
+        return if (fallback != null && status["base_url"] == fallback.endpoint) {
+            fallback.createBrowserUrl()
+        } else {
+            GoCoreBridge.createBrowserUrl()
+        }
     }
 
     private fun stopFallback() {

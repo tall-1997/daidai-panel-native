@@ -37,6 +37,10 @@ class MethodChannelLocalPanelHost implements LocalPanelHost {
   }
 
   @override
+  Future<String> openBrowserPanel() async =>
+      await _methodChannel.invokeMethod<String>('openBrowserPanel') ?? '';
+
+  @override
   Stream<LocalPanelStatus> watchStatus() {
     return _statusStream ??= _eventChannel
         .receiveBroadcastStream()

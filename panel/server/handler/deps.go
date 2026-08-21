@@ -1029,6 +1029,7 @@ func installDependency(id uint, depType, name string) {
 	case model.DepTypeNodeJS:
 		nodeUnlock := service.LockNodePackageOperation()
 		defer nodeUnlock()
+		defer service.TrimNpmCache()
 
 		if notice := service.NodeInstallCompatibilityNotice(name); notice != "" {
 			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("log", notice+"\n")
@@ -1042,6 +1043,18 @@ func installDependency(id uint, depType, name string) {
 		}
 		service.EnforceNpmScriptPolicy(cmd)
 	case model.DepTypePython:
+		pythonUnlock := service.LockDependencyInstall(depType, name, pythonVersion)
+		defer pythonUnlock()
+		if service.DependencyInstalledForPythonVersion(depType, name, pythonVersion) {
+			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+				"status": model.DepStatusInstalled,
+				"log":    "Already installed; skipped network installation",
+			})
+			if operationID, _, _, _ := dependencyOperationContext(id); operationID != "" {
+				_ = service.DefaultOperationStore().Finish(operationID, 0, 0)
+			}
+			return
+		}
 		var err error
 		cmd, err = service.NewPipInstallCommandForPythonVersion(pythonVersion, name)
 		if err != nil {

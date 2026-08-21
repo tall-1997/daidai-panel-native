@@ -77,10 +77,10 @@ object AndroidLinuxRuntime {
     )
 
     internal fun pipInstallArguments(mirror: String, target: String, packageSpec: String): List<String> =
-        listOf("install", "--no-input", "--only-binary=:all:", "-i", mirror, "--target", target, packageSpec)
+        listOf("install", "--no-input", "--no-cache-dir", "--only-binary=:all:", "-i", mirror, "--target", target, packageSpec)
 
-    internal fun npmInstallArguments(mirror: String, prefix: String, packageSpec: String): List<String> =
-        listOf("install", "--ignore-scripts", "--registry", mirror, "--prefix", prefix, packageSpec)
+    internal fun npmInstallArguments(mirror: String, prefix: String, cacheDir: String, packageSpec: String): List<String> =
+        listOf("install", "--ignore-scripts", "--registry", mirror, "--cache", cacheDir, "--prefix", prefix, packageSpec)
 
     fun mirrorConfig(context: Context): MirrorConfig = synchronized(mirrorConfigLock) {
         val preferences = context.getSharedPreferences(MIRROR_PREFERENCES, Context.MODE_PRIVATE)

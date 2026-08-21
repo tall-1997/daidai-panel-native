@@ -90,6 +90,23 @@ if (!daidaiWindow.__DAIDAI_SAFE_FOCUS_PATCHED__) {
   };
 }
 
+async function establishLocalBrowserSession() {
+  if (!window.location.pathname.startsWith("/local-ui/")) return;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const ticket = params.get("ticket");
+  if (!ticket) return;
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  const response = await fetch("/local-ui/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: ticket,
+  });
+  if (!response.ok) throw new Error("本地浏览器会话已失效，请从 App 重新打开");
+}
+
+await establishLocalBrowserSession();
+
 const app = createApp(App);
 
 app.use(createPinia());

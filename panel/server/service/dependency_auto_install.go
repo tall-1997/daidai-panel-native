@@ -147,9 +147,15 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 	baseEnv := buildEnvSlice(envVars)
 	switch candidate.Manager {
 	case "python":
-		pipEnv := PipInstallEnv(baseEnv, CurrentPipMirror())
 		pythonVersion := ResolvePythonVersionFromEnv(envVars)
 		candidate.PythonVersion = pythonVersion
+		unlock := LockDependencyInstall(model.DepTypePython, candidate.PackageName, pythonVersion)
+		defer unlock()
+		if DependencyInstalledForPythonVersion(model.DepTypePython, candidate.PackageName, pythonVersion) {
+			RecordAutoInstalledDepForPythonVersion(candidate.RecordType, candidate.RecordName, "Already installed; skipped network installation", pythonVersion)
+			return AutoInstallResult{Success: true, Log: "Already installed; skipped network installation"}
+		}
+		pipEnv := PipInstallEnv(baseEnv, CurrentPipMirror())
 		cmd, err := NewPipInstallCommandForPythonVersion(pythonVersion, candidate.PackageName)
 		if err != nil {
 			return AutoInstallResult{Error: err.Error()}
@@ -178,6 +184,7 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 	case "nodejs":
 		unlock := LockNodePackageOperation()
 		defer unlock()
+		defer TrimNpmCache()
 
 		notice := NodeInstallCompatibilityNotice(candidate.PackageName)
 		cmd, err := NewNpmInstallCommand(candidate.PackageName)
@@ -363,12 +370,13 @@ func ManagedPythonDependencyEnv(base []string, pythonVersion string) []string {
 	if strings.TrimSpace(existing) != "" {
 		value += string(os.PathListSeparator) + existing
 	}
-	return appendEnvOverride(base, "PYTHONPATH", value)
+	base = appendEnvOverride(base, "PYTHONPATH", value)
+	return appendEnvOverride(base, "PIP_TARGET", target)
 }
 
 // BuildPipInstallArgs 把 install 子命令、附加 flag、包名拼成完整的 args。
 func BuildPipInstallArgs(extraFlags []string, packageName string) []string {
-	args := []string{"install"}
+	args := []string{"install", "--no-cache-dir"}
 	args = append(args, extraFlags...)
 	args = append(args, packageName)
 	return args

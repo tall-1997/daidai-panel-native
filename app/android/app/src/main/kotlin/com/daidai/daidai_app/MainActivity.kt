@@ -141,6 +141,22 @@ class MainActivity : FlutterActivity() {
                         emitAfter = true,
                     )
                 }
+                "openBrowserPanel" -> localPanelClient.createBrowserUrl { callResult ->
+                    runOnUiThread {
+                        if (activityDestroyed) return@runOnUiThread
+                        callResult.fold(
+                            onSuccess = { url ->
+                                runCatching {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }.fold(
+                                    onSuccess = { result.success(url) },
+                                    onFailure = { result.error("BROWSER_UNAVAILABLE", "无法打开设备浏览器", null) },
+                                )
+                            },
+                            onFailure = { result.error("LOCAL_WEB_UNAVAILABLE", it.message, null) },
+                        )
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

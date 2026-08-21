@@ -1515,6 +1515,7 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 	case model.DepTypeNodeJS:
 		unlock := LockNodePackageOperation()
 		defer unlock()
+		defer TrimNpmCache()
 
 		var err error
 		cmd, err = NewNpmInstallCommand(dep.Name)
@@ -1526,8 +1527,18 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 			return
 		}
 	case model.DepTypePython:
+		pythonVersion := NormalizePythonVersionOrDefault(dep.PythonVersion)
+		unlock := LockDependencyInstall(dep.Type, dep.Name, pythonVersion)
+		defer unlock()
+		if DependencyInstalledForPythonVersion(dep.Type, dep.Name, pythonVersion) {
+			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
+				"status": model.DepStatusInstalled,
+				"log":    logPrefix + " 已安装，跳过网络安装",
+			})
+			return
+		}
 		var err error
-		cmd, err = NewPipInstallCommandForPythonVersion(dep.PythonVersion, dep.Name)
+		cmd, err = NewPipInstallCommandForPythonVersion(pythonVersion, dep.Name)
 		if err != nil {
 			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 				"status": model.DepStatusFailed,
@@ -1535,7 +1546,7 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 			})
 			return
 		}
-		cmd.Env = append(PipInstallEnv(AppendProxyEnv(os.Environ()), CurrentPipMirror()), "TMPDIR=/tmp")
+		cmd.Env = append(ManagedPythonDependencyEnv(PipInstallEnv(AppendProxyEnv(os.Environ()), CurrentPipMirror()), pythonVersion), "TMPDIR=/tmp")
 	case model.DepTypeLinux:
 		// 重启后的 Linux 依赖恢复必须复用当前主依赖安装路径的包管理器策略，
 		// 避免 Debian 继续走旧的裸 apt-get update/install 分支，导致与

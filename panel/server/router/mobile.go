@@ -71,6 +71,7 @@ func SetupMobileFull(engine *gin.Engine, security ManagementSecurity, platform M
 	engine.Use(middleware.SecurityHeaders())
 	registerMobileHandlers(engine)
 	registerMetadataRoutes(engine)
+	security.Browser.Register(engine)
 }
 
 func registerFullHandlers(engine *gin.Engine) {

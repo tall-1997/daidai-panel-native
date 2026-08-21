@@ -57,6 +57,7 @@ type options struct {
 	Port                 int                                `json:"port"`
 	LocalToken           string                             `json:"localToken"`
 	NativeLibraryDir     string                             `json:"nativeLibraryDir"`
+	WebDir               string                             `json:"webDir"`
 	AndroidKeystoreKey   string                             `json:"androidKeystoreMasterKey"`
 	RuntimeManifestPath  string                             `json:"runtimeManifestPath"`
 	RuntimeCompatPath    string                             `json:"runtimeCompatibilityPath"`
@@ -104,6 +105,7 @@ type core struct {
 	store        *generationStore
 	generationID string
 	baseline     generationBaseline
+	browser      *router.LoopbackBrowserAccess
 }
 
 var (
@@ -393,7 +395,13 @@ func StartCore(optionsJSON string) (response string) {
 	}
 	engine.Use(gin.Recovery())
 	platform := router.NewMobilePlatform(parsed.PlatformCapabilities)
-	if err := configureRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost}, platform); err != nil {
+	browser, err := router.NewLoopbackBrowserAccess(actualHost, parsed.WebDir)
+	if err != nil {
+		_ = listener.Close()
+		logDiagnostic(codeBootstrapFailed, "local-web")
+		return failure(codeBootstrapFailed, "local web assets unavailable", result{Status: "stopped"})
+	}
+	if err := configureRoutes(engine, router.ManagementSecurity{LocalToken: parsed.LocalToken, Host: actualHost, Browser: browser}, platform); err != nil {
 		_ = listener.Close()
 		logDiagnostic(codeBootstrapFailed, "routes")
 		if rollbackErr := rollbackStartFailure(store, txn, prepared, cfg, bootstrapWriter, previous); rollbackErr != nil {
@@ -446,6 +454,7 @@ func StartCore(optionsJSON string) (response string) {
 		store:        store,
 		generationID: activeID,
 		baseline:     baseline,
+		browser:      browser,
 	}
 	running.server = &http.Server{Handler: engine, ConnState: running.trackConnection}
 	serveResult := make(chan error, 1)
@@ -564,6 +573,9 @@ func StopCore(timeoutMillis int64) string {
 		return failure(codeNotRunning, "core is not running", value)
 	}
 	running := lifecycle.core
+	if running.browser != nil {
+		running.browser.Clear()
+	}
 	lifecycle.status = "stopping"
 	recoveryReady.Store(false)
 	lifecycle.mu.Unlock()
@@ -647,6 +659,19 @@ func CoreEndpoint() string {
 		return ""
 	}
 	return lifecycle.core.endpoint
+}
+
+func CreateBrowserURL() string {
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.core == nil || !coreReadyStatus(lifecycle.status) || lifecycle.core.browser == nil {
+		return ""
+	}
+	url, err := lifecycle.core.browser.CreateURL()
+	if err != nil {
+		return ""
+	}
+	return url
 }
 
 // RecoveryConverged gates business workers until recovery and migration commit.

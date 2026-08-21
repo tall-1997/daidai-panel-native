@@ -6,4 +6,5 @@ object GoCoreReflectionContract {
     const val STOP_CORE = "stopCore"
     const val CORE_STATUS = "coreStatus"
     const val CORE_ENDPOINT = "coreEndpoint"
+    const val CREATE_BROWSER_URL = "createBrowserURL"
 }

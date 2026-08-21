@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/auth/auth_provider.dart';
+import '../../../core/local_panel/method_channel_local_panel_host.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/services/app_update_service.dart';
@@ -41,6 +42,20 @@ class _MorePageState extends ConsumerState<MorePage> {
   Future<void> _loadServerUrl() async {
     final url = await SecureStorage.getServerUrl();
     if (mounted) setState(() => _serverUrl = url);
+  }
+
+  Future<void> _openBrowserPanel() async {
+    try {
+      await MethodChannelLocalPanelHost().openBrowserPanel();
+    } catch (_) {
+      if (mounted) {
+        AppGlassNotice.show(
+          context,
+          '无法打开本地 Web 面板',
+          type: AppGlassNoticeType.error,
+        );
+      }
+    }
   }
 
   String? _buildAvatarUrl(String? avatarPath) {
@@ -145,6 +160,13 @@ class _MorePageState extends ConsumerState<MorePage> {
             isLight: isLight,
             onTap: () => context.push('/server-config?manage=1'),
           ),
+          if (_serverUrl?.startsWith('http://127.0.0.1:') == true)
+            _SettingsItem(
+              icon: Icons.open_in_browser_outlined,
+              title: '在设备浏览器打开本地面板',
+              isLight: isLight,
+              onTap: _openBrowserPanel,
+            ),
           if (showsOperatorAutomation(user?.role)) ...[
             _SettingsItem(
               icon: Icons.key_outlined,

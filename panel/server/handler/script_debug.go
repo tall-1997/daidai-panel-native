@@ -244,6 +244,7 @@ func prepareInlineDebugFile(requestPath, ext string) (full string, workDir strin
 
 func (h *ScriptHandler) DebugLogs(c *gin.Context) {
 	runID := c.Param("run_id")
+	cursor := service.ParseLogCursor(c.Query("cursor"))
 
 	run, exists := h.loadRun(runID)
 	if !exists {
@@ -252,9 +253,14 @@ func (h *ScriptHandler) DebugLogs(c *gin.Context) {
 	}
 
 	logs, done, exitCode, status := run.snapshot()
+	if cursor > int64(len(logs)) {
+		cursor = int64(len(logs))
+	}
 	response.Success(c, gin.H{
 		"data": gin.H{
-			"logs":      logs,
+			"logs":      logs[cursor:],
+			"cursor":    len(logs),
+			"log_count": len(logs),
 			"done":      done,
 			"exit_code": exitCode,
 			"status":    status,

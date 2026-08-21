@@ -85,7 +85,7 @@ object AndroidPythonRuntime {
             env = mapOf(
                 "LD_LIBRARY_PATH" to "$compatLibDir:$libDir:$nativeDir:\$LD_LIBRARY_PATH",
                 "PYTHONHOME" to home.absolutePath,
-                "PYTHONPATH" to "$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages",
+                "PYTHONPATH" to "$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages:${DependencyStorage.pythonSitePackages(context.filesDir)}",
                 "HOME" to home.absolutePath,
                 "DAIDAI_RUNTIME_LANGUAGE" to "python",
             ),

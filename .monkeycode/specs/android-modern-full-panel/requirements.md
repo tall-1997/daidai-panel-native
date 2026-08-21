@@ -160,3 +160,42 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 3. IF 页面读取能力为 `disabled` 或 `temporaryUnavailable`, Client SHALL 显示页面状态与原因并禁用受影响操作。
 4. IF 写入或执行能力不可用, Client SHALL 保留只读页面并隐藏或禁用对应操作按钮。
 5. WHEN 用户切换本地与远程实例, Client SHALL 使用目标实例独立的角色、版本和能力配置刷新菜单、路由和操作。
+
+## Requirement 16：实时任务反馈与日志一致性
+
+**User Story:** 作为任务用户，我希望运行后立即看到脚本输出并可靠打开历史日志，以便判断任务执行进度和结果。
+
+1. WHILE 任务处于排队或启动状态, Client SHALL 持续跟踪任务直到终态或用户离开页面。
+2. WHEN 任务产生 stdout 或 stderr, Client SHALL 在下一次可用推送或增量轮询周期展示新输出。
+3. WHEN 内存实时日志已释放, Local Core SHALL 从持久日志恢复最新输出、游标和终态。
+4. WHEN 用户打开日志文件, Local Core SHALL 返回统一的文件名、路径、日志 ID、大小和创建时间字段。
+5. WHEN 日志列表包含有效任务关联, Local Core SHALL 返回任务名称。
+
+## Requirement 17：Unicode 脚本执行
+
+**User Story:** 作为使用中文脚本名的用户，我希望任务命令、日志和下载完整保留脚本路径，以便正常执行与定位错误。
+
+1. WHEN 任务命令包含引号、空格、中文路径或脚本参数, Executor SHALL 解析脚本路径和参数为独立结构化字段。
+2. WHEN 路径经过 URL、数据库和日志文件接口, System SHALL 保持 UTF-8 内容和字面百分号语义。
+3. IF 脚本路径无效, Client SHALL 展示规范化后的路径与可操作错误原因。
+
+## Requirement 18：依赖复用与存储治理
+
+**User Story:** 作为本地脚本用户，我希望多个脚本复用已安装依赖并限制缓存增长，以便减少存储和重复下载。
+
+1. Dependency Manager SHALL 使用依赖类型、规范包名和运行时版本作为唯一身份。
+2. WHEN 并发任务请求同一依赖, Dependency Manager SHALL 复用一个安装操作并共享结果。
+3. WHEN 已安装版本满足请求, Dependency Manager SHALL 跳过网络安装。
+4. Local Runtime SHALL 将 Python 用户依赖存储在运行时目录之外并向所有同版本脚本提供共享路径。
+5. Local Runtime SHALL 对 pip/npm 缓存、任务日志、脚本运行日志、备份和临时文件执行有界保留与清理。
+
+## Requirement 19：后台资源与本机浏览器访问
+
+**User Story:** 作为本地面板用户，我希望后台任务可靠运行并能从设备浏览器打开面板，以便兼顾自动化和管理体验。
+
+1. WHILE 持续调度启用, Android Host SHALL 使用有界任务并发、队列和日志内存窗口。
+2. WHEN 持续调度关闭且客户端解绑, Android Host SHALL 停止 Core、子进程和周期恢复任务并释放资源。
+3. WHEN App 停止或重启本地实例, Android Host SHALL 清除旧端点缓存并验证新端点。
+4. Local Web SHALL 仅监听动态 `127.0.0.1` 端口并托管构建时签名打包的静态前端。
+5. WHEN 用户从 App 请求浏览器访问, Local Web SHALL 使用短时一次性票据换取 HttpOnly、SameSite=Strict 的本机浏览器会话。
+6. WHILE 浏览器会话有效, 业务 API SHALL 继续执行 JWT、角色和权限校验。

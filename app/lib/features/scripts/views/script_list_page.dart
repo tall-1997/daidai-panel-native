@@ -2819,6 +2819,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
   String? _errorSummary;
   Timer? _pollTimer;
   bool _pollRequestRunning = false;
+  int _cursor = 0;
   Color? _logBackgroundColor;
 
   @override
@@ -2847,6 +2848,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.scriptsRunLogs(widget.runId),
+        queryParameters: {'cursor': _cursor},
       );
       final data = extractData(resp.data);
       if (data is! Map) {
@@ -2860,9 +2862,8 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
       }
 
       setState(() {
-        _logs
-          ..clear()
-          ..addAll(run.logs);
+        _logs.addAll(run.logs);
+        _cursor = run.cursor;
         _done = run.done;
         _loading = false;
         _errorSummary = run.error;

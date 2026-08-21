@@ -134,6 +134,7 @@ func ReadLogFile(logPath, logDir string) (string, error) {
 type LogFileInfo struct {
 	Filename  string `json:"filename"`
 	Path      string `json:"path"`
+	LogID     uint   `json:"log_id"`
 	Size      int64  `json:"size"`
 	CreatedAt string `json:"created_at"`
 }

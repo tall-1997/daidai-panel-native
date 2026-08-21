@@ -236,6 +236,9 @@ class FakeLocalPanelHost implements LocalPanelHost {
       ensureStarted();
 
   @override
+  Future<String> openBrowserPanel() async => 'http://127.0.0.1:5700/local-ui/';
+
+  @override
   Future<LocalPanelStatus> stop() => ensureStarted();
 
   @override

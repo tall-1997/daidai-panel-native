@@ -61,6 +61,9 @@ class LocalPanelHostService : Service() {
             setPersistentScheduling(enabled)
             return status()
         }
+
+        override fun createBrowserUrl(): String =
+            LocalPanelRuntime.createBrowserUrl(applicationContext, localToken)
     }
 
     override fun onCreate() {
@@ -97,7 +100,11 @@ class LocalPanelHostService : Service() {
             }
             persistentPolicy = PersistentForegroundPolicy(readPersistentSelection())
             applyPersistentAction(persistentPolicy.recoveryAction())
-            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
+            if (persistentPolicy.enabled) {
+                LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
+            } else {
+                LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(applicationContext)
+            }
         } catch (error: Throwable) {
             runCatching {
                 val crashDir = File(filesDir, "panel-crash-logs")
@@ -163,6 +170,11 @@ class LocalPanelHostService : Service() {
     private fun setPersistentScheduling(enabled: Boolean) {
         val preferences = getSharedPreferences(PERSISTENT_PREFS_NAME, MODE_PRIVATE)
         check(preferences.edit().putBoolean(PREF_PERSISTENT_ENABLED, enabled).commit())
+        if (enabled) {
+            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
+        } else {
+            LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(applicationContext)
+        }
         applyPersistentAction(persistentPolicy.update(enabled))
     }
 

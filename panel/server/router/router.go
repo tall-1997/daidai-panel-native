@@ -3,6 +3,7 @@ package router
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"strings"
 
 	"daidai-panel/handler"
 	"daidai-panel/middleware"
@@ -13,6 +14,7 @@ import (
 type ManagementSecurity struct {
 	LocalToken string
 	Host       string
+	Browser    *LoopbackBrowserAccess
 }
 
 func Setup(engine *gin.Engine) {
@@ -67,8 +69,13 @@ func managementSecurityMiddleware(security ManagementSecurity) gin.HandlerFunc {
 	expectedTokenDigest := sha256.Sum256([]byte(security.LocalToken))
 	expectedOrigin := "http://" + security.Host
 	return func(c *gin.Context) {
+		if c.Request.URL.Path == "/local-ui" || strings.HasPrefix(c.Request.URL.Path, "/local-ui/") {
+			c.Next()
+			return
+		}
+		browserSession := security.Browser != nil && security.Browser.HasSession(c.Request)
 		providedTokenDigest := sha256.Sum256([]byte(c.GetHeader("X-Daidai-Local-Token")))
-		if subtle.ConstantTimeCompare(providedTokenDigest[:], expectedTokenDigest[:]) != 1 {
+		if !browserSession && subtle.ConstantTimeCompare(providedTokenDigest[:], expectedTokenDigest[:]) != 1 {
 			c.AbortWithStatus(401)
 			return
 		}
@@ -76,7 +83,13 @@ func managementSecurityMiddleware(security ManagementSecurity) gin.HandlerFunc {
 			c.AbortWithStatus(403)
 			return
 		}
-		if c.GetHeader("Origin") != expectedOrigin {
+		origin := c.GetHeader("Origin")
+		if browserSession {
+			if origin != "" && origin != expectedOrigin {
+				c.AbortWithStatus(403)
+				return
+			}
+		} else if origin != expectedOrigin {
 			c.AbortWithStatus(403)
 			return
 		}

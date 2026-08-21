@@ -44,6 +44,10 @@ object LocalPanelRecoveryTriggers {
     }
 
     fun schedulePeriodicReconciliation(context: Context) {
+        if (!LocalPanelHostService.isPersistentSchedulingEnabled(context)) {
+            cancelPeriodicReconciliation(context)
+            return
+        }
         val request = PeriodicWorkRequestBuilder<LocalPanelRecoveryWorker>(15, TimeUnit.MINUTES)
             .setInputData(androidx.work.workDataOf("trigger" to "periodic"))
             .build()
@@ -52,6 +56,10 @@ object LocalPanelRecoveryTriggers {
             ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
+    }
+
+    fun cancelPeriodicReconciliation(context: Context) {
+        WorkManager.getInstance(context.applicationContext).cancelUniqueWork(UNIQUE_PERIODIC)
     }
 }
 
@@ -82,6 +90,10 @@ class LocalPanelRecoveryReceiver : BroadcastReceiver() {
             LocalPanelRecoveryTriggers.ACTION_PROCESS_RECOVERY -> LocalPanelRecoveryTriggers.reconcileNow(context, "process-recovery")
             LocalPanelRecoveryTriggers.ACTION_NETWORK_RESTORED -> LocalPanelRecoveryTriggers.reconcileWhenNetworkRestored(context)
         }
-        LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(context)
+        if (LocalPanelHostService.isPersistentSchedulingEnabled(context)) {
+            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(context)
+        } else {
+            LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(context)
+        }
     }
 }

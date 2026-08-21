@@ -9,9 +9,8 @@ class ScriptPathContractTest {
     fun `normal relative UTF-8 paths are preserved`() {
         assertEquals("目录/脚本.py", LocalPanelStore.normalizeScriptPath("目录/脚本.py"))
         assertEquals("目录/脚本.py", LocalPanelStore.normalizeScriptPath("/目录/脚本.py"))
-        assertEquals("目录/脚本.py", LocalPanelStore.normalizeScriptPath("%E7%9B%AE%E5%BD%95/%E8%84%9A%E6%9C%AC.py"))
         assertEquals("签到+通知.py", LocalPanelStore.normalizeScriptPath("签到+通知.py"))
-        assertEquals("签到+通知.py", LocalPanelStore.normalizeScriptPath("%E7%AD%BE%E5%88%B0%2B%E9%80%9A%E7%9F%A5.py"))
+        assertEquals("折扣%25+通知.py", LocalPanelStore.normalizeScriptPath("折扣%25+通知.py"))
         assertEquals("", LocalPanelStore.normalizeScriptPath("/", allowRootAlias = true))
     }
 

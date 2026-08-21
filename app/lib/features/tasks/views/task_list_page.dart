@@ -23,6 +23,8 @@ import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
+import '../models/live_log_snapshot.dart';
+import '../models/task_log_file.dart';
 
 class TaskListPage extends ConsumerStatefulWidget {
   const TaskListPage({super.key});
@@ -443,22 +445,19 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           ? data
                 .whereType<Map>()
                 .map(
-                  (item) =>
-                      _TaskLogFile.fromJson(Map<String, dynamic>.from(item)),
+                  (item) => TaskLogFile.fromJson(
+                    Map<String, dynamic>.from(item),
+                  ),
                 )
                 .toList()
-          : <_TaskLogFile>[];
-      final logsByPath = await _loadTaskLogsByPath(task.id);
-      final linkedFiles = files
-          .map((file) => file.copyWith(logId: logsByPath[file.path]?.id))
-          .toList();
+          : <TaskLogFile>[];
       if (!mounted) return;
       final selectedLogId = await showDialog<int>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text('${task.name} 日志文件'),
           content: _TaskLogFileList(
-            files: linkedFiles,
+            files: files,
             onOpen: (logId) => Navigator.pop(dialogContext, logId),
           ),
           actions: [
@@ -474,35 +473,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     } catch (error) {
       await _showActionError(error, '加载任务日志文件失败');
     }
-  }
-
-  Future<Map<String, TaskLog>> _loadTaskLogsByPath(int taskId) async {
-    const pageSize = 100;
-    final logsByPath = <String, TaskLog>{};
-    var page = 1;
-    var loaded = 0;
-    var total = 0;
-    while (page == 1 || loaded < total) {
-      final response = await DioClient.instance.dio.get(
-        ApiEndpoints.logs,
-        queryParameters: {
-          'page': page,
-          'page_size': pageSize,
-          'task_id': taskId,
-        },
-      );
-      final paginated = extractPaginated(response.data);
-      if (page == 1) total = paginated.total;
-      if (paginated.items.isEmpty) break;
-      for (final item in paginated.items) {
-        final log = TaskLog.fromJson(item);
-        final path = log.logPath?.trim() ?? '';
-        if (path.isNotEmpty) logsByPath[path] = log;
-      }
-      loaded += paginated.items.length;
-      page++;
-    }
-    return logsByPath;
   }
 
   List<String> _formatTaskInfoLines(dynamic data) {
@@ -2003,41 +1973,8 @@ class _TaskInfoDialogContent extends StatelessWidget {
   }
 }
 
-class _TaskLogFile {
-  final String filename;
-  final String path;
-  final int size;
-  final DateTime? createdAt;
-  final int? logId;
-
-  const _TaskLogFile({
-    required this.filename,
-    required this.path,
-    required this.size,
-    this.createdAt,
-    this.logId,
-  });
-
-  factory _TaskLogFile.fromJson(Map<String, dynamic> json) => _TaskLogFile(
-    filename: json['filename']?.toString() ?? '',
-    path: json['path']?.toString() ?? '',
-    size: json['size'] is num
-        ? (json['size'] as num).toInt()
-        : int.tryParse(json['size']?.toString() ?? '') ?? 0,
-    createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
-  );
-
-  _TaskLogFile copyWith({int? logId}) => _TaskLogFile(
-    filename: filename,
-    path: path,
-    size: size,
-    createdAt: createdAt,
-    logId: logId ?? this.logId,
-  );
-}
-
 class _TaskLogFileList extends StatelessWidget {
-  final List<_TaskLogFile> files;
+  final List<TaskLogFile> files;
   final ValueChanged<int> onOpen;
 
   const _TaskLogFileList({required this.files, required this.onOpen});
@@ -2093,12 +2030,12 @@ class _TaskLogFileList extends StatelessWidget {
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
-                      if (!canOpen)
-                        const Text(
-                          '无对应日志记录',
-                          style: TextStyle(
+                      if (file.contractError != null)
+                        Text(
+                          file.contractError!,
+                          style: const TextStyle(
                             fontSize: 11,
-                            color: AppColors.slate400,
+                            color: AppColors.red500,
                           ),
                         ),
                     ],
@@ -3203,8 +3140,9 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   bool _autoScroll = true;
   String _statusText = '连接中...';
   Timer? _pollTimer;
-  int _pollAttempts = 0;
   bool _pollRequestRunning = false;
+  int _cursor = 0;
+  int? _logId;
   Color? _logBackgroundColor;
 
   @override
@@ -3226,6 +3164,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.taskLiveLogs(widget.taskId),
+        queryParameters: {'cursor': _cursor},
       );
       final data = extractData(resp.data);
       if (data is Map<String, dynamic>) {
@@ -3252,17 +3191,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   }
 
   void _applyLiveSnapshot(Map<String, dynamic> data, {bool initial = false}) {
-    final rawLogs = data['logs'];
-    final logs = rawLogs is List
-        ? rawLogs
-              .map((item) => item.toString())
-              .where((line) => line.trim().isNotEmpty)
-              .toList()
-        : const <String>[];
-    final done = data['done'] == true;
-    final status = (data['status'] as num?)?.toDouble();
-    final isRunning = !done && status == 2;
-    final shouldKeepPolling = !isRunning && (logs.isEmpty || initial);
+    final snapshot = LiveLogSnapshot.fromMap(data);
+    final shouldKeepPolling = snapshot.shouldTrack;
 
     if (!mounted) {
       return;
@@ -3270,20 +3200,23 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
 
     setState(() {
       _loading = false;
-      _lines
-        ..clear()
-        ..addAll(logs);
-      _done = done && !shouldKeepPolling;
+      if (initial || (_logId != null && snapshot.logId != _logId)) {
+        _lines.clear();
+      }
+      _lines.addAll(snapshot.logs);
+      _cursor = snapshot.cursor;
+      _logId = snapshot.logId ?? _logId;
+      _done = snapshot.done && !shouldKeepPolling;
       _statusText = shouldKeepPolling
           ? '等待日志...'
-          : _statusFromLiveTask(status, done: done);
+          : _statusFromLiveTask(snapshot.status, done: snapshot.done);
     });
 
-    if (_autoScroll && logs.isNotEmpty) {
+    if (_autoScroll && snapshot.logs.isNotEmpty) {
       _scrollToBottom();
     }
 
-    if (isRunning) {
+    if (snapshot.isRunning) {
       _pollTimer?.cancel();
       _connectSSE(widget.taskId);
       return;
@@ -3295,17 +3228,19 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     }
 
     _pollTimer?.cancel();
+    _pollTimer = null;
+    if (!initial && snapshot.done) {
+      _sendTaskCompletionNotification(widget.taskId, 'finished');
+    }
   }
 
   void _startPolling() {
     if (_pollTimer != null) {
       return;
     }
-    _pollAttempts = 0;
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (_pollRequestRunning) return;
       _pollRequestRunning = true;
-      _pollAttempts++;
       if (!mounted) {
         _pollTimer?.cancel();
         _pollTimer = null;
@@ -3315,6 +3250,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       try {
         final resp = await DioClient.instance.dio.get(
           ApiEndpoints.taskLiveLogs(widget.taskId),
+          queryParameters: {'cursor': _cursor},
         );
         final data = extractData(resp.data);
         if (data is Map<String, dynamic>) {
@@ -3325,17 +3261,6 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         _pollRequestRunning = false;
       }
 
-      if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...') {
-        _pollTimer?.cancel();
-        _pollTimer = null;
-        setState(() {
-          _done = _lines.isNotEmpty;
-          _statusText = _lines.isEmpty ? '暂无日志' : '已完成';
-        });
-        if (_lines.isNotEmpty) {
-          _sendTaskCompletionNotification(widget.taskId, 'finished');
-        }
-      }
     });
   }
 
@@ -3347,7 +3272,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       ..clear()
       ..addAll(_lines);
     _sseClient.connect(
-      path: ApiEndpoints.logStream(taskId),
+      path: '${ApiEndpoints.logStream(taskId)}?cursor=$_cursor',
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
@@ -3366,6 +3291,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
             _done = event.data == 'finished';
             _statusText = _statusFromStreamDone(event.data);
           });
+          _sseClient.close();
           _sendTaskCompletionNotification(widget.taskId, event.data);
           return;
         }
@@ -3376,6 +3302,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         if (dedupedLines.isEmpty) return;
         setState(() {
           _lines.addAll(dedupedLines);
+          final eventCursor = int.tryParse(event.lastEventId ?? event.id ?? '');
+          if (eventCursor != null && eventCursor > _cursor) {
+            _cursor = eventCursor;
+          }
           _done = false;
           _statusText = '运行中';
         });
@@ -3419,21 +3349,18 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   }
 
   String _statusFromLiveTask(double? status, {required bool done}) {
-    if (!done && status == 2) {
-      return '运行中';
-    }
     if (!done) {
-      return '等待日志...';
+      return status == 2 ? '运行中' : status == 0.5 ? '排队中' : '等待日志...';
     }
     switch (status) {
       case 0:
-        return '已禁用';
-      case 0.5:
-        return '排队中';
+        return '执行成功';
       case 1:
-        return '已启用';
+        return '执行失败';
       case 2:
-        return '已完成';
+        return '运行中';
+      case 3:
+        return '已终止';
       default:
         return _lines.isEmpty ? '等待日志...' : '已完成';
     }

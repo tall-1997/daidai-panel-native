@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,8 @@ import (
 	"daidai-panel/config"
 	"daidai-panel/service"
 	"daidai-panel/testutil"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestScriptCommandParts(t *testing.T) {
@@ -121,6 +125,30 @@ func TestDebugRunFinishDoesNotOverrideStoppedStatus(t *testing.T) {
 	}
 	if got := len(run.Logs); got != 1 {
 		t.Fatalf("expected finish to avoid appending logs for stopped run, got %d entries", got)
+	}
+}
+
+func TestDebugLogsReturnsOnlyEntriesAfterCursor(t *testing.T) {
+	handler := NewScriptHandler()
+	handler.storeRun("incremental", &debugRun{Logs: []string{"one", "two", "three"}, Status: "running"})
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("GET", "/?cursor=2", nil)
+	ctx.Params = gin.Params{{Key: "run_id", Value: "incremental"}}
+
+	handler.DebugLogs(ctx)
+	var response struct {
+		Data struct {
+			Logs     []string `json:"logs"`
+			Cursor   int      `json:"cursor"`
+			LogCount int      `json:"log_count"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode debug logs: %v", err)
+	}
+	if len(response.Data.Logs) != 1 || response.Data.Logs[0] != "three" || response.Data.Cursor != 3 || response.Data.LogCount != 3 {
+		t.Fatalf("unexpected incremental debug logs: %#v", response.Data)
 	}
 }
 

@@ -4,6 +4,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.Properties
 import groovy.json.JsonSlurper
+import org.gradle.api.tasks.Sync
 
 plugins {
     id("com.android.application")
@@ -114,10 +115,51 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs("../../../runtime")
+            assets.srcDirs("../../../runtime", layout.buildDirectory.dir("generated/localWebAssets"))
             // Python and Node payloads are packaged as archives under src/main/assets.
             // The generated pythonAssets/nodeAssets trees are build-time verification inputs;
             // adding them as Android asset roots duplicates archive metadata paths.
+        }
+    }
+}
+
+val panelWebDir = rootProject.file("../../panel/web")
+val generatedLocalWebDir = layout.buildDirectory.dir("generated/localWebAssets/local-web")
+
+val installLocalPanelWebDependencies = tasks.register<Exec>("installLocalPanelWebDependencies") {
+    group = "build setup"
+    description = "Installs locked Panel Web dependencies for the Android asset build."
+    workingDir(panelWebDir)
+    commandLine("npm", "ci", "--no-audit", "--no-fund")
+    inputs.files(panelWebDir.resolve("package.json"), panelWebDir.resolve("package-lock.json"))
+    outputs.dir(panelWebDir.resolve("node_modules"))
+}
+
+val buildLocalPanelWeb = tasks.register<Exec>("buildLocalPanelWeb") {
+    dependsOn(installLocalPanelWebDependencies)
+    group = "build"
+    description = "Builds the loopback-only Panel Web bundle."
+    workingDir(panelWebDir)
+    commandLine("npm", "run", "build")
+    environment("VITE_LOCAL_WEB_BUILD", "true")
+    inputs.files(fileTree(panelWebDir.resolve("src")), panelWebDir.resolve("package.json"), panelWebDir.resolve("package-lock.json"), panelWebDir.resolve("vite.config.ts"))
+    outputs.dir(panelWebDir.resolve("dist"))
+}
+
+val packageLocalPanelWeb = tasks.register<Sync>("packageLocalPanelWeb") {
+    dependsOn(buildLocalPanelWeb)
+    from(panelWebDir.resolve("dist"))
+    into(generatedLocalWebDir)
+}
+
+val verifyLocalPanelWeb = tasks.register("verifyLocalPanelWeb") {
+    dependsOn(packageLocalPanelWeb)
+    group = "verification"
+    doLast {
+        val webRoot = generatedLocalWebDir.get().asFile
+        check(webRoot.resolve("index.html").isFile) { "Panel Web index.html is missing from local-web assets." }
+        check(webRoot.resolve("assets").isDirectory && webRoot.resolve("assets").walkTopDown().any { it.isFile }) {
+            "Panel Web assets directory is missing or empty."
         }
     }
 }
@@ -390,6 +432,7 @@ tasks.named("preBuild").configure {
     dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
+    dependsOn(verifyLocalPanelWeb)
     
 }
 

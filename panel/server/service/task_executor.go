@@ -1279,6 +1279,8 @@ func RecordAutoInstalledDep(depType, name, installLog string) {
 }
 
 func RecordAutoInstalledDepForPythonVersion(depType, name, installLog, pythonVersion string) {
+	unlock := lockDependencyRecord()
+	defer unlock()
 	if depType == model.DepTypePython {
 		pythonVersion = NormalizeDependencyPythonVersion(pythonVersion)
 	} else {
@@ -1290,7 +1292,17 @@ func RecordAutoInstalledDepForPythonVersion(depType, name, installLog, pythonVer
 		// 按 PEP 503 归一化键查重，避免 requests / Requests 落成两条。
 		existing, found = FindExistingPythonDependency(name, pythonVersion)
 	} else {
-		found = database.DB.Where("type = ? AND name = ?", depType, name).First(&existing).Error == nil
+		name = NormalizeNodeDependencyPackageName(name)
+		var candidates []model.Dependency
+		if database.DB.Where("type = ?", depType).Find(&candidates).Error == nil {
+			for _, candidate := range candidates {
+				if strings.EqualFold(NormalizeNodeDependencyPackageName(candidate.Name), name) {
+					existing = candidate
+					found = true
+					break
+				}
+			}
+		}
 	}
 	if found {
 		database.DB.Model(&existing).Updates(map[string]interface{}{

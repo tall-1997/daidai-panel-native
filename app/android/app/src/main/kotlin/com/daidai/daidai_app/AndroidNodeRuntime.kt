@@ -66,6 +66,7 @@ object AndroidNodeRuntime {
                 "DAIDAI_RUNTIME_LANGUAGE" to "node",
                 "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
                 "npm_config_ignore_scripts" to "true",
+                "NPM_CONFIG_CACHE" to DependencyStorage.npmCache(context.filesDir).absolutePath,
             ),
             executable = launcherExe,
         )

@@ -72,3 +72,45 @@ func TestCompletedTaskLogDetailAndSSEReadSamePersistedOutput(t *testing.T) {
 		t.Fatalf("expected cursor-resumed completed SSE payload, got %q", sse)
 	}
 }
+
+func TestLiveLogsFallsBackToLatestPersistedLogWithCursor(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	task := &model.Task{Name: "persisted live log", Command: "task fixture.go", CronExpression: "0 0 * * *", TaskType: model.TaskTypeManual, Status: model.TaskStatusEnabled, SuccessExitCodes: model.DefaultSuccessExitCodes}
+	if err := database.DB.Create(task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	oldStatus, status := model.LogStatusFailed, model.LogStatusSuccess
+	old := &model.TaskLog{TaskID: task.ID, Content: "old", Status: &oldStatus, StartedAt: time.Now().Add(-time.Minute)}
+	latestContent := "first\nsecond\n"
+	latest := &model.TaskLog{TaskID: task.ID, Content: latestContent, Status: &status, LogCursor: int64(len(latestContent)), StartedAt: time.Now()}
+	if err := database.DB.Create(old).Error; err != nil {
+		t.Fatalf("create old log: %v", err)
+	}
+	if err := database.DB.Create(latest).Error; err != nil {
+		t.Fatalf("create latest log: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/?cursor="+strconv.Itoa(len("first\n")), nil)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(task.ID), 10)}}
+	NewTaskHandler().LiveLogs(ctx)
+
+	var payload struct {
+		Logs    []string `json:"logs"`
+		Content string   `json:"content"`
+		Done    bool     `json:"done"`
+		Status  int      `json:"status"`
+		Cursor  int64    `json:"cursor"`
+		LogID   uint     `json:"log_id"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode live logs: %v", err)
+	}
+	if payload.Content != "second\n" || len(payload.Logs) != 1 || payload.Logs[0] != "second" {
+		t.Fatalf("expected incremental persisted content, got %#v", payload)
+	}
+	if !payload.Done || payload.Status != model.LogStatusSuccess || payload.Cursor != int64(len(latestContent)) || payload.LogID != latest.ID {
+		t.Fatalf("unexpected persisted metadata: %#v", payload)
+	}
+}

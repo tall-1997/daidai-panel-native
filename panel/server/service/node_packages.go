@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ import (
 )
 
 var nodePackageOperationMu sync.Mutex
+
+const maxNpmCacheBytes int64 = 64 * 1024 * 1024
 
 var nodeRequireCompatiblePackageSpecs = map[string]string{
 	"uuid":                   "uuid@8.3.2",
@@ -98,14 +101,45 @@ func LockNodePackageOperation() func() {
 	return nodePackageOperationMu.Unlock
 }
 
+func TrimNpmCache() {
+	cacheDir := filepath.Join(config.C.Data.Dir, "deps", "cache", "npm")
+	type cacheFile struct {
+		path    string
+		size    int64
+		modTime time.Time
+	}
+	files := make([]cacheFile, 0)
+	var total int64
+	_ = filepath.Walk(cacheDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() {
+			files = append(files, cacheFile{path: path, size: info.Size(), modTime: info.ModTime()})
+			total += info.Size()
+		}
+		return nil
+	})
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+	for _, file := range files {
+		if total <= maxNpmCacheBytes {
+			break
+		}
+		if os.Remove(file.path) == nil {
+			total -= file.size
+		}
+	}
+}
+
 func NewNpmInstallCommand(packageName string) (*exec.Cmd, error) {
 	nodeDir := filepath.Join(config.C.Data.Dir, "deps", "nodejs")
+	cacheDir := filepath.Join(config.C.Data.Dir, "deps", "cache", "npm")
 	if err := ensureNodePackageManifest(nodeDir); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return nil, err
 	}
 
 	installSpec := ResolveNodeInstallPackageSpec(packageName)
-	cmd := exec.Command("npm", "install", "--prefix", nodeDir, installSpec)
+	cmd := exec.Command("npm", "install", "--cache", cacheDir, "--prefix", nodeDir, installSpec)
 	cmd.Env = NpmInstallEnv(AppendProxyEnv(os.Environ()), CurrentNpmMirror())
 	return cmd, nil
 }

@@ -6,4 +6,5 @@ interface ILocalPanelService {
     String restart();
     String stop();
     String setPersistentSchedulingEnabled(boolean enabled);
+    String createBrowserUrl();
 }
