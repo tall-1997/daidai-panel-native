@@ -7,10 +7,10 @@ The single version source is `VERSION.json`. Its current values are version `0.3
 ## CI Flow
 
 1. Resolve and validate `VERSION.json`.
-2. For tags, validate release signing secrets, prepare the keystore, and require successful same-commit `android-device-smoke.yml` evidence for `api28-4k`, `api35-4k`, and `api35-16k`, each with eight passing runtime records.
+2. Signed releases validate signing secrets and prepare the keystore. Tag builds require verified same-commit ARM64 device evidence; stable workflow dispatches accept the same-commit cloud workflow's explicit blocked ARM64 evidence and preserve it in the release bundle.
 3. Prepare runtime inputs; run Go, runtime-contract script, and route-contract checks.
 4. Build and inspect the mobile Core AAR; resolve Flutter packages; run Flutter and Kotlin checks.
-5. For snapshots, generate local smoke evidence. Both paths verify runtime contracts before APK build; tag verification adds `--strict`.
+5. Snapshots generate local smoke evidence. Stable workflow dispatches import and validate cloud blocked evidence. Tag verification adds `--strict` and requires verified ARM64 device records.
 6. Build the Android ARM64 APK, extract embedded runtime metadata, compare it to repository inputs, and repeat runtime verification using the APK.
 7. Generate APK SHA-256, update manifest, and `release/evidence/`; upload CI artifacts.
 8. For tags, verify the signing certificate and attach the APK, SHA-256, update manifest, and evidence archive to the GitHub Release.
@@ -19,7 +19,7 @@ The single version source is `VERSION.json`. Its current values are version `0.3
 
 Snapshot builds may carry blocked runtime smoke evidence because their runtime verification omits `--strict`. They provide integration artifacts and do not establish device readiness.
 
-Tag builds use repository/device evidence without regenerating snapshot smoke data. They require strict runtime verification before and after packaging, a matching tag/version, formal signing, and a successful same-commit device workflow whose three required matrix records each report eight passing runtimes.
+Tag builds use repository/device evidence without regenerating snapshot smoke data. They require strict runtime verification before and after packaging, a matching tag/version, formal signing, and a successful same-commit device workflow whose three required matrix records each report eight passing runtimes. Stable workflow dispatches require formal signing and a successful same-commit device workflow, preserve explicit ARM64 blocked evidence, and disclose the cloud runner limitation in release notes.
 
 The device workflow can emit a blocked API 35/16K record when the required emulator image is unavailable. External JSON remains unverified and blocked. Physical-device evidence requires an explicitly requested self-hosted ARM64 run. Current repository smoke records are blocked, so the real runtime/device gate remains open.
 

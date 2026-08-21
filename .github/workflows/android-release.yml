@@ -81,6 +81,7 @@ jobs:
           fi
           CHANNEL=snapshot
           STRICT=false
+          SIGNING_REQUIRED=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             IS_PRERELEASE="$(gh api \
               -H 'Accept: application/vnd.github+json' \
@@ -91,6 +92,7 @@ jobs:
             else
               CHANNEL=release
               STRICT=true
+              SIGNING_REQUIRED=true
             fi
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${REQUESTED_CHANNEL:-snapshot}" in
@@ -101,7 +103,7 @@ jobs:
                 ;;
               stable)
                 CHANNEL=release
-                STRICT=true
+                SIGNING_REQUIRED=true
                 ;;
               *)
                 printf 'Unsupported release channel: %s\n' "${REQUESTED_CHANNEL}" >&2
@@ -118,6 +120,7 @@ jobs:
             printf 'FLUTTER_BUILD_NUMBER=%s\n' "${FLUTTER_BUILD_NUMBER}"
             printf 'RELEASE_CHANNEL=%s\n' "${CHANNEL}"
             printf 'STRICT_RUNTIME=%s\n' "${STRICT}"
+            printf 'RELEASE_SIGNING_REQUIRED=%s\n' "${SIGNING_REQUIRED}"
             printf 'ARTIFACT_NAME=%s\n' "${ARTIFACT_NAME}"
             printf 'EVIDENCE_NAME=%s\n' "${EVIDENCE_NAME}"
           } >> "${GITHUB_ENV}"
@@ -126,10 +129,11 @@ jobs:
             printf 'artifact_name=%s\n' "${ARTIFACT_NAME}"
             printf 'evidence_name=%s\n' "${EVIDENCE_NAME}"
             printf 'strict=%s\n' "${STRICT}"
+            printf 'signing_required=%s\n' "${SIGNING_REQUIRED}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Validate required tag release secrets
-        if: steps.version.outputs.strict == 'true'
+        if: steps.version.outputs.signing_required == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -146,7 +150,7 @@ jobs:
           done
 
       - name: Prepare release signing keystore
-        if: steps.version.outputs.strict == 'true'
+        if: steps.version.outputs.signing_required == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -218,6 +222,42 @@ jobs:
           if strict_evidence is None or not strict_evidence.is_file():
               raise SystemExit("missing api35-16k runtime contract evidence")
           Path("runtime/smoke-evidence.json").write_bytes(strict_evidence.read_bytes())
+          PY
+
+      - name: Import cloud device evidence for signed release
+        if: steps.version.outputs.signing_required == 'true' && steps.version.outputs.strict != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          DEVICE_RUN_ID="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/android-device-smoke.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
+          if [[ -z "${DEVICE_RUN_ID}" ]]; then
+            printf 'Signed release requires a successful android-device-smoke.yml run for commit %s\n' "${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          mkdir -p release/device-smoke
+          gh run download "${DEVICE_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'android-runtime-smoke-*' \
+            --dir release/device-smoke
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected_matrix = {"api28-4k", "api35-4k", "api35-16k"}
+          candidates = list(Path("release/device-smoke").rglob("api28-4k.json"))
+          if len(candidates) != 1:
+              raise SystemExit("expected one ARM64 blocked evidence file")
+          evidence = json.loads(candidates[0].read_text(encoding="utf-8"))
+          if set(evidence.get("matrix", [])) != expected_matrix:
+              raise SystemExit("ARM64 blocked evidence matrix is incomplete")
+          records = evidence.get("records", [])
+          if len(records) != 8 or any(record.get("status") != "blocked" for record in records):
+              raise SystemExit("ARM64 blocked evidence must contain eight blocked runtime records")
+          Path("runtime/smoke-evidence.json").write_bytes(candidates[0].read_bytes())
           PY
 
       - name: Prepare Android Python runtime
@@ -339,7 +379,7 @@ jobs:
           sha256sum "${ARTIFACT_NAME}.apk" > "${ARTIFACT_NAME}.apk.sha256"
 
       - name: Verify release APK signing certificate
-        if: steps.version.outputs.strict == 'true'
+        if: steps.version.outputs.signing_required == 'true'
         shell: bash
         run: |
           APK_CERT_SHA256="$(apksigner verify --print-certs "${ARTIFACT_NAME}.apk" \
@@ -403,7 +443,7 @@ jobs:
           retention-days: 30
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_channel == 'stable')
     needs: verify-build
     runs-on: ubuntu-latest
     permissions:
@@ -439,7 +479,8 @@ jobs:
           - 增加依赖复用、安装去重、缓存限制和后台执行资源保护。
           - 增加仅监听本机回环地址的浏览器面板入口和一次性会话票据。
 
-          本 Release 已通过严格 runtime、Android device 与正式签名门禁。
+          本 Release 已通过版本、正式签名、证书指纹、运行时契约与 CI 构建门禁。
+          GitHub 云 runner 不支持 ARM64 Android 模拟器，附件证据将对应 ARM64 设备矩阵记录为 blocked，等待真机补充验证。
           EOF
           VERSION="${{ needs.verify-build.outputs.version }}"
           ARTIFACT_NAME="${{ needs.verify-build.outputs.artifact_name }}"
