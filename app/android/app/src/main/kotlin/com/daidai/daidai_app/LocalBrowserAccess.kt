@@ -122,8 +122,13 @@ internal class LocalBrowserAccess(
         if (relative.split('/').any { it == ".." || it.isBlank() }) return response(NanoHTTPD.Response.Status.NOT_FOUND, "text/plain", "Not found")
         val assetPath = "local-web/$relative"
         val input = runCatching { context.assets.open(assetPath) }.getOrNull()
-            ?: if (relative.contains('.')) null else runCatching { context.assets.open("local-web/index.html") }.getOrNull()
-            ?: return response(NanoHTTPD.Response.Status.NOT_FOUND, "text/plain", "Not found")
+            ?: run {
+                if (relative.contains('.')) {
+                    return response(NanoHTTPD.Response.Status.NOT_FOUND, "text/plain", "Not found")
+                }
+                runCatching { context.assets.open("local-web/index.html") }.getOrNull()
+                    ?: return response(NanoHTTPD.Response.Status.NOT_FOUND, "text/plain", "Not found")
+            }
         return streamResponse(input, contentType(relative))
     }
 

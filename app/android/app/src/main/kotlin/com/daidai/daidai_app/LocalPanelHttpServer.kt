@@ -24,7 +24,7 @@ class LocalPanelHttpServer(
         localTokenProvider = { localToken },
     )
     private val cronScheduler = AndroidFallbackCronScheduler(store)
-    private val browserAccess = LocalBrowserAccess(context) { endpoint }
+    private val browserAccess = LocalBrowserAccess(context, endpoint = { endpoint })
     @Volatile
     private var goCoreFallbackReason = goCoreFallbackReason
     @Volatile
