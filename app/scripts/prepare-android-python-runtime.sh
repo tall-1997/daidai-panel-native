@@ -328,9 +328,9 @@ PY
 
 CLANG=""
 for candidate in \
-  "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" \
-  "${ANDROID_NDK_ROOT:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang" \
-  "${ANDROID_HOME:-}/ndk/"*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang; do
+  "${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+  "${ANDROID_NDK_ROOT:-}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+  "${ANDROID_HOME:-}/ndk/"*/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang; do
   if [[ -x "$candidate" ]]; then CLANG="$candidate"; break; fi
 done
 [[ -n "$CLANG" ]] || { printf 'Android NDK clang was not found; set ANDROID_NDK_HOME or ANDROID_NDK_ROOT.\n' >&2; exit 2; }

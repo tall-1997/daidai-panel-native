@@ -111,8 +111,7 @@ internal class LocalBrowserAccess(
         val ticket = files["postData"].orEmpty().take(1024)
         val sessionToken = credentials.redeem(ticket)
             ?: return response(NanoHTTPD.Response.Status.UNAUTHORIZED, "text/plain", "Invalid ticket")
-        return response(NanoHTTPD.Response.Status.REDIRECT, "text/plain", "Redirecting").apply {
-            addHeader("Location", "/local-ui/")
+        return response(NanoHTTPD.Response.Status.NO_CONTENT, "text/plain", "").apply {
             addHeader("Set-Cookie", "$COOKIE_NAME=$sessionToken; HttpOnly; SameSite=Strict; Path=/; Max-Age=900")
         }
     }

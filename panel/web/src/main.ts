@@ -105,15 +105,11 @@ async function establishLocalBrowserSession() {
   if (!response.ok) throw new Error("本地浏览器会话已失效，请从 App 重新打开");
 }
 
-await establishLocalBrowserSession();
-
 const app = createApp(App);
 
 app.use(createPinia());
 app.use(router);
 app.component("LoadingMotion", LoadingMotion);
-
-void fetchAndApplyPanelAppearance();
 
 const globalIcons = {
   ArrowLeft,
@@ -175,4 +171,11 @@ for (const [key, component] of Object.entries(globalIcons)) {
   app.component(key, component);
 }
 
-app.mount("#app");
+establishLocalBrowserSession()
+  .catch((error) => {
+    console.error(error);
+  })
+  .finally(() => {
+    void fetchAndApplyPanelAppearance();
+    app.mount("#app");
+  });

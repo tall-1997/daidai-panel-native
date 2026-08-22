@@ -133,7 +133,7 @@ func (a *LoopbackBrowserAccess) exchange(c *gin.Context) {
 	a.mu.Unlock()
 	http.SetCookie(c.Writer, &http.Cookie{Name: localBrowserCookie, Value: session, Path: "/", MaxAge: 900, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	secureLocalWebHeaders(c.Writer.Header())
-	c.Redirect(http.StatusFound, "/local-ui/")
+	c.Status(http.StatusNoContent)
 }
 
 func (a *LoopbackBrowserAccess) static(c *gin.Context) {

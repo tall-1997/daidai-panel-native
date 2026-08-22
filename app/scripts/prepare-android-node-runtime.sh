@@ -18,7 +18,7 @@ JNI_DIRS[arm64-v8a]="$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a"
 declare -A LAUNCHER_OUTS
 LAUNCHER_OUTS[arm64-v8a]="${JNI_DIRS[arm64-v8a]}/libnode_exec.so"
 declare -A CLANG_TARGETS
-CLANG_TARGETS[arm64-v8a]="aarch64-linux-android28-clang++"
+CLANG_TARGETS[arm64-v8a]="aarch64-linux-android24-clang++"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/node_exec.cc"
 RUNTIME_LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/jni/nodelauncher.c"
 

@@ -8,7 +8,7 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 
 ## 术语
 
-- **Modern APK**：`targetSdk 35`、`minSdk 28`、仅包含 `arm64-v8a` 的正式安装包。
+- **Modern APK**：`targetSdk 35`、`minSdk 24`、仅包含 `arm64-v8a` 的正式安装包。
 - **完整管理功能**：上游面板的任务、日志、脚本、环境变量、订阅、通知、SSH、用户、安全、系统、OpenAPI、依赖、配置和平台 Token 管理。
 - **预置运行时**：随 APK 签名交付的 Python、Node.js、TypeScript、受控 Shell、Git、SSH、Yaegi 和 Go 构建工具。
 - **兼容清单**：经 Android ARM64、Bionic、运行时 ABI 和 16 KB page size 验证的原生扩展集合。
@@ -111,7 +111,7 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 
 1. Release Candidate SHALL 通过 Core、Flutter、Kotlin、AAR、APK 和 SHA-256 构建门禁。
 2. Release Candidate SHALL 在断网条件下分别通过 Python、Node.js、TypeScript、Shell、Git、SSH、Yaegi 和 Go Builder 八类 smoke test。
-3. Release Candidate SHALL 在 API 28、29、31、34 和 35 真机或等价设备矩阵通过安装与核心流程。
+3. Release Candidate SHALL 在 API 24、28、29、31、34 和 35 真机或等价设备矩阵通过安装与核心流程。
 4. Release Candidate SHALL 通过 4 KB 与 16 KB page size 检查。
 5. Release Candidate SHALL 通过 100 次 Core 启停、24 小时和 7 天调度测试。
 6. Build Pipeline SHALL 发布 APK、SHA-256、SBOM、第三方许可、运行时清单和兼容矩阵。

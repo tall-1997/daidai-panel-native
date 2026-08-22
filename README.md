@@ -67,7 +67,7 @@ Android versionCode：**1000050**
 | 当前稳定标签 | `v1.0.5` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
-| 最低 Android API | 28 |
+| 最低 Android API | 24 |
 | 目标 Android API | 35 |
 | 编译 Android API | 36 |
 | 支持 ABI | `arm64-v8a` |
@@ -118,7 +118,7 @@ CI 使用以下工具链：
 | Node.js | 20，Panel Web 构建工具 |
 | Android compileSdk | 36 |
 | Android targetSdk | 35 |
-| Android minSdk | 28 |
+| Android minSdk | 24 |
 
 本地构建还需要 Android SDK、NDK、CMake、Linux shell 工具和可访问运行时资产源的网络环境。
 

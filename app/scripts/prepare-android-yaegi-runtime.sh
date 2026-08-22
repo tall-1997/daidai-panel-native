@@ -12,7 +12,7 @@ test -n "$toolchain" || { printf 'Android NDK toolchain not found\n' >&2; exit 2
 
 for abi in $abis; do
   case "$abi" in
-    arm64-v8a) goarch=arm64; goarm=; cc="$toolchain/aarch64-linux-android28-clang" ;;
+    arm64-v8a) goarch=arm64; goarm=; cc="$toolchain/aarch64-linux-android24-clang" ;;
     *) printf 'Unsupported ABI: %s\n' "$abi" >&2; exit 1 ;;
   esac
   output="$app_root/android/app/src/main/jniLibs/$abi/libyaegi_exec.so"

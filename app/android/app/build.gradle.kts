@@ -63,7 +63,7 @@ android {
 
     defaultConfig {
         applicationId = "com.daidai.daidai_app"
-        minSdk = 28
+        minSdk = 24
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = flutter.versionCode

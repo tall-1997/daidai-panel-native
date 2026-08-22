@@ -44,7 +44,7 @@ func TestLoopbackBrowserTicketCookieAndReplay(t *testing.T) {
 	}
 
 	exchange := requestLocalBrowserExchange(engine, strings.TrimPrefix(parsed.Fragment, "ticket="), "127.0.0.1:5700", "")
-	if exchange.Code != http.StatusFound {
+	if exchange.Code != http.StatusNoContent {
 		t.Fatalf("exchange status=%d body=%s", exchange.Code, exchange.Body.String())
 	}
 	cookies := exchange.Result().Cookies()
