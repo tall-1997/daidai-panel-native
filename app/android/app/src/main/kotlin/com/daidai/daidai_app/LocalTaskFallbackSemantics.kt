@@ -22,6 +22,17 @@ internal object LocalTaskFallbackSemantics {
     private val pythonInstallHint = Regex("\\bpip3?\\s+install\\s+([A-Za-z][A-Za-z0-9_.@-]*)")
     private val nodeInstallHint = Regex("\\bnpm[ \\t]+(?:i|install|add)[ \\t]+((?:@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)(?:[ \\t]+@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)*)")
     private val managedModules = setOf("notify", "sendNotify")
+    private val pythonPackageMap = mapOf(
+        "bs4" to "beautifulsoup4",
+        "crypto" to "pycryptodome",
+        "cryptodome" to "pycryptodomex",
+        "cv2" to "opencv-python",
+        "dateutil" to "python-dateutil",
+        "dotenv" to "python-dotenv",
+        "pil" to "pillow",
+        "socks" to "pysocks",
+        "yaml" to "pyyaml",
+    )
 
     fun detectMissingDependency(runtime: String, output: String): DependencyCandidate? {
         return detectMissingDependencies(runtime, output).firstOrNull()
@@ -34,11 +45,11 @@ internal object LocalTaskFallbackSemantics {
                 pythonMissing.find(output)?.groupValues?.get(1)
                     ?.substringBefore('.')
                     ?.takeIf { isInstallableName(it) && it !in managedModules }
-                    ?.let { candidates += DependencyCandidate("python", it) }
+                    ?.let { candidates += DependencyCandidate("python", pythonInstallPackageName(it)) }
                 pythonInstallHint.findAll(output).forEach { match ->
                     match.groupValues[1]
                         .takeIf { isInstallableName(it) && it !in managedModules }
-                        ?.let { candidates += DependencyCandidate("python", it) }
+                        ?.let { candidates += DependencyCandidate("python", pythonInstallPackageName(it)) }
                 }
                 candidates.toList()
             }
@@ -332,6 +343,9 @@ internal object LocalTaskFallbackSemantics {
 
     private fun isNodeInstallableName(name: String): Boolean =
         isInstallableName(name) && name !in managedModules && !name.startsWith(".") && !name.startsWith("/")
+
+    private fun pythonInstallPackageName(moduleOrPackage: String): String =
+        pythonPackageMap[moduleOrPackage.substringBefore('.').lowercase()] ?: moduleOrPackage
 }
 
 internal object LocalLogQueryContract {

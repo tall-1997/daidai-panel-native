@@ -13,8 +13,12 @@ class LocalTaskFallbackSemanticsTest {
     @Test
     fun `detects Python and Node missing dependencies`() {
         assertEquals(
-            LocalTaskFallbackSemantics.DependencyCandidate("python", "Crypto"),
+            LocalTaskFallbackSemantics.DependencyCandidate("python", "pycryptodome"),
             LocalTaskFallbackSemantics.detectMissingDependency("python", "ModuleNotFoundError: No module named 'Crypto.Hash'"),
+        )
+        assertEquals(
+            LocalTaskFallbackSemantics.DependencyCandidate("python", "python-dotenv"),
+            LocalTaskFallbackSemantics.detectMissingDependency("python", "ModuleNotFoundError: No module named 'dotenv'"),
         )
         assertEquals(
             LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "axios"),
