@@ -958,6 +958,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     final timeController = TextEditingController(text: value('backup_schedule_time', '03:00'));
     final weekdayController = TextEditingController(text: value('backup_schedule_weekday', '0'));
     final monthdayController = TextEditingController(text: value('backup_schedule_monthday', '1'));
+    if (!mounted) return;
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
