@@ -68,6 +68,8 @@ class DependencyStorageTest {
         assertFalse(DependencyStorage.satisfies("python", "requests==2.31.0", "2.32.0"))
         assertFalse(DependencyStorage.satisfies("python", "requests>=2.31.0", "2.32.0"))
         assertTrue(DependencyStorage.satisfies("nodejs", "lodash@4.17.21", "4.17.21"))
+        assertTrue(DependencyStorage.satisfies("nodejs", "got@11", "11.8.6"))
+        assertFalse(DependencyStorage.satisfies("nodejs", "got@11", "12.0.0"))
     }
 
     @Test
@@ -77,5 +79,27 @@ class DependencyStorageTest {
         assertThrows(IllegalArgumentException::class.java) {
             DependencyStorage.normalizedName("python", "--pre")
         }
+    }
+
+    @Test
+    fun `node install specs pin commonjs compatible defaults`() {
+        assertEquals("got@11.8.6", DependencyStorage.nodeInstallPackageSpec("got"))
+        assertEquals("dotenv@16.4.5", DependencyStorage.nodeInstallPackageSpec("dotenv"))
+        assertEquals("iconv-lite@0.6.3", DependencyStorage.nodeInstallPackageSpec("iconv-lite"))
+        assertEquals("tough-cookie@4.1.4", DependencyStorage.nodeInstallPackageSpec("tough-cookie"))
+        assertEquals("got@11", DependencyStorage.nodeInstallPackageSpec("got@11"))
+        assertEquals("@scope/pkg@1.2.3", DependencyStorage.nodeInstallPackageSpec("@scope/pkg@1.2.3"))
+    }
+
+    @Test
+    fun `node dependency manifest is created and broken lock is quarantined`() {
+        val dir = Files.createTempDirectory("dependency-storage-node").toFile()
+        dir.resolve("package-lock.json").writeText("}")
+
+        DependencyStorage.ensureNodePackageManifest(dir)
+
+        assertTrue(dir.resolve("package.json").readText().contains("daidai-android-node-deps"))
+        assertFalse(dir.resolve("package-lock.json").exists())
+        assertTrue(dir.listFiles().orEmpty().any { it.name.startsWith("package-lock.json.broken-") })
     }
 }

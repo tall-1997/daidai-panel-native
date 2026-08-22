@@ -19,6 +19,8 @@ internal object LocalTaskFallbackSemantics {
 
     private val pythonMissing = Regex("(?:ModuleNotFoundError|ImportError):\\s*No module named\\s*['\"]([^'\"]+)['\"]")
     private val nodeMissing = Regex("(?:Cannot find module|Error \\[ERR_MODULE_NOT_FOUND].*?)\\s*['\"]([^'\"]+)['\"]")
+    private val pythonInstallHint = Regex("\\bpip3?\\s+install\\s+([A-Za-z][A-Za-z0-9_.@-]*)")
+    private val nodeInstallHint = Regex("\\bnpm\\s+(?:i|install|add)\\s+(@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)")
     private val managedModules = setOf("notify", "sendNotify")
 
     fun detectMissingDependency(runtime: String, output: String): DependencyCandidate? {
@@ -27,9 +29,15 @@ internal object LocalTaskFallbackSemantics {
                 ?.substringBefore('.')
                 ?.takeIf { isInstallableName(it) && it !in managedModules }
                 ?.let { DependencyCandidate("python", it) }
+                ?: pythonInstallHint.find(output)?.groupValues?.get(1)
+                    ?.takeIf { isInstallableName(it) && it !in managedModules }
+                    ?.let { DependencyCandidate("python", it) }
             "nodejs" -> nodeMissing.find(output)?.groupValues?.get(1)
                 ?.takeIf { isInstallableName(it) && it !in managedModules && !it.startsWith(".") && !it.startsWith("/") }
                 ?.let { DependencyCandidate("nodejs", it) }
+                ?: nodeInstallHint.find(output)?.groupValues?.get(1)
+                    ?.takeIf { isInstallableName(it) && it !in managedModules && !it.startsWith(".") && !it.startsWith("/") }
+                    ?.let { DependencyCandidate("nodejs", it) }
             else -> null
         }
     }

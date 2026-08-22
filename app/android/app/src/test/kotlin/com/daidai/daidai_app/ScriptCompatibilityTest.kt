@@ -22,6 +22,25 @@ class ScriptCompatibilityTest {
         } finally { dir.deleteRecursively() }
     }
 
+    @Test fun detectsNodeImportsAndInstallHintsUsedByQingLongScripts() {
+        val scan = ScriptCompatibility.scanNode(
+            """
+            import got from 'got'
+            const dotenv = require('dotenv')
+            console.log('请运行: npm install iconv-lite tough-cookie')
+            """.trimIndent(),
+            File("."),
+        )
+
+        assertEquals(setOf("iconv-lite", "tough-cookie", "dotenv", "got"), scan.nodePackages)
+    }
+
+    @Test fun detectsPythonInstallHints() {
+        val scan = ScriptCompatibility.scanPython("print('请先运行 pip install beautifulsoup4')", File("."))
+
+        assertEquals(setOf("beautifulsoup4"), scan.pythonPackages)
+    }
+
     @Test fun ignoresDynamicAndUnknownRequires() {
         val scan = ScriptCompatibility.scanNode("require(name); require('not-an-allowlisted-package')", File("."))
         assertTrue(scan.nodePackages.isEmpty())

@@ -103,6 +103,10 @@ async function establishLocalBrowserSession() {
     body: ticket,
   });
   if (!response.ok) throw new Error("本地浏览器会话已失效，请从 App 重新打开");
+  const payload = await response.json().catch(() => null) as { browser_session?: string } | null;
+  if (payload?.browser_session) {
+    window.sessionStorage.setItem("daidai_browser_session", payload.browser_session);
+  }
 }
 
 const app = createApp(App);

@@ -2228,21 +2228,11 @@ fun serveDashboardStats(): JSONObject {
             val workingDir = file.parentFile ?: scriptsRoot()
             ensureQingLongShims(workingDir)
             if (!prepareScriptDependencies(runId, file)) { finishScriptRun(runId, "failed", 2); return }
-            val command = scriptCommand(file, displayPath, languageHint)
-            if (command == null) { appendScriptRunLog(runId, "Runtime not available for script type: ${file.extension.ifBlank { "unknown" }}"); finishScriptRun(runId, "failed", 127); return }
-            appendScriptRunLog(runId, "Command: ${command.first().substringAfterLast('/')}")
-            val process = ProcessBuilder(command).directory(workingDir).redirectErrorStream(true)
-                .apply { environment().putAll(runtimeEnvironment(workingDir)) }.start()
-            scriptProcesses[runId] = process
-            if (scriptRunStatus(runId) == "stopped") {
-                process.destroyForcibly()
-                return
+            val result = executeWithAutoInstall(null, runtimeForFile(file), { line -> appendScriptRunLog(runId, line) }) {
+                runAsyncScriptProcess(runId, file, displayPath, languageHint, workingDir)
             }
-            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { appendScriptRunLog(runId, it) } }
-            val exit = process.waitFor()
             if (scriptRunStatus(runId) != "stopped") {
-                appendScriptRunLog(runId, if (exit == 0) "Script completed successfully" else "Script failed with exit code $exit")
-                finishScriptRun(runId, if (exit == 0) "success" else "failed", exit)
+                finishScriptRun(runId, result.status, result.exitCode ?: 127)
             }
         } catch (error: Exception) {
             if (scriptRunStatus(runId) != "stopped") { appendScriptRunLog(runId, "Script start failed: ${error.message ?: error.javaClass.simpleName}"); finishScriptRun(runId, "failed", 127) }
@@ -2250,6 +2240,46 @@ fun serveDashboardStats(): JSONObject {
             scriptProcesses.remove(runId); scriptRunLocks.remove(runId); scriptRunLogsMemory.remove(runId)
             scriptRunLogCharacters.remove(runId); scriptRunPendingPersistence.remove(runId)
             if (deleteAfter) runCatching { file.delete() }
+        }
+    }
+
+    private fun runAsyncScriptProcess(runId: String, file: File, displayPath: String, languageHint: String, workingDir: File): LocalScriptResult {
+        val logs = JSONArray()
+        val command = scriptCommand(file, displayPath, languageHint)
+            ?: return LocalScriptResult(
+                logs.put("Runtime not available for script type: ${file.extension.ifBlank { "unknown" }}"),
+                "failed",
+                true,
+                127,
+            )
+        val commandLine = "Command: ${command.first().substringAfterLast('/')}"
+        logs.put(commandLine)
+        appendScriptRunLog(runId, commandLine)
+        return try {
+            val process = ProcessBuilder(command).directory(workingDir).redirectErrorStream(true)
+                .apply { environment().putAll(runtimeEnvironment(workingDir)) }.start()
+            scriptProcesses[runId] = process
+            if (scriptRunStatus(runId) == "stopped") {
+                process.destroyForcibly()
+                return LocalScriptResult(logs.put("Script stopped before output"), "stopped", true, 130)
+            }
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    logs.put(line)
+                    appendScriptRunLog(runId, line)
+                }
+            }
+            val exit = process.waitFor()
+            val finalLine = if (exit == 0) "Script completed successfully" else "Script failed with exit code $exit"
+            logs.put(finalLine)
+            appendScriptRunLog(runId, finalLine)
+            LocalScriptResult(logs, if (exit == 0) "success" else "failed", true, exit)
+        } catch (error: Exception) {
+            val line = "Script start failed: ${error.message ?: error.javaClass.simpleName}"
+            appendScriptRunLog(runId, line)
+            LocalScriptResult(logs.put(line), "failed", true, 127)
+        } finally {
+            scriptProcesses.remove(runId)
         }
     }
 
@@ -2439,7 +2469,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun executeWithAutoInstall(
-        taskId: Long,
+        taskId: Long?,
         runtime: String,
         onLine: ((String) -> Unit)?,
         execute: () -> LocalScriptResult,
@@ -2515,7 +2545,7 @@ fun serveDashboardStats(): JSONObject {
                 name,
                 onLine = { line -> appendScriptRunLog(runId, line) },
             )
-            if (result.second.isNotBlank()) appendScriptRunLog(runId, "Dependency install result: ${result.first}")
+            if (result.second.isNotBlank()) appendScriptRunLog(runId, "Dependency install result: ${result.first}\n${result.second.take(1000)}")
             if (result.first != "installed") {
                 appendScriptRunLog(runId, "Dependency install failed: $type/$name (${result.first})")
                 return false
@@ -3942,7 +3972,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun queryNpmInstalledPackages(): Map<String, String> {
         val runtime = AndroidNodeRuntime.ensureReady(appContext) ?: return emptyMap()
-        val deps = AndroidNodeRuntime.depsDir(appContext)
+        val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
         val npm = File(runtime.modules, "npm/bin/npm-cli.js")
         val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "list", "--json", "--depth=0", "--prefix", deps.absolutePath)
         val result = runLocalProcess(command, deps, JSONArray())
@@ -3959,7 +3989,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun nodeDependencyResolvable(runtime: AndroidNodeRuntime.NodeRuntimePaths, packageName: String): Pair<Boolean, String> {
-        val deps = AndroidNodeRuntime.depsDir(appContext).apply { mkdirs() }
+        val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
         val code = "const name=process.argv[1];const root=process.argv[2];console.log(require.resolve(name,{paths:[root]}));"
         val result = runLocalProcess(
             listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, "-e", code, packageName, deps.absolutePath),
@@ -4046,21 +4076,24 @@ fun serveDashboardStats(): JSONObject {
             }
             val directNode = AndroidNodeRuntime.ensureReady(appContext)
             if (directNode == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
-                val deps = AndroidNodeRuntime.depsDir(appContext)
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", name))
+                val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
+                val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
-                val result = runLocalProcess(command, deps, JSONArray().put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                val result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
             return directNode?.let { runtime ->
-                val deps = AndroidNodeRuntime.depsDir(appContext)
+                val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
                 val cache = DependencyStorage.npmCache(appContext.filesDir).apply { mkdirs() }
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-                val npmArguments = AndroidLinuxRuntime.npmInstallArguments(mirrors.npmMirror, deps.absolutePath, cache.absolutePath, name)
+                val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
+                val npmArguments = AndroidLinuxRuntime.npmInstallArguments(mirrors.npmMirror, deps.absolutePath, cache.absolutePath, installSpec)
                 val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath) + npmArguments
                 val logs = JSONArray()
-                    .put("Installing Node dependency from network source: $name")
+                    .put(DependencyStorage.nodeInstallCompatibilityNotice(name))
+                    .put("Installing Node dependency from network source: $installSpec")
                     .put("npm_registry=${mirrors.npmMirror}")
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
                 val before = queryNpmInstalledPackages()
@@ -4220,14 +4253,14 @@ fun serveDashboardStats(): JSONObject {
                             ?: return@withInstallLock false to "Rootfs Node runtime is not ready"
                     } else {
                     node ?: return@withInstallLock false to "Node runtime is not ready"
-                    val deps = AndroidNodeRuntime.depsDir(appContext)
+                    val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
                     val npm = File(node.modules, "npm/bin/npm-cli.js")
                     listOf(node.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "uninstall", "--ignore-scripts", "--cache", DependencyStorage.npmCache(appContext.filesDir).absolutePath, "--prefix", deps.absolutePath, normalized)
                     }
                 }
                 else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
             }
-            val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else AndroidNodeRuntime.depsDir(appContext)
+            val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
             val result = runLocalProcess(command, workingDir.apply { mkdirs() }, JSONArray(), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
             val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             (result.exitCode == 0) to log

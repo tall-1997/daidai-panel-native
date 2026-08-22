@@ -20,6 +20,14 @@ class LocalTaskFallbackSemanticsTest {
             LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "axios"),
             LocalTaskFallbackSemantics.detectMissingDependency("nodejs", "Error: Cannot find module 'axios'"),
         )
+        assertEquals(
+            LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "got@11"),
+            LocalTaskFallbackSemantics.detectMissingDependency("nodejs", "依赖 got@11 安装失败，请手动安装: npm install got@11"),
+        )
+        assertEquals(
+            LocalTaskFallbackSemantics.DependencyCandidate("python", "beautifulsoup4"),
+            LocalTaskFallbackSemantics.detectMissingDependency("python", "请手动安装: pip install beautifulsoup4"),
+        )
     }
 
     @Test

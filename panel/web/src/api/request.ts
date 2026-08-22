@@ -38,6 +38,12 @@ function rejectPending(error: unknown) {
 request.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const authStore = useAuthStore()
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/local-ui/')) {
+      const browserSession = window.sessionStorage.getItem('daidai_browser_session')
+      if (browserSession) {
+        config.headers['X-Daidai-Browser-Session'] = browserSession
+      }
+    }
     if (authStore.accessToken) {
       config.headers.Authorization = `Bearer ${authStore.accessToken}`
     }

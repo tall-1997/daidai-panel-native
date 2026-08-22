@@ -7,6 +7,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONObject
 
 internal class LocalBrowserCredentials(
     private val nowMillis: () -> Long = System::currentTimeMillis,
@@ -70,6 +71,8 @@ internal class LocalBrowserAccess(
     }
 
     fun hasSession(headers: Map<String, String>): Boolean {
+        val headerToken = header(headers, SESSION_HEADER).orEmpty()
+        if (credentials.hasSession(headerToken)) return true
         val cookie = header(headers, "cookie").orEmpty()
             .split(';')
             .map(String::trim)
@@ -111,7 +114,11 @@ internal class LocalBrowserAccess(
         val ticket = files["postData"].orEmpty().take(1024)
         val sessionToken = credentials.redeem(ticket)
             ?: return response(NanoHTTPD.Response.Status.UNAUTHORIZED, "text/plain", "Invalid ticket")
-        return response(NanoHTTPD.Response.Status.NO_CONTENT, "text/plain", "").apply {
+        return response(
+            NanoHTTPD.Response.Status.OK,
+            "application/json; charset=utf-8",
+            JSONObject().put("browser_session", sessionToken).toString(),
+        ).apply {
             addHeader("Set-Cookie", "$COOKIE_NAME=$sessionToken; HttpOnly; SameSite=Strict; Path=/; Max-Age=900")
         }
     }
@@ -159,5 +166,6 @@ internal class LocalBrowserAccess(
 
     companion object {
         private const val COOKIE_NAME = "daidai_local_session"
+        private const val SESSION_HEADER = "x-daidai-browser-session"
     }
 }

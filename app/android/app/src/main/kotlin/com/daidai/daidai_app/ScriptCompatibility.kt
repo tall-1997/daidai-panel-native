@@ -33,8 +33,12 @@ internal object ScriptCompatibility {
     )
     private val allowedNodePackages = setOf(
         "axios", "crypto-js", "got", "lodash", "moment", "dayjs", "dotenv", "node-fetch", "tough-cookie",
-        "cheerio", "qs", "form-data",
+        "cheerio", "qs", "form-data", "iconv-lite", "https-proxy-agent", "http-proxy-agent", "socks-proxy-agent",
+        "request", "request-promise", "request-promise-native", "md5", "js-md5", "js-yaml", "yaml", "xml2js",
+        "fast-xml-parser", "jsonwebtoken", "fs-extra", "csv-parse", "date-fns", "undici", "ws",
     )
+    private val nodeInstallHintPattern = Regex("\\bnpm[ \\t]+(?:i|install|add)[ \\t]+((?:@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)(?:[ \\t]+@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)*)")
+    private val pythonInstallHintPattern = Regex("\\bpip3?\\s+install\\s+([A-Za-z][A-Za-z0-9_.@-]*)")
 
     fun scan(file: File): Scan {
         val text = runCatching { file.readText() }.getOrDefault("")
@@ -48,6 +52,10 @@ internal object ScriptCompatibility {
     internal fun scanPython(text: String, directory: File): Scan {
         val packages = linkedSetOf<String>()
         val importPattern = Regex("^(?:from\\s+([A-Za-z_][\\w.]*)\\s+import\\b|import\\s+(.+))")
+        pythonInstallHintPattern.findAll(text).forEach { match ->
+            val requested = match.groupValues[1].substringBefore(',').trim()
+            if (requested.isNotBlank()) packages += requested
+        }
         text.lineSequence().filter { it.isNotBlank() && !it.first().isWhitespace() }.forEach { line ->
             val clean = line.substringBefore('#').trim()
             val match = importPattern.find(clean) ?: return@forEach
@@ -66,13 +74,30 @@ internal object ScriptCompatibility {
         val packages = linkedSetOf<String>()
         val missing = linkedSetOf<String>()
         val requirePattern = Regex("\\brequire\\s*\\(\\s*(['\"])([^'\"]+)\\1\\s*\\)")
+        val importPattern = Regex("(?:^|[;\\n])\\s*import\\s+(?:[^'\"]+?\\s+from\\s+)?(['\"])([^'\"]+)\\1")
+        fun addPackage(name: String) {
+            val root = if (name.startsWith('@')) name.split('/').take(2).joinToString("/") else name.substringBefore('/')
+            if (root.removePrefix("node:") !in nodeBuiltins && (root in allowedNodePackages || root.startsWith("@"))) packages += root
+        }
+        nodeInstallHintPattern.findAll(text).forEach { match ->
+            match.groupValues[1].split(Regex("\\s+")).map(String::trim).filter(String::isNotEmpty).forEach { name ->
+                if (!name.startsWith("-")) addPackage(name)
+            }
+        }
         requirePattern.findAll(text).forEach { match ->
             val name = match.groupValues[2]
             if (name.startsWith(".") || name.startsWith("/")) {
                 if (!relativeModuleExists(directory, name)) missing += name
             } else {
-                val root = if (name.startsWith('@')) name.split('/').take(2).joinToString("/") else name.substringBefore('/')
-                if (root.removePrefix("node:") !in nodeBuiltins && root in allowedNodePackages) packages += root
+                addPackage(name)
+            }
+        }
+        importPattern.findAll(text).forEach { match ->
+            val name = match.groupValues[2]
+            if (name.startsWith(".") || name.startsWith("/")) {
+                if (!relativeModuleExists(directory, name)) missing += name
+            } else {
+                addPackage(name)
             }
         }
         return Scan(nodePackages = packages, missingCompanionFiles = missing)
