@@ -6,6 +6,7 @@ import android.os.StatFs
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
@@ -206,8 +207,8 @@ class LocalPanelHttpServer(
         .put("core_version", "kotlin-local-fallback")
         .put("schema_version", LocalPanelStore.SCHEMA_VERSION)
         .put("backend_parity", "control-plane")
-        .put("native_runtime_mode", if (AndroidLinuxRuntime.currentAbi() == "arm64-v8a") "android-runtime" else "remote-or-control-plane")
-        .put("recommended_execution_mode", if (AndroidLinuxRuntime.currentAbi() == "arm64-v8a") "local" else "remote-panel")
+        .put("native_runtime_mode", if (AndroidLinuxRuntime.isRootfsReady(context)) "full-local-runtime" else "runtime-unavailable")
+        .put("recommended_execution_mode", if (AndroidLinuxRuntime.isRootfsReady(context)) "local" else "remote-panel")
         .put(
             "capabilities",
             JSONObject()
@@ -227,8 +228,8 @@ class LocalPanelHttpServer(
                 .put("env_import_export", true)
                 .put("subscriptions", true)
                 .put("single_file_subscription", true)
-                .put("git_subscription", false)
-                .put("subscription_schedule", false)
+                .put("git_subscription", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
+                .put("subscription_schedule", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
                 .put("notifications", true)
                 .put("open_api_management", true)
                 .put("open_api_token", false)
@@ -239,13 +240,17 @@ class LocalPanelHttpServer(
                 .put("backup", true)
                 .put("backup_schedule", true)
                 .put("system_monitor", true)
-                .put("dependency_install", AndroidLinuxRuntime.currentAbi() == "arm64-v8a")
-                .put("python", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidPythonRuntime.ensureReady(context) != null)
-                .put("pip", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidPythonRuntime.ensureReady(context) != null)
-                .put("node", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidNodeRuntime.ensureReady(context) != null)
-                .put("npm", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidNodeRuntime.ensureReady(context) != null)
-                .put("typescript", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidNodeRuntime.ensureReady(context) != null)
-                .put("shell", AndroidLinuxRuntime.currentAbi() == "arm64-v8a" && AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
+                .put("dependency_install", AndroidLinuxRuntime.isRootfsReady(context))
+                .put("python", AndroidPythonRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/python3"))
+                .put("pip", AndroidPythonRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/pip3"))
+                .put("node", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/node"))
+                .put("npm", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/npm"))
+                .put("typescript", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc"))
+                .put("shell", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
+                .put("git", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
+                .put("ssh", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/ssh"))
+                .put("go_interpret", File(context.applicationInfo.nativeLibraryDir.orEmpty(), "libyaegi_exec.so").isFile)
+                .put("go_builder", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/go"))
                 .put("linux_package_manager", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
                 .put("foreground_scheduler", true)
                 .put("exact_cron", false)
@@ -315,7 +320,7 @@ class LocalPanelHttpServer(
 
     private fun pythonSmokeCommand(): List<String>? = AndroidPythonRuntime.ensureReady(context)?.let {
         listOf(it.executable, it.wrapperScript, "-c", "print('PY_OK')")
-    }
+    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/python3", "-c", "import ssl,sqlite3,venv;print('PY_OK')"))
 
     private fun pythonSeedStatusItem(): JSONObject {
         val status = "ok"
@@ -328,11 +333,11 @@ class LocalPanelHttpServer(
 
     private fun nodeSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
         listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "console.log('NODE_OK')")
-    }
+    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/node", "-e", "console.log('NODE_OK')"))
 
     private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
         listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "const ts=require('typescript');const out=ts.transpileModule(\"const msg:string='TS_OK'; console.log(msg)\",{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;eval(out)")
-    }
+    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/env", "NODE_PATH=/usr/lib/node_modules", "/usr/bin/node", "-e", "const ts=require('typescript');console.log('TS_OK')"))
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
         if (command == null) return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime is not packaged or not executable")

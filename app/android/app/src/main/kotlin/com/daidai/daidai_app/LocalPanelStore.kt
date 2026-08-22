@@ -1524,6 +1524,9 @@ fun serveDashboardStats(): JSONObject {
                 put("enabled", cursor.int("enabled") == 1)
                 put("type", cursor.string("type"))
                 put("last_sync", cursor.string("last_sync"))
+                for (key in listOf("branch", "schedule", "whitelist", "blacklist", "depend_on", "pre_script", "hook_script", "save_dir", "auth_type", "auth_username", "ca_cert_path", "sub_path", "alias")) put(key, cursor.string(key))
+                for (key in listOf("auto_add_task", "auto_del_task", "force_overwrite")) put(key, cursor.int(key) != 0)
+                put("ssh_key_id", if (cursor.isNull(cursor.getColumnIndexOrThrow("ssh_key_id"))) JSONObject.NULL else cursor.long("ssh_key_id"))
                 put("created_at", cursor.string("created_at"))
                 put("updated_at", cursor.string("updated_at"))
             }
@@ -1544,6 +1547,9 @@ fun serveDashboardStats(): JSONObject {
             put("url", json.optString("url", ""))
             put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
             put("type", json.optString("type", "public-remote"))
+            for (key in listOf("branch", "schedule", "whitelist", "blacklist", "depend_on", "pre_script", "hook_script", "save_dir", "auth_type", "auth_username", "ca_cert_path", "sub_path", "alias")) if (json.has(key)) put(key, json.optString(key))
+            for (key in listOf("auto_add_task", "auto_del_task", "force_overwrite")) if (json.has(key)) put(key, if (json.optBoolean(key)) 1 else 0)
+            if (json.has("ssh_key_id") && !json.isNull("ssh_key_id")) put("ssh_key_id", json.optLong("ssh_key_id"))
         }
         ensureSubscriptionsTable(writableDatabase)
         val id = writableDatabase.insert("local_subscriptions", null, values)
@@ -1569,7 +1575,9 @@ fun serveDashboardStats(): JSONObject {
 
     private fun updateSubscription(id: Long, json: JSONObject): NanoHTTPD.Response {
         val values = ContentValues().apply {
-            for (key in listOf("name", "url", "type")) if (json.has(key)) put(key, json.optString(key))
+            for (key in listOf("name", "url", "type", "branch", "schedule", "whitelist", "blacklist", "depend_on", "pre_script", "hook_script", "save_dir", "auth_type", "auth_username", "ca_cert_path", "sub_path", "alias")) if (json.has(key)) put(key, json.optString(key))
+            for (key in listOf("auto_add_task", "auto_del_task", "force_overwrite")) if (json.has(key)) put(key, if (json.optBoolean(key)) 1 else 0)
+            if (json.has("ssh_key_id")) { if (json.isNull("ssh_key_id")) putNull("ssh_key_id") else put("ssh_key_id", json.optLong("ssh_key_id")) }
             if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
             put("updated_at", Instant.now().toString())
         }
@@ -1588,14 +1596,17 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun pullSubscription(id: Long): NanoHTTPD.Response {
-        val pair = readableDatabase.query("local_subscriptions", arrayOf("url", "name"), "id=?", arrayOf(id.toString()), null, null, null).use { c -> if (c.moveToFirst()) c.getString(0) to c.getString(1) else null }
+        val record = readableDatabase.query("local_subscriptions", arrayOf("url", "name", "type", "branch", "save_dir"), "id=?", arrayOf(id.toString()), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else listOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
+        }
             ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        if (record[2] == "git-repo" || record[0].endsWith(".git")) return pullGitSubscription(id, record[0], record[1], record[3], record[4])
         return try {
-            val connection = java.net.URL(pair.first).openConnection() as HttpURLConnection
+            val connection = java.net.URL(record[0]).openConnection() as HttpURLConnection
             connection.connectTimeout = 15000; connection.readTimeout = 30000; connection.instanceFollowRedirects = true
             val code = connection.responseCode
             if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            val filename = (pair.second.ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
+            val filename = (record[1].ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
             val output = File(scriptsRoot(), filename)
             connection.inputStream.use { input -> output.outputStream().use { input.copyTo(it) } }
             connection.disconnect()
@@ -1606,6 +1617,25 @@ fun serveDashboardStats(): JSONObject {
             recordSubscriptionLog(id, "error", e.message ?: e.javaClass.simpleName)
             error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "pull failed: ${e.message}")
         }
+    }
+
+    private fun pullGitSubscription(id: Long, url: String, name: String, branch: String, saveDir: String): NanoHTTPD.Response {
+        val directoryName = saveDir.ifBlank { name.ifBlank { "subscription-$id" } }.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val target = File(scriptsRoot(), directoryName).apply { mkdirs() }
+        val guest = if (File(target, ".git").isDirectory) {
+            AndroidLinuxRuntime.guestCommand(appContext, target, listOf("/usr/bin/git", "-C", "/workspace", "pull", "--ff-only"))
+        } else {
+            val args = mutableListOf("/usr/bin/git", "clone", "--depth", "1")
+            if (branch.isNotBlank()) args += listOf("--branch", branch)
+            args += listOf(url, "/workspace")
+            AndroidLinuxRuntime.guestCommand(appContext, target, args)
+        } ?: return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "Git runtime unavailable for ${AndroidLinuxRuntime.currentAbi()}")
+        val result = runLocalProcess(guest, target, JSONArray().put("Pulling Git subscription $url"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
+        val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        recordSubscriptionLog(id, if (result.exitCode == 0) "info" else "error", log)
+        if (result.exitCode != 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "Git pull failed")
+        writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,last_pull_at=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), Instant.now().toString(), id))
+        return ok(JSONObject().put("data", JSONObject().put("id", id).put("path", directoryName).put("status", "success")))
     }
 
     private fun stopSubscriptionPull(id: Long): NanoHTTPD.Response {
@@ -2270,17 +2300,23 @@ fun serveDashboardStats(): JSONObject {
                 if (pyRuntime != null) {
                     listOf(pyRuntime.executable, pyRuntime.wrapperScript, file.absolutePath)
                 } else {
+                    val guestPythonPath = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+                    AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "/usr/bin/python3", "/workspace/${file.name}")) ?: run {
                     val sysPy = try {
                         val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
                         p.waitFor()
                         if (p.exitValue() == 0) p.inputStream.bufferedReader().readText().trim() else null
                     } catch (_: Exception) { null }
                     if (sysPy != null) listOf(sysPy, file.absolutePath) else null
+                    }
                 }
             }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, file.absolutePath) }
+                ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
             ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", typeScriptEvalCode(), file.absolutePath) }
+                ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "-e", typeScriptEvalCode(), "/workspace/${file.name}"))
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
+                ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/go", "run", "/workspace/${file.name}"))
             else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
         }
     }
@@ -3921,7 +3957,15 @@ fun serveDashboardStats(): JSONObject {
                 return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
             }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
-                ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
+            if (runtime == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
+                val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--only-binary=:all:", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
+                    ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
+                val result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+                return if (result.exitCode == 0) "installed" to text else "failed" to text
+            }
+            runtime ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
             installScript.parentFile?.mkdirs()
             installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(sys.argv[1:])\nsys.exit(result)\n")
@@ -3948,7 +3992,16 @@ fun serveDashboardStats(): JSONObject {
             if (restricted.contains(name.lowercase()) && !allowUnverifiedNative) {
                 return "blocked" to "RESTRICTED_NODE_PACKAGE_BLOCKED: enable allow_unverified_android_abi_wheels before installing restricted automation packages"
             }
-            return AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
+            val directNode = AndroidNodeRuntime.ensureReady(appContext)
+            if (directNode == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
+                val deps = AndroidNodeRuntime.depsDir(appContext)
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", name))
+                    ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
+                val result = runLocalProcess(command, deps, JSONArray().put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+                return if (result.exitCode == 0) "installed" to text else "failed" to text
+            }
+            return directNode?.let { runtime ->
                 val deps = AndroidNodeRuntime.depsDir(appContext)
                 val cache = DependencyStorage.npmCache(appContext.filesDir).apply { mkdirs() }
                 val npm = File(runtime.modules, "npm/bin/npm-cli.js")
@@ -4085,6 +4138,10 @@ fun serveDashboardStats(): JSONObject {
             val runtime = if (depType == "python") AndroidPythonRuntime.ensureReady(appContext) else null
             val command = when (depType) {
                 "python" -> {
+                    if (runtime == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
+                        AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "uninstall", "-y", normalized))
+                            ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
+                    } else {
                     runtime ?: return@withInstallLock false to "Python runtime is not ready"
                     val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_uninstall.py")
                     script.parentFile?.mkdirs()
@@ -4099,12 +4156,19 @@ fun serveDashboardStats(): JSONObject {
                             "shutil.rmtree(os.path.realpath(str(dist._path)),ignore_errors=True)\n",
                     )
                     listOf(runtime.executable, runtime.wrapperScript, script.absolutePath, normalized)
+                    }
                 }
                 "nodejs" -> {
-                    val node = AndroidNodeRuntime.ensureReady(appContext) ?: return@withInstallLock false to "Node runtime is not ready"
+                    val node = AndroidNodeRuntime.ensureReady(appContext)
+                    if (node == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
+                        AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "uninstall", "--ignore-scripts", "--prefix", "/host-files/deps/nodejs", normalized))
+                            ?: return@withInstallLock false to "Rootfs Node runtime is not ready"
+                    } else {
+                    node ?: return@withInstallLock false to "Node runtime is not ready"
                     val deps = AndroidNodeRuntime.depsDir(appContext)
                     val npm = File(node.modules, "npm/bin/npm-cli.js")
                     listOf(node.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "uninstall", "--ignore-scripts", "--cache", DependencyStorage.npmCache(appContext.filesDir).absolutePath, "--prefix", deps.absolutePath, normalized)
+                    }
                 }
                 else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
             }

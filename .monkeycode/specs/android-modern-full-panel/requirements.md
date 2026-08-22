@@ -281,6 +281,14 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 4. Universal APK SHALL 包含 armeabi-v7a、arm64-v8a 和 x86_64 Flutter/Go ABI，并按设备 ABI 动态选择完整或降级模式。
 5. Release Pipeline SHALL 为每个 APK 生成独立 SHA-256 并验证签名证书。
 
+## Requirement 29：ARM32 与 x86_64 完整运行时
+
+1. Runtime Pipeline SHALL 为 armeabi-v7a、arm64-v8a 和 x86_64 构建同架构 Alpine rootfs、PRoot、Python、Node、TypeScript、Git、SSH、Go toolchain 和 Yaegi worker。
+2. WHEN 专用 Python 或 Node runtime 缺失, Kotlin Runtime Broker SHALL 使用同 ABI rootfs 执行脚本和依赖操作。
+3. Runtime Installer SHALL 在解包前验证 rootfs SHA-256，并恢复 tar hardlink。
+4. Stable Release SHALL 要求 ARM32 真机、ARM64 真机和 x86_64 emulator 对应 profile 的 verified evidence。
+5. IF 任一目标 ABI 缺少真实设备证据, Release Pipeline SHALL 仅允许生成 prerelease。
+
 ## Requirement 26：通知渠道与任务终态推送
 
 **User Story:** 作为自动化用户，我希望任务结束后按配置渠道收到通知，以便及时了解执行结果。

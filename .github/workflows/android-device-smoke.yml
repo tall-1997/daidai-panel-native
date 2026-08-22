@@ -34,6 +34,14 @@ on:
         options:
           - '4096'
           - '16384'
+      physical_expected_abi:
+        description: Expected ABI for the connected physical device
+        required: false
+        default: 'armeabi-v7a'
+        type: choice
+        options:
+          - 'armeabi-v7a'
+          - 'arm64-v8a'
   pull_request:
     paths:
       - 'app/android/**'
@@ -56,7 +64,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
@@ -82,6 +90,9 @@ jobs:
         run: |
           bash scripts/prepare-android-python-runtime.sh
           bash scripts/prepare-android-node-runtime.sh
+          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-alpine-rootfs.sh
+          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-proot-busybox.sh
+          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-yaegi-runtime.sh
           bash scripts/build-mobile-core-aar.sh
           flutter pub get
       - name: Build debug application and instrumentation APKs (multi-ABI)
@@ -217,6 +228,40 @@ jobs:
             evidence/tombstone_*.txt
           if-no-files-found: warn
           retention-days: 30
+
+  physical-device:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_physical_device
+    needs: build
+    runs-on: [self-hosted, android-device]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-runtime-smoke-apks
+          path: smoke-apks
+      - name: Run trusted physical-device smoke
+        env:
+          ANDROID_SERIAL: ${{ inputs.physical_device_serial }}
+        run: |
+          MATRIX_ID="physical-${{ inputs.physical_expected_abi }}-api${{ inputs.physical_expected_api }}-${{ inputs.physical_expected_page_size }}"
+          python3 scripts/android-runtime-smoke.py run \
+            --apk smoke-apks/flutter-apk/app-debug.apk \
+            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk \
+            --matrix-id "${MATRIX_ID}" \
+            --expected-api "${{ inputs.physical_expected_api }}" \
+            --expected-page-size "${{ inputs.physical_expected_page_size }}" \
+            --expected-abi "${{ inputs.physical_expected_abi }}" \
+            --output "evidence/${MATRIX_ID}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-smoke-physical-${{ inputs.physical_expected_abi }}-verified
+          path: evidence/**
+          if-no-files-found: error
+          retention-days: 90
 
   arm64-emulator-blocked:
     needs: build

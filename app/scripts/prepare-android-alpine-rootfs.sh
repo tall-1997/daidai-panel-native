@@ -7,8 +7,8 @@ asset_root="$repo_root/app/android/app/src/main/assets/android-runtime"
 cache_root="${ANDROID_ALPINE_ROOTFS_CACHE:-$HOME/.cache/daidai-android-alpine-rootfs}"
 mirror="${ALPINE_APK_MIRROR:-https://repo.huaweicloud.com/alpine}"
 release_branch="${ALPINE_RELEASE_BRANCH:-latest-stable}"
-packages="${ALPINE_ROOTFS_PACKAGES:-bash python3 py3-pip nodejs npm ca-certificates curl git openssh-client tzdata}"
-abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
+packages="${ALPINE_ROOTFS_PACKAGES:-bash python3 py3-pip nodejs npm typescript go ca-certificates curl git openssh-client tzdata}"
+abis="${ANDROID_RUNTIME_ABIS:-armeabi-v7a arm64-v8a x86_64}"
 apk_static_bin=""
 
 alpine_arch_for_abi() {
@@ -117,6 +117,16 @@ build_rootfs_for_abi() {
   "$apk_static_bin" "${usermode_args[@]}" --root "$root_dir" --arch "$alpine_arch" --keys-dir "$root_dir/etc/apk/keys" --repositories-file "$root_dir/etc/apk/repositories" --no-cache --no-scripts --initdb add $packages
   tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' -cf - -C "$root_dir" . | gzip -n > "$output_dir/rootfs.tar.gz.bin"
   sha256sum "$output_dir/rootfs.tar.gz.bin" | awk '{print $1}' > "$output_dir/rootfs.tar.gz.bin.sha256"
+  python3 - "$output_dir/runtime-manifest.json" "$abi" "$alpine_arch" "$version" "$output_dir/rootfs.tar.gz.bin" "$packages" <<'PY'
+import hashlib, json, pathlib, sys
+target, abi, arch, version, archive, packages = sys.argv[1:]
+path = pathlib.Path(archive)
+pathlib.Path(target).write_text(json.dumps({
+    "schema_version": 1, "abi": abi, "alpine_arch": arch, "alpine_version": version,
+    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size,
+    "packages": packages.split(),
+}, indent=2) + "\n")
+PY
 }
 
 install_apk_static

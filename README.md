@@ -51,6 +51,8 @@ Android versionCode：**1000050**
 
 控制面兼容覆盖任务配置、Cron、日志、环境变量、通知、Open API 管理、安全管理、备份恢复、定时备份和系统监控。依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 ARM64 Go Core 提供；其他架构可连接远程呆呆面板获得同等执行能力。
 
+`v1.0.6` prerelease 开始为 ARM32/x86_64 交付同 ABI Alpine runtime preview，包含 Python、Node、TypeScript、Shell、Git、SSH、Go toolchain 和 Yaegi。x86_64 可通过 GitHub emulator 验证；ARM32 稳定能力需要真实 `armeabi-v7a` 设备证据，证据缺失时只发布 prerelease。
+
 ## 平台边界
 
 - 正式 Release 提供 ARM64、ARM32、x86_64 与 universal 四类 APK。

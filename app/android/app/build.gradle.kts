@@ -200,7 +200,7 @@ val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
             check(archive.getEntry("classes.jar") != null) {
                 "Invalid mobilecore.aar: classes.jar is missing."
             }
-            listOf("arm64-v8a").forEach { abi ->
+            requestedAbis.forEach { abi ->
                 check(archive.getEntry("jni/$abi/libgojni.so") != null) {
                     "Invalid mobilecore.aar: jni/$abi/libgojni.so is missing."
                 }
@@ -245,27 +245,16 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
     group = "verification"
     description = "Fails when the packaged Alpine/Ubuntu rootfs or PRoot runner is missing."
     doLast {
-        val abi = "arm64-v8a"
-        val rootfs = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin")
-        val rootfsSha = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin.sha256")
-        val nativeDir = file("src/main/jniLibs/$abi")
-        val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
-        val busybox = listOf("libdaidai_busybox.so", "liboperit_busybox.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
-        check(rootfs.isFile) {
-            "Missing Android Linux rootfs asset: ${rootfs.path}. Run app/scripts/prepare-android-alpine-rootfs.sh."
-        }
-        check(rootfsSha.isFile) {
-            "Missing Android Linux rootfs checksum: ${rootfsSha.path}. Run app/scripts/prepare-android-alpine-rootfs.sh."
-        }
-        check(proot != null && isAndroidElf(proot)) {
-            "Missing Android PRoot runner in $nativeDir. Expected libdaidai_proot.so or liboperit_proot.so."
-        }
-        check(busybox != null && isAndroidElf(busybox)) {
-            "Missing Android BusyBox runner in $nativeDir. Expected libdaidai_busybox.so or liboperit_busybox.so."
-        }
-        val expected = rootfsSha.readText().trim().substringBefore(' ')
-        check(expected.length == 64 && expected.equals(sha256(rootfs), ignoreCase = true)) {
-            "Android Linux rootfs checksum mismatch: ${rootfs.path}."
+        requestedAbis.forEach { abi ->
+            val rootfs = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin")
+            val rootfsSha = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin.sha256")
+            val nativeDir = file("src/main/jniLibs/$abi")
+            val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
+            check(rootfs.isFile && rootfsSha.isFile) { "Missing Android Linux rootfs assets for $abi." }
+            check(proot != null && isAndroidElf(proot)) { "Missing Android PRoot runner for $abi." }
+            check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
+            val expected = rootfsSha.readText().trim().substringBefore(' ')
+            check(expected.length == 64 && expected.equals(sha256(rootfs), ignoreCase = true)) { "Android Linux rootfs checksum mismatch for $abi." }
         }
     }
 }
@@ -423,9 +412,9 @@ fun isAndroidElf(file: File): Boolean {
     if (header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
         return false
     }
-    if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
+    if (header[4] !in listOf(1.toByte(), 2.toByte()) || header[5] != 1.toByte()) return false
     val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
-    return machine == 183 || machine == 62
+    return machine == 40 || machine == 183 || machine == 62
 }
 
 fun sha256(file: File): String {

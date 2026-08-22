@@ -5,8 +5,8 @@
   "distribution_abis": ["armeabi-v7a", "arm64-v8a", "x86_64"],
   "distribution_profiles": {
     "arm64-v8a": "full-local-runtime",
-    "armeabi-v7a": "control-plane-and-remote-panel",
-    "x86_64": "control-plane-and-remote-panel",
+    "armeabi-v7a": "full-local-runtime-preview-requires-physical-smoke",
+    "x86_64": "full-local-runtime-preview",
     "universal": "runtime-selected-by-device-abi"
   },
   "container_model": "layered-linux-runtime",

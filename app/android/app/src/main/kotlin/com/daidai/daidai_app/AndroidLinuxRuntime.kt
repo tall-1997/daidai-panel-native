@@ -5,6 +5,7 @@ import java.io.File
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.security.MessageDigest
 import java.util.zip.GZIPInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.json.JSONArray
@@ -53,6 +54,15 @@ object AndroidLinuxRuntime {
 
     fun nativeLibraryDir(context: Context): File = File(context.applicationInfo.nativeLibraryDir.orEmpty())
 
+    private fun nativeCompatDir(context: Context): File {
+        val compat = File(context.filesDir, "runtimes/native-compat/${currentAbi()}")
+        copyVersionedLibraries(nativeLibraryDir(context), compat, mapOf(
+            "libtalloc_v2.so" to listOf("libtalloc.so.2"),
+            "libbusybox_v138.so" to listOf("libbusybox.so.1.38.0"),
+        ))
+        return compat
+    }
+
     fun baseEnvironment(context: Context, workingDir: File): MutableMap<String, String> {
         val mirrors = mirrorConfig(context)
         return mutableMapOf(
@@ -62,7 +72,7 @@ object AndroidLinuxRuntime {
             "DAIDAI_ANDROID_LOCAL" to "1",
             "DAIDAI_RUNTIME_ISOLATION" to "android-app-sandbox",
             "DAIDAI_RUNTIME_ABI" to currentAbi(),
-            "LD_LIBRARY_PATH" to nativeLibraryDir(context).absolutePath,
+            "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
             "PROOT_NO_SECCOMP" to "1",
             "PROOT_TMP_DIR" to context.cacheDir.absolutePath,
             "PROOT_VERBOSE" to "0",
@@ -138,6 +148,20 @@ object AndroidLinuxRuntime {
         return prootCommand(context, rootfs, workingDir, "/workspace", listOf("/bin/sh", guestScript))
     }
 
+    fun guestCommand(context: Context, workingDir: File, command: List<String>): List<String>? {
+        val rootfs = ensureRootfsReady(context) ?: return null
+        return prootCommand(context, rootfs, workingDir, "/workspace", command)
+    }
+
+    fun guestRuntimeAvailable(context: Context, executable: String): Boolean {
+        val rootfs = ensureRootfsReady(context) ?: return false
+        return File(rootfs.root, executable.trimStart('/')).isFile
+    }
+
+    fun guestRuntimeVersion(context: Context, executable: String): String =
+        ensureRootfsReady(context)?.let { rootfs -> File(rootfs.root, executable.trimStart('/')).takeIf(File::isFile) }
+            ?.let { executable.substringAfterLast('/') }.orEmpty()
+
     fun systemPackageInstallCommand(
         context: Context,
         packageSpec: String,
@@ -212,11 +236,20 @@ object AndroidLinuxRuntime {
     private fun installRootfsAsset(context: Context, root: File, mirrors: MirrorConfig): RootfsPaths? {
         val abi = currentAbi()
         val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME"
+        val checksumName = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_SHA256_ASSET_NAME"
         if (!assetExists(context, assetName)) return null
         val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return null
         root.deleteRecursively()
         root.mkdirs()
         try {
+            val expected = context.assets.open(checksumName).bufferedReader().use { it.readText().trim().substringBefore(' ') }
+            val digest = MessageDigest.getInstance("SHA-256")
+            context.assets.open(assetName).use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+            }
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            require(expected.length == 64 && expected.equals(actual, true)) { "rootfs checksum mismatch" }
             context.assets.open(assetName).use { raw ->
                 GZIPInputStream(raw).use { gzip ->
                     TarArchiveInputStream(gzip).use { tar ->
@@ -234,6 +267,7 @@ object AndroidLinuxRuntime {
     }
 
     private fun extractTar(root: File, tar: TarArchiveInputStream) {
+        val hardLinks = mutableListOf<Pair<File, String>>()
         while (true) {
             val entry = tar.nextTarEntry ?: break
             val output = File(root, entry.name).canonicalFile
@@ -244,6 +278,9 @@ object AndroidLinuxRuntime {
                     output.parentFile?.mkdirs()
                     runCatching { Files.createSymbolicLink(output.toPath(), Paths.get(entry.linkName)) }
                 }
+                entry.isLink -> {
+                    hardLinks += output to entry.linkName
+                }
                 entry.isFile -> {
                     output.parentFile?.mkdirs()
                     output.outputStream().use { tar.copyTo(it) }
@@ -251,6 +288,14 @@ object AndroidLinuxRuntime {
                     output.setWritable(entry.mode and 0b010000000 != 0, false)
                     output.setExecutable(entry.mode and 0b001000000 != 0, false)
                 }
+            }
+        }
+        hardLinks.forEach { (output, linkName) ->
+            val target = File(root, linkName).canonicalFile
+            if (target.path.startsWith(root.canonicalPath + File.separator) && target.isFile) {
+                output.parentFile?.mkdirs()
+                runCatching { Files.createLink(output.toPath(), target.toPath()) }
+                    .recoverCatching { target.copyTo(output, overwrite = true) }
             }
         }
     }
@@ -329,6 +374,22 @@ object AndroidLinuxRuntime {
                 capabilities = listOf("python", "pip", "venv", "ssl", "sqlite"),
             )))
             .put(descriptorJson(RuntimeDescriptor(
+                id = "linux-runtime-${currentAbi()}",
+                language = "linux",
+                version = rootfs.optString("distribution"),
+                installed = rootfs.optBoolean("installed"),
+                executable = rootfs.optJSONObject("runner")?.optString("path").orEmpty(),
+                home = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}").absolutePath,
+                isolation = "layered-rootfs",
+                capabilities = listOf("shell", "python", "pip", "node", "npm", "typescript", "git", "ssh", "go-build"),
+            )))
+            .put(descriptorJson(RuntimeDescriptor(
+                id = "yaegi-go-${currentAbi()}", language = "go", version = "0.16.1",
+                installed = File(nativeLibraryDir(context), "libyaegi_exec.so").isFile,
+                executable = File(nativeLibraryDir(context), "libyaegi_exec.so").absolutePath,
+                home = "", isolation = "isolated-worker", capabilities = listOf("go-interpret"),
+            )))
+            .put(descriptorJson(RuntimeDescriptor(
                 id = "node-lts-android-arm64",
                 language = "node",
                 version = if (node != null) "18.20.4" else "",
@@ -368,7 +429,7 @@ object AndroidLinuxRuntime {
         val rootfsPackaged = assetExists(context, rootfsAsset)
         val rootfsDir = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         return JSONObject()
-            .put("id", "alpine-rootfs-android-arm64")
+            .put("id", "alpine-rootfs-android-$abi")
             .put("distribution", rootfsDistribution(rootfsDir))
             .put("installed", File(rootfsDir, ROOTFS_READY_MARKER).isFile)
             .put("packaged", rootfsPackaged)

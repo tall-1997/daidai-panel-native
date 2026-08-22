@@ -204,6 +204,7 @@ def dry_run(args):
         "matrix_id": args.matrix_id,
         "expected_api": args.expected_api,
         "expected_page_size": args.expected_page_size,
+        "expected_abi": args.expected_abi,
         "apk": str(args.apk),
         "test_apk": str(args.test_apk),
         "commands": [
@@ -230,8 +231,10 @@ def run(args):
     page_size = int(device_value(args.adb, args.serial, "getconf", "PAGESIZE"))
     fingerprint = device_value(args.adb, args.serial, "getprop", "ro.build.fingerprint")
     device = {"serial": args.serial or "default", "abi": abi, "api": api, "page_size_bytes": page_size, "fingerprint": fingerprint}
-    if abi not in {"arm64-v8a", "arm64-v8a,armeabi-v7a", "x86_64"}:
+    if abi not in {"armeabi-v7a", "arm64-v8a", "arm64-v8a,armeabi-v7a", "x86_64"}:
         return fail_device_run(args, device, f"unsupported-abi:{abi}")
+    if args.expected_abi and abi != args.expected_abi:
+        return fail_device_run(args, device, f"abi-mismatch:expected={args.expected_abi}:actual={abi}")
     if api != args.expected_api:
         return fail_device_run(args, device, f"api-mismatch:expected={args.expected_api}:actual={api}")
     if page_size != args.expected_page_size:
@@ -375,6 +378,7 @@ def parser():
         item.add_argument("--matrix-id", required=True)
         item.add_argument("--expected-api", type=int, required=True)
         item.add_argument("--expected-page-size", type=int, required=True)
+        item.add_argument("--expected-abi", default="")
         item.add_argument("--serial", default="")
         item.add_argument("--adb", default="adb")
         item.add_argument("--output", type=pathlib.Path, default=pathlib.Path("android-runtime-smoke-evidence.json"))
