@@ -111,14 +111,6 @@ android {
         ignoreAssetsPattern = "android-daidai-do-not-ignore-python-stdlib"
     }
 
-    if ("arm64-v8a" !in requestedAbis) {
-        sourceSets.getByName("main").assets.exclude(
-            "python-runtime/**",
-            "node-runtime/**",
-            "android-runtime/**",
-        )
-    }
-
     lint {
         disable.add("MissingVersion")
     }

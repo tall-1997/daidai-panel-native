@@ -116,7 +116,7 @@ Android 9-15 ARM64 优先启动完整 Go Core；Android 16 使用 Kotlin fallbac
 
 Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在后续安装操作重试。npm 安装关闭 lifecycle、audit、fund 和 update notifier；本地 tgz、URL 和 alias 通过安装前后顶层依赖变化验证。Node launcher 由 CI 使用 16 KB linker page-size 参数重新生成，并作为 preBuild runtime 门禁输入。
 
-Release 同时生成 ARM64 完整版、ARM32 控制面版、x86_64 控制面版与 universal 整合版。ARM32/x86_64 专属包排除 ARM64 Python、Node 和 rootfs 资产以缩小体积；universal 包包含 armeabi-v7a、arm64-v8a、x86_64 的 Flutter/Go ABI，运行时按设备 ABI 选择完整 Core 或控制面降级。
+Release 同时生成 ARM64 完整版、ARM32 控制面版、x86_64 控制面版与 universal 整合版。架构专属包通过 ABI filter 仅保留目标架构 native libraries；universal 包包含 armeabi-v7a、arm64-v8a、x86_64 的 Flutter/Go ABI，运行时按设备 ABI 选择完整 Core 或控制面降级。
 
 本地 Web 只能通过 Android Host 生成的动态 `/local-ui/#ticket=...` URL 进入。Vite 与 Vue Router 共享 `/local-ui/` base；一次性 ticket、browser session Cookie、精确 Host/Origin 与用户 token 共同构成回环浏览器安全边界。
 

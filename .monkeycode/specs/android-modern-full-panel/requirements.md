@@ -277,7 +277,7 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 
 1. Release Pipeline SHALL 生成 ARM64、ARM32、x86_64 和 universal 四类签名 APK。
 2. ARM64 APK SHALL 包含完整 Go Core、Python、Node、Shell 与 rootfs 运行时。
-3. ARM32 和 x86_64 APK SHALL 排除 ARM64 runtime assets 并提供控制面降级能力。
+3. ARM32 和 x86_64 APK SHALL 仅包含目标架构 native libraries 并提供控制面降级能力。
 4. Universal APK SHALL 包含 armeabi-v7a、arm64-v8a 和 x86_64 Flutter/Go ABI，并按设备 ABI 动态选择完整或降级模式。
 5. Release Pipeline SHALL 为每个 APK 生成独立 SHA-256 并验证签名证书。
 
