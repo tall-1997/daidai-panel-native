@@ -26,6 +26,7 @@ class ScriptCompatibilityTest {
         val scan = ScriptCompatibility.scanNode(
             """
             import got from 'got'
+            const iconv = await import('iconv-lite')
             const dotenv = require('dotenv')
             console.log('请运行: npm install iconv-lite tough-cookie')
             """.trimIndent(),
@@ -42,7 +43,7 @@ class ScriptCompatibilityTest {
     }
 
     @Test fun ignoresDynamicAndUnknownRequires() {
-        val scan = ScriptCompatibility.scanNode("require(name); require('not-an-allowlisted-package')", File("."))
+        val scan = ScriptCompatibility.scanNode("require(name); require('not-an-allowlisted-package'); import('@scope/unknown')", File("."))
         assertTrue(scan.nodePackages.isEmpty())
     }
 

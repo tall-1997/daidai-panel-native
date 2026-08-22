@@ -20,25 +20,42 @@ internal object LocalTaskFallbackSemantics {
     private val pythonMissing = Regex("(?:ModuleNotFoundError|ImportError):\\s*No module named\\s*['\"]([^'\"]+)['\"]")
     private val nodeMissing = Regex("(?:Cannot find module|Error \\[ERR_MODULE_NOT_FOUND].*?)\\s*['\"]([^'\"]+)['\"]")
     private val pythonInstallHint = Regex("\\bpip3?\\s+install\\s+([A-Za-z][A-Za-z0-9_.@-]*)")
-    private val nodeInstallHint = Regex("\\bnpm\\s+(?:i|install|add)\\s+(@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)")
+    private val nodeInstallHint = Regex("\\bnpm[ \\t]+(?:i|install|add)[ \\t]+((?:@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)(?:[ \\t]+@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)*)")
     private val managedModules = setOf("notify", "sendNotify")
 
     fun detectMissingDependency(runtime: String, output: String): DependencyCandidate? {
+        return detectMissingDependencies(runtime, output).firstOrNull()
+    }
+
+    internal fun detectMissingDependencies(runtime: String, output: String): List<DependencyCandidate> {
+        val candidates = linkedSetOf<DependencyCandidate>()
         return when (runtime.lowercase()) {
-            "python" -> pythonMissing.find(output)?.groupValues?.get(1)
-                ?.substringBefore('.')
-                ?.takeIf { isInstallableName(it) && it !in managedModules }
-                ?.let { DependencyCandidate("python", it) }
-                ?: pythonInstallHint.find(output)?.groupValues?.get(1)
+            "python" -> {
+                pythonMissing.find(output)?.groupValues?.get(1)
+                    ?.substringBefore('.')
                     ?.takeIf { isInstallableName(it) && it !in managedModules }
-                    ?.let { DependencyCandidate("python", it) }
-            "nodejs" -> nodeMissing.find(output)?.groupValues?.get(1)
-                ?.takeIf { isInstallableName(it) && it !in managedModules && !it.startsWith(".") && !it.startsWith("/") }
-                ?.let { DependencyCandidate("nodejs", it) }
-                ?: nodeInstallHint.find(output)?.groupValues?.get(1)
-                    ?.takeIf { isInstallableName(it) && it !in managedModules && !it.startsWith(".") && !it.startsWith("/") }
-                    ?.let { DependencyCandidate("nodejs", it) }
-            else -> null
+                    ?.let { candidates += DependencyCandidate("python", it) }
+                pythonInstallHint.findAll(output).forEach { match ->
+                    match.groupValues[1]
+                        .takeIf { isInstallableName(it) && it !in managedModules }
+                        ?.let { candidates += DependencyCandidate("python", it) }
+                }
+                candidates.toList()
+            }
+            "nodejs" -> {
+                nodeMissing.find(output)?.groupValues?.get(1)
+                    ?.takeIf { isNodeInstallableName(it) }
+                    ?.let { candidates += DependencyCandidate("nodejs", it) }
+                nodeInstallHint.findAll(output).forEach { match ->
+                    match.groupValues[1].split(Regex("[ \\t]+"))
+                        .map(String::trim)
+                        .filter(String::isNotEmpty)
+                        .filter(::isNodeInstallableName)
+                        .forEach { candidates += DependencyCandidate("nodejs", it) }
+                }
+                candidates.toList()
+            }
+            else -> emptyList()
         }
     }
 
@@ -307,11 +324,14 @@ internal object LocalTaskFallbackSemantics {
         installCount: Int,
     ): DependencyCandidate? {
         if (installCount >= MAX_DEPENDENCY_INSTALLS) return null
-        return detectMissingDependency(runtime, output)?.takeUnless(attempted::contains)
+        return detectMissingDependencies(runtime, output).firstOrNull { it !in attempted }
     }
 
     private fun isInstallableName(name: String): Boolean =
         name.isNotBlank() && name.matches(Regex("[A-Za-z0-9@][A-Za-z0-9_./@-]*"))
+
+    private fun isNodeInstallableName(name: String): Boolean =
+        isInstallableName(name) && name !in managedModules && !name.startsWith(".") && !name.startsWith("/")
 }
 
 internal object LocalLogQueryContract {

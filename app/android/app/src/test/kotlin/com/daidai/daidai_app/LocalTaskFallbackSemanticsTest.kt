@@ -25,6 +25,13 @@ class LocalTaskFallbackSemanticsTest {
             LocalTaskFallbackSemantics.detectMissingDependency("nodejs", "依赖 got@11 安装失败，请手动安装: npm install got@11"),
         )
         assertEquals(
+            listOf(
+                LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "iconv-lite"),
+                LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "tough-cookie"),
+            ),
+            LocalTaskFallbackSemantics.detectMissingDependencies("nodejs", "请手动安装: npm install iconv-lite tough-cookie"),
+        )
+        assertEquals(
             LocalTaskFallbackSemantics.DependencyCandidate("python", "beautifulsoup4"),
             LocalTaskFallbackSemantics.detectMissingDependency("python", "请手动安装: pip install beautifulsoup4"),
         )
@@ -76,6 +83,15 @@ class LocalTaskFallbackSemanticsTest {
         assertEquals(candidate, LocalTaskFallbackSemantics.nextDependency("nodejs", "Cannot find module 'axios'", emptySet(), 4))
         assertNull(LocalTaskFallbackSemantics.nextDependency("nodejs", "Cannot find module 'axios'", emptySet(), 5))
         assertNull(LocalTaskFallbackSemantics.nextDependency("nodejs", "Cannot find module 'axios'", setOf(candidate), 1))
+        assertEquals(
+            LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "tough-cookie"),
+            LocalTaskFallbackSemantics.nextDependency(
+                "nodejs",
+                "请手动安装: npm install iconv-lite tough-cookie",
+                setOf(LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "iconv-lite")),
+                1,
+            ),
+        )
     }
 
     @Test

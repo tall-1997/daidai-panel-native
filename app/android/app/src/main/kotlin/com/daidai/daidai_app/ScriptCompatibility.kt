@@ -75,9 +75,10 @@ internal object ScriptCompatibility {
         val missing = linkedSetOf<String>()
         val requirePattern = Regex("\\brequire\\s*\\(\\s*(['\"])([^'\"]+)\\1\\s*\\)")
         val importPattern = Regex("(?:^|[;\\n])\\s*import\\s+(?:[^'\"]+?\\s+from\\s+)?(['\"])([^'\"]+)\\1")
+        val dynamicImportPattern = Regex("\\bimport\\s*\\(\\s*(['\"])([^'\"]+)\\1\\s*\\)")
         fun addPackage(name: String) {
             val root = if (name.startsWith('@')) name.split('/').take(2).joinToString("/") else name.substringBefore('/')
-            if (root.removePrefix("node:") !in nodeBuiltins && (root in allowedNodePackages || root.startsWith("@"))) packages += root
+            if (root.removePrefix("node:") !in nodeBuiltins && root in allowedNodePackages) packages += root
         }
         nodeInstallHintPattern.findAll(text).forEach { match ->
             match.groupValues[1].split(Regex("\\s+")).map(String::trim).filter(String::isNotEmpty).forEach { name ->
@@ -93,6 +94,14 @@ internal object ScriptCompatibility {
             }
         }
         importPattern.findAll(text).forEach { match ->
+            val name = match.groupValues[2]
+            if (name.startsWith(".") || name.startsWith("/")) {
+                if (!relativeModuleExists(directory, name)) missing += name
+            } else {
+                addPackage(name)
+            }
+        }
+        dynamicImportPattern.findAll(text).forEach { match ->
             val name = match.groupValues[2]
             if (name.startsWith(".") || name.startsWith("/")) {
                 if (!relativeModuleExists(directory, name)) missing += name
