@@ -61,14 +61,16 @@ type runtimeArtifact struct {
 }
 
 type compatibilityMatrix struct {
-	Version           string                 `json:"version"`
-	UpdatedAt         string                 `json:"updated_at,omitempty"`
-	ABI               string                 `json:"abi"`
-	RequiredChecks    []string               `json:"required_checks,omitempty"`
-	RuntimeIDs        []string               `json:"runtime_ids"`
-	ContainerModel    string                 `json:"container_model,omitempty"`
-	PythonWheelPolicy map[string]any         `json:"python_wheel_policy,omitempty"`
-	Runtimes          []compatibilityRuntime `json:"runtimes"`
+	Version              string                 `json:"version"`
+	UpdatedAt            string                 `json:"updated_at,omitempty"`
+	ABI                  string                 `json:"abi"`
+	DistributionABIs     []string               `json:"distribution_abis,omitempty"`
+	DistributionProfiles map[string]string      `json:"distribution_profiles,omitempty"`
+	RequiredChecks       []string               `json:"required_checks,omitempty"`
+	RuntimeIDs           []string               `json:"runtime_ids"`
+	ContainerModel       string                 `json:"container_model,omitempty"`
+	PythonWheelPolicy    map[string]any         `json:"python_wheel_policy,omitempty"`
+	Runtimes             []compatibilityRuntime `json:"runtimes"`
 }
 
 type compatibilityRuntime struct {
