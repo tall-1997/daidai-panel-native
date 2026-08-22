@@ -28,6 +28,7 @@ class Task {
   final bool isPinned;
   final String? taskBefore;
   final String? taskAfter;
+  final String stopSchedule;
   final bool allowMultipleInstances;
   final String? notificationChannelName;
   final bool? notificationChannelEnabled;
@@ -63,6 +64,7 @@ class Task {
     this.isPinned = false,
     this.taskBefore,
     this.taskAfter,
+    this.stopSchedule = '',
     this.allowMultipleInstances = false,
     this.notificationChannelName,
     this.notificationChannelEnabled,
@@ -224,6 +226,7 @@ class Task {
       isPinned: json['is_pinned'] == true,
       taskBefore: json['task_before']?.toString(),
       taskAfter: json['task_after']?.toString(),
+      stopSchedule: json['stop_schedule']?.toString() ?? '',
       allowMultipleInstances: json['allow_multiple_instances'] == true,
       notificationChannelName: json['notification_channel_name']?.toString(),
       notificationChannelEnabled: json['notification_channel_enabled'] as bool?,
@@ -254,6 +257,7 @@ class Task {
     'sort_order': sortOrder,
     'task_before': taskBefore,
     'task_after': taskAfter,
+    'stop_schedule': stopSchedule,
     'allow_multiple_instances': allowMultipleInstances,
   };
 }
