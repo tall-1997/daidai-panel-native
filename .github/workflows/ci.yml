@@ -72,7 +72,9 @@ jobs:
               - 'app/scripts/build-mobile-core-aar.sh'
               - 'app/scripts/prepare-android-python-runtime.sh'
               - 'app/scripts/prepare-android-node-runtime.sh'
+              - 'app/scripts/prepare-android-yaegi-runtime.sh'
               - 'app/scripts/verify-android-node-runtime.sh'
+              - 'app/runtime-tools/yaegi/**'
               - 'panel/server/mobilecore/**'
               - 'panel/server/go.mod'
               - 'panel/server/go.sum'
@@ -242,6 +244,10 @@ jobs:
       - name: Prepare Android Node runtime
         working-directory: app
         run: bash scripts/prepare-android-node-runtime.sh
+
+      - name: Prepare Android Yaegi runtime
+        working-directory: app
+        run: ANDROID_RUNTIME_ABIS='arm64-v8a' bash scripts/prepare-android-yaegi-runtime.sh
 
       - name: Build embedded Core AAR
         working-directory: app
