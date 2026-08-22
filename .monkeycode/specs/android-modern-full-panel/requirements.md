@@ -269,25 +269,23 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 5. WHEN fallback 登录成功, Auth API SHALL 返回与 Go Backend 一致的顶层 token 和 user 字段。
 6. WHEN 用户查看 Open API Secret, Backend SHALL 在验证当前管理员密码后返回 `data.app_secret`。
 7. Script Runtime SHALL 内置 Python、CommonJS 和 ESM 可解析的 `notify` helper。
-8. WHILE ABI 为 x86_64, Runtime Host SHALL 使用控制面降级路径并跳过 ARM64 Go Core。
+8. WHILE ABI 不是 arm64-v8a, Runtime Host SHALL 引导用户使用远程面板或等待后续架构支持。
 
-## Requirement 28：多架构发行
+## Requirement 28：ARM64 发行
 
-**User Story:** 作为不同 Android 架构的用户，我希望下载匹配设备的安装包，以便减少下载体积并获得准确的能力声明。
+**User Story:** 作为 ARM64 Android 用户，我希望下载稳定的 ARM64 安装包，以便获得完整本地执行能力。
 
-1. Release Pipeline SHALL 生成 ARM64、ARM32、x86_64 和 universal 四类签名 APK。
+1. Release Pipeline SHALL 生成 ARM64 签名 APK。
 2. ARM64 APK SHALL 包含完整 Go Core、Python、Node、Shell 与 rootfs 运行时。
-3. ARM32 和 x86_64 APK SHALL 仅包含目标架构 native libraries 并提供控制面降级能力。
-4. Universal APK SHALL 包含 armeabi-v7a、arm64-v8a 和 x86_64 Flutter/Go ABI，并按设备 ABI 动态选择完整或降级模式。
-5. Release Pipeline SHALL 为每个 APK 生成独立 SHA-256 并验证签名证书。
+3. Release Pipeline SHALL 为 ARM64 APK 生成独立 SHA-256 并验证签名证书。
+4. Multi-architecture runtime preview SHALL remain outside mainline until re-approved.
 
-## Requirement 29：ARM32 与 x86_64 完整运行时
+## Requirement 29：搁置的 ARM32 与 x86_64 预研
 
-1. Runtime Pipeline SHALL 为 armeabi-v7a、arm64-v8a 和 x86_64 构建同架构 Alpine rootfs、PRoot、Python、Node、TypeScript、Git、SSH、Go toolchain 和 Yaegi worker。
-2. WHEN 专用 Python 或 Node runtime 缺失, Kotlin Runtime Broker SHALL 使用同 ABI rootfs 执行脚本和依赖操作。
-3. Runtime Installer SHALL 在解包前验证 rootfs SHA-256，并恢复 tar hardlink。
-4. Stable Release SHALL 要求 ARM32 真机、ARM64 真机和 x86_64 emulator 对应 profile 的 verified evidence。
-5. IF 任一目标 ABI 缺少真实设备证据, Release Pipeline SHALL 仅允许生成 prerelease。
+1. Multi-architecture runtime preview SHALL be preserved on branch `shelved/multi-arch-runtime`.
+2. Mainline Runtime Pipeline SHALL only build `arm64-v8a` runtime assets.
+3. Mainline Stable Release SHALL not require ARM32 or x86_64 device evidence.
+4. IF multi-architecture support is re-approved, Runtime Pipeline SHALL reintroduce ABI-specific evidence gates before stable release.
 
 ## Requirement 26：通知渠道与任务终态推送
 

@@ -38,12 +38,7 @@ val hasReleaseSigning =
         !releaseKeyAlias.isNullOrEmpty() &&
         !releaseKeyPassword.isNullOrEmpty()
 val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
-val requestedAbis = System.getenv("DAIDAI_ANDROID_ABIS")
-    ?.split(',')
-    ?.map(String::trim)
-    ?.filter(String::isNotEmpty)
-    ?.takeIf(List<String>::isNotEmpty)
-    ?: listOf("arm64-v8a")
+val requestedAbis = listOf("arm64-v8a")
 
 check(!requireReleaseSigning || hasReleaseSigning) {
     "Release signing is required, but KEYSTORE_FILE, KEYSTORE_PASSWORD, KEYSTORE_ALIAS, or KEYSTORE_KEY_PASSWORD is missing."
@@ -266,7 +261,7 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
         val version = "18.20.4"
         val npmVersion = "10.9.4"
         val typescriptVersion = "5.9.3"
-        val nativeAbis = listOf("arm64-v8a", "x86_64").filter { file("src/main/jniLibs/$it/libnode.so").isFile }
+        val nativeAbis = listOf("arm64-v8a").filter { file("src/main/jniLibs/$it/libnode.so").isFile }
         check(nativeAbis.isNotEmpty()) { "No Android Node native libraries found." }
         val primaryAbi = nativeAbis.first()
         val nativeDir = file("src/main/jniLibs/$primaryAbi")
@@ -329,7 +324,7 @@ val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
     group = "verification"
     description = "Fails when the CPython 3.14 Android runtime, stdlib, native dependencies, or wheels are invalid."
     doLast {
-        val nativeAbis = listOf("arm64-v8a", "x86_64").filter { file("src/main/jniLibs/$it/libpython3.14.so").isFile }
+        val nativeAbis = listOf("arm64-v8a").filter { file("src/main/jniLibs/$it/libpython3.14.so").isFile }
         check(nativeAbis.isNotEmpty()) { "No Android Python native libraries found." }
         val primaryAbi = nativeAbis.first()
         val nativeDir = file("src/main/jniLibs/$primaryAbi")

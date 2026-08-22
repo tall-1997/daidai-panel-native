@@ -112,17 +112,17 @@ managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel
 
 ### Android Compatibility Modes
 
-Android 9-15 ARM64 优先启动完整 Go Core；Android 16 使用 Kotlin fallback 并分别探测 Python、Node、Shell 和依赖安装能力。x86_64 模拟器进入控制面降级模式，保留 UI、本地配置、备份、诊断和远程面板连接，跳过 ARM64 Go Core 与 runtime。fallback 对 exact cron 明确报告 unsupported，持续调度依赖 Foreground Service 与 WorkManager 恢复。
+Android 9-15 ARM64 优先启动完整 Go Core；Android 16 使用 Kotlin fallback 并分别探测 Python、Node、Shell 和依赖安装能力。ARM32 与 x86_64 多架构预研已搁置到 `shelved/multi-arch-runtime` 分支，主分支不进入相关发布矩阵。fallback 对 exact cron 明确报告 unsupported，持续调度依赖 Foreground Service 与 WorkManager 恢复。
 
 Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在后续安装操作重试。npm 安装关闭 lifecycle、audit、fund 和 update notifier；本地 tgz、URL 和 alias 通过安装前后顶层依赖变化验证。Node launcher 由 CI 使用 16 KB linker page-size 参数重新生成，并作为 preBuild runtime 门禁输入。
 
-Release 同时生成 ARM64 完整版、ARM32 控制面版、x86_64 控制面版与 universal 整合版。架构专属包通过 ABI filter 仅保留目标架构 native libraries；universal 包包含 armeabi-v7a、arm64-v8a、x86_64 的 Flutter/Go ABI，运行时按设备 ABI 选择完整 Core 或控制面降级。
+Release 生成 ARM64 完整版 APK。主分支通过 ABI filter 固定 `arm64-v8a`，确保发布链路聚焦当前稳定 runtime。
 
 ### Upstream Capability Parity
 
-`panel/server` 是 upstream 呆呆面板业务能力的移动端同源实现。ARM64 在 `:panel` 进程直接启动完整 Go Core，业务 Handler、Scheduler、Executor、SecretStore、Backup、Notification 和 Open API 与服务器项目共享代码。ARM32/x86_64 使用 Kotlin 控制面兼容层，保持任务、脚本、日志、环境变量、通知、安全管理、备份和监控的数据模型与 API 结构；需要完整 Git 仓库同步、2FA、Open API token 和原生多语言执行时，客户端引导连接远程面板。
+`panel/server` 是 upstream 呆呆面板业务能力的移动端同源实现。ARM64 在 `:panel` 进程直接启动完整 Go Core，业务 Handler、Scheduler、Executor、SecretStore、Backup、Notification 和 Open API 与服务器项目共享代码。
 
-多 ABI runtime preview 为 armeabi-v7a、arm64-v8a 和 x86_64 构建同架构 Alpine rootfs。rootfs 内交付 Python、pip、Node、npm、TypeScript、Shell、Git、SSH 和 Go toolchain，Kotlin broker 通过 PRoot 执行 guest 命令；Yaegi 以三个 ABI 的 Android PIE worker 交付。x86_64 emulator smoke 与 ARM32 物理设备 smoke 作为稳定 profile 的证据门禁。
+ARM64 runtime 通过原生 Python、Node、TypeScript 与 ARM64 Alpine rootfs fallback 承载 Shell、Git、SSH、Go toolchain 和 Yaegi。多 ABI runtime preview 保留在 `shelved/multi-arch-runtime` 分支，后续重新评估后再合入主线。
 
 `/api/local/capabilities` 返回 `backend_parity`、`native_runtime_mode`、`recommended_execution_mode` 和逐功能 capability。Flutter 根据 capability 呈现真实可用操作，避免用设备架构推断业务能力。
 

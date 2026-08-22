@@ -4,7 +4,7 @@
 
 用户只安装呆呆面板 App，即可在 Android 手机本机创建、管理和运行面板，无需准备 Docker、服务器或独立后端服务。
 
-产品面向非 Root Android，通过 GitHub Release 提供 ARM64 完整版、ARM32 控制面版、x86_64 控制面版和 universal 整合版。ARM64 App 内置面板核心、Python、Node.js、TypeScript、受控 Shell、Git 与 Go 工具链；全部架构均保留连接远程呆呆面板的能力。
+产品面向非 Root Android，通过 GitHub Release 提供 ARM64 完整版。ARM64 App 内置面板核心、Python、Node.js、TypeScript、受控 Shell、Git 与 Go 工具链；ARM32 与 x86_64 多架构预研保留在 `shelved/multi-arch-runtime` 分支。
 
 ## 已确认范围
 
@@ -23,7 +23,7 @@
 - Go Core 在运行时组件受阻时保持管理核心可用并报告 `degraded-ready`，运行时执行保持 fail-closed。
 - Kotlin fallback 提供控制面兼容 API，复用安装级 token，并严格校验回环 Host 与 Origin；能力响应逐项标记 native runtime、Git 订阅、Open API token、2FA 和多设备会话支持状态。
 - 八个 runtime ID 已统一清单、兼容性、smoke、APK 和设备证据契约。当前真实资产与设备 smoke 仍受阻。
-- Go、Flutter、Kotlin、Web、route、race 和多架构构建门禁已通过；ARM64 真机长稳与严格 16 KB 设备证据继续作为发布后补充矩阵。
+- Go、Flutter、Kotlin、Web、route、race 和 ARM64 构建门禁已通过；ARM64 真机长稳与严格 16 KB 设备证据继续作为发布后补充矩阵。
 
 ## 文档索引
 

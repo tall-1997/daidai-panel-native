@@ -8,14 +8,12 @@ cache_root="${ANDROID_ALPINE_ROOTFS_CACHE:-$HOME/.cache/daidai-android-alpine-ro
 mirror="${ALPINE_APK_MIRROR:-https://repo.huaweicloud.com/alpine}"
 release_branch="${ALPINE_RELEASE_BRANCH:-latest-stable}"
 packages="${ALPINE_ROOTFS_PACKAGES:-bash python3 py3-pip nodejs npm typescript go ca-certificates curl git openssh-client tzdata}"
-abis="${ANDROID_RUNTIME_ABIS:-armeabi-v7a arm64-v8a x86_64}"
+abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
 apk_static_bin=""
 
 alpine_arch_for_abi() {
   case "$1" in
     arm64-v8a) printf '%s\n' aarch64 ;;
-    x86_64) printf '%s\n' x86_64 ;;
-    armeabi-v7a) printf '%s\n' armv7 ;;
     *) printf 'Unsupported ABI: %s\n' "$1" >&2; exit 1 ;;
   esac
 }

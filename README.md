@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/tall-1997/daidai-panel-native)](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 [![License](https://img.shields.io/github/license/tall-1997/daidai-panel-native)](LICENSE)
 
-呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。ARM64 提供完整本地 Go Core 与运行时；ARM32、x86_64 和 universal 根据设备 ABI 自动选择本地控制面或远程面板执行模式。
+呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。当前主分支聚焦 ARM64 完整本地 Go Core 与运行时；ARM32 与 x86_64 多架构预研已搁置到 `shelved/multi-arch-runtime` 分支。
 
 当前稳定版：**v1.0.5**
 
@@ -19,9 +19,6 @@ Android versionCode：**1000050**
 - 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 - v1.0.5：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.5)
 - ARM64 完整版：`daidai-panel-native-1.0.5-release-arm64.apk`
-- ARM32 控制面版：`daidai-panel-native-1.0.5-release-arm32.apk`
-- x86_64 控制面版：`daidai-panel-native-1.0.5-release-x86_64.apk`
-- 通用整合版：`daidai-panel-native-1.0.5-release-universal.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -38,24 +35,20 @@ Android versionCode：**1000050**
 - 支持中文脚本路径、空格、引号、显式空参数和多账号变量。
 - 支持 App 内安全打开本机浏览器面板，一次性票据仅用于动态回环地址。
 - 本地接口校验安装级 Token、精确 Host、Origin、JWT、角色和权限。
-- 业务 API 以同仓库 `panel/server` 为 upstream 兼容基线；ARM64 直接运行完整 Go Core，其他架构保持控制面数据模型和 API 结构一致。
+- 业务 API 以同仓库 `panel/server` 为 upstream 兼容基线；ARM64 直接运行完整 Go Core。
 
 ## 架构与能力
 
 | 安装包 | ABI | 本地业务 API | 本地多语言运行时 | 推荐场景 |
 | --- | --- | --- | --- | --- |
 | ARM64 完整版 | `arm64-v8a` | 完整 Go Core，与 upstream 后端能力一致 | Python、Node.js、TypeScript、Shell、Git、SSH、Yaegi/Go | ARM64 手机、平板、云手机 |
-| ARM32 控制面版 | `armeabi-v7a` | Kotlin 控制面兼容 API | 按实时探测开放；完整执行推荐连接远程面板 | 32 位 ARM 老设备 |
-| x86_64 控制面版 | `x86_64` | Kotlin 控制面兼容 API | 按实时探测开放；完整执行推荐连接远程面板 | Android 模拟器、x86_64 云环境 |
-| Universal 整合版 | 三种 ABI | 按设备 ABI 自动选择 | ARM64 完整，其余架构控制面/远程模式 | 不确定设备 ABI 时安装 |
+| ARM32/x86_64 预研 | `armeabi-v7a` / `x86_64` | 已搁置 | 分支 `shelved/multi-arch-runtime` 保留历史实现 | 后续重新评估 |
 
-控制面兼容覆盖任务配置、Cron、日志、环境变量、通知、Open API 管理、安全管理、备份恢复、定时备份和系统监控。依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 ARM64 Go Core 提供；其他架构可连接远程呆呆面板获得同等执行能力。
-
-`v1.0.6` prerelease 开始为 ARM32/x86_64 交付同 ABI Alpine runtime preview，包含 Python、Node、TypeScript、Shell、Git、SSH、Go toolchain 和 Yaegi。x86_64 可通过 GitHub emulator 验证；ARM32 稳定能力需要真实 `armeabi-v7a` 设备证据，证据缺失时只发布 prerelease。
+依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 ARM64 Go Core 提供；其他架构预研暂不进入主分支发布。
 
 ## 平台边界
 
-- 正式 Release 提供 ARM64、ARM32、x86_64 与 universal 四类 APK。
+- 正式 Release 提供 ARM64 APK。
 - 本地服务仅监听 `127.0.0.1`，不会暴露到局域网。
 - Python 与 npm 纯脚本包兼容性最好。
 - 依赖 glibc、桌面 Linux API、`node-gyp` 或不兼容 Android ARM64 的原生扩展可能无法使用。
@@ -77,7 +70,7 @@ Android versionCode：**1000050**
 | 最低 Android API | 28 |
 | 目标 Android API | 35 |
 | 编译 Android API | 36 |
-| 支持 ABI | `armeabi-v7a`、`arm64-v8a`、`x86_64` |
+| 支持 ABI | `arm64-v8a` |
 
 ### 分支策略
 
@@ -190,17 +183,11 @@ PANEL_SOURCE_DIR=../panel bash scripts/build-mobile-core-aar.sh
 gradle -p app/android :app:testDebugUnitTest --no-daemon --stacktrace
 ```
 
-### 7. 构建多架构 release APK
+### 7. 构建 ARM64 release APK
 
 ```bash
 cd app
 flutter build apk --release --target-platform android-arm64
-
-DAIDAI_ANDROID_ABIS=armeabi-v7a flutter build apk --release --target-platform android-arm
-
-DAIDAI_ANDROID_ABIS=x86_64 flutter build apk --release --target-platform android-x64
-
-DAIDAI_ANDROID_ABIS=armeabi-v7a,arm64-v8a,x86_64 flutter build apk --release --target-platform android-arm,android-arm64,android-x64
 ```
 
 Flutter APK 输出：
@@ -259,7 +246,7 @@ gh workflow run android-release.yml \
 
 工作流：`.github/workflows/android-device-smoke.yml`
 
-默认执行 debug APK 构建、smoke driver 测试、x64 API 34/35 诊断和 ARM64 blocked evidence。连接 self-hosted ARM64 Android runner 后，可通过 `run_physical_device` 输入执行真机矩阵。
+默认执行 ARM64 debug APK 构建、smoke driver 测试和 ARM64 blocked evidence。连接 self-hosted ARM64 Android runner 后，可通过 `run_physical_device` 输入执行真机矩阵。
 
 ## 正式签名与发布
 

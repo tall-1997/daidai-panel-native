@@ -37,10 +37,9 @@ on:
       physical_expected_abi:
         description: Expected ABI for the connected physical device
         required: false
-        default: 'armeabi-v7a'
+        default: 'arm64-v8a'
         type: choice
         options:
-          - 'armeabi-v7a'
           - 'arm64-v8a'
   pull_request:
     paths:
@@ -90,20 +89,20 @@ jobs:
         run: |
           bash scripts/prepare-android-python-runtime.sh
           bash scripts/prepare-android-node-runtime.sh
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-alpine-rootfs.sh
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-proot-busybox.sh
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-yaegi-runtime.sh
+          bash scripts/prepare-android-alpine-rootfs.sh
+          bash scripts/prepare-android-proot-busybox.sh
+          bash scripts/prepare-android-yaegi-runtime.sh
           bash scripts/build-mobile-core-aar.sh
           flutter pub get
-      - name: Build debug application and instrumentation APKs (multi-ABI)
+      - name: Build debug application and instrumentation APKs
         working-directory: app
-        run: DAIDAI_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk --debug --target-platform android-arm64,android-x64 && DAIDAI_ANDROID_ABIS=arm64-v8a,x86_64 gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
-      - name: Verify smoke driver dry-run (x64 emulator)
+        run: flutter build apk --debug --target-platform android-arm64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
+      - name: Verify smoke driver dry-run
         run: |
           python3 scripts/android-runtime-smoke.py dry-run \
             --apk app/build/app/outputs/flutter-apk/app-debug.apk \
             --test-apk app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            --matrix-id api34-x64 --expected-api 34 --expected-page-size 4096
+            --matrix-id api35-4k --expected-api 35 --expected-page-size 4096
       - name: Test smoke driver
         run: python3 -m unittest scripts/test_android_runtime_smoke.py
       - uses: actions/upload-artifact@v4
@@ -114,120 +113,6 @@ jobs:
             app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 7
-
-  x64-emulator:
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - api: 34
-            matrix_id: api34-x64
-            target: default
-          - api: 35
-            matrix_id: api35-x64
-            target: default
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: android-runtime-smoke-apks
-          path: smoke-apks
-      - name: Enable KVM group permissions
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -la /dev/kvm || true
-      - name: Run x86_64 device smoke
-        id: emulator-smoke
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: ${{ matrix.api }}
-          arch: x86_64
-          target: ${{ matrix.target }}
-          cores: 2
-          ram-size: 4096M
-          heap-size: 1024M
-          disk-size: 8192M
-          emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          disable-animations: true
-          pre-emulator-launch-script: |
-            adb kill-server 2>/dev/null || true
-            adb start-server
-          script: >-
-            python3 scripts/android-runtime-smoke.py pre-diagnose
-            --matrix-id ${{ matrix.matrix_id }}
-            --output evidence/${{ matrix.matrix_id }}.pre-diag.json
-            &&
-            python3 scripts/android-runtime-smoke.py run
-            --apk smoke-apks/flutter-apk/app-debug.apk
-            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk
-            --matrix-id ${{ matrix.matrix_id }}
-            --expected-api ${{ matrix.api }}
-            --expected-page-size 4096
-            --output evidence/${{ matrix.matrix_id }}.json
-      - name: Capture emulator failure diagnostics
-        if: failure()
-        run: |
-          python3 scripts/android-runtime-smoke.py diagnose \
-            --matrix-id "${{ matrix.matrix_id }}" \
-            --reason "emulator-or-instrumentation-start-failed" \
-            --output "evidence/${{ matrix.matrix_id }}.diagnostics.json"
-          if [[ ! -f "evidence/${{ matrix.matrix_id }}.json" ]]; then
-            python3 scripts/android-runtime-smoke.py blocked \
-              --matrix-id "${{ matrix.matrix_id }}" \
-              --reason "emulator-or-instrumentation-start-failed;see-diagnostics" \
-              --output "evidence/${{ matrix.matrix_id }}.json"
-          fi
-      - name: Capture final emulator diagnostics and logcat
-        if: always()
-        run: |
-          if [[ ! -f "evidence/${{ matrix.matrix_id }}.diagnostics.json" ]]; then
-            python3 scripts/android-runtime-smoke.py diagnose \
-              --matrix-id "${{ matrix.matrix_id }}" \
-              --reason "post-emulator-run" \
-              --output "evidence/${{ matrix.matrix_id }}.diagnostics.json"
-          fi
-      - name: Collect panel crash logs
-        if: always()
-        run: |
-          mkdir -p evidence
-          adb -s emulator-5554 shell 'run-as com.daidai.daidai_app ls files/panel-crash-logs/' 2>/dev/null | while read f; do
-            adb -s emulator-5554 shell "run-as com.daidai.daidai_app cat files/panel-crash-logs/$f" > "evidence/panel-crash-$f" 2>/dev/null || true
-          done || true
-          adb -s emulator-5554 shell 'run-as com.daidai.daidai_app ls files/panel-crash-logs/' 2>/dev/null | while read f; do
-            adb -s emulator-5554 shell "run-as com.daidai.daidai_app:panel cat files/panel-crash-logs/$f" > "evidence/panel2-crash-$f" 2>/dev/null || true
-          done || true
-          adb -s emulator-5554 shell 'find /data/tombstones -type f -name "tombstone_*" 2>/dev/null | head -5' | while read ts; do
-            adb -s emulator-5554 shell "cat $ts" > "evidence/$(basename $ts).txt" 2>/dev/null || true
-          done || true
-      - name: Verify runtime contract evidence
-        if: always() && hashFiles(format('evidence/{0}.json', matrix.matrix_id)) != ''
-        run: go run ./scripts/verify-runtime-contract.go --smoke-evidence evidence/${{ matrix.matrix_id }}.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: android-runtime-smoke-${{ matrix.matrix_id }}
-          path: |
-            evidence/${{ matrix.matrix_id }}.json
-            evidence/${{ matrix.matrix_id }}.device.json
-            evidence/${{ matrix.matrix_id }}.diagnostics.json
-            evidence/${{ matrix.matrix_id }}.logcat.txt
-            evidence/${{ matrix.matrix_id }}.pre-diag.json
-            evidence/panel-crash-*
-            evidence/panel2-crash-*
-            evidence/tombstone_*.txt
-          if-no-files-found: warn
-          retention-days: 30
 
   physical-device:
     if: github.event_name == 'workflow_dispatch' && inputs.run_physical_device

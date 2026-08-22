@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-abis="${ANDROID_RUNTIME_ABIS:-armeabi-v7a arm64-v8a x86_64}"
+abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
 repo_base="${TERMUX_REPO_BASE:-https://packages.termux.dev/apt/termux-main}"
 cache_root="${ANDROID_PROOT_BUSYBOX_CACHE:-$HOME/.cache/daidai-android-proot-busybox}"
 work_dir="$cache_root/work-$(date +%s)-$$"
@@ -77,9 +77,7 @@ stage_binary() {
 
 termux_arch_for_abi() {
   case "$1" in
-    armeabi-v7a) printf arm ;;
     arm64-v8a) printf aarch64 ;;
-    x86_64) printf x86_64 ;;
     *) printf 'Unsupported ABI: %s\n' "$1" >&2; exit 1 ;;
   esac
 }

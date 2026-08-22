@@ -9,7 +9,7 @@ ASSET_DIR="${NODE_RUNTIME_ASSET_DIR:-$APP_ROOT/android/app/src/main/nodeAssets/n
 MANIFEST_PATH="${NODE_RUNTIME_MANIFEST:-$APP_ROOT/../runtime/manifest.json}"
 
 PRIMARY_ABI=""
-for candidate in arm64-v8a x86_64; do
+for candidate in arm64-v8a; do
   if [[ -f "$APP_ROOT/android/app/src/main/jniLibs/$candidate/libnode_exec.so" ]]; then
     PRIMARY_ABI="$candidate"
     break
@@ -65,8 +65,8 @@ for (const relative of bundleFiles) {
 }
 if (metadata.bundle_sha256 !== bundleHash.digest('hex')) fail('Node asset bundle hash mismatch');
 
-const componentIds = primaryAbi === 'arm64-v8a' ? ['node-lts-android-arm64', 'typescript-stable'] : ['node-lts-android-x64', 'typescript-stable-x64'];
-const expectedVersions = primaryAbi === 'arm64-v8a' ? [nodeVersion, typescriptVersion] : [nodeVersion, typescriptVersion];
+const componentIds = ['node-lts-android-arm64', 'typescript-stable'];
+const expectedVersions = [nodeVersion, typescriptVersion];
 for (const [i, id] of componentIds.entries()) {
   const component = manifest.components.find(item => item.id === id);
   if (!component || component.version !== expectedVersions[i] || component.abi !== primaryAbi || component.entrypoint !== 'libnode_exec.so' || component.sha256 !== metadata.launcher_sha256) fail(`${id} manifest metadata mismatch`);

@@ -2,12 +2,9 @@
   "version": "1",
   "updated_at": "2026-07-29T00:00:00Z",
   "abi": "arm64-v8a",
-  "distribution_abis": ["armeabi-v7a", "arm64-v8a", "x86_64"],
+  "distribution_abis": ["arm64-v8a"],
   "distribution_profiles": {
-    "arm64-v8a": "full-local-runtime",
-    "armeabi-v7a": "full-local-runtime-preview-requires-physical-smoke",
-    "x86_64": "full-local-runtime-preview",
-    "universal": "runtime-selected-by-device-abi"
+    "arm64-v8a": "full-local-runtime"
   },
   "container_model": "layered-linux-runtime",
   "required_checks": [

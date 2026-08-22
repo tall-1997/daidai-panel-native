@@ -15,17 +15,14 @@ EXTRACT_DIR="$WORK_DIR/extracted"
 ASSET_DIR="$ANDROID_APP_DIR/src/main/nodeAssets/node-runtime/${NODE_MOBILE_VERSION}/usr"
 declare -A JNI_DIRS
 JNI_DIRS[arm64-v8a]="$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a"
-JNI_DIRS[x86_64]="$ANDROID_APP_DIR/src/main/jniLibs/x86_64"
 declare -A LAUNCHER_OUTS
 LAUNCHER_OUTS[arm64-v8a]="${JNI_DIRS[arm64-v8a]}/libnode_exec.so"
-LAUNCHER_OUTS[x86_64]="${JNI_DIRS[x86_64]}/libnode_exec.so"
 declare -A CLANG_TARGETS
 CLANG_TARGETS[arm64-v8a]="aarch64-linux-android28-clang++"
-CLANG_TARGETS[x86_64]="x86_64-linux-android28-clang++"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/node_exec.cc"
 RUNTIME_LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/jni/nodelauncher.c"
 
-for ABI in arm64-v8a x86_64; do
+for ABI in arm64-v8a; do
   mkdir -p "${JNI_DIRS[$ABI]}"
 done
 mkdir -p "$WORK_DIR" "$EXTRACT_DIR" "$ASSET_DIR"
@@ -36,7 +33,7 @@ fi
 
 unzip -q -o "$ARCHIVE_PATH" -d "$EXTRACT_DIR"
 
-for ABI in arm64-v8a x86_64; do
+for ABI in arm64-v8a; do
   if [[ ! -s "$EXTRACT_DIR/bin/${ABI}/libnode.so" ]]; then
     printf 'nodejs-mobile %s libnode.so not found in %s; skipping\n' "$ABI" "$ARCHIVE_PATH" >&2
     continue
@@ -65,7 +62,7 @@ for candidate_base in \
   if [[ -d "$candidate_base" ]]; then NDK_TOOLCHAIN="$candidate_base"; break; fi
 done
 
-for ABI in arm64-v8a x86_64; do
+for ABI in arm64-v8a; do
   launcher_target="${CLANG_TARGETS[$ABI]}"
   jni_dir="${JNI_DIRS[$ABI]}"
   if [[ ! -f "$jni_dir/libnode.so" ]]; then continue; fi

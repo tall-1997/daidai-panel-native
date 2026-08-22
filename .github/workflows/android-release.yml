@@ -225,29 +225,6 @@ jobs:
           Path("runtime/smoke-evidence.json").write_bytes(strict_evidence.read_bytes())
           PY
 
-      - name: Require trusted ARM32 evidence for stable multi-ABI release
-        if: github.event_name == 'workflow_dispatch' && inputs.release_channel == 'stable'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          DEVICE_RUN_ID="$(gh api \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/android-device-smoke.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
-          test -n "${DEVICE_RUN_ID}"
-          mkdir -p release/arm32-physical
-          gh run download "${DEVICE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'android-runtime-smoke-physical-armeabi-v7a-verified' --dir release/arm32-physical
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          files = list(Path('release/arm32-physical').rglob('*.device.json'))
-          if len(files) != 1:
-              raise SystemExit('stable multi-ABI release requires one trusted ARM32 device evidence file')
-          evidence = json.loads(files[0].read_text())
-          if evidence.get('status') != 'verified' or evidence.get('device', {}).get('abi') != 'armeabi-v7a':
-              raise SystemExit('ARM32 physical-device evidence is not verified')
-          PY
-
       - name: Import cloud device evidence for signed release
         if: steps.version.outputs.signing_required == 'true' && steps.version.outputs.strict != 'true'
         env:
@@ -292,12 +269,12 @@ jobs:
         working-directory: app
         run: bash scripts/prepare-android-node-runtime.sh
 
-      - name: Prepare multi-ABI Linux runtimes
+      - name: Prepare Android Linux runtime
         working-directory: app
         run: |
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-alpine-rootfs.sh
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-proot-busybox.sh
-          ANDROID_RUNTIME_ABIS='armeabi-v7a arm64-v8a x86_64' bash scripts/prepare-android-yaegi-runtime.sh
+          bash scripts/prepare-android-alpine-rootfs.sh
+          bash scripts/prepare-android-proot-busybox.sh
+          bash scripts/prepare-android-yaegi-runtime.sh
 
       - name: Test embedded Go core
         working-directory: panel/server
@@ -380,16 +357,9 @@ jobs:
       - name: Build installable release APK
         working-directory: app
         run: |
-          build_apk() {
-            LABEL="$1" ABIS="$2" TARGETS="$3"
-            DAIDAI_ANDROID_ABIS="${ABIS}" flutter build apk --release --target-platform "${TARGETS}" \
-              --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
-            cp build/app/outputs/flutter-apk/app-release.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${LABEL}.apk"
-          }
-          build_apk arm64 arm64-v8a android-arm64
-          build_apk arm32 armeabi-v7a android-arm
-          build_apk x86_64 x86_64 android-x64
-          build_apk universal armeabi-v7a,arm64-v8a,x86_64 android-arm,android-arm64,android-x64
+          flutter build apk --release --target-platform android-arm64 \
+            --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
+          cp build/app/outputs/flutter-apk/app-release.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk"
 
       - name: Extract and verify APK runtime metadata
         shell: bash
@@ -413,7 +383,7 @@ jobs:
             --smoke-evidence ./runtime/smoke-evidence.json \
             --apk "${APK_SOURCE}" \
             "${STRICT_ARGS[@]}"
-          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-{arm64,arm32,x86_64,universal}.apk; do
+          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk; do
             sha256sum "${APK}" > "${APK}.sha256"
           done
 
@@ -426,7 +396,7 @@ jobs:
             printf 'Android SDK apksigner was not found\n' >&2
             exit 1
           fi
-          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-{arm64,arm32,x86_64,universal}.apk; do "${APKSIGNER}" verify "${APK}"; done
+          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk; do "${APKSIGNER}" verify "${APK}"; done
           APK_CERT_SHA256="$("${APKSIGNER}" verify --print-certs "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
             | sed -n 's/.*certificate SHA-256 digest: *//p' \
             | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' \
@@ -448,10 +418,10 @@ jobs:
             --arg packageName com.daidai.daidai_app \
             --arg version "${VERSION}" \
             --argjson versionCode "${ANDROID_VERSION_CODE}" \
-            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-universal.apk" \
-            --arg name "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-universal.apk" \
-            --arg sha256 "$(sha256sum "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-universal.apk" | cut -d ' ' -f1)" \
-            --argjson size "$(stat -c '%s' "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-universal.apk")" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
+            --arg name "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
+            --arg sha256 "$(sha256sum "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" | cut -d ' ' -f1)" \
+            --argjson size "$(stat -c '%s' "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk")" \
             '{schemaVersion: 1, packageName: $packageName, version: $version, versionCode: $versionCode, releaseNotes: "", full: {url: $url, name: $name, size: $size, sha256: $sha256}, patches: []}' \
             > android-update.json
           python3 scripts/version.py check --manifest android-update.json
@@ -518,7 +488,7 @@ jobs:
           cat > release-notes.md <<'EOF'
           # 呆呆面板本机版 v${{ needs.verify-build.outputs.version }}
 
-          - 提供 ARM64 完整版、ARM32 控制面版、x86_64 控制面版和 universal 整合版。
+          - 提供 ARM64 完整版 APK。
           - ARM64 提供完整 Go Core 与本地运行时；其他架构按实时能力探测进入控制面降级模式。
           - App 内嵌 Go 面板 Core，使用动态回环端口。
           - 支持本地管理员初始化、认证和任务管理 API。

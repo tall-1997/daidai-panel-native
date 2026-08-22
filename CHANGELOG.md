@@ -1,18 +1,12 @@
 # Changelog
 
-## v1.0.6 Preview - 2026-08-22
+## Unreleased
 
-### 多 ABI 完整运行时预览
+### 架构范围
 
-- 新增 armeabi-v7a、arm64-v8a、x86_64 三 ABI Alpine rootfs 构建链。
-- rootfs 内置 Python、pip、Node、npm、TypeScript、Shell、Git、SSH 和 Go toolchain。
-- 新增三 ABI PRoot、BusyBox 和动态依赖 SHA-256 校验与 staging。
-- 新增三 ABI Yaegi Android worker 构建模块。
-- Kotlin broker 在专用 runtime 缺失时使用同 ABI guest 执行 Python、Node、TypeScript 和 Go。
-- rootfs 安装增加归档 SHA-256 校验、hardlink 延迟恢复和原子失败清理。
-- Go Core 开放 ARM32/x86_64 启动探测；实际稳定性由对应设备证据决定。
-- x86_64 rootfs 和 PRoot 构建已通过主机侧验证。
-- ARM32 stable 能力仍需真实 armeabi-v7a 设备完成 smoke，因此本版本标记为 prerelease。
+- 暂停 ARM32 与 x86_64 多架构 runtime 预研在主分支的集成。
+- 将多架构预研代码保留到 `shelved/multi-arch-runtime` 分支。
+- 主分支发布链路重新聚焦 ARM64 完整本地 Go Core 与运行时。
 
 ## v1.0.5 - 2026-08-22
 
