@@ -24,6 +24,8 @@ const _apiScopeOptions = [
   _ApiScopeOption('subscriptions', '订阅管理', '管理订阅仓库和文件'),
   _ApiScopeOption('logs', '日志查看', '读取执行日志和流式输出'),
   _ApiScopeOption('system', '系统信息', '读取系统信息和状态数据'),
+  _ApiScopeOption('backup', '备份恢复', '创建、下载和恢复面板备份'),
+  _ApiScopeOption('notifications', '通知推送', '调用已配置的通知渠道'),
 ];
 
 Future<({List<Map<String, dynamic>> items, int total})> _loadOpenApiLogPage(

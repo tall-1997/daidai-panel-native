@@ -56,7 +56,7 @@ void main() {
         '0 30 * * *',
         '0 0 * * *',
       ]);
-      expect(task.toJson()['cron_expression'], '0 0 * * *');
+      expect(task.toJson()['cron_expression'], '0 0 * * *\n0 30 * * *\n0 0 * * *');
       expect(task.toJson()['cron_expressions'], [
         '0 0 * * *',
         '0 30 * * *',
@@ -66,7 +66,7 @@ void main() {
 
     test('normalizes multiline Cron form input without deduplication', () {
       expect(Task.cronPayload('  a  \n\n b\r\na\n'), {
-        'cron_expression': 'a',
+        'cron_expression': 'a\nb\na',
         'cron_expressions': ['a', 'b', 'a'],
       });
       expect(taskFrom({}).effectiveCronExpressions, ['* * * * *']);

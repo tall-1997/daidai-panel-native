@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -20,6 +22,7 @@ class DashboardPage extends ConsumerStatefulWidget {
 
 class _DashboardPageState extends ConsumerState<DashboardPage> {
   String? _serverUrl;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
@@ -33,7 +36,16 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         await ref.read(authProvider.notifier).refreshUser();
       }
       _silentUpdateCheck();
+      _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (mounted) ref.read(dashboardProvider.notifier).load();
+      });
     });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   String? _buildAvatarUrl(String? avatarPath) {

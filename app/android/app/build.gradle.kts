@@ -38,6 +38,12 @@ val hasReleaseSigning =
         !releaseKeyAlias.isNullOrEmpty() &&
         !releaseKeyPassword.isNullOrEmpty()
 val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
+val requestedAbis = System.getenv("DAIDAI_ANDROID_ABIS")
+    ?.split(',')
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.takeIf(List<String>::isNotEmpty)
+    ?: listOf("arm64-v8a")
 
 check(!requireReleaseSigning || hasReleaseSigning) {
     "Release signing is required, but KEYSTORE_FILE, KEYSTORE_PASSWORD, KEYSTORE_ALIAS, or KEYSTORE_KEY_PASSWORD is missing."
@@ -68,7 +74,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += requestedAbis
         }
     }
 
@@ -103,6 +109,14 @@ android {
 
     androidResources {
         ignoreAssetsPattern = "android-daidai-do-not-ignore-python-stdlib"
+    }
+
+    if ("arm64-v8a" !in requestedAbis) {
+        sourceSets.getByName("main").assets.exclude(
+            "python-runtime/**",
+            "node-runtime/**",
+            "android-runtime/**",
+        )
     }
 
     lint {

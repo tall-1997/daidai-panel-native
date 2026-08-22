@@ -64,6 +64,7 @@ class LocalPanelStore(
     private val scriptRunPendingPersistence = ConcurrentHashMap<String, Int>()
     private val scriptRunLocks = ConcurrentHashMap<String, Any>()
     private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
+    @Volatile private var lastScheduledBackupKey = ""
 
     internal data class LocalScriptResult(
         val logs: JSONArray,
@@ -1164,7 +1165,7 @@ class LocalPanelStore(
                 reinstallDependencies(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("dependencies", dependencyRows(session))
             session.method == NanoHTTPD.Method.POST && id == null -> createDependencies(body(session))
-            id != null && session.method == NanoHTTPD.Method.DELETE -> delete("dependencies", id)
+            id != null && session.method == NanoHTTPD.Method.DELETE -> deleteDependency(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖接口尚未实现")
         }
     }
@@ -1749,7 +1750,8 @@ fun serveDashboardStats(): JSONObject {
 
     private fun taskRunStatusCode(value: String): Any = when (value.trim().lowercase()) {
         "success" -> 0
-        "failed", "aborted", "stopped" -> 1
+        "failed" -> 1
+        "aborted", "stopped" -> 2
         "running" -> 2
         else -> JSONObject.NULL
     }
@@ -2183,7 +2185,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun executeStructuredCommand(command: String, taskId: Long? = null, onLine: ((String) -> Unit)? = null): LocalScriptResult {
+    private fun executeStructuredCommand(command: String, taskId: Long? = null, onLine: ((String) -> Unit)? = null, timeoutSeconds: Long = 300): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing shell command: $command")
         onLine?.invoke("Android local fallback executing shell command: $command")
         val parts = try { LocalTaskFallbackSemantics.tokenize(command) } catch (error: IllegalArgumentException) {
@@ -2209,7 +2211,12 @@ fun serveDashboardStats(): JSONObject {
                 }
             }
             output.takeLast(100).forEach { logs.put(it) }
-            val code = process.waitFor()
+            val finished = process.waitFor(timeoutSeconds.coerceAtLeast(1), TimeUnit.SECONDS)
+            if (!finished) {
+                terminateTaskProcess(process)
+                return LocalScriptResult(logs.put("Task timed out after $timeoutSeconds seconds"), "failed", true, 124)
+            }
+            val code = process.exitValue()
             val status = if (code == 0) "success" else "failed"
             LocalScriptResult(logs, status, true, code)
         } catch (e: Exception) {
@@ -2858,6 +2865,11 @@ fun serveDashboardStats(): JSONObject {
             put("python_version", json.optString("python_version"))
             put("task_before", json.optString("task_before"))
             put("task_after", json.optString("task_after"))
+            put("timeout", json.optInt("timeout", 0).coerceIn(0, 604800))
+            put("max_retries", json.optInt("max_retries", 0).coerceIn(0, 20))
+            put("retry_interval", json.optInt("retry_interval", 60).coerceIn(0, 86400))
+            if (json.has("depends_on") && !json.isNull("depends_on")) put("depends_on", json.optLong("depends_on"))
+            put("stop_schedule", json.optString("stop_schedule"))
             put("notify_on_failure", if (json.optBoolean("notify_on_failure")) 1 else 0)
             put("notify_on_success", if (json.optBoolean("notify_on_success")) 1 else 0)
             put("notify_on_abort", if (json.optBoolean("notify_on_abort")) 1 else 0)
@@ -2884,6 +2896,11 @@ fun serveDashboardStats(): JSONObject {
                 put("python_version", cursor.string("python_version"))
                 put("task_before", cursor.string("task_before"))
                 put("task_after", cursor.string("task_after"))
+                put("timeout", cursor.int("timeout"))
+                put("max_retries", cursor.int("max_retries"))
+                put("retry_interval", cursor.int("retry_interval"))
+                put("depends_on", if (cursor.isNull(cursor.getColumnIndexOrThrow("depends_on"))) JSONObject.NULL else cursor.long("depends_on"))
+                put("stop_schedule", cursor.string("stop_schedule"))
                 put("notify_on_failure", cursor.int("notify_on_failure") != 0)
                 put("notify_on_success", cursor.int("notify_on_success") != 0)
                 put("notify_on_abort", cursor.int("notify_on_abort") != 0)
@@ -2909,7 +2926,7 @@ fun serveDashboardStats(): JSONObject {
             return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道不存在")
         }
         val values = ContentValues().apply {
-            listOf("name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after").forEach { key ->
+            listOf("name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after", "stop_schedule").forEach { key ->
                 if (json.has(key)) put(key, json.optString(key))
             }
             listOf("notify_on_failure", "notify_on_success", "notify_on_abort").forEach { key ->
@@ -2920,6 +2937,8 @@ fun serveDashboardStats(): JSONObject {
                 else if (channelId == null) putNull("notification_channel_id") else put("notification_channel_id", channelId)
             }
             if (json.has("status")) put("status", json.optDouble("status"))
+            listOf("timeout", "max_retries", "retry_interval").forEach { key -> if (json.has(key)) put(key, json.optInt(key)) }
+            if (json.has("depends_on")) { if (json.isNull("depends_on")) putNull("depends_on") else put("depends_on", json.optLong("depends_on")) }
             if (json.has("labels")) put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("updated_at", Instant.now().toString())
         }
@@ -3012,7 +3031,7 @@ fun serveDashboardStats(): JSONObject {
     private fun finishTaskLog(taskId: Long, logId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant) {
         val values = ContentValues().apply {
             put("content", (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) })
-            put("logs_json", result.logs.toString()); put("status", if (result.status == "success") 0 else 1)
+            put("logs_json", result.logs.toString()); put("status", when (result.status) { "success" -> 0; "aborted", "stopped" -> 2; else -> 1 })
             if (result.exitCode == null) putNull("exit_code") else put("exit_code", result.exitCode)
             put("duration", (endedAt.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0)
             put("ended_at", endedAt.toString())
@@ -3022,13 +3041,49 @@ fun serveDashboardStats(): JSONObject {
     }
 
     internal data class ScheduledTask(val id: Long, val cronExpression: String)
+    internal data class ScheduledTaskStop(val id: Long, val stopSchedule: String)
 
     internal fun enabledScheduledTasks(): List<ScheduledTask> {
         val tasks = mutableListOf<ScheduledTask>()
-        readableDatabase.query("tasks", arrayOf("id", "cron_expression"), "status > 0 AND cron_expression <> ''", null, null, null, null).use { cursor ->
+        readableDatabase.query("tasks", arrayOf("id", "cron_expression"), "status > 0 AND task_type='cron' AND cron_expression <> ''", null, null, null, null).use { cursor ->
             while (cursor.moveToNext()) tasks += ScheduledTask(cursor.long("id"), cursor.string("cron_expression"))
         }
         return tasks
+    }
+
+    internal fun scheduledTaskStops(): List<ScheduledTaskStop> {
+        val tasks = mutableListOf<ScheduledTaskStop>()
+        readableDatabase.query("tasks", arrayOf("id", "stop_schedule"), "status > 0 AND stop_schedule <> ''", null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) tasks += ScheduledTaskStop(cursor.long("id"), cursor.string("stop_schedule"))
+        }
+        return tasks
+    }
+
+    internal fun stopScheduledTask(id: Long) {
+        taskAbortRequested.add(id)
+        taskProcesses[id]?.let(::terminateTaskProcess)
+    }
+
+    internal fun runScheduledBackupIfDue(now: java.time.ZonedDateTime) {
+        if (!configBool("backup_schedule_enabled", false)) return
+        val clock = configValue("backup_schedule_time", "03:00").split(':')
+        val hour = clock.getOrNull(0)?.toIntOrNull() ?: return
+        val minute = clock.getOrNull(1)?.toIntOrNull() ?: return
+        if (now.hour != hour || now.minute != minute) return
+        val frequency = configValue("backup_schedule_frequency", "daily")
+        val matches = when (frequency) {
+            "weekly" -> now.dayOfWeek.value % 7 == configValue("backup_schedule_weekday", "0").toIntOrNull()
+            "monthly" -> now.dayOfMonth == configValue("backup_schedule_monthday", "1").toIntOrNull()
+            else -> frequency == "daily"
+        }
+        if (!matches) return
+        val key = "$frequency:${now.toLocalDate()}:$hour:$minute"
+        if (key == lastScheduledBackupKey) return
+        lastScheduledBackupKey = key
+        runCatching {
+            localBackupService.create(JSONObject().put("password", configValue("backup_schedule_password", "")))
+        }.onSuccess { appLog("Backup", "Scheduled backup completed: ${it.optString("filename")}") }
+            .onFailure { appLog("Backup", "Scheduled backup failed: ${it.message ?: it.javaClass.simpleName}") }
     }
 
     private fun enqueueTask(id: Long): Boolean {
@@ -3200,7 +3255,7 @@ fun serveDashboardStats(): JSONObject {
     private fun runTaskNow(id: Long, onLine: ((String) -> Unit)? = null): LocalScriptResult {
         return readableDatabase.query(
             "tasks",
-            arrayOf("command", "name", "task_before", "task_after"),
+            arrayOf("command", "name", "task_before", "task_after", "timeout", "max_retries", "retry_interval", "depends_on"),
             "id = ?",
             arrayOf(id.toString()),
             null,
@@ -3213,13 +3268,23 @@ fun serveDashboardStats(): JSONObject {
             val command = cursor.string("command").trim()
             val before = cursor.string("task_before").trim()
             val after = cursor.string("task_after").trim()
+            val timeout = cursor.int("timeout").takeIf { it > 0 }?.toLong() ?: 300L
+            val maxRetries = cursor.int("max_retries").coerceIn(0, 20)
+            val retryInterval = cursor.int("retry_interval").coerceIn(0, 86400)
+            val dependsIndex = cursor.getColumnIndexOrThrow("depends_on")
+            if (!cursor.isNull(dependsIndex)) {
+                val dependencyID = cursor.getLong(dependsIndex)
+                val dependencySucceeded = readableDatabase.query("tasks", arrayOf("last_run_status"), "id=?", arrayOf(dependencyID.toString()), null, null, null).use { dep -> dep.moveToFirst() && dep.string("last_run_status") == "success" }
+                if (!dependencySucceeded) return@use LocalScriptResult(JSONArray().put("依赖任务不存在或上次执行未成功"), "failed", true, 3)
+            }
             val logs = JSONArray()
             if (before.isNotEmpty()) {
                 val hook = executeHookCommand(before, id) { line -> onLine?.invoke("[before] $line") }
                 logs.put("[before] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[before] ${hook.logs.optString(i)}")
             }
-            val main = if (taskAbortRequested.contains(id)) {
+            fun runMain(): LocalScriptResult {
+                return if (taskAbortRequested.contains(id)) {
                 LocalScriptResult(JSONArray().put("Task aborted before main command"), "aborted", true, 130)
             } else if (Regex("^task(?:\\s|$)").containsMatchIn(command)) {
                 val plan = try {
@@ -3227,13 +3292,13 @@ fun serveDashboardStats(): JSONObject {
                         runCatching { scriptFile(candidate).isFile }.getOrDefault(false)
                     }
                 } catch (error: IllegalArgumentException) {
-                    return@use LocalScriptResult(logs.put(error.message ?: "任务命令无效"), "failed", true, 2)
+                    return LocalScriptResult(JSONArray().put(error.message ?: "任务命令无效"), "failed", true, 2)
                 }
                 val file = scriptFile(plan.scriptPath)
                 val environments = try {
                     LocalTaskFallbackSemantics.taskEnvironments(plan, runtimeEnvironment(file.parentFile ?: scriptsRoot()))
                 } catch (error: IllegalArgumentException) {
-                    return@use LocalScriptResult(logs.put(error.message ?: "任务环境无效"), "failed", true, 2)
+                    return LocalScriptResult(JSONArray().put(error.message ?: "任务环境无效"), "failed", true, 2)
                 }
                 var result = LocalScriptResult(JSONArray(), "success", true, 0)
                 for (selected in environments) {
@@ -3241,13 +3306,22 @@ fun serveDashboardStats(): JSONObject {
                         { line -> onLine?.invoke("[${plan.envName}#${selected.index}] $line") }
                     } else onLine
                     result = executeWithAutoInstall(id, runtimeForFile(file), prefixedOutput) {
-                        executeScriptFile(file, plan.scriptPath, args = plan.scriptArgs, timeoutSeconds = plan.timeoutSeconds, extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
+                        executeScriptFile(file, plan.scriptPath, args = plan.scriptArgs, timeoutSeconds = minOf(plan.timeoutSeconds, timeout), extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
                     }
                     if (result.status != "success") break
                 }
                 result
             } else {
-                executeWithAutoInstall(id, runtimeForCommand(command), onLine) { executeStructuredCommand(command, id, onLine) }
+                executeWithAutoInstall(id, runtimeForCommand(command), onLine) { executeStructuredCommand(command, id, onLine, timeout) }
+                }
+            }
+            var main = runMain()
+            var retry = 0
+            while (main.status == "failed" && retry < maxRetries && !taskAbortRequested.contains(id)) {
+                retry++
+                logs.put("[第 $retry 次重试，等待 $retryInterval 秒]")
+                if (retryInterval > 0) Thread.sleep(retryInterval * 1000L)
+                if (!taskAbortRequested.contains(id)) main = runMain()
             }
             for (i in 0 until main.logs.length()) logs.put(main.logs.optString(i))
             // after always runs, including when the main command failed. Its failure is diagnostic only.
@@ -3539,22 +3613,28 @@ fun serveDashboardStats(): JSONObject {
 
     private fun importEnvs(json: JSONObject): NanoHTTPD.Response {
         val envs = json.optJSONArray("envs") ?: json.optJSONArray("data") ?: JSONArray()
+        val mode = json.optString("mode", "merge").trim().lowercase()
+        if (mode !in setOf("merge", "replace")) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "导入模式仅支持 merge 或 replace")
         val errors = JSONArray()
         var imported = 0
-        for (index in 0 until envs.length()) {
-            val item = envs.optJSONObject(index)
-            if (item == null) {
-                errors.put("第 ${index + 1} 条变量格式无效")
-                continue
-            }
-            runCatching {
+        val items = (0 until envs.length()).map { index ->
+            envs.optJSONObject(index)?.also { require(it.optString("name").isNotBlank()) { "第 ${index + 1} 条变量名为空" } }
+                ?: throw IllegalArgumentException("第 ${index + 1} 条变量格式无效")
+        }
+        writableDatabase.beginTransaction()
+        try {
+            if (mode == "replace") writableDatabase.delete("envs", null, null)
+            for (item in items) {
                 upsertEnv(item)
                 imported++
-            }.onFailure { error ->
-                errors.put("${item.optString("name", "第 ${index + 1} 条")}: ${error.message ?: "导入失败"}")
             }
+            writableDatabase.setTransactionSuccessful()
+        } catch (error: Exception) {
+            errors.put(error.message ?: "导入失败")
+        } finally {
+            writableDatabase.endTransaction()
         }
-        return ok(JSONObject().put("message", "已导入 $imported 个环境变量").put("imported", imported).put("errors", errors).put("data", JSONObject().put("imported", imported).put("errors", errors)))
+        return ok(JSONObject().put("message", "已按 $mode 模式导入 $imported 个环境变量").put("mode", mode).put("imported", imported).put("errors", errors).put("data", JSONObject().put("mode", mode).put("imported", imported).put("errors", errors)))
     }
 
     private fun upsertEnv(json: JSONObject) {
@@ -3569,7 +3649,8 @@ fun serveDashboardStats(): JSONObject {
             put("groups_json", normalizeGroups(json).toString())
             put("updated_at", now)
         }
-        val existing = readableDatabase.query("envs", arrayOf("id"), "name = ?", arrayOf(name), null, null, null).use { cursor ->
+        val remarks = json.optString("remarks")
+        val existing = readableDatabase.query("envs", arrayOf("id"), "name = ? AND remarks = ?", arrayOf(name, remarks), null, null, null).use { cursor ->
             if (cursor.moveToFirst()) cursor.long("id") else 0L
         }
         if (existing > 0) {
@@ -3982,6 +4063,19 @@ fun serveDashboardStats(): JSONObject {
             statuses.put(JSONObject().put("id", id).put("status", if (result.first) "removed" else "failed").put("log", result.second))
         }
         return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
+    }
+
+    private fun deleteDependency(id: Long): NanoHTTPD.Response {
+        val record = readableDatabase.query("dependencies", arrayOf("name", "type"), "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.string("name") to cursor.string("type") else null
+        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
+        val result = uninstallDependencyForFallback(record.second, record.first)
+        if (!result.first) {
+            updateDependencyRecord(id, "failed", result.second, "")
+            return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, result.second.ifBlank { "物理卸载失败" })
+        }
+        writableDatabase.delete("dependencies", "id=?", arrayOf(id.toString()))
+        return ok(JSONObject().put("message", "卸载成功").put("data", JSONObject().put("id", id).put("status", "removed")))
     }
 
     private fun uninstallDependencyForFallback(depType: String, name: String): Pair<Boolean, String> {

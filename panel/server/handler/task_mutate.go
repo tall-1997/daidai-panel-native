@@ -40,6 +40,43 @@ func normalizeTaskRandomDelaySecondsValue(value interface{}) (*int, error) {
 	}
 }
 
+func validateTaskExecutionOptions(taskID uint, timeout, maxRetries, retryInterval int, dependsOn *uint, stopSchedule string) error {
+	if timeout < 0 || timeout > 7*24*60*60 {
+		return fmt.Errorf("任务超时需在 0-604800 秒之间")
+	}
+	if maxRetries < 0 || maxRetries > 20 {
+		return fmt.Errorf("重试次数需在 0-20 之间")
+	}
+	if retryInterval < 0 || retryInterval > 24*60*60 {
+		return fmt.Errorf("重试间隔需在 0-86400 秒之间")
+	}
+	if strings.TrimSpace(stopSchedule) != "" {
+		if err := panelcron.ValidateExpressions(panelcron.NormalizeExpressions(stopSchedule)); err != nil {
+			return fmt.Errorf("定时停止表达式无效: %w", err)
+		}
+	}
+	if dependsOn != nil {
+		if *dependsOn == 0 || (taskID > 0 && *dependsOn == taskID) {
+			return fmt.Errorf("任务依赖不能指向自身")
+		}
+		var dependency model.Task
+		if err := database.DB.First(&dependency, *dependsOn).Error; err != nil {
+			return fmt.Errorf("依赖任务不存在")
+		}
+		seen := map[uint]bool{taskID: true}
+		for dependency.DependsOn != nil {
+			if seen[*dependency.DependsOn] {
+				return fmt.Errorf("任务依赖存在循环")
+			}
+			seen[*dependency.DependsOn] = true
+			if err := database.DB.First(&dependency, *dependency.DependsOn).Error; err != nil {
+				return fmt.Errorf("依赖链包含不存在的任务")
+			}
+		}
+	}
+	return nil
+}
+
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req struct {
 		Name                   string   `json:"name" binding:"required"`
@@ -174,7 +211,11 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		task.SchedulePolicy = policy
 	}
 	if req.StopSchedule != nil {
-		task.StopSchedule = *req.StopSchedule
+		task.StopSchedule = panelcron.NormalizeExpressions(*req.StopSchedule)
+	}
+	if err := validateTaskExecutionOptions(0, task.Timeout, task.MaxRetries, task.RetryInterval, task.DependsOn, task.StopSchedule); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 	if err := database.DB.Select("*").Create(&task).Error; err != nil {
 		response.InternalError(c, "创建任务失败")
@@ -284,6 +325,9 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		req["schedule_policy"] = value
 	}
+	if value, ok := req["stop_schedule"].(string); ok {
+		req["stop_schedule"] = panelcron.NormalizeExpressions(value)
+	}
 
 	allowedFields := map[string]bool{
 		"name": true, "command": true, "python_version": true, "cron_expression": true,
@@ -321,6 +365,35 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		if allowedFields[key] {
 			updates[key] = value
 		}
+	}
+	resolvedTimeout := task.Timeout
+	resolvedRetries := task.MaxRetries
+	resolvedRetryInterval := task.RetryInterval
+	resolvedDependsOn := task.DependsOn
+	resolvedStopSchedule := task.StopSchedule
+	if value, ok := updates["timeout"].(float64); ok {
+		resolvedTimeout = int(value)
+	}
+	if value, ok := updates["max_retries"].(float64); ok {
+		resolvedRetries = int(value)
+	}
+	if value, ok := updates["retry_interval"].(float64); ok {
+		resolvedRetryInterval = int(value)
+	}
+	if value, exists := updates["depends_on"]; exists {
+		if value == nil {
+			resolvedDependsOn = nil
+		} else if numeric, ok := value.(float64); ok {
+			id := uint(numeric)
+			resolvedDependsOn = &id
+		}
+	}
+	if value, ok := updates["stop_schedule"].(string); ok {
+		resolvedStopSchedule = value
+	}
+	if err := validateTaskExecutionOptions(uint(taskID), resolvedTimeout, resolvedRetries, resolvedRetryInterval, resolvedDependsOn, resolvedStopSchedule); err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 
 	// 用户在面板手动改过任务名或定时 → 打上订阅锁：之后订阅同步不再覆盖 name/cron，

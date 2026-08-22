@@ -8,17 +8,20 @@
 
 呆呆面板 Android 本机版面向普通非 Root ARM64 Android 设备。安装一个 APK 即可运行自包含本地面板，同时保留远程面板连接能力，无需 Docker、Termux 或独立服务器。
 
-当前稳定版：**v1.0.3**
+当前稳定版：**v1.0.4**
 
-Android versionCode：**1000030**
+Android versionCode：**1000040**
 
 默认分支：**main**
 
 ## 下载
 
 - 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
-- v1.0.3：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.3)
-- ARM64 APK：`daidai-panel-native-1.0.3-release-arm64.apk`
+- v1.0.4：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.4)
+- ARM64 完整版：`daidai-panel-native-1.0.4-release-arm64.apk`
+- ARM32 控制面版：`daidai-panel-native-1.0.4-release-arm32.apk`
+- x86_64 控制面版：`daidai-panel-native-1.0.4-release-x86_64.apk`
+- 通用整合版：`daidai-panel-native-1.0.4-release-universal.apk`
 - APK SHA-256：`668d8632086b0ec5cd1ebec6a96be4ee58ff84ac693ceb8d5c01b4f062b1c440`
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -54,7 +57,7 @@ Android versionCode：**1000030**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.3` |
+| 当前稳定标签 | `v1.0.4` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 28 |

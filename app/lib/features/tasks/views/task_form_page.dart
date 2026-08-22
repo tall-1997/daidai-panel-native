@@ -74,6 +74,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   late final TextEditingController _dependsOnC;
   late final TextEditingController _taskBeforeC;
   late final TextEditingController _taskAfterC;
+  late final TextEditingController _stopScheduleC;
   late final TextEditingController _labelC;
   late final TextEditingController _groupC;
 
@@ -132,6 +133,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     );
     _taskBeforeC = TextEditingController(text: task?.taskBefore ?? '');
     _taskAfterC = TextEditingController(text: task?.taskAfter ?? '');
+    _stopScheduleC = TextEditingController(text: task?.stopSchedule ?? '');
     _labelC = TextEditingController();
     _groupC = TextEditingController(text: task?.groupName ?? '');
 
@@ -146,7 +148,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       ..clear()
       ..addAll(task?.userLabelsForDisplay ?? const []);
     _randomDelayMode = _resolveRandomDelayMode(task?.randomDelaySeconds);
-    _showHooks = _taskBeforeC.text.isNotEmpty || _taskAfterC.text.isNotEmpty;
+    _showHooks = _taskBeforeC.text.isNotEmpty || _taskAfterC.text.isNotEmpty || _stopScheduleC.text.isNotEmpty;
 
     Future.microtask(() async {
       await Future.wait([
@@ -173,6 +175,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       _dependsOnC,
       _taskBeforeC,
       _taskAfterC,
+      _stopScheduleC,
       _labelC,
       _groupC,
     ]) {
@@ -472,6 +475,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       'depends_on': int.tryParse(_dependsOnC.text.trim()),
       'task_before': _taskBeforeC.text.trim(),
       'task_after': _taskAfterC.text.trim(),
+      'stop_schedule': _stopScheduleC.text.trim(),
       'allow_multiple_instances': _allowMultipleInstances,
     };
 
@@ -1041,7 +1045,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                               ),
                             ),
                             if (_taskBeforeC.text.isNotEmpty ||
-                                _taskAfterC.text.isNotEmpty)
+                                _taskAfterC.text.isNotEmpty ||
+                                _stopScheduleC.text.isNotEmpty)
                               Container(
                                 margin: const EdgeInsets.only(left: 8),
                                 width: 6,
@@ -1090,6 +1095,16 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                               ),
                               minLines: 3,
                               maxLines: 5,
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _stopScheduleC,
+                              decoration: const InputDecoration(
+                                labelText: '定时停止 Cron',
+                                hintText: '例如 0 8 * * *，留空表示不定时停止。',
+                                helperText: '命中表达式时停止该任务当前运行实例。',
+                              ),
+                              maxLines: 2,
                             ),
                           ],
                         ),

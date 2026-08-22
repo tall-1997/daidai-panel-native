@@ -86,7 +86,7 @@ jobs:
           flutter pub get
       - name: Build debug application and instrumentation APKs (multi-ABI)
         working-directory: app
-        run: flutter build apk --debug --target-platform android-arm64,android-x64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
+        run: DAIDAI_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk --debug --target-platform android-arm64,android-x64 && DAIDAI_ANDROID_ABIS=arm64-v8a,x86_64 gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
       - name: Verify smoke driver dry-run (x64 emulator)
         run: |
           python3 scripts/android-runtime-smoke.py dry-run \

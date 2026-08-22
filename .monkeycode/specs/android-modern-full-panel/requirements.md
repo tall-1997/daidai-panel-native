@@ -271,6 +271,16 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 7. Script Runtime SHALL 内置 Python、CommonJS 和 ESM 可解析的 `notify` helper。
 8. WHILE ABI 为 x86_64, Runtime Host SHALL 使用控制面降级路径并跳过 ARM64 Go Core。
 
+## Requirement 28：多架构发行
+
+**User Story:** 作为不同 Android 架构的用户，我希望下载匹配设备的安装包，以便减少下载体积并获得准确的能力声明。
+
+1. Release Pipeline SHALL 生成 ARM64、ARM32、x86_64 和 universal 四类签名 APK。
+2. ARM64 APK SHALL 包含完整 Go Core、Python、Node、Shell 与 rootfs 运行时。
+3. ARM32 和 x86_64 APK SHALL 排除 ARM64 runtime assets 并提供控制面降级能力。
+4. Universal APK SHALL 包含 armeabi-v7a、arm64-v8a 和 x86_64 Flutter/Go ABI，并按设备 ABI 动态选择完整或降级模式。
+5. Release Pipeline SHALL 为每个 APK 生成独立 SHA-256 并验证签名证书。
+
 ## Requirement 26：通知渠道与任务终态推送
 
 **User Story:** 作为自动化用户，我希望任务结束后按配置渠道收到通知，以便及时了解执行结果。

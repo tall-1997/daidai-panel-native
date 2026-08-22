@@ -944,6 +944,55 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   bool get _showProgressCard =>
       !_hideRestoreProgress && _restoreProgress.visible;
 
+  Future<void> _configureBackupSchedule() async {
+    final response = await DioClient.instance.dio.get(ApiEndpoints.configs);
+    final raw = extractData(response.data);
+    final configs = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+    String value(String key, String fallback) {
+      final item = configs[key];
+      if (item is Map && item['value'] != null) return item['value'].toString();
+      return item?.toString() ?? fallback;
+    }
+    var enabled = value('backup_schedule_enabled', 'false') == 'true';
+    var frequency = value('backup_schedule_frequency', 'daily');
+    final timeController = TextEditingController(text: value('backup_schedule_time', '03:00'));
+    final weekdayController = TextEditingController(text: value('backup_schedule_weekday', '0'));
+    final monthdayController = TextEditingController(text: value('backup_schedule_monthday', '1'));
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('定时备份'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              SwitchListTile.adaptive(title: const Text('启用定时备份'), value: enabled, onChanged: (value) => setDialogState(() => enabled = value)),
+              DropdownButtonFormField<String>(
+                initialValue: frequency,
+                decoration: const InputDecoration(labelText: '频率'),
+                items: const [DropdownMenuItem(value: 'daily', child: Text('每天')), DropdownMenuItem(value: 'weekly', child: Text('每周')), DropdownMenuItem(value: 'monthly', child: Text('每月'))],
+                onChanged: (value) => setDialogState(() => frequency = value ?? 'daily'),
+              ),
+              const SizedBox(height: 12),
+              TextField(controller: timeController, decoration: const InputDecoration(labelText: '执行时间', hintText: '03:00')),
+              if (frequency == 'weekly') TextField(controller: weekdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '星期', helperText: '0=周日，1-6=周一至周六')),
+              if (frequency == 'monthly') TextField(controller: monthdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '每月日期', helperText: '1-28')),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('保存'))],
+        ),
+      ),
+    );
+    if (saved != true || !mounted) return;
+    await DioClient.instance.dio.put(ApiEndpoints.configsBatch, data: {'configs': {
+      'backup_schedule_enabled': enabled ? 'true' : 'false',
+      'backup_schedule_frequency': frequency,
+      'backup_schedule_time': timeController.text.trim(),
+      'backup_schedule_weekday': weekdayController.text.trim(),
+      'backup_schedule_monthday': monthdayController.text.trim(),
+    }});
+    if (mounted) _showMessage('定时备份配置已保存');
+  }
+
   Widget _buildActionIcon(bool loading, IconData icon) {
     if (loading) {
       return const SizedBox(
@@ -1023,6 +1072,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                     Icons.add_circle_outline_rounded,
                   ),
                   label: Text(_creating ? '创建中...' : '创建备份'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _busyRestoring ? null : _configureBackupSchedule,
+                  icon: const Icon(Icons.schedule_rounded),
+                  label: const Text('定时备份'),
                 ),
               ],
             ),

@@ -40,8 +40,9 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             val minute = now.toEpochSecond() / 60
             if (minute == lastCheckedMinute) return
             lastCheckedMinute = minute
+            store.runScheduledBackupIfDue(now)
             store.enabledScheduledTasks()
-                .filter { CronExpression.matches(it.cronExpression, now) }
+                .filter { task -> task.cronExpression.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
                 .forEach { task ->
                     try {
                         workers.execute { store.executeTaskAndSave(task.id) }
@@ -49,6 +50,9 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
                         store.appLog("Cron", "Task ${task.id} rejected: fallback queue is full")
                     }
                 }
+            store.scheduledTaskStops()
+                .filter { task -> task.stopSchedule.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
+                .forEach { store.stopScheduledTask(it.id) }
         } catch (error: Exception) {
             store.appLog("Cron", error.message ?: error.javaClass.simpleName)
         }

@@ -17,10 +17,12 @@ class TrendChart extends ConsumerWidget {
 
     final successSpots = <FlSpot>[];
     final failSpots = <FlSpot>[];
+    final abortedSpots = <FlSpot>[];
     final chartData = data
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
-        .toList();
+        .toList()
+      ..sort((a, b) => (a['date']?.toString() ?? '').compareTo(b['date']?.toString() ?? ''));
 
     for (int i = 0; i < chartData.length; i++) {
       final item = chartData[i];
@@ -30,6 +32,7 @@ class TrendChart extends ConsumerWidget {
       failSpots.add(
         FlSpot(i.toDouble(), _number(item['failed'])),
       );
+      abortedSpots.add(FlSpot(i.toDouble(), _number(item['aborted'])));
     }
 
     final chartContent = Column(
@@ -49,6 +52,8 @@ class TrendChart extends ConsumerWidget {
             _LegendDot(color: AppColors.primary, label: '成功', isLight: isLight),
             const SizedBox(width: 12),
             _LegendDot(color: AppColors.red500, label: '失败', isLight: isLight),
+            const SizedBox(width: 12),
+            _LegendDot(color: AppColors.amber500, label: '终止', isLight: isLight),
           ],
         ),
         const SizedBox(height: 16),
@@ -122,6 +127,7 @@ class TrendChart extends ConsumerWidget {
               lineBarsData: [
                 _line(successSpots, AppColors.primary),
                 _line(failSpots, AppColors.red500),
+                _line(abortedSpots, AppColors.amber500),
               ],
             ),
           ),

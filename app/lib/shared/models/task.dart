@@ -134,7 +134,7 @@ class Task {
   static Map<String, dynamic> cronPayload(String value) {
     final expressions = parseCronInput(value);
     return {
-      'cron_expression': expressions.isEmpty ? '' : expressions.first,
+      'cron_expression': expressions.join('\n'),
       'cron_expressions': expressions,
     };
   }
@@ -236,9 +236,7 @@ class Task {
   Map<String, dynamic> toJson() => {
     'name': name,
     'command': command,
-    'cron_expression': effectiveCronExpressions.isEmpty
-        ? ''
-        : effectiveCronExpressions.first,
+    'cron_expression': effectiveCronExpressions.join('\n'),
     'cron_expressions': effectiveCronExpressions,
     'task_type': taskType,
     'python_version': pythonVersion,

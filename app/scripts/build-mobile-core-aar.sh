@@ -22,7 +22,7 @@ mkdir -p "$OUTPUT_DIR"
   cd "$PANEL_SOURCE_DIR/server"
   go test ./mobilecore
   "$GOMOBILE_BIN" bind \
-    -target android/arm64,android/amd64 \
+    -target android \
     -androidapi 28 \
     -javapkg mobilecore \
     -o "$OUTPUT_DIR/mobilecore.aar" \

@@ -206,10 +206,11 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 
 	if task.DependsOn != nil {
 		var depTask model.Task
-		if err := database.DB.First(&depTask, *task.DependsOn).Error; err == nil {
-			if depTask.LastRunStatus == nil || *depTask.LastRunStatus != model.RunSuccess {
-				return fmt.Errorf("依赖任务 '%s' 上次执行未成功", depTask.Name)
-			}
+		if err := database.DB.First(&depTask, *task.DependsOn).Error; err != nil {
+			return fmt.Errorf("依赖任务不存在")
+		}
+		if depTask.LastRunStatus == nil || *depTask.LastRunStatus != model.RunSuccess {
+			return fmt.Errorf("依赖任务 '%s' 上次执行未成功", depTask.Name)
 		}
 	}
 
