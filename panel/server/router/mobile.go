@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	CapabilityDisabled = "disabled"
-	CapabilityEnabled  = "enabled"
+	CapabilityDisabled    = "disabled"
+	CapabilityEnabled     = "enabled"
+	CapabilityUnsupported = "unsupported"
 
 	CapabilityTaskExecution        = "task_execution"
 	CapabilityScriptExecution      = "script_execution"

@@ -179,6 +179,11 @@ func TestStartCorePublishesImmutableCapabilitySnapshot(t *testing.T) {
 					"adapterId":  "android.process-supervisor",
 					"reasonCode": "READY",
 				},
+				router.CapabilityRuntimeMutation: map[string]any{
+					"state":      router.CapabilityUnsupported,
+					"adapterId":  "android.app-update",
+					"reasonCode": "ANDROID_BUNDLED_IMMUTABLE",
+				},
 			},
 		},
 	})
@@ -193,6 +198,10 @@ func TestStartCorePublishesImmutableCapabilitySnapshot(t *testing.T) {
 	state := started.PlatformCapabilities.Capabilities[router.CapabilityTaskExecution]
 	if state.State != router.CapabilityEnabled || state.AdapterID != "android.process-supervisor" {
 		t.Fatalf("unexpected capability snapshot: %+v", started.PlatformCapabilities)
+	}
+	unsupported := started.PlatformCapabilities.Capabilities[router.CapabilityRuntimeMutation]
+	if unsupported.State != router.CapabilityUnsupported || unsupported.ReasonCode != "ANDROID_BUNDLED_IMMUTABLE" {
+		t.Fatalf("unexpected immutable capability snapshot: %+v", started.PlatformCapabilities)
 	}
 	if strings.Contains(CoreStatus(), testLocalToken) {
 		t.Fatal("local token leaked through capability status")

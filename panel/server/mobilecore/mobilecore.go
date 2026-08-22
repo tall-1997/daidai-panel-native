@@ -787,7 +787,7 @@ func parseOptions(raw string) (options, string, string, string) {
 		parsed.PlatformCapabilities.Capabilities = map[string]router.CapabilityState{}
 	}
 	for _, state := range parsed.PlatformCapabilities.Capabilities {
-		if state.State != router.CapabilityDisabled && state.State != router.CapabilityEnabled {
+		if state.State != router.CapabilityDisabled && state.State != router.CapabilityEnabled && state.State != router.CapabilityUnsupported {
 			return parsed, codeInvalidOptions, "platform capability state is invalid", "capability-state"
 		}
 	}
