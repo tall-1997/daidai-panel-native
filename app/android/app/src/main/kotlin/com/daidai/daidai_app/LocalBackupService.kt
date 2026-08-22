@@ -710,7 +710,7 @@ internal class LocalBackupService(
     companion object {
         private const val MAX_BACKUP_BYTES = 64 * 1024 * 1024
         private const val MAX_EXPANDED_BYTES = 128 * 1024 * 1024
-        private const val MAX_ENTRY_BYTES = 32 * 1024 * 1024
+        private const val MAX_ENTRY_BYTES = MAX_EXPANDED_BYTES
         private const val MAX_MANIFEST_BYTES = 8 * 1024 * 1024
         private const val MAX_ENTRIES = 4096
         private const val MAX_SCRIPT_ENTRIES = 2048
