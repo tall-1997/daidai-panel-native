@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -52,6 +53,47 @@ type LegacyBackupScriptFile struct {
 	Path          string `json:"path"`
 	Content       string `json:"content"`
 	ContentBase64 string `json:"content_base64"`
+}
+
+type portableOpenAppSecret struct {
+	Provider string `json:"provider"`
+	Cipher   string `json:"cipher"`
+	Sealed   bool   `json:"sealed"`
+}
+
+func openPortableOpenAppSecret(appKey, stored string) string {
+	var payload portableOpenAppSecret
+	if json.Unmarshal([]byte(stored), &payload) != nil || !payload.Sealed || payload.Provider == "" || payload.Cipher == "" {
+		return stored
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(payload.Cipher)
+	if err != nil {
+		return stored
+	}
+	opened, err := RuntimeSecretStoreInstance().Open(context.Background(), "open-app:"+appKey, SealedValue{Provider: payload.Provider, Cipher: ciphertext})
+	if err != nil {
+		return stored
+	}
+	return string(opened)
+}
+
+func sealRestoredOpenAppSecret(appKey, raw string) string {
+	if raw == "" || strings.HasPrefix(raw, "sha256:") {
+		return raw
+	}
+	var existing portableOpenAppSecret
+	if json.Unmarshal([]byte(raw), &existing) == nil && existing.Sealed {
+		return raw
+	}
+	sealed, err := RuntimeSecretStoreInstance().Seal(context.Background(), "open-app:"+appKey, []byte(raw))
+	if err != nil {
+		return raw
+	}
+	encoded, err := json.Marshal(portableOpenAppSecret{Provider: sealed.Provider, Cipher: base64.StdEncoding.EncodeToString(sealed.Cipher), Sealed: true})
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
 
 func createBackupArchive(options BackupCreateOptions) (string, error) {
@@ -255,7 +297,7 @@ func snapshotConfigBundle() (BackupConfigBundle, error) {
 			ID:        app.ID,
 			Name:      app.Name,
 			AppKey:    app.AppKey,
-			AppSecret: app.AppSecret,
+			AppSecret: openPortableOpenAppSecret(app.AppKey, app.AppSecret),
 			Scopes:    app.Scopes,
 			Enabled:   app.Enabled,
 			RateLimit: app.RateLimit,
@@ -1098,7 +1140,7 @@ func restoreOpenApps(tx *gorm.DB, apps []BackupOpenApp) error {
 		app := model.OpenApp{
 			Name:      item.Name,
 			AppKey:    item.AppKey,
-			AppSecret: item.AppSecret,
+			AppSecret: sealRestoredOpenAppSecret(item.AppKey, item.AppSecret),
 			Scopes:    item.Scopes,
 			Enabled:   item.Enabled,
 			RateLimit: item.RateLimit,

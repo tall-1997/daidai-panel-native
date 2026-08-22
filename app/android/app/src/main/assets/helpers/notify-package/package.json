@@ -1,0 +1,12 @@
+{
+  "name": "notify",
+  "version": "1.0.0",
+  "private": true,
+  "_managed": "DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1",
+  "type": "module",
+  "main": "index.cjs",
+  "exports": {
+    "require": "./index.cjs",
+    "import": "./index.mjs"
+  }
+}

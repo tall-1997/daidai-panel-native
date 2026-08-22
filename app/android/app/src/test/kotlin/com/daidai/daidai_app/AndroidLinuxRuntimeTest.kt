@@ -151,7 +151,7 @@ class AndroidLinuxRuntimeTest {
             AndroidLinuxRuntime.pipInstallArguments("https://pypi.org/simple", "/deps/python", "requests"),
         )
         assertEquals(
-            listOf("install", "--ignore-scripts", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
+            listOf("install", "--ignore-scripts", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
             AndroidLinuxRuntime.npmInstallArguments("https://registry.npmjs.org", "/deps/node", "/deps/cache", "lodash"),
         )
     }

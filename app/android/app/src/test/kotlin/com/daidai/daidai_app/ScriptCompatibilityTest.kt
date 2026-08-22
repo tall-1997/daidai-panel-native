@@ -26,4 +26,9 @@ class ScriptCompatibilityTest {
         val scan = ScriptCompatibility.scanNode("require(name); require('not-an-allowlisted-package')", File("."))
         assertTrue(scan.nodePackages.isEmpty())
     }
+
+    @Test fun treatsManagedNotifyModulesAsBuiltIn() {
+        assertTrue(ScriptCompatibility.scanPython("from notify import send", File(".")).pythonPackages.isEmpty())
+        assertTrue(ScriptCompatibility.scanNode("const n = require('notify'); const s = require('sendNotify')", File(".")).nodePackages.isEmpty())
+    }
 }

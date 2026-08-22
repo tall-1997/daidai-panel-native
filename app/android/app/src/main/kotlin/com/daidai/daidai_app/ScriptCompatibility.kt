@@ -24,12 +24,12 @@ internal object ScriptCompatibility {
         "html", "http", "importlib", "inspect", "io", "itertools", "json", "logging", "math", "multiprocessing",
         "os", "pathlib", "pickle", "platform", "queue", "random", "re", "secrets", "shlex", "shutil", "signal",
         "socket", "sqlite3", "ssl", "statistics", "string", "struct", "subprocess", "sys", "tempfile", "threading",
-        "time", "traceback", "types", "typing", "unittest", "urllib", "uuid", "warnings", "xml", "zipfile",
+        "time", "traceback", "types", "typing", "unittest", "urllib", "uuid", "warnings", "xml", "zipfile", "notify",
     )
     private val nodeBuiltins = setOf(
         "assert", "buffer", "child_process", "cluster", "console", "crypto", "dns", "events", "fs", "http",
         "https", "module", "net", "os", "path", "perf_hooks", "process", "querystring", "readline", "stream",
-        "string_decoder", "timers", "tls", "tty", "url", "util", "v8", "vm", "worker_threads", "zlib",
+        "string_decoder", "timers", "tls", "tty", "url", "util", "v8", "vm", "worker_threads", "zlib", "notify", "sendNotify",
     )
     private val allowedNodePackages = setOf(
         "axios", "crypto-js", "got", "lodash", "moment", "dayjs", "dotenv", "node-fetch", "tough-cookie",

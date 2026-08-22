@@ -258,6 +258,19 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 7. WHEN Kotlin fallback 创建带密码备份, Backup Service SHALL 生成与 Go Core 相同的 SHA-256 密钥派生 AES-GCM `.enc` 文件。
 8. WHILE 恢复跨设备备份, Restore Service SHALL 保留目标设备用户、会话、2FA 和设备绑定凭据。
 
+## Requirement 27：Android 运行时与本地 Web 兼容
+
+**User Story:** 作为 Android 用户，我希望本地面板在现代系统、低版本设备和受限云环境中提供可预期能力。
+
+1. WHEN Android 16 启动本地实例, Runtime Host SHALL 使用 Kotlin fallback 并独立探测 Node、Python 和本地执行能力。
+2. WHEN Node runtime 初始化暂时失败, Runtime Host SHALL 保留失败原因并允许后续依赖安装重试。
+3. WHEN npm 安装本地归档、URL 或 alias, Dependency Manager SHALL 根据安装前后顶层依赖变化验证安装结果。
+4. WHEN 用户打开本地 Web, Browser Host SHALL 使用动态回环端口、`/local-ui/` Router base 和一次性 ticket。
+5. WHEN fallback 登录成功, Auth API SHALL 返回与 Go Backend 一致的顶层 token 和 user 字段。
+6. WHEN 用户查看 Open API Secret, Backend SHALL 在验证当前管理员密码后返回 `data.app_secret`。
+7. Script Runtime SHALL 内置 Python、CommonJS 和 ESM 可解析的 `notify` helper。
+8. WHILE ABI 为 x86_64, Runtime Host SHALL 使用控制面降级路径并跳过 ARM64 Go Core。
+
 ## Requirement 26：通知渠道与任务终态推送
 
 **User Story:** 作为自动化用户，我希望任务结束后按配置渠道收到通知，以便及时了解执行结果。

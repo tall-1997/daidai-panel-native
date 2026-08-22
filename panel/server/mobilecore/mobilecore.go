@@ -383,6 +383,7 @@ func StartCore(optionsJSON string) (response string) {
 	}
 	config.C.Server.Port = port
 	actualHost := listener.Addr().String()
+	service.ConfigureScriptNotifyBoundary("http://"+actualHost, parsed.LocalToken)
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	if err := configureTrustedProxies(engine, middleware.CurrentTrustedProxyCIDRs()); err != nil {

@@ -110,6 +110,16 @@ Flutter 本地连接 monitor 仅在前台执行 30 秒 reconcile，进入后台�
 
 managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel` 管理方式、前台服务、调度保障、恢复触发、可用内存和 Python runtime。APK 本地实例将后端自更新与 runtime mutation 声明为 unsupported，本地 Core 重启通过 MethodChannel 完成并采用返回的新 endpoint。服务器实例继续展示后端更新与 service manager 信息。
 
+### Android Compatibility Modes
+
+Android 9-15 ARM64 优先启动完整 Go Core；Android 16 使用 Kotlin fallback 并分别探测 Python、Node、Shell 和依赖安装能力。x86_64 模拟器进入控制面降级模式，保留 UI、本地配置、备份、诊断和远程面板连接，跳过 ARM64 Go Core 与 runtime。fallback 对 exact cron 明确报告 unsupported，持续调度依赖 Foreground Service 与 WorkManager 恢复。
+
+Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在后续安装操作重试。npm 安装关闭 lifecycle、audit、fund 和 update notifier；本地 tgz、URL 和 alias 通过安装前后顶层依赖变化验证。Node launcher 由 CI 使用 16 KB linker page-size 参数重新生成，并作为 preBuild runtime 门禁输入。
+
+本地 Web 只能通过 Android Host 生成的动态 `/local-ui/#ticket=...` URL 进入。Vite 与 Vue Router 共享 `/local-ui/` base；一次性 ticket、browser session Cookie、精确 Host/Origin 与用户 token 共同构成回环浏览器安全边界。
+
+脚本环境内置 Python `notify.py`、CommonJS `sendNotify.js` 与同时支持 CommonJS/ESM 的 `notify` package。Android Go Core 使用临时业务 JWT、动态 Origin 和独立 local token 调用通知 API；fallback 采用相同环境变量契约。
+
 ### Backup Interoperability
 
 Flutter 备份页使用 Android SAF 的 unrestricted picker，再按完整文件名接受 `.json`、`.enc`、`.tgz` 和 `.tar.gz`。该策略避免系统文件提供器将未知 MIME 的 tgz/enc 隐藏。Go Core 与 Kotlin fallback 统一生成和消费 `daidai-panel-backup` 0.4.0 canonical manifest；fallback 可生成 `.tgz` 和 Go AES-GCM `.enc`，并完整映射配置、任务、环境变量、订阅、SSH Key、通知渠道、依赖、任务日志、Task View 和脚本。恢复通过通知渠道、SSH Key 与任务 ID 映射回填外键，目标设备用户、会话、2FA 和设备绑定凭据保持现状。

@@ -19,15 +19,16 @@ internal object LocalTaskFallbackSemantics {
 
     private val pythonMissing = Regex("(?:ModuleNotFoundError|ImportError):\\s*No module named\\s*['\"]([^'\"]+)['\"]")
     private val nodeMissing = Regex("(?:Cannot find module|Error \\[ERR_MODULE_NOT_FOUND].*?)\\s*['\"]([^'\"]+)['\"]")
+    private val managedModules = setOf("notify", "sendNotify")
 
     fun detectMissingDependency(runtime: String, output: String): DependencyCandidate? {
         return when (runtime.lowercase()) {
             "python" -> pythonMissing.find(output)?.groupValues?.get(1)
                 ?.substringBefore('.')
-                ?.takeIf(::isInstallableName)
+                ?.takeIf { isInstallableName(it) && it !in managedModules }
                 ?.let { DependencyCandidate("python", it) }
             "nodejs" -> nodeMissing.find(output)?.groupValues?.get(1)
-                ?.takeIf { isInstallableName(it) && !it.startsWith(".") && !it.startsWith("/") }
+                ?.takeIf { isInstallableName(it) && it !in managedModules && !it.startsWith(".") && !it.startsWith("/") }
                 ?.let { DependencyCandidate("nodejs", it) }
             else -> null
         }

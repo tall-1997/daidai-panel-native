@@ -6,17 +6,35 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 )
 
+var scriptNotifyBoundary struct {
+	sync.RWMutex
+	origin     string
+	localToken string
+}
+
+func ConfigureScriptNotifyBoundary(origin, localToken string) {
+	scriptNotifyBoundary.Lock()
+	defer scriptNotifyBoundary.Unlock()
+	scriptNotifyBoundary.origin = strings.TrimSpace(origin)
+	scriptNotifyBoundary.localToken = strings.TrimSpace(localToken)
+}
+
 const (
 	managedNotifyHelperToken = "DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1"
 	notifyPyFilename         = "notify.py"
 	sendNotifyJSFilename     = "sendNotify.js"
 )
+
+const managedNotifyPackageJSON = `{"name":"notify","version":"1.0.0","private":true,"_managed":"DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1","type":"module","main":"index.cjs","exports":{"require":"./index.cjs","import":"./index.mjs"}}`
+const managedNotifyPackageCJS = "// " + managedNotifyHelperToken + "\n'use strict';\nmodule.exports = require('../../sendNotify.js');\n"
+const managedNotifyPackageMJS = "// " + managedNotifyHelperToken + "\nimport helper from '../../sendNotify.js';\nexport const sendNotify = helper.sendNotify;\nexport const send = helper.send;\nexport const requestNotify = helper.requestNotify;\nexport default helper.sendNotify;\n"
 
 type managedNotifyArtifact struct {
 	filename string
@@ -168,10 +186,12 @@ var managedNotifyPyContent = strings.Join([]string{
 	"    request = urllib.request.Request(",
 	"        notify_url,",
 	"        data=json.dumps(payload).encode(\"utf-8\"),",
-	"        headers={",
+	"        headers={key: value for key, value in {",
 	"            \"Authorization\": f\"Bearer {notify_token}\",",
 	"            \"Content-Type\": \"application/json\",",
-	"        },",
+	"            \"Origin\": os.getenv(\"DAIDAI_NOTIFY_ORIGIN\", \"\"),",
+	"            \"X-Daidai-Local-Token\": os.getenv(\"DAIDAI_NOTIFY_LOCAL_TOKEN\", \"\"),",
+	"        }.items() if value},",
 	"        method=\"POST\",",
 	"    )",
 	"",
@@ -400,6 +420,8 @@ var managedSendNotifyJSContent = strings.Join([]string{
 	"        'Authorization': `Bearer ${notifyToken}`,",
 	"        'Content-Type': 'application/json',",
 	"        'Content-Length': Buffer.byteLength(payload),",
+	"        ...(process.env.DAIDAI_NOTIFY_ORIGIN ? { 'Origin': process.env.DAIDAI_NOTIFY_ORIGIN } : {}),",
+	"        ...(process.env.DAIDAI_NOTIFY_LOCAL_TOKEN ? { 'X-Daidai-Local-Token': process.env.DAIDAI_NOTIFY_LOCAL_TOKEN } : {}),",
 	"      },",
 	"      timeout: timeoutMs,",
 	"    }, (res) => {",
@@ -469,6 +491,9 @@ var managedSendNotifyJSContent = strings.Join([]string{
 var managedNotifyArtifacts = []managedNotifyArtifact{
 	{filename: notifyPyFilename, content: managedNotifyPyContent + "\n"},
 	{filename: sendNotifyJSFilename, content: managedSendNotifyJSContent + "\n"},
+	{filename: "node_modules/notify/package.json", content: managedNotifyPackageJSON + "\n"},
+	{filename: "node_modules/notify/index.cjs", content: managedNotifyPackageCJS},
+	{filename: "node_modules/notify/index.mjs", content: managedNotifyPackageMJS},
 }
 
 func EnsureBuiltinNotifyHelpers(dirs ...string) error {
@@ -557,6 +582,9 @@ func ensureManagedHelperFile(path, content string) error {
 		return err
 	}
 
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
@@ -618,6 +646,12 @@ func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, def
 		"DAIDAI_API_BASE":       apiBase,
 		"DAIDAI_TOKEN":          tokenInfo.Token,
 	}
+	scriptNotifyBoundary.RLock()
+	if scriptNotifyBoundary.origin != "" && scriptNotifyBoundary.localToken != "" {
+		env["DAIDAI_NOTIFY_ORIGIN"] = scriptNotifyBoundary.origin
+		env["DAIDAI_NOTIFY_LOCAL_TOKEN"] = scriptNotifyBoundary.localToken
+	}
+	scriptNotifyBoundary.RUnlock()
 	if defaultChannelID != nil && *defaultChannelID > 0 {
 		env["DAIDAI_NOTIFY_CHANNEL_ID"] = fmt.Sprintf("%d", *defaultChannelID)
 	}

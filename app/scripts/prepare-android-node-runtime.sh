@@ -23,6 +23,7 @@ declare -A CLANG_TARGETS
 CLANG_TARGETS[arm64-v8a]="aarch64-linux-android28-clang++"
 CLANG_TARGETS[x86_64]="x86_64-linux-android28-clang++"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/node_exec.cc"
+RUNTIME_LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/jni/nodelauncher.c"
 
 for ABI in arm64-v8a x86_64; do
   mkdir -p "${JNI_DIRS[$ABI]}"
@@ -78,6 +79,8 @@ for ABI in arm64-v8a x86_64; do
   fi
   "$clangxx" \
     -fPIE -pie \
+    -Wl,-z,max-page-size=16384 \
+    -Wl,-z,common-page-size=16384 \
     -I"$EXTRACT_DIR/include/node" \
     "$LAUNCHER_SRC" \
     -L"$jni_dir" \
@@ -86,6 +89,12 @@ for ABI in arm64-v8a x86_64; do
     -ldl -lm \
     -o "${LAUNCHER_OUTS[$ABI]}"
   chmod 755 "${LAUNCHER_OUTS[$ABI]}"
+  clang="${clangxx%++}"
+  if [[ -x "$clang" && -f "$RUNTIME_LAUNCHER_SRC" ]]; then
+    "$clang" -fPIE -pie -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+      "$RUNTIME_LAUNCHER_SRC" -ldl -o "${JNI_DIRS[$ABI]}/libnodelauncher.so"
+    chmod 755 "${JNI_DIRS[$ABI]}/libnodelauncher.so"
+  fi
 done
 
 MANIFEST_PATH="$APP_ROOT/../runtime/manifest.json"

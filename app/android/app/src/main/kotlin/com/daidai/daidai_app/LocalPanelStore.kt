@@ -498,11 +498,11 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/refresh" ->
                 refresh(session)
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user" ->
-                authenticated(session) { ok(JSONObject().put("data", userJson())) }
+                authenticated(session) { ok(JSONObject().put("user", userJson())) }
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/logout" ->
                 authenticated(session) { revokeAccessToken(bearerToken(session), "logout"); ok(JSONObject().put("message", "ok")) }
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/captcha-config" ->
-                ok(JSONObject().put("data", JSONObject().put("enabled", false).put("configured", true)))
+                ok(JSONObject().put("enabled", false).put("configured", true).put("implemented", false).put("required", false).put("captcha_id", "").put("require_after_failures", 0).put("message", ""))
             session.uri.startsWith("/api/auth/users") -> serveUsers(session, "/api/auth/users")
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> listUsers()
             session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/password" -> changeOwnPassword(body(session))
@@ -703,7 +703,7 @@ class LocalPanelStore(
         return when {
             uri.startsWith("/ssh-keys") -> serveSimpleSecretCrud(session,uri,"/ssh-keys","ssh_keys","private_key")
             uri.startsWith("/platform-tokens") -> servePlatformTokens(session,uri)
-            uri.startsWith("/open-api/apps") -> serveOpenApi(session,uri)
+            uri.startsWith("/open-api/apps") -> serveOpenApiSecretContract(session, uri) ?: serveOpenApi(session,uri)
             uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> ok(JSONObject().put("data",JSONObject().put("sponsors",JSONArray()).put("count",0).put("total_amount",0).put("updated_at",JSONObject.NULL)))
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
         }
@@ -711,6 +711,38 @@ class LocalPanelStore(
     private fun serveSimpleSecretCrud(s:NanoHTTPD.IHTTPSession,u:String,p:String,t:String,secret:String):NanoHTTPD.Response { val id=u.removePrefix(p).trim('/').toLongOrNull();return when { s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query(t,null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put(secret,"********").put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at")))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.GET&&id!=null->{readableDatabase.query(t,null,"id=?",arrayOf(id.toString()),null,null,null).use{c->if(!c.moveToFirst())return error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在");ok(JSONObject().put("data",JSONObject().put("id",id).put("name",c.string("name")).put(secret,c.string(secret))))}};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val n=j.optString("name").trim();val v=j.optString(secret);if(n.isBlank()||v.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称和密钥不能为空");val x=writableDatabase.insert(t,null,ContentValues().apply{put("name",n);put(secret,v);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString(secret).isNotBlank()&&j.optString(secret)!="********")put(secret,j.optString(secret));put("updated_at",Instant.now().toString())};if(writableDatabase.update(t,v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete(t,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"接口不存在") } }
     private fun servePlatformTokens(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { if(u=="/platform-tokens/platforms"){if(s.method==NanoHTTPD.Method.GET){val a=JSONArray();readableDatabase.query("platforms",null,null,null,null,null,"name").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("label",c.string("label")).put("icon",c.string("icon")))};return ok(JSONObject().put("data",a))};if(s.method==NanoHTTPD.Method.POST){val j=body(s);val now=Instant.now().toString();val id=writableDatabase.insert("platforms",null,ContentValues().apply{put("name",j.optString("name"));put("label",j.optString("label",j.optString("name")));put("icon",j.optString("icon"));put("created_at",now);put("updated_at",now)});return ok(JSONObject().put("data",JSONObject().put("id",id)))}};val tail=u.removePrefix("/platform-tokens").trim('/');val parts=tail.split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("platform_tokens",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};return serveTokenCrud(s,id) }
     private fun serveTokenCrud(s:NanoHTTPD.IHTTPSession,id:Long?):NanoHTTPD.Response { return when {s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();val q="SELECT t.*,p.name platform_name,p.label platform_label FROM platform_tokens t LEFT JOIN platforms p ON p.id=t.platform_id";readableDatabase.rawQuery(q,null).use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("platform_id",c.long("platform_id")).put("platform",JSONObject().put("name",c.string("platform_name")).put("label",c.string("platform_label"))).put("name",c.string("name")).put("token","********").put("remarks",c.string("remarks")).put("enabled",c.int("enabled")!=0))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val x=writableDatabase.insert("platform_tokens",null,ContentValues().apply{put("platform_id",j.optLong("platform_id"));put("name",j.optString("name"));put("token",j.optString("token"));put("remarks",j.optString("remarks"));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString("token").isNotBlank()&&j.optString("token")!="********")put("token",j.optString("token"));if(j.has("remarks"))put("remarks",j.optString("remarks"));put("updated_at",Instant.now().toString())};writableDatabase.update("platform_tokens",v,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","更新成功"))};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("platform_tokens","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"平台令牌接口不存在")} }
+
+    private fun serveOpenApiSecretContract(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response? {
+        val parts = uri.removePrefix("/open-api/apps").trim('/').split('/')
+        val id = parts.firstOrNull()?.toLongOrNull() ?: return null
+        return when {
+            parts.getOrNull(1) == "reset-secret" && session.method == NanoHTTPD.Method.PUT -> {
+                val secret = randomToken()
+                val changed = writableDatabase.update("open_api_apps", ContentValues().apply { put("secret", secret); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+                if (changed == 0) error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在") else ok(JSONObject().put("message", "密钥已重置").put("data", JSONObject().put("app_secret", secret)))
+            }
+            parts.getOrNull(1) in setOf("view-secret", "show-secret") && session.method == NanoHTTPD.Method.POST -> viewOpenApiSecret(session, id)
+            else -> null
+        }
+    }
+
+    private fun viewOpenApiSecret(session: NanoHTTPD.IHTTPSession, id: Long): NanoHTTPD.Response {
+        val token = bearerToken(session) ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val user = readableDatabase.rawQuery(
+            "SELECT u.password_hash,u.password_salt,u.role FROM security_sessions s JOIN local_users u ON u.username=s.username WHERE s.access_token=? AND s.expires_at>? LIMIT 1",
+            arrayOf(token, Instant.now().toString()),
+        ).use { cursor -> if (!cursor.moveToFirst()) null else Triple(cursor.string("password_hash"), cursor.string("password_salt"), cursor.string("role")) }
+            ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        if (user.third != "admin") return error(NanoHTTPD.Response.Status.FORBIDDEN, "需要管理员权限")
+        val password = body(session).optString("password")
+        if (password.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请输入密码")
+        if (hashPassword(password, Base64.decode(user.second, Base64.NO_WRAP)) != user.first) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "管理员密码错误")
+        val secret = readableDatabase.query("open_api_apps", arrayOf("secret"), "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
+            if (!cursor.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+            cursor.string("secret")
+        }
+        return ok(JSONObject().put("data", JSONObject().put("app_secret", secret)))
+    }
 
     private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return ok(JSONObject().put("data",JSONArray()).put("total",0).put("page",1).put("page_size",20));if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST){val password=body(s).optString("password");val valid=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->c.moveToFirst()&&hashPassword(password,Base64.decode(c.string("password_salt"),Base64.NO_WRAP))==c.string("password_hash")};if(!valid)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"管理员密码错误");val secret=readableDatabase.query("open_api_apps",arrayOf("secret"),"id=?",arrayOf(id.toString()),null,null,null).use{c->if(c.moveToFirst())c.string("secret")else return error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};return ok(JSONObject().put("data",JSONObject().put("secret",secret)))};return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
     private fun openApiJson(c:Cursor)=JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("app_key",c.string("app_key")).put("secret","********").put("scopes",c.string("scopes")).put("rate_limit",c.int("rate_limit")).put("enabled",c.int("enabled")!=0).put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at"))
@@ -2416,9 +2448,23 @@ fun serveDashboardStats(): JSONObject {
 
     private fun copyManagedHelper(assetName: String, target: File) {
         val content = appContext.assets.open("helpers/$assetName").bufferedReader().use { it.readText() }
-        if (!target.exists() || !target.readText().contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
+        val current = target.takeIf(File::isFile)?.readText()
+        if (current == null || current.contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
             target.parentFile?.mkdirs()
-            target.writeText(content)
+            if (current != content) target.writeText(content)
+        }
+    }
+
+    private fun ensureNodeNotifyPackage(root: File) {
+        val target = File(root, "node_modules/notify")
+        listOf("package.json", "index.cjs", "index.mjs").forEach { name ->
+            val content = appContext.assets.open("helpers/notify-package/$name").bufferedReader().use { it.readText() }
+            val file = File(target, name)
+            val current = file.takeIf(File::isFile)?.readText()
+            if (current == null || current.contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
+                file.parentFile?.mkdirs()
+                if (current != content) file.writeText(content)
+            }
         }
     }
 
@@ -2427,6 +2473,7 @@ fun serveDashboardStats(): JSONObject {
         val scripts = scriptsRoot()
         copyManagedHelper("notify.py", File(scripts, "notify.py"))
         copyManagedHelper("sendNotify.js", File(scripts, "sendNotify.js"))
+        ensureNodeNotifyPackage(scripts)
         if (workingDir.canonicalFile != scripts.canonicalFile) {
             copyManagedHelper("notify.py", File(workingDir, "notify.py"))
             copyManagedHelper("sendNotify.js", File(workingDir, "sendNotify.js"))
@@ -2448,7 +2495,10 @@ fun serveDashboardStats(): JSONObject {
                     "DAIDAI_NOTIFY_URL" to "${endpointProvider().trimEnd('/')}/api/v1/notifications/send",
                     "DAIDAI_NOTIFY_ORIGIN" to endpointProvider().trimEnd('/'),
                     "DAIDAI_NOTIFY_TOKEN" to localTokenProvider(),
+                    "DAIDAI_NOTIFY_LOCAL_TOKEN" to localTokenProvider(),
                     "DAIDAI_NOTIFY_TIMEOUT" to "15000",
+                    "DAIDAI_API_BASE" to "${endpointProvider().trimEnd('/')}/api/v1",
+                    "DAIDAI_TOKEN" to localTokenProvider(),
                     "QL_DIR" to scriptsRoot().absolutePath,
                     "QL_DATA_DIR" to appContext.filesDir.absolutePath,
                     "QL_SCRIPT_DIR" to workingDir.absolutePath,
@@ -2510,7 +2560,10 @@ fun serveDashboardStats(): JSONObject {
         "DAIDAI_NOTIFY_URL",
         "DAIDAI_NOTIFY_ORIGIN",
         "DAIDAI_NOTIFY_TOKEN",
+        "DAIDAI_NOTIFY_LOCAL_TOKEN",
         "DAIDAI_NOTIFY_TIMEOUT",
+        "DAIDAI_API_BASE",
+        "DAIDAI_TOKEN",
         "QL_DIR",
         "QL_DATA_DIR",
         "QL_SCRIPT_DIR",
@@ -3824,15 +3877,18 @@ fun serveDashboardStats(): JSONObject {
                     .put("Installing Node dependency from network source: $name")
                     .put("npm_registry=${mirrors.npmMirror}")
                     .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
+                val before = queryNpmInstalledPackages()
                 val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 DependencyStorage.trimDirectory(cache, DependencyStorage.MAX_CACHE_BYTES)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) "failed" to text else {
-                    val verified = queryNpmInstalledPackages().containsKey(DependencyStorage.normalizedName("nodejs", name))
+                    val after = queryNpmInstalledPackages()
+                    val normalized = DependencyStorage.normalizedName("nodejs", name)
+                    val verified = after.containsKey(normalized) || after.any { (pkg, version) -> before[pkg] != version }
                     if (verified) "installed" to "$text\nPost-install verification: npm list confirmed $name"
                     else "failed" to "$text\nPOST_VERIFY_FAILED: npm list did not report $name"
                 }
-            } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
+            } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: ${AndroidNodeRuntime.failureReason().ifBlank { "bundled Node runtime is not ready" }}")
         }
         if (depType in setOf("system", "linux", "os", "apk", "apt", "apt-get", "yum", "dnf")) {
             val preferredManager = when (depType) {
@@ -4160,15 +4216,7 @@ fun serveDashboardStats(): JSONObject {
         )
         writableDatabase.insert("security_sessions", null, ContentValues().apply { put("username", username); put("access_token", accessToken); put("ip", requestIp(session)); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) })
         writableDatabase.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", "auth.login"); put("detail", "登录成功"); put("created_at", now) })
-        return ok(
-            JSONObject().put(
-                "data",
-                JSONObject()
-                    .put("access_token", accessToken)
-                    .put("refresh_token", refreshToken)
-                    .put("user", userJson())
-            )
-        )
+        return ok(JSONObject().put("message", "登录成功").put("access_token", accessToken).put("refresh_token", refreshToken).put("user", userJson()))
     }
 
     private fun revokeAccessToken(token: String?, action: String) {
@@ -4193,7 +4241,7 @@ fun serveDashboardStats(): JSONObject {
         val oldAccessToken = readableDatabase.rawQuery("SELECT access_token FROM local_sessions WHERE id=1", null).use { if (it.moveToFirst()) it.getString(0) else "" }
         writableDatabase.update("local_sessions", values, "id = 1", null)
         writableDatabase.update("security_sessions", ContentValues().apply { put("access_token", accessToken); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) }, "access_token=?", arrayOf(oldAccessToken))
-        return ok(JSONObject().put("data", JSONObject().put("access_token", accessToken)))
+        return ok(JSONObject().put("access_token", accessToken))
     }
 
     private fun userJson(): JSONObject {

@@ -208,3 +208,31 @@ func TestOpenAPICreateResponseStartsWithZeroTodayCallCount(t *testing.T) {
 		t.Fatalf("expected new app today call_count to start at 0, got %d", got)
 	}
 }
+
+func TestOpenAPISecretCanBeViewedAfterPasswordVerification(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	admin := testutil.MustCreateLoginUser(t, "open-api-secret-admin", "admin", "correct-password")
+	adminToken := testutil.MustCreateAccessToken(t, admin.Username, admin.Role)
+	engine := newOpenAPIRouter()
+
+	create := performJSONRequest(engine, http.MethodPost, "/api/v1/open-api/apps", `{"name":"secret-app","scopes":"tasks"}`, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	}, "")
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	created := decodeJSONMap(t, create)["data"].(map[string]interface{})
+	id := uint(created["id"].(float64))
+	want := created["app_secret"].(string)
+
+	view := performJSONRequest(engine, http.MethodPost, fmt.Sprintf("/api/v1/open-api/apps/%d/view-secret", id), `{"password":"correct-password"}`, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	}, "")
+	if view.Code != http.StatusOK {
+		t.Fatalf("view status=%d body=%s", view.Code, view.Body.String())
+	}
+	got := decodeJSONMap(t, view)["data"].(map[string]interface{})["app_secret"]
+	if got != want {
+		t.Fatalf("viewed secret=%v want=%q", got, want)
+	}
+}

@@ -10,7 +10,7 @@ object GoCoreBridge {
     private const val STOP_TIMEOUT_MILLIS = 3_000L
 
     private fun isAndroidPlatformCompatible(): Boolean {
-        return android.os.Build.VERSION.SDK_INT < 36
+        return android.os.Build.VERSION.SDK_INT < 36 && AndroidLinuxRuntime.currentAbi() == "arm64-v8a"
     }
 
     @Synchronized

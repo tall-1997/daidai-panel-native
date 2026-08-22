@@ -16,16 +16,15 @@ object AndroidNodeRuntime {
     )
 
     private var cached: NodeRuntimePaths? = null
-    @Volatile private var cacheChecked = false
+    @Volatile private var lastFailure: String = ""
 
     fun ensureReady(context: Context): NodeRuntimePaths? {
-        if (cacheChecked) return cached
+        cached?.let { return it }
         synchronized(this) {
-            if (cacheChecked) return cached
-            val result = doEnsureReady(context)
-            cached = result
-            cacheChecked = true
-            return result
+            cached?.let { return it }
+            return runCatching { doEnsureReady(context) }
+                .onFailure { lastFailure = it.message.orEmpty() }
+                .getOrNull()?.also { cached = it; lastFailure = "" }
         }
     }
 
@@ -46,9 +45,7 @@ object AndroidNodeRuntime {
                 home.deleteRecursively()
                 home.mkdirs()
                 extractZipAsset(context, home)
-            } catch (e: Exception) {
-                return null
-            }
+            } catch (e: Exception) { throw IllegalStateException("NODE_RUNTIME_EXTRACT_FAILED", e) }
         }
 
         val modules = File(home, "lib/node_modules")
@@ -123,4 +120,6 @@ object AndroidNodeRuntime {
     }
 
     fun depsDir(context: Context): File = File(context.filesDir, "deps/nodejs").apply { mkdirs() }
+
+    fun failureReason(): String = lastFailure
 }

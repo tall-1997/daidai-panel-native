@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +18,7 @@ import (
 	"daidai-panel/model"
 	"daidai-panel/pkg/crypto"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -38,18 +43,48 @@ func hashOpenAppSecret(secret string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func checkOpenAppSecret(stored, provided string) bool {
+func checkOpenAppSecret(appKey, stored, provided string) bool {
+	if raw, err := openOpenAppSecret(context.Background(), appKey, stored); err == nil {
+		return raw == provided
+	}
 	if strings.HasPrefix(stored, "sha256:") {
 		return stored == hashOpenAppSecret(provided)
 	}
 	return stored == provided
 }
 
-func redactOpenAppSecret(stored string) string {
-	if strings.TrimSpace(stored) == "" {
-		return ""
+type sealedOpenAppSecret struct {
+	Provider string `json:"provider"`
+	Cipher   string `json:"cipher"`
+	Sealed   bool   `json:"sealed"`
+	Version  int    `json:"version"`
+}
+
+func sealOpenAppSecret(ctx context.Context, appKey, raw string) (string, error) {
+	sealed, err := service.RuntimeSecretStoreInstance().Seal(ctx, "open-app:"+appKey, []byte(raw))
+	if err != nil {
+		return "", err
 	}
-	return "********"
+	encoded, err := json.Marshal(sealedOpenAppSecret{
+		Provider: sealed.Provider,
+		Cipher:   base64.StdEncoding.EncodeToString(sealed.Cipher),
+		Sealed:   true,
+		Version:  1,
+	})
+	return string(encoded), err
+}
+
+func openOpenAppSecret(ctx context.Context, appKey, stored string) (string, error) {
+	var payload sealedOpenAppSecret
+	if json.Unmarshal([]byte(stored), &payload) != nil || !payload.Sealed || payload.Provider == "" || payload.Cipher == "" {
+		return "", fmt.Errorf("Open API Secret 不是可逆密文")
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(payload.Cipher)
+	if err != nil {
+		return "", err
+	}
+	opened, err := service.RuntimeSecretStoreInstance().Open(ctx, "open-app:"+appKey, service.SealedValue{Provider: payload.Provider, Cipher: ciphertext})
+	return string(opened), err
 }
 
 type openAppDailyCountRow struct {
@@ -131,10 +166,16 @@ func (h *OpenAPIHandler) Create(c *gin.Context) {
 	}
 
 	rawSecret := generateRandomKey(32)
+	appKey := generateRandomKey(16)
+	storedSecret, err := sealOpenAppSecret(c.Request.Context(), appKey, rawSecret)
+	if err != nil {
+		response.InternalError(c, "封存应用密钥失败")
+		return
+	}
 	app := model.OpenApp{
 		Name:      req.Name,
-		AppKey:    generateRandomKey(16),
-		AppSecret: hashOpenAppSecret(rawSecret),
+		AppKey:    appKey,
+		AppSecret: storedSecret,
 		Scopes:    req.Scopes,
 		Enabled:   true,
 		RateLimit: req.RateLimit,
@@ -223,7 +264,12 @@ func (h *OpenAPIHandler) ResetSecret(c *gin.Context) {
 	}
 
 	newSecret := generateRandomKey(32)
-	app.AppSecret = hashOpenAppSecret(newSecret)
+	storedSecret, err := sealOpenAppSecret(c.Request.Context(), app.AppKey, newSecret)
+	if err != nil {
+		response.InternalError(c, "封存应用密钥失败")
+		return
+	}
+	app.AppSecret = storedSecret
 	database.DB.Model(&app).Update("app_secret", app.AppSecret)
 
 	data := buildOpenAppResponse(&app, loadOpenAppDailyCount(app.ID), false)
@@ -260,7 +306,12 @@ func (h *OpenAPIHandler) ViewSecret(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"data": gin.H{"app_secret": redactOpenAppSecret(app.AppSecret)}})
+	secret, err := openOpenAppSecret(c.Request.Context(), app.AppKey, app.AppSecret)
+	if err != nil {
+		response.Error(c, http.StatusConflict, "历史应用密钥无法再次查看，请重置密钥")
+		return
+	}
+	response.Success(c, gin.H{"data": gin.H{"app_secret": secret}})
 }
 
 func (h *OpenAPIHandler) Token(c *gin.Context) {
@@ -286,7 +337,7 @@ func (h *OpenAPIHandler) Token(c *gin.Context) {
 		return
 	}
 
-	if !checkOpenAppSecret(app.AppSecret, req.AppSecret) {
+	if !checkOpenAppSecret(app.AppKey, app.AppSecret, req.AppSecret) {
 		response.Unauthorized(c, "凭证无效")
 		return
 	}

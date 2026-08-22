@@ -25,6 +25,8 @@ class LocalTaskFallbackSemanticsTest {
     @Test
     fun `rejects local Node module and unrelated output`() {
         assertNull(LocalTaskFallbackSemantics.detectMissingDependency("nodejs", "Error: Cannot find module './helper'"))
+        assertNull(LocalTaskFallbackSemantics.detectMissingDependency("nodejs", "Error: Cannot find module 'notify'"))
+        assertNull(LocalTaskFallbackSemantics.detectMissingDependency("python", "ModuleNotFoundError: No module named 'notify'"))
         assertNull(LocalTaskFallbackSemantics.detectMissingDependency("python", "SyntaxError: invalid syntax"))
     }
 

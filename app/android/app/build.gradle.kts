@@ -276,6 +276,7 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
         val primaryAbi = nativeAbis.first()
         val nativeDir = file("src/main/jniLibs/$primaryAbi")
         val launcher = file("$nativeDir/libnode_exec.so")
+        val runtimeLauncher = file("$nativeDir/libnodelauncher.so")
         val libnode = file("$nativeDir/libnode.so")
         val assets = file("src/main/nodeAssets/node-runtime/$version/usr")
         val metadataFile = file("$assets/runtime-metadata.json")
@@ -289,6 +290,9 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
         )
         check(launcher.isFile && isAndroidElf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
             "Missing real Android Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
+        }
+        check(runtimeLauncher.isFile && isAndroidElf(runtimeLauncher)) {
+            "Missing Android 16-compatible Node runtime launcher: ${runtimeLauncher.path}."
         }
         check(libnode.isFile && isAndroidElf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
             "Missing real Android libnode.so. Run app/scripts/prepare-android-node-runtime.sh."
@@ -436,6 +440,8 @@ tasks.named("preBuild").configure {
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
     dependsOn(verifyLocalPanelWeb)
+    dependsOn(verifyNodeNativeRuntime)
+    dependsOn(verifyPythonNativeRuntime)
     
 }
 
