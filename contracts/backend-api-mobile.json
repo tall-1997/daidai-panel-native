@@ -316,6 +316,16 @@
     },
     {
       "method": "DELETE",
+      "path": "/api/terminal/sessions/:id",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/delete_api_terminal_sessions_id"
+    },
+    {
+      "method": "DELETE",
       "path": "/api/users/:id",
       "module": "users",
       "mobileStatus": "supported",
@@ -633,6 +643,16 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/delete_api_v1_tasks_views_id"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/terminal/sessions/:id",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/delete_api_v1_terminal_sessions_id"
     },
     {
       "method": "DELETE",
@@ -1446,6 +1466,16 @@
     },
     {
       "method": "GET",
+      "path": "/api/terminal/sessions/:id",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_terminal_sessions_id"
+    },
+    {
+      "method": "GET",
       "path": "/api/users",
       "module": "users",
       "mobileStatus": "supported",
@@ -2256,6 +2286,16 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/terminal/sessions/:id",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/get_api_v1_terminal_sessions_id"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/users",
       "module": "users",
       "mobileStatus": "supported",
@@ -2766,6 +2806,26 @@
     },
     {
       "method": "POST",
+      "path": "/api/terminal/sessions",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_terminal_sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/terminal/sessions/:id/input",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_terminal_sessions_id_input"
+    },
+    {
+      "method": "POST",
       "path": "/api/users",
       "module": "users",
       "mobileStatus": "supported",
@@ -3243,6 +3303,26 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/post_api_v1_tasks_views"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/terminal/sessions",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_v1_terminal_sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/terminal/sessions/:id/input",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/post_api_v1_terminal_sessions_id_input"
     },
     {
       "method": "POST",
@@ -3793,6 +3873,26 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/put_api_tasks_views_reorder"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/terminal/sessions/:id/resize",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_terminal_sessions_id_resize"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/terminal/sessions/:id/stop",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_terminal_sessions_id_stop"
     },
     {
       "method": "PUT",
@@ -4353,6 +4453,26 @@
       "authContract": "jwt",
       "streamContract": "none",
       "testCase": "TestMobileRouteContract/put_api_v1_tasks_views_reorder"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/terminal/sessions/:id/resize",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_v1_terminal_sessions_id_resize"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/terminal/sessions/:id/stop",
+      "module": "terminal",
+      "mobileStatus": "supported",
+      "androidEquivalent": "native:terminal",
+      "authContract": "jwt",
+      "streamContract": "none",
+      "testCase": "TestMobileRouteContract/put_api_v1_terminal_sessions_id_stop"
     },
     {
       "method": "PUT",

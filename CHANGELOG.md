@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v1.0.11 - 2026-08-22
+
+### Android Linux Runtime
+
+- Alpine rootfs 升级为首选执行层，内置 `apk`、Bash、Python 3、pip、Node.js、npm、uv、pnpm 和 CA 证书。
+- Python、Node 和依赖自动安装优先使用 rootfs，Android/Bionic runtime 作为快速兼容路径。
+- rootfs manifest 记录包、命令、能力、大小和 SHA-256；APK 升级后按资产摘要自动刷新已安装 rootfs。
+- PRoot、BusyBox 和依赖固定 Termux 包版本与 SHA-256，并对 AArch64、动态依赖和 16 KB `PT_LOAD` alignment 执行 fail-closed 门禁。
+
+### Shell 与终端
+
+- 新增保守 Bashism 检测，识别 shebang、双中括号、数组、process substitution、brace expansion 等语法并自动路由 rootfs Bash。
+- 脚本、普通 task command 和前后置 hook 统一使用 rootfs shell planner。
+- Go Core 与 Kotlin fallback 新增 PTY session API，支持输入、增量原始输出、resize、停止、会话限额和进程组回收。
+- 本地 Web 新增交互终端页面，并限制前后端输出保留量和页面离开后的会话生命周期。
+
+### CI 与发行
+
+- canonical mobile route contract 扩展到 449 条路由。
+- CI 新增 rootfs 内容、manifest、PRoot provenance、原生依赖和 16 KB alignment 验证。
+- Android 版本提升至 `1.0.11+1000110`。
+
 ### 架构范围
 
 - 暂停 ARM32 与 x86_64 多架构 runtime 预研在主分支的集成。

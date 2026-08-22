@@ -285,7 +285,7 @@ jobs:
           go test ./scripts/run-runtime-smoke.go ./scripts/run-runtime-smoke_test.go
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_runtime_smoke.py
+          python3 -m unittest scripts/test_version.py scripts/test_android_runtime_smoke.py app/scripts/test_verify_android_linux_runtime.py
 
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check

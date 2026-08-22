@@ -93,6 +93,7 @@ func registerFullHandlers(engine *gin.Engine) {
 	platformTokenHandler := handler.NewPlatformTokenHandler()
 	sponsorHandler := handler.NewSponsorHandler()
 	androidRuntimeHandler := handler.NewAndroidRuntimeHandler()
+	terminalHandler := handler.NewTerminalHandler()
 
 	for _, prefix := range []string{"/api/v1", "/api"} {
 		group := engine.Group(prefix)
@@ -113,8 +114,11 @@ func registerFullHandlers(engine *gin.Engine) {
 		platformTokenHandler.RegisterRoutes(group)
 		sponsorHandler.RegisterRoutes(group)
 		androidRuntimeHandler.RegisterRoutes(group)
+		terminalHandler.RegisterRoutes(group)
 	}
 }
+
+func CloseMobileTerminalSessions() { handler.CloseTerminalSessions() }
 
 func mobileCapabilityMiddleware(platform MobilePlatform) gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -45,6 +45,10 @@ on:
     paths:
       - 'app/android/**'
       - 'app/scripts/prepare-android-*-runtime.sh'
+      - 'app/scripts/prepare-android-alpine-rootfs.sh'
+      - 'app/scripts/prepare-android-proot-busybox.sh'
+      - 'app/scripts/verify-android-linux-runtime.py'
+      - 'app/scripts/test_verify_android_linux_runtime.py'
       - 'panel/server/**'
       - 'runtime/**'
       - 'scripts/android-runtime-smoke.py'
@@ -104,7 +108,7 @@ jobs:
             --test-apk app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
             --matrix-id api35-4k --expected-api 35 --expected-page-size 4096
       - name: Test smoke driver
-        run: python3 -m unittest scripts/test_android_runtime_smoke.py
+        run: python3 -m unittest scripts/test_android_runtime_smoke.py app/scripts/test_verify_android_linux_runtime.py
       - uses: actions/upload-artifact@v4
         with:
           name: android-runtime-smoke-apks

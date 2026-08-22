@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "abi": "arm64-v8a",
+  "alpine_arch": "aarch64",
+  "alpine_version": "3.24.1",
+  "sha256": "5ecc989fb8ca960140e9f543273b0f0f8fddf8c4e96af1f7d0c7fb10976d22ad",
+  "size": 73547467,
+  "packages": [
+    "curl",
+    "git",
+    "openssh-client",
+    "tzdata",
+    "bash",
+    "python3",
+    "py3-pip",
+    "nodejs",
+    "npm",
+    "uv",
+    "pnpm",
+    "ca-certificates"
+  ],
+  "required_commands": [
+    "apk",
+    "bash",
+    "python3",
+    "pip3",
+    "node",
+    "npm",
+    "uv",
+    "pnpm"
+  ],
+  "capabilities": {
+    "package_manager": [
+      "apk"
+    ],
+    "shell": [
+      "bash"
+    ],
+    "python": [
+      "python3",
+      "pip3",
+      "uv"
+    ],
+    "node": [
+      "node",
+      "npm",
+      "pnpm"
+    ],
+    "tls_ca_certificates": true
+  }
+}

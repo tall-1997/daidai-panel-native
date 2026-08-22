@@ -28,6 +28,7 @@ const routeComponents = {
   dashboard: () => import('@/views/dashboard/index.vue'),
   tasks: () => import('@/views/tasks/index.vue'),
   scripts: () => import('@/views/scripts/index.vue'),
+  terminal: () => import('@/views/terminal/index.vue'),
   envs: () => import('@/views/envs/index.vue'),
   configFile: () => import('@/views/config-file/index.vue'),
   subscriptions: () => import('@/views/subscriptions/index.vue'),
@@ -45,6 +46,7 @@ const routePreloaders: Record<string, () => Promise<unknown>> = {
   '/dashboard': routeComponents.dashboard,
   '/tasks': routeComponents.tasks,
   '/scripts': routeComponents.scripts,
+  '/terminal': routeComponents.terminal,
   '/envs': routeComponents.envs,
   '/config-file': routeComponents.configFile,
   '/subscriptions': routeComponents.subscriptions,
@@ -154,6 +156,12 @@ const router = createRouter({
           name: 'Scripts',
           component: routeComponents.scripts,
           meta: { title: '脚本管理', icon: 'Document', minRole: 'operator' }
+        },
+        {
+          path: 'terminal',
+          name: 'Terminal',
+          component: routeComponents.terminal,
+          meta: { title: '交互终端', icon: 'Monitor', minRole: 'operator' }
         },
         {
           path: 'envs',

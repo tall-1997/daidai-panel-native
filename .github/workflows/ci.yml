@@ -73,6 +73,10 @@ jobs:
               - 'app/scripts/prepare-android-python-runtime.sh'
               - 'app/scripts/prepare-android-node-runtime.sh'
               - 'app/scripts/prepare-android-yaegi-runtime.sh'
+              - 'app/scripts/prepare-android-alpine-rootfs.sh'
+              - 'app/scripts/prepare-android-proot-busybox.sh'
+              - 'app/scripts/verify-android-linux-runtime.py'
+              - 'app/scripts/test_verify_android_linux_runtime.py'
               - 'app/scripts/verify-android-node-runtime.sh'
               - 'app/runtime-tools/yaegi/**'
               - 'panel/server/mobilecore/**'
@@ -245,6 +249,12 @@ jobs:
         working-directory: app
         run: bash scripts/prepare-android-node-runtime.sh
 
+      - name: Prepare Android Linux runtime
+        working-directory: app
+        run: |
+          bash scripts/prepare-android-alpine-rootfs.sh
+          bash scripts/prepare-android-proot-busybox.sh
+
       - name: Prepare Android Yaegi runtime
         working-directory: app
         run: ANDROID_RUNTIME_ABIS='arm64-v8a' bash scripts/prepare-android-yaegi-runtime.sh
@@ -258,6 +268,9 @@ jobs:
       - name: Run Kotlin tests
         working-directory: app
         run: gradle -p android :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Test Android Linux runtime verifier
+        run: python3 -m unittest app/scripts/test_verify_android_linux_runtime.py
 
       - name: Upload Kotlin test reports
         if: always()

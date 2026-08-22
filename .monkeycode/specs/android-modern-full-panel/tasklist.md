@@ -210,6 +210,12 @@ Embed Yaegi with a fixed symbol allowlist. Package Go compiler/linker/asm tools 
 
 Implement Android Keystore envelope encryption and source/version/SHA-256/capability authorization records. Add `:runner` trusted process and isolated pure-compute worker.
 
+### Task 2.7: First-Class Rootfs and PTY Sessions
+
+**Status:** Complete for implementation and CI contracts in v1.0.11; strict physical-device 16 KB execution evidence remains part of the release matrix.
+
+Promote Alpine rootfs to the preferred Python, Node, Shell and dependency layer. Bundle Bash, Python, pip, Node.js, npm, uv, pnpm and CA certificates. Route Bashisms to rootfs Bash, validate pinned PRoot/BusyBox artifacts with 16 KB alignment, and expose bounded PTY sessions through Go Core and Kotlin fallback.
+
 ### Milestone 2 Exit Gate
 
 - Eight runtime IDs must pass smoke on API 28/4K, API 35/4K, and API 35/16K; current records are blocked.

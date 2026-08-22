@@ -65,6 +65,7 @@ class LocalPanelStore(
     private val scriptRunPendingPersistence = ConcurrentHashMap<String, Int>()
     private val scriptRunLocks = ConcurrentHashMap<String, Any>()
     private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
+    private val terminalSessions = AndroidTerminalSessions()
     @Volatile private var lastScheduledBackupKey = ""
 
     internal data class LocalScriptResult(
@@ -689,6 +690,57 @@ class LocalPanelStore(
             "SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ?",
             arrayOf(token)
         ).use(Cursor::moveToFirst)
+    }
+
+    fun serveTerminal(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response = authenticated(session) {
+        val uri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+        val parts = uri.trim('/').split('/').filter(String::isNotBlank)
+        val id = parts.getOrNull(2).orEmpty()
+        val action = parts.getOrNull(3).orEmpty()
+        try {
+            when {
+                session.method == NanoHTTPD.Method.POST && parts == listOf("terminal", "sessions") -> {
+                    val payload = body(session)
+                    val rows = payload.optInt("rows", 24)
+                    val columns = payload.optInt("columns", 80)
+                    val rootfsCommand = AndroidLinuxRuntime.guestCommand(
+                        appContext,
+                        appContext.filesDir,
+                        listOf("/bin/bash", "-l"),
+                    ) ?: return@authenticated error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "ROOTFS_TERMINAL_UNAVAILABLE")
+                    val data = terminalSessions.create(rootfsCommand, terminalEnvironment(), appContext.filesDir, "/bin/bash", rows, columns)
+                    NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.CREATED, "application/json; charset=utf-8", JSONObject().put("data", data).toString())
+                }
+                session.method == NanoHTTPD.Method.GET && id.isNotBlank() && action.isBlank() ->
+                    ok(JSONObject().put("data", terminalSessions.get(id, session.parms["cursor"]?.toLongOrNull() ?: 0L)))
+                session.method == NanoHTTPD.Method.POST && id.isNotBlank() && action == "input" -> {
+                    val payload = body(session)
+                    val encoding = payload.optString("encoding", "utf8")
+                    val raw = payload.optString("data")
+                    val bytes = if (encoding == "base64") Base64.decode(raw, Base64.DEFAULT) else raw.toByteArray(Charsets.UTF_8)
+                    terminalSessions.write(id, bytes)
+                    ok(JSONObject().put("status", "accepted"))
+                }
+                session.method == NanoHTTPD.Method.PUT && id.isNotBlank() && action == "resize" -> {
+                    val payload = body(session)
+                    terminalSessions.resize(id, payload.optInt("rows", 24), payload.optInt("columns", 80))
+                    ok(JSONObject().put("status", "resized"))
+                }
+                session.method == NanoHTTPD.Method.PUT && id.isNotBlank() && action == "stop" ->
+                    ok(JSONObject().put("data", terminalSessions.stop(id)))
+                session.method == NanoHTTPD.Method.DELETE && id.isNotBlank() && action.isBlank() -> {
+                    terminalSessions.remove(id)
+                    ok(JSONObject().put("status", "deleted"))
+                }
+                else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "终端接口不存在")
+            }
+        } catch (error: NoSuchElementException) {
+            error(NanoHTTPD.Response.Status.NOT_FOUND, error.message ?: "终端会话不存在")
+        } catch (error: IllegalArgumentException) {
+            error(NanoHTTPD.Response.Status.BAD_REQUEST, error.message ?: "终端请求无效")
+        } catch (error: IllegalStateException) {
+            error(NanoHTTPD.Response.Status.CONFLICT, error.message ?: "终端会话状态冲突")
+        }
     }
 
     fun dashboard(): JSONObject {
@@ -2257,7 +2309,7 @@ fun serveDashboardStats(): JSONObject {
         appendScriptRunLog(runId, commandLine)
         return try {
             val process = ProcessBuilder(command).directory(workingDir).redirectErrorStream(true)
-                .apply { environment().putAll(runtimeEnvironment(workingDir)) }.start()
+                .apply { applyProcessEnvironment(command, environment(), workingDir) }.start()
             scriptProcesses[runId] = process
             if (scriptRunStatus(runId) == "stopped") {
                 process.destroyForcibly()
@@ -2286,59 +2338,29 @@ fun serveDashboardStats(): JSONObject {
     private fun executeStructuredCommand(command: String, taskId: Long? = null, onLine: ((String) -> Unit)? = null, timeoutSeconds: Long = 300): LocalScriptResult {
         val logs = JSONArray().put("Android local fallback executing shell command: $command")
         onLine?.invoke("Android local fallback executing shell command: $command")
-        val parts = try { LocalTaskFallbackSemantics.tokenize(command) } catch (error: IllegalArgumentException) {
-            return LocalScriptResult(logs.put(error.message), "failed", true, 2)
-        }
-        if (parts.isEmpty()) {
+        if (command.isBlank()) {
             return LocalScriptResult(logs.put("Empty command"), "failed", true, 1)
         }
-        val pb = ProcessBuilder(parts)
-        pb.directory(appContext.filesDir)
-        pb.redirectErrorStream(true)
-        LocalTaskFallbackSemantics.applyRuntimeEnvironment(pb.environment(), runtimeEnvironment(appContext.filesDir))
-        return try {
-            val process = pb.start()
-            if (taskId != null && !registerTaskProcess(taskId, process)) {
-                return LocalScriptResult(logs.put("Task aborted before process start"), "aborted", true, 130)
-            }
-            val output = mutableListOf<String>()
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    output += line
-                    onLine?.invoke(line)
-                }
-            }
-            output.takeLast(100).forEach { logs.put(it) }
-            val finished = process.waitFor(timeoutSeconds.coerceAtLeast(1), TimeUnit.SECONDS)
-            if (!finished) {
-                terminateTaskProcess(process)
-                return LocalScriptResult(logs.put("Task timed out after $timeoutSeconds seconds"), "failed", true, 124)
-            }
-            val code = process.exitValue()
-            val status = if (code == 0) "success" else "failed"
-            LocalScriptResult(logs, status, true, code)
-        } catch (e: Exception) {
-            LocalScriptResult(logs.put("Execution error: ${e.message}"), "failed", true, 1)
-        } finally {
-            if (taskId != null) taskProcesses.remove(taskId)
-        }
+        val scan = ShellCompatibility.scan(command)
+        val shell = if (scan.requiresBash) AndroidLinuxRuntime.GuestShell.BASH else AndroidLinuxRuntime.GuestShell.SH
+        if (scan.requiresBash) logs.put("Shell route: /bin/bash (${scan.matchedRules.joinToString()})")
+        val rootfsCommand = AndroidLinuxRuntime.shellTextCommand(appContext, appContext.filesDir, command, shell)
+            ?: return LocalScriptResult(logs.put("ROOTFS_SHELL_UNAVAILABLE: first-class Linux runtime is required for task commands"), "failed", true, 127)
+        return runLocalProcess(rootfsCommand, appContext.filesDir, logs, timeoutSeconds, onLine, taskId)
     }
 
     private fun executeHookCommand(command: String, taskId: Long, onLine: ((String) -> Unit)? = null): LocalScriptResult {
-        val hook = File(appContext.cacheDir, "task-hooks/${UUID.randomUUID()}.sh")
-        return try {
-            hook.parentFile?.mkdirs()
-            hook.writeText(command, Charsets.UTF_8)
-            runLocalProcess(
-                listOf("/system/bin/sh", hook.absolutePath),
-                appContext.filesDir,
-                JSONArray().put("Android local fallback executing task hook"),
-                onLine = onLine,
-                taskId = taskId,
-            )
-        } finally {
-            hook.delete()
-        }
+        val scan = ShellCompatibility.scan(command)
+        val shell = if (scan.requiresBash) AndroidLinuxRuntime.GuestShell.BASH else AndroidLinuxRuntime.GuestShell.SH
+        val rootfsCommand = AndroidLinuxRuntime.shellTextCommand(appContext, appContext.filesDir, command, shell)
+            ?: return LocalScriptResult(JSONArray().put("ROOTFS_SHELL_UNAVAILABLE: task hooks require the Linux runtime"), "failed", true, 127)
+        return runLocalProcess(
+            rootfsCommand,
+            appContext.filesDir,
+            JSONArray().put("Android local fallback executing task hook with ${shell.executable}"),
+            onLine = onLine,
+            taskId = taskId,
+        )
     }
 
     private fun executeScriptFile(file: File, displayPath: String, languageHint: String = "", args: List<String> = emptyList(), timeoutSeconds: Long = 300, extraEnvironment: Map<String, String> = emptyMap(), onLine: ((String) -> Unit)? = null, taskId: Long? = null): LocalScriptResult {
@@ -2361,31 +2383,34 @@ fun serveDashboardStats(): JSONObject {
         val nativeDir = appContext.applicationInfo.nativeLibraryDir.orEmpty()
         fun native(name: String): String? = File(nativeDir, name).takeIf { it.isFile && isRuntimeEntryVerified(it) }?.absolutePath
         return when {
-            ext == "sh" || languageHint.equals("shell", ignoreCase = true) ->
-                AndroidLinuxRuntime.shellCommand(appContext, file, file.parentFile ?: scriptsRoot()) ?: listOf("/system/bin/sh", file.absolutePath)
+            ext in setOf("sh", "bash") || languageHint.equals("shell", ignoreCase = true) || languageHint.equals("bash", ignoreCase = true) -> {
+                val scan = ShellCompatibility.scan(runCatching { file.readText(Charsets.UTF_8) }.getOrDefault(""))
+                val requiresBash = ext == "bash" || languageHint.equals("bash", true) || scan.requiresBash
+                val shell = if (requiresBash) AndroidLinuxRuntime.GuestShell.BASH else AndroidLinuxRuntime.GuestShell.SH
+                AndroidLinuxRuntime.shellCommand(appContext, file, file.parentFile ?: scriptsRoot(), shell)
+            }
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
-                val pyRuntime = AndroidPythonRuntime.ensureReady(appContext)
-                if (pyRuntime != null) {
-                    listOf(pyRuntime.executable, pyRuntime.wrapperScript, file.absolutePath)
-                } else {
-                    val guestPythonPath = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
-                    AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "/usr/bin/python3", "/workspace/${file.name}")) ?: run {
+                val guestPythonPath = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "/usr/bin/python3", "/workspace/${file.name}"))
+                    ?: AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.wrapperScript, file.absolutePath) }
+                    ?: run {
                     val sysPy = try {
                         val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
                         p.waitFor()
                         if (p.exitValue() == 0) p.inputStream.bufferedReader().readText().trim() else null
                     } catch (_: Exception) { null }
                     if (sysPy != null) listOf(sysPy, file.absolutePath) else null
-                    }
                 }
             }
-            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, file.absolutePath) }
-                ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", typeScriptEvalCode(), file.absolutePath) }
-                ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "-e", typeScriptEvalCode(), "/workspace/${file.name}"))
+            ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) ->
+                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
+                    ?: AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, file.absolutePath) }
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) ->
+                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "-e", typeScriptEvalCode(), "/workspace/${file.name}"))
+                    ?: AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", typeScriptEvalCode(), file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
                 ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/go", "run", "/workspace/${file.name}"))
-            else -> listOf("/system/bin/sh", file.absolutePath).takeIf { displayPath.endsWith(".sh") }
+            else -> null
         }
     }
 
@@ -2409,8 +2434,7 @@ fun serveDashboardStats(): JSONObject {
                 .directory(workingDir)
                 .redirectErrorStream(true)
                 .apply {
-                    LocalTaskFallbackSemantics.applyRuntimeEnvironment(environment(), runtimeEnvironment(workingDir))
-                    environment().putAll(extraEnvironment)
+                    applyProcessEnvironment(command, environment(), workingDir, extraEnvironment)
                 }
                 .start()
             if (taskId != null && !registerTaskProcess(taskId, process)) {
@@ -2661,6 +2685,38 @@ fun serveDashboardStats(): JSONObject {
         }
         grouped.forEach { (name, values) -> env[name] = LocalTaskFallbackSemantics.joinEnvironmentValues(values) }
         return env
+    }
+
+    private fun applyProcessEnvironment(
+        command: List<String>,
+        target: MutableMap<String, String>,
+        workingDir: File,
+        extraEnvironment: Map<String, String> = emptyMap(),
+    ) {
+        LocalTaskFallbackSemantics.applyRuntimeEnvironment(target, runtimeEnvironment(workingDir))
+        target.putAll(extraEnvironment)
+        if (command.firstOrNull()?.substringAfterLast('/') !in setOf("liboperit_proot.so", "libdaidai_proot.so")) return
+        target.remove("PYTHONHOME")
+        target["HOME"] = "/root"
+        target["PWD"] = "/workspace"
+        target["TMPDIR"] = "/tmp"
+        target["PYTHONPATH"] = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages:/workspace"
+        target["NODE_PATH"] = "/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules:/workspace"
+        target.remove("NODE_OPTIONS")
+        target["QL_DIR"] = "/host-files"
+        target["QL_DATA_DIR"] = "/host-files"
+        target["QL_SCRIPT_DIR"] = "/workspace"
+    }
+
+    private fun terminalEnvironment(): MutableMap<String, String> = AndroidLinuxRuntime.baseEnvironment(appContext, appContext.filesDir).apply {
+        put("HOME", "/root")
+        put("PWD", "/host-files")
+        put("TMPDIR", "/tmp")
+        put("TERM", "xterm-256color")
+        put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        remove("PYTHONHOME")
+        remove("PYTHONPATH")
+        remove("NODE_OPTIONS")
     }
 
     private val reservedRuntimeEnvironmentNames = setOf(
@@ -4038,8 +4094,7 @@ fun serveDashboardStats(): JSONObject {
             if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
                 return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
             }
-            val runtime = AndroidPythonRuntime.ensureReady(appContext)
-            if (runtime == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
+            if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
                 val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--only-binary=:all:", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
@@ -4047,6 +4102,7 @@ fun serveDashboardStats(): JSONObject {
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
+            val runtime = AndroidPythonRuntime.ensureReady(appContext)
             runtime ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
             val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
             installScript.parentFile?.mkdirs()
@@ -4074,8 +4130,7 @@ fun serveDashboardStats(): JSONObject {
             if (restricted.contains(name.lowercase()) && !allowUnverifiedNative) {
                 return "blocked" to "RESTRICTED_NODE_PACKAGE_BLOCKED: enable allow_unverified_android_abi_wheels before installing restricted automation packages"
             }
-            val directNode = AndroidNodeRuntime.ensureReady(appContext)
-            if (directNode == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
+            if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                 val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
                 val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
@@ -4084,6 +4139,7 @@ fun serveDashboardStats(): JSONObject {
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
+            val directNode = AndroidNodeRuntime.ensureReady(appContext)
             return directNode?.let { runtime ->
                 val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
                 val cache = DependencyStorage.npmCache(appContext.filesDir).apply { mkdirs() }
@@ -4562,6 +4618,7 @@ fun serveDashboardStats(): JSONObject {
     private fun Cursor.int(column: String): Int = getInt(getColumnIndexOrThrow(column))
     private fun Cursor.double(column: String): Double = getDouble(getColumnIndexOrThrow(column))
     override fun close() {
+        terminalSessions.close()
         scriptProcesses.values.forEach(::terminateTaskProcess)
         taskProcesses.values.forEach(::terminateTaskProcess)
         scriptProcesses.clear()

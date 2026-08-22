@@ -39,12 +39,17 @@ object GoCoreBridge {
         val hostStatus = AndroidSchedulerHostStatus.status(context, foregroundActive, recoveryTrigger = "app-start")
         val dataDir = File(context.filesDir, "local-panel").apply { mkdirs() }.canonicalPath
         val webDir = LocalWebAssets.ensureExtracted(context).canonicalPath
+        val rootfs = AndroidLinuxRuntime.ensureRootfsReady(context)
         val options = JSONObject()
             .put("dataDir", dataDir)
             .put("bindHost", "127.0.0.1")
             .put("port", 0)
             .put("localToken", localToken)
             .put("nativeLibraryDir", context.applicationInfo.nativeLibraryDir)
+            .put("androidFilesDir", context.filesDir.canonicalPath)
+            .put("androidCacheDir", context.cacheDir.canonicalPath)
+            .put("linuxRootfsDir", rootfs?.root?.canonicalPath.orEmpty())
+            .put("prootPath", rootfs?.proot?.canonicalPath.orEmpty())
             .put("webDir", webDir)
             .put("androidKeystoreMasterKey", AndroidRuntimeSecretBridge.runtimeMasterKey(context))
             .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))

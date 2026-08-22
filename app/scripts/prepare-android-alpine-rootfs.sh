@@ -7,7 +7,10 @@ asset_root="$repo_root/app/android/app/src/main/assets/android-runtime"
 cache_root="${ANDROID_ALPINE_ROOTFS_CACHE:-$HOME/.cache/daidai-android-alpine-rootfs}"
 mirror="${ALPINE_APK_MIRROR:-https://repo.huaweicloud.com/alpine}"
 release_branch="${ALPINE_RELEASE_BRANCH:-latest-stable}"
-packages="${ALPINE_ROOTFS_PACKAGES:-bash python3 py3-pip nodejs npm typescript go ca-certificates curl git openssh-client tzdata}"
+required_packages=(bash python3 py3-pip nodejs npm uv pnpm ca-certificates)
+required_commands=(apk bash python3 pip3 node npm uv pnpm)
+extra_packages="${ALPINE_ROOTFS_PACKAGES:-curl git openssh-client tzdata}"
+packages="$extra_packages ${required_packages[*]}"
 abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
 apk_static_bin=""
 
@@ -113,18 +116,40 @@ build_rootfs_for_abi() {
     usermode_args+=(--usermode)
   fi
   "$apk_static_bin" "${usermode_args[@]}" --root "$root_dir" --arch "$alpine_arch" --keys-dir "$root_dir/etc/apk/keys" --repositories-file "$root_dir/etc/apk/repositories" --no-cache --no-scripts --initdb add $packages
+  for command in "${required_commands[@]}"; do
+    test -x "$root_dir/usr/bin/$command" || test -x "$root_dir/bin/$command" || test -x "$root_dir/sbin/$command" || test -x "$root_dir/usr/sbin/$command" || {
+      printf 'Required rootfs command is missing or not executable: %s\n' "$command" >&2
+      exit 1
+    }
+  done
+  test -s "$root_dir/etc/ssl/certs/ca-certificates.crt" || {
+    printf 'Required CA certificate bundle is missing.\n' >&2
+    exit 1
+  }
   tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' -cf - -C "$root_dir" . | gzip -n > "$output_dir/rootfs.tar.gz.bin"
   sha256sum "$output_dir/rootfs.tar.gz.bin" | awk '{print $1}' > "$output_dir/rootfs.tar.gz.bin.sha256"
-  python3 - "$output_dir/runtime-manifest.json" "$abi" "$alpine_arch" "$version" "$output_dir/rootfs.tar.gz.bin" "$packages" <<'PY'
+  python3 - "$output_dir/runtime-manifest.json" "$abi" "$alpine_arch" "$version" "$output_dir/rootfs.tar.gz.bin" "$packages" "${required_commands[*]}" <<'PY'
 import hashlib, json, pathlib, sys
-target, abi, arch, version, archive, packages = sys.argv[1:]
+target, abi, arch, version, archive, packages, required_commands = sys.argv[1:]
 path = pathlib.Path(archive)
 pathlib.Path(target).write_text(json.dumps({
-    "schema_version": 1, "abi": abi, "alpine_arch": arch, "alpine_version": version,
+    "schema_version": 2, "abi": abi, "alpine_arch": arch, "alpine_version": version,
     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size,
     "packages": packages.split(),
+    "required_commands": required_commands.split(),
+    "capabilities": {
+        "package_manager": ["apk"],
+        "shell": ["bash"],
+        "python": ["python3", "pip3", "uv"],
+        "node": ["node", "npm", "pnpm"],
+        "tls_ca_certificates": True,
+    },
 }, indent=2) + "\n")
 PY
+  python3 "$script_dir/verify-android-linux-runtime.py" \
+    --rootfs "$output_dir/rootfs.tar.gz.bin" \
+    --rootfs-sha "$output_dir/rootfs.tar.gz.bin.sha256" \
+    --rootfs-manifest "$output_dir/runtime-manifest.json"
 }
 
 install_apk_static

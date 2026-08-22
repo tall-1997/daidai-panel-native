@@ -1,5 +1,6 @@
 import java.io.File
 import java.io.FileInputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.Properties
@@ -71,6 +72,11 @@ android {
         ndk {
             abiFilters += requestedAbis
         }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+            }
+        }
     }
 
     signingConfigs {
@@ -112,6 +118,12 @@ android {
 
     buildFeatures {
         aidl = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/CMakeLists.txt")
+        }
     }
 
     sourceSets {
@@ -238,18 +250,88 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
 
 val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
     group = "verification"
-    description = "Fails when the packaged Alpine/Ubuntu rootfs or PRoot runner is missing."
+    description = "Verifies the rootfs contract and pinned 16 KB-aligned Android native tools."
     doLast {
+        val requiredCommands = listOf("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm")
+        val requiredPackages = setOf("bash", "python3", "py3-pip", "nodejs", "npm", "uv", "pnpm", "ca-certificates")
+        val requiredCapabilities = mapOf(
+            "package_manager" to listOf("apk"),
+            "shell" to listOf("bash"),
+            "python" to listOf("python3", "pip3", "uv"),
+            "node" to listOf("node", "npm", "pnpm"),
+        )
         requestedAbis.forEach { abi ->
-            val rootfs = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin")
-            val rootfsSha = file("src/main/assets/android-runtime/$abi/rootfs.tar.gz.bin.sha256")
+            val assetDir = file("src/main/assets/android-runtime/$abi")
+            val rootfs = file("$assetDir/rootfs.tar.gz.bin")
+            val rootfsSha = file("$assetDir/rootfs.tar.gz.bin.sha256")
+            val rootfsManifestFile = file("$assetDir/runtime-manifest.json")
+            val nativeManifestFile = file("$assetDir/native-runtime-manifest.json")
             val nativeDir = file("src/main/jniLibs/$abi")
             val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
-            check(rootfs.isFile && rootfsSha.isFile) { "Missing Android Linux rootfs assets for $abi." }
-            check(proot != null && isAndroidElf(proot)) { "Missing Android PRoot runner for $abi." }
+            check(rootfs.isFile && rootfsSha.isFile && rootfsManifestFile.isFile) { "Missing Android Linux rootfs assets or manifest for $abi." }
+            check(nativeManifestFile.isFile) { "Missing pinned native runtime manifest for $abi." }
+            check(proot != null && isArm64Elf(proot) && hasMinimumElfLoadAlignment(proot, 16384L)) {
+                "Android PRoot runner for $abi must be an arm64 ELF with 16 KB PT_LOAD alignment."
+            }
             check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
             val expected = rootfsSha.readText().trim().substringBefore(' ')
-            check(expected.length == 64 && expected.equals(sha256(rootfs), ignoreCase = true)) { "Android Linux rootfs checksum mismatch for $abi." }
+            val actualRootfsSha = sha256(rootfs)
+            check(expected.length == 64 && expected.equals(actualRootfsSha, ignoreCase = true)) { "Android Linux rootfs checksum mismatch for $abi." }
+
+            @Suppress("UNCHECKED_CAST")
+            val rootfsManifest = JsonSlurper().parse(rootfsManifestFile) as Map<String, Any>
+            check((rootfsManifest["schema_version"] as? Number)?.toInt() == 2) { "Android rootfs manifest schema must be version 2 for $abi." }
+            check(rootfsManifest["abi"] == abi && rootfsManifest["sha256"] == actualRootfsSha) { "Android rootfs manifest identity or checksum mismatch for $abi." }
+            check((rootfsManifest["size"] as? Number)?.toLong() == rootfs.length()) { "Android rootfs manifest size mismatch for $abi." }
+            check((rootfsManifest["required_commands"] as? List<*>) == requiredCommands) { "Android rootfs required_commands mismatch for $abi." }
+            check(requiredPackages.all { it in (rootfsManifest["packages"] as? List<*>).orEmpty() }) { "Android rootfs required package list is incomplete for $abi." }
+            @Suppress("UNCHECKED_CAST")
+            val capabilities = rootfsManifest["capabilities"] as? Map<String, Any> ?: error("Android rootfs capabilities are missing for $abi.")
+            requiredCapabilities.forEach { (name, commands) -> check(capabilities[name] == commands) { "Android rootfs capability $name mismatch for $abi." } }
+            check(capabilities["tls_ca_certificates"] == true) { "Android rootfs TLS CA capability is missing for $abi." }
+
+            @Suppress("UNCHECKED_CAST")
+            val nativeManifest = JsonSlurper().parse(nativeManifestFile) as Map<String, Any>
+            check((nativeManifest["schema_version"] as? Number)?.toInt() == 1 && nativeManifest["abi"] == abi) { "Android native runtime manifest identity mismatch for $abi." }
+            check((nativeManifest["minimum_load_alignment"] as? Number)?.toLong() == 16384L) { "Android native runtime alignment policy mismatch for $abi." }
+            @Suppress("UNCHECKED_CAST")
+            val provenance = nativeManifest["provenance"] as? Map<String, Any> ?: error("Android native runtime provenance is missing for $abi.")
+            check(provenance["strategy"] == "pinned-termux-binary-packages" && provenance["source_build"] == false && provenance["source_patch_applied"] == false) {
+                "Android native runtime provenance makes an unsupported source-build or patch claim for $abi."
+            }
+            @Suppress("UNCHECKED_CAST")
+            val termuxRecipe = provenance["termux_recipe"] as? Map<String, Any> ?: error("Pinned Termux recipe metadata is missing for $abi.")
+            @Suppress("UNCHECKED_CAST")
+            val upstreamSource = provenance["upstream_source"] as? Map<String, Any> ?: error("Pinned upstream PRoot source metadata is missing for $abi.")
+            check((termuxRecipe["commit"] as? String)?.matches(Regex("[0-9a-f]{40}")) == true) { "Termux recipe commit is not pinned for $abi." }
+            check((upstreamSource["sha256"] as? String)?.matches(Regex("[0-9a-f]{64}")) == true) { "Upstream PRoot source hash is not pinned for $abi." }
+            @Suppress("UNCHECKED_CAST")
+            val packageSources = nativeManifest["packages"] as? List<Map<String, Any>> ?: error("Android native package sources are missing for $abi.")
+            check(packageSources.isNotEmpty() && packageSources.all { (it["sha256"] as? String)?.matches(Regex("[0-9a-f]{64}")) == true }) {
+                "Android native runtime contains an unpinned Termux package for $abi."
+            }
+            @Suppress("UNCHECKED_CAST")
+            val artifacts = nativeManifest["artifacts"] as? List<Map<String, Any>> ?: error("Android native artifacts are missing for $abi.")
+            val requiredNativeFiles = setOf("liboperit_proot.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
+            check(requiredNativeFiles.all { required -> artifacts.any { it["name"] == required } }) { "Android PRoot/BusyBox dependency manifest is incomplete for $abi." }
+            val expectedDependencies = mapOf(
+                "liboperit_proot.so" to listOf("libtalloc_2.so", "libandroid-shmem.so"),
+                "liboperit_busybox.so" to listOf("libbusybox_1_38_0.so"),
+                "libbusybox_1_38_0.so" to listOf("libandroid-selinux.so"),
+                "libandroid-selinux.so" to listOf("libpcre2-8.so"),
+            )
+            artifacts.forEach { artifact ->
+                val name = artifact["name"] as? String ?: error("Android native artifact has no name for $abi.")
+                val binary = file("$nativeDir/$name")
+                check(binary.isFile && artifact["sha256"] == sha256(binary) && (artifact["size"] as? Number)?.toLong() == binary.length()) {
+                    "Android native artifact checksum or size mismatch: $name."
+                }
+                check(isArm64Elf(binary) && hasMinimumElfLoadAlignment(binary, 16384L)) {
+                    "Android native artifact must be arm64 and 16 KB PT_LOAD aligned: $name."
+                }
+                val binaryStrings = binary.readText(Charsets.ISO_8859_1)
+                check(expectedDependencies[name].orEmpty().all(binaryStrings::contains)) { "Android native artifact dependency contract mismatch: $name." }
+            }
         }
     }
 }
@@ -415,6 +497,45 @@ fun isAndroidElf(file: File): Boolean {
     if (header[4] !in listOf(1.toByte(), 2.toByte()) || header[5] != 1.toByte()) return false
     val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
     return machine == 40 || machine == 183 || machine == 62
+}
+
+fun hasMinimumElfLoadAlignment(file: File, minimumAlignment: Long): Boolean {
+    RandomAccessFile(file, "r").use { elf ->
+        val identification = ByteArray(16)
+        if (elf.read(identification) != identification.size || identification.sliceArray(0..3).contentEquals(byteArrayOf(0x7f.toByte(), 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte())).not()) return false
+        if (identification[4] != 2.toByte() || identification[5] != 1.toByte()) return false
+        fun readUnsignedShort(): Int {
+            val bytes = ByteArray(2)
+            elf.readFully(bytes)
+            return (bytes[0].toInt() and 0xff) or ((bytes[1].toInt() and 0xff) shl 8)
+        }
+        fun readLongLittleEndian(): Long {
+            val bytes = ByteArray(8)
+            elf.readFully(bytes)
+            return bytes.indices.fold(0L) { value, index -> value or ((bytes[index].toLong() and 0xffL) shl (index * 8)) }
+        }
+        elf.seek(32)
+        val programHeaderOffset = readLongLittleEndian()
+        elf.seek(54)
+        val programHeaderSize = readUnsignedShort()
+        val programHeaderCount = readUnsignedShort()
+        val programHeadersLength = programHeaderSize.toLong() * programHeaderCount
+        if (programHeaderSize < 56 || programHeaderCount == 0 || programHeaderOffset < 0 || programHeadersLength > elf.length() || programHeaderOffset > elf.length() - programHeadersLength) return false
+        var loadSegments = 0
+        repeat(programHeaderCount) { index ->
+            val headerOffset = programHeaderOffset + index.toLong() * programHeaderSize
+            elf.seek(headerOffset)
+            val typeBytes = ByteArray(4)
+            elf.readFully(typeBytes)
+            val type = typeBytes.indices.fold(0) { value, byteIndex -> value or ((typeBytes[byteIndex].toInt() and 0xff) shl (byteIndex * 8)) }
+            if (type == 1) {
+                loadSegments++
+                elf.seek(headerOffset + 48)
+                if (readLongLittleEndian() < minimumAlignment) return false
+            }
+        }
+        return loadSegments > 0
+    }
 }
 
 fun sha256(file: File): String {

@@ -18,11 +18,12 @@
 
 ## 当前实现状态
 
-- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `1.0.5`，Android version code 为 `1000050`。
+- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `1.0.11`，Android version code 为 `1000110`。
 - capability 状态为 `enabled` 时，请求进入已注册的真实 Go Handler；禁用或未声明能力返回稳定的 `PLATFORM_CAPABILITY` 结果。
 - Go Core 在运行时组件受阻时保持管理核心可用并报告 `degraded-ready`，运行时执行保持 fail-closed。
 - Kotlin fallback 提供控制面兼容 API，复用安装级 token，并严格校验回环 Host 与 Origin；能力响应逐项标记 native runtime、Git 订阅、Open API token、2FA 和多设备会话支持状态。
-- 八个 runtime ID 已统一清单、兼容性、smoke、APK 和设备证据契约。当前真实资产与设备 smoke 仍受阻。
+- Alpine rootfs 已成为首选完整 Linux 执行层，内置 Bash、Python、pip、Node.js、npm、uv、pnpm、CA、Git 与 SSH，并提供交互式 PTY session。
+- 八个 runtime ID 已统一清单、兼容性、smoke、APK 和设备证据契约；严格真机 smoke 与 16 KB 运行证据继续由发布矩阵收集。
 - Go、Flutter、Kotlin、Web、route、race 和 ARM64 构建门禁已通过；ARM64 真机长稳与严格 16 KB 设备证据继续作为发布后补充矩阵。
 
 ## 文档索引

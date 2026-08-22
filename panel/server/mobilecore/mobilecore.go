@@ -57,6 +57,10 @@ type options struct {
 	Port                 int                                `json:"port"`
 	LocalToken           string                             `json:"localToken"`
 	NativeLibraryDir     string                             `json:"nativeLibraryDir"`
+	AndroidFilesDir      string                             `json:"androidFilesDir"`
+	AndroidCacheDir      string                             `json:"androidCacheDir"`
+	LinuxRootfsDir       string                             `json:"linuxRootfsDir"`
+	PRootPath            string                             `json:"prootPath"`
 	WebDir               string                             `json:"webDir"`
 	AndroidKeystoreKey   string                             `json:"androidKeystoreMasterKey"`
 	RuntimeManifestPath  string                             `json:"runtimeManifestPath"`
@@ -352,6 +356,7 @@ func StartCore(optionsJSON string) (response string) {
 		nativeLibraryDir = strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR"))
 	}
 	applyRuntimeMetadataPathEnv(parsed)
+	applyAndroidTerminalEnv(parsed)
 	runtimeManager := service.NewRuntimeComponentManager(nativeLibraryDir)
 	runtimeBaseline, runtimeErr := runtimeManager.LoadAndValidate()
 	if runtimeErr != nil {
@@ -544,6 +549,21 @@ func applyRuntimeMetadataPathEnv(parsed options) {
 	}
 }
 
+func applyAndroidTerminalEnv(parsed options) {
+	values := map[string]string{
+		"DAIDAI_ANDROID_FILES_DIR":      parsed.AndroidFilesDir,
+		"DAIDAI_ANDROID_CACHE_DIR":      parsed.AndroidCacheDir,
+		"DAIDAI_LINUX_ROOTFS_DIR":       parsed.LinuxRootfsDir,
+		"DAIDAI_PROOT_PATH":             parsed.PRootPath,
+		"DAIDAI_ANDROID_NATIVE_LIB_DIR": parsed.NativeLibraryDir,
+	}
+	for key, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			_ = os.Setenv(key, value)
+		}
+	}
+}
+
 func StopCore(timeoutMillis int64) string {
 	if timeoutMillis <= 0 || timeoutMillis > int64(time.Duration(1<<63-1)/time.Millisecond) {
 		return failure(codeInvalidTimeout, "timeoutMillis must be greater than 0", statusSnapshot())
@@ -551,6 +571,7 @@ func StopCore(timeoutMillis int64) string {
 
 	lifecycle.operation.Lock()
 	defer lifecycle.operation.Unlock()
+	router.CloseMobileTerminalSessions()
 
 	lifecycle.mu.Lock()
 	if lifecycle.core == nil {

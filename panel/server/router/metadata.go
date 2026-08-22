@@ -77,12 +77,37 @@ var extensionRouteDescriptors = map[string]RouteDescriptor{
 	"PUT /api/v1/tasks/:id/restore-subscription-default": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_tasks_id_restore-subscription-default"},
 }
 
+var terminalRouteDescriptors = func() map[string]RouteDescriptor {
+	descriptors := make(map[string]RouteDescriptor, 12)
+	for _, prefix := range []string{"/api", "/api/v1"} {
+		testPrefix := strings.ReplaceAll(strings.TrimPrefix(prefix, "/"), "/", "_")
+		add := func(method, path, testName string) {
+			descriptors[method+" "+prefix+path] = RouteDescriptor{
+				AuthContract:   "jwt",
+				StreamContract: "none",
+				TestCase:       "TestMobileRouteContract/" + strings.ToLower(method) + "_" + testPrefix + "_" + testName,
+			}
+		}
+		add(http.MethodPost, "/terminal/sessions", "terminal_sessions")
+		add(http.MethodGet, "/terminal/sessions/:id", "terminal_sessions_id")
+		add(http.MethodPost, "/terminal/sessions/:id/input", "terminal_sessions_id_input")
+		add(http.MethodPut, "/terminal/sessions/:id/resize", "terminal_sessions_id_resize")
+		add(http.MethodPut, "/terminal/sessions/:id/stop", "terminal_sessions_id_stop")
+		add(http.MethodDelete, "/terminal/sessions/:id", "terminal_sessions_id")
+	}
+	return descriptors
+}()
+
 func descriptorForRoute(key string) (RouteDescriptor, bool) {
 	descriptor, ok := explicitRouteDescriptors[key]
 	if ok {
 		return descriptor, true
 	}
 	descriptor, ok = extensionRouteDescriptors[key]
+	if ok {
+		return descriptor, true
+	}
+	descriptor, ok = terminalRouteDescriptors[key]
 	return descriptor, ok
 }
 
@@ -104,11 +129,14 @@ func MetadataForRoute(method, routePath string) (RouteMetadata, bool) {
 }
 
 func RouteDescriptors() map[string]RouteDescriptor {
-	descriptors := make(map[string]RouteDescriptor, len(explicitRouteDescriptors)+len(extensionRouteDescriptors))
+	descriptors := make(map[string]RouteDescriptor, len(explicitRouteDescriptors)+len(extensionRouteDescriptors)+len(terminalRouteDescriptors))
 	for key, descriptor := range explicitRouteDescriptors {
 		descriptors[key] = descriptor
 	}
 	for key, descriptor := range extensionRouteDescriptors {
+		descriptors[key] = descriptor
+	}
+	for key, descriptor := range terminalRouteDescriptors {
 		descriptors[key] = descriptor
 	}
 	return descriptors

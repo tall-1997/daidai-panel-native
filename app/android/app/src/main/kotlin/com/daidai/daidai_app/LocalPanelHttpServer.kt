@@ -126,6 +126,7 @@ class LocalPanelHttpServer(
             if (uri.startsWith("/api/configs")) return store.serveConfigs(session)
             if (uri.startsWith("/api/v1/configs")) return store.serveConfigs(session)
             if (uri.startsWith("/api/scripts")) return store.serveScripts(session)
+            if (uri.startsWith("/api/terminal") || uri.startsWith("/api/v1/terminal")) return store.serveTerminal(session)
             if (uri.startsWith("/api/subscriptions")) return store.serveSubscriptions(session)
             if (uri.startsWith("/api/logs")) return store.serveLogs(session)
             if (uri.startsWith("/api/v1/logs")) return store.serveLogs(session)
