@@ -6,13 +6,46 @@
 #include <string.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include <limits.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 typedef int (*Py_MainFunc)(int, wchar_t **);
 typedef void (*Py_SetPythonHomeFunc)(const wchar_t *);
 
+static int native_dir(char *buffer, size_t size, const char *argv0) {
+    if (!argv0 || !strchr(argv0, '/')) {
+        fprintf(stderr, "pylauncher: argv[0] does not contain an absolute native path\n");
+        return 0;
+    }
+    size_t length = strlen(argv0);
+    while (length > 0 && argv0[length - 1] != '/') length--;
+    if (length == 0 || length >= size) return 0;
+    memcpy(buffer, argv0, length - 1);
+    buffer[length - 1] = '\0';
+    return 1;
+}
+
+static void preload_optional(const char *dir, const char *name) {
+    char path[PATH_MAX];
+    if (snprintf(path, sizeof(path), "%s/%s", dir, name) < (int)sizeof(path)) {
+        dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    }
+}
+
 int main(int argc, char **argv) {
-    // Load libpython3.14.so
-    void *handle = dlopen("libpython3.14.so", RTLD_NOW | RTLD_GLOBAL);
+    char dir[PATH_MAX];
+    if (!native_dir(dir, sizeof(dir), argv[0])) return 1;
+    preload_optional(dir, "libandroid-support.so");
+
+    char python_path[PATH_MAX];
+    if (snprintf(python_path, sizeof(python_path), "%s/%s", dir, "libpython3.14.so") >= (int)sizeof(python_path)) {
+        fprintf(stderr, "pylauncher: python path too long\n");
+        return 1;
+    }
+    void *handle = dlopen(python_path, RTLD_NOW | RTLD_GLOBAL);
     if (!handle) {
         fprintf(stderr, "pylauncher: Cannot load libpython3.14.so: %s\n", dlerror());
         return 1;

@@ -34,7 +34,7 @@ object AndroidNodeRuntime {
 
     private fun doEnsureReady(context: Context): NodeRuntimePaths? {
         val nativeDir = AndroidLinuxRuntime.nativeLibraryDir(context).absolutePath
-        val launcherExe = File(nativeDir, "libnodelauncher.so")
+        val launcherExe = File(nativeDir, "libnode_exec.so")
         if (!launcherExe.isFile) return null
 
         val home = File(context.filesDir, "runtimes/node-$VERSION/usr")

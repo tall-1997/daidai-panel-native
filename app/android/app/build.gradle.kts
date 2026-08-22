@@ -266,8 +266,8 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
         val primaryAbi = nativeAbis.first()
         val nativeDir = file("src/main/jniLibs/$primaryAbi")
         val launcher = file("$nativeDir/libnode_exec.so")
-        val runtimeLauncher = file("$nativeDir/libnodelauncher.so")
         val libnode = file("$nativeDir/libnode.so")
+        val legacyNodeEntrypoints = listOf("libnodejs_exec.so", "libnodelauncher.so")
         val assets = file("src/main/nodeAssets/node-runtime/$version/usr")
         val metadataFile = file("$assets/runtime-metadata.json")
         val requiredAssets = listOf(
@@ -278,11 +278,16 @@ val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
             "lib/node_modules/typescript/bin/tsc",
             "etc/npmrc",
         )
+        legacyNodeEntrypoints.forEach { legacy ->
+            check(!file("$nativeDir/$legacy").exists()) {
+                "Legacy Node runtime entry $legacy must not be packaged; run app/scripts/prepare-android-node-runtime.sh."
+            }
+        }
         check(launcher.isFile && isAndroidElf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
             "Missing real Android Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
         }
-        check(runtimeLauncher.isFile && isAndroidElf(runtimeLauncher)) {
-            "Missing Android 16-compatible Node runtime launcher: ${runtimeLauncher.path}."
+        check(!launcher.readText(Charsets.ISO_8859_1).contains("/data/data/com.termux/files/usr/lib")) {
+            "Android Node launcher must not contain Termux RUNPATH."
         }
         check(libnode.isFile && isAndroidElf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
             "Missing real Android libnode.so. Run app/scripts/prepare-android-node-runtime.sh."

@@ -9,18 +9,29 @@ ASSET_DIR="${NODE_RUNTIME_ASSET_DIR:-$APP_ROOT/android/app/src/main/nodeAssets/n
 MANIFEST_PATH="${NODE_RUNTIME_MANIFEST:-$APP_ROOT/../runtime/manifest.json}"
 
 PRIMARY_ABI=""
-for candidate in arm64-v8a; do
-  if [[ -f "$APP_ROOT/android/app/src/main/jniLibs/$candidate/libnode_exec.so" ]]; then
-    PRIMARY_ABI="$candidate"
-    break
-  fi
-done
+if [[ -n "${NODE_RUNTIME_JNI_DIR:-}" ]]; then
+  PRIMARY_ABI="arm64-v8a"
+  JNI_DIR="$NODE_RUNTIME_JNI_DIR"
+else
+  for candidate in arm64-v8a; do
+    if [[ -f "$APP_ROOT/android/app/src/main/jniLibs/$candidate/libnode_exec.so" ]]; then
+      PRIMARY_ABI="$candidate"
+      JNI_DIR="$APP_ROOT/android/app/src/main/jniLibs/$candidate"
+      break
+    fi
+  done
+fi
 if [[ -z "$PRIMARY_ABI" ]]; then
   printf 'No Android Node launcher found; skipping verification.\n' >&2
   exit 0
 fi
 
-JNI_DIR="$APP_ROOT/android/app/src/main/jniLibs/$PRIMARY_ABI"
+for legacy in libnodejs_exec.so libnodelauncher.so; do
+  if [[ -e "$JNI_DIR/$legacy" ]]; then
+    printf 'Legacy Node runtime entry must not be packaged: %s\n' "$JNI_DIR/$legacy" >&2
+    exit 1
+  fi
+done
 
 node - "$JNI_DIR" "$ASSET_DIR" "$MANIFEST_PATH" "$NODE_VERSION" "$NPM_VERSION" "$TYPESCRIPT_VERSION" "$PRIMARY_ABI" <<'JS'
 const crypto = require('crypto');
@@ -40,6 +51,7 @@ const launcher = path.join(jniDir, 'libnode_exec.so');
 const libnode = path.join(jniDir, 'libnode.so');
 if (!androidElf(launcher)) fail('libnode_exec.so must be a real Android ELF');
 if (!androidElf(libnode)) fail('libnode.so must be a real Android ELF');
+if (read(launcher).includes(Buffer.from('/data/data/com.termux/files/usr/lib'))) fail('libnode_exec.so must not contain Termux RUNPATH');
 
 const metadata = JSON.parse(read(path.join(assetDir, 'runtime-metadata.json')));
 const manifest = JSON.parse(read(manifestPath));
