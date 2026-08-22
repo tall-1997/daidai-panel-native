@@ -4,7 +4,7 @@
 
 用户只安装呆呆面板 App，即可在 Android 手机本机创建、管理和运行面板，无需准备 Docker、服务器或独立后端服务。
 
-首期产品以非 Root Android ARM64 为目标，通过 GitHub Release 提供离线完整 APK。App 内置面板核心、Python、Node.js、TypeScript、受控 Shell、Git 与 Go 工具链，同时保留连接远程呆呆面板的能力。
+产品面向非 Root Android，通过 GitHub Release 提供 ARM64 完整版、ARM32 控制面版、x86_64 控制面版和 universal 整合版。ARM64 App 内置面板核心、Python、Node.js、TypeScript、受控 Shell、Git 与 Go 工具链；全部架构均保留连接远程呆呆面板的能力。
 
 ## 已确认范围
 
@@ -18,12 +18,12 @@
 
 ## 当前实现状态
 
-- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `0.3.15`，Android version code 为 `30150`。
+- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `1.0.5`，Android version code 为 `1000050`。
 - capability 状态为 `enabled` 时，请求进入已注册的真实 Go Handler；禁用或未声明能力返回稳定的 `PLATFORM_CAPABILITY` 结果。
 - Go Core 在运行时组件受阻时保持管理核心可用并报告 `degraded-ready`，运行时执行保持 fail-closed。
-- Kotlin fallback 为 `degraded` 的 diagnostic-only 接口，复用安装级 token，并严格校验回环 Host 与 Origin。
+- Kotlin fallback 提供控制面兼容 API，复用安装级 token，并严格校验回环 Host 与 Origin；能力响应逐项标记 native runtime、Git 订阅、Open API token、2FA 和多设备会话支持状态。
 - 八个 runtime ID 已统一清单、兼容性、smoke、APK 和设备证据契约。当前真实资产与设备 smoke 仍受阻。
-- Recovery APK、真实设备矩阵、升级恢复与长稳证据仍待完成。当前文档不将 Kotlin、Flutter 或设备测试记为已通过。
+- Go、Flutter、Kotlin、Web、route、race 和多架构构建门禁已通过；ARM64 真机长稳与严格 16 KB 设备证据继续作为发布后补充矩阵。
 
 ## 文档索引
 
@@ -36,7 +36,7 @@
 
 - Flutter App：<https://github.com/linzixuanzz/Dumb-Panel-APP>
 - Go 面板：<https://github.com/linzixuanzz/daidai-panel>
-- 分析版本：呆呆面板 `v2.3.9`
+- upstream 主分支基线提交：`7c5e8e6e1acc40b03febeedd64544fbde726562c`
 
 ## 产品边界
 

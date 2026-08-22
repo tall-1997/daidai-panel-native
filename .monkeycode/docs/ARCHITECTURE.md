@@ -118,6 +118,12 @@ Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在�
 
 Release 同时生成 ARM64 完整版、ARM32 控制面版、x86_64 控制面版与 universal 整合版。架构专属包通过 ABI filter 仅保留目标架构 native libraries；universal 包包含 armeabi-v7a、arm64-v8a、x86_64 的 Flutter/Go ABI，运行时按设备 ABI 选择完整 Core 或控制面降级。
 
+### Upstream Capability Parity
+
+`panel/server` 是 upstream 呆呆面板业务能力的移动端同源实现。ARM64 在 `:panel` 进程直接启动完整 Go Core，业务 Handler、Scheduler、Executor、SecretStore、Backup、Notification 和 Open API 与服务器项目共享代码。ARM32/x86_64 使用 Kotlin 控制面兼容层，保持任务、脚本、日志、环境变量、通知、安全管理、备份和监控的数据模型与 API 结构；需要完整 Git 仓库同步、2FA、Open API token 和原生多语言执行时，客户端引导连接远程面板。
+
+`/api/local/capabilities` 返回 `backend_parity`、`native_runtime_mode`、`recommended_execution_mode` 和逐功能 capability。Flutter 根据 capability 呈现真实可用操作，避免用设备架构推断业务能力。
+
 本地 Web 只能通过 Android Host 生成的动态 `/local-ui/#ticket=...` URL 进入。Vite 与 Vue Router 共享 `/local-ui/` base；一次性 ticket、browser session Cookie、精确 Host/Origin 与用户 token 共同构成回环浏览器安全边界。
 
 脚本环境内置 Python `notify.py`、CommonJS `sendNotify.js` 与同时支持 CommonJS/ESM 的 `notify` package。Android Go Core 使用临时业务 JWT、动态 Origin 和独立 local token 调用通知 API；fallback 采用相同环境变量契约。
