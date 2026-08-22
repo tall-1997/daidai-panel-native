@@ -13,6 +13,7 @@ import android.util.Base64
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -95,17 +96,50 @@ class LocalPanelStore(
 
 
         internal fun normalizeScriptPath(rawPath: String, allowRootAlias: Boolean = false): String {
-            if (allowRootAlias && (rawPath.isEmpty() || rawPath == "/")) return ""
-            require(rawPath.isNotBlank()) { "脚本路径不能为空" }
-            require(!rawPath.startsWith("//") && !rawPath.startsWith('\\')) { "脚本路径必须位于脚本目录内: $rawPath" }
-            require(!Regex("^[A-Za-z]:").containsMatchIn(rawPath)) { "脚本路径必须位于脚本目录内: $rawPath" }
-            require('\\' !in rawPath) { "脚本路径不能包含反斜杠: $rawPath" }
-            val workspacePath = rawPath.removePrefix("/")
-            require(!workspacePath.startsWith("data/") && !workspacePath.startsWith("system/") && !workspacePath.startsWith("sdcard/")) { "脚本路径不能指向系统目录: $rawPath" }
+            val decodedPath = percentDecodePath(rawPath)
+            if (allowRootAlias && (decodedPath.isEmpty() || decodedPath == "/")) return ""
+            require(decodedPath.isNotBlank()) { "脚本路径不能为空" }
+            require(!decodedPath.startsWith("//") && !decodedPath.startsWith('\\')) { "脚本路径必须位于脚本目录内: $decodedPath" }
+            require(!Regex("^[A-Za-z]:").containsMatchIn(decodedPath)) { "脚本路径必须位于脚本目录内: $decodedPath" }
+            require('\\' !in decodedPath) { "脚本路径不能包含反斜杠: $decodedPath" }
+            val workspacePath = decodedPath.removePrefix("/")
+            require(!workspacePath.startsWith("data/") && !workspacePath.startsWith("system/") && !workspacePath.startsWith("sdcard/")) { "脚本路径不能指向系统目录: $decodedPath" }
             val segments = workspacePath.split('/')
-            require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段: $rawPath" }
-            require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段: $rawPath" }
+            require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段: $decodedPath" }
+            require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段: $decodedPath" }
             return segments.joinToString("/")
+        }
+
+        private fun percentDecodePath(value: String): String {
+            if ('%' !in value) return value
+            val output = StringBuilder(value.length)
+            val bytes = ByteArrayOutputStream()
+
+            fun flushBytes() {
+                if (bytes.size() > 0) {
+                    output.append(String(bytes.toByteArray(), Charsets.UTF_8))
+                    bytes.reset()
+                }
+            }
+
+            var index = 0
+            while (index < value.length) {
+                val char = value[index]
+                if (char == '%' && index + 2 < value.length) {
+                    val high = value[index + 1].digitToIntOrNull(16)
+                    val low = value[index + 2].digitToIntOrNull(16)
+                    if (high != null && low != null) {
+                        bytes.write((high shl 4) + low)
+                        index += 3
+                        continue
+                    }
+                }
+                flushBytes()
+                output.append(char)
+                index++
+            }
+            flushBytes()
+            return output.toString()
         }
 
         fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean {
@@ -2160,7 +2194,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun runScript(json: JSONObject): NanoHTTPD.Response {
-        val path = json.optString("path", "script.py")
+        val path = cleanScriptPath(json.optString("path", "script.py"))
         val file = scriptFile(path)
         if (!file.exists() || !file.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "脚本不存在")
         val runId = "android-local-${UUID.randomUUID()}"
@@ -3330,7 +3364,8 @@ fun serveDashboardStats(): JSONObject {
                 } catch (error: IllegalArgumentException) {
                     return LocalScriptResult(JSONArray().put(error.message ?: "任务命令无效"), "failed", true, 2)
                 }
-                val file = scriptFile(plan.scriptPath)
+                val scriptPath = cleanScriptPath(plan.scriptPath)
+                val file = scriptFile(scriptPath)
                 val environments = try {
                     LocalTaskFallbackSemantics.taskEnvironments(plan, runtimeEnvironment(file.parentFile ?: scriptsRoot()))
                 } catch (error: IllegalArgumentException) {
@@ -3342,7 +3377,7 @@ fun serveDashboardStats(): JSONObject {
                         { line -> onLine?.invoke("[${plan.envName}#${selected.index}] $line") }
                     } else onLine
                     result = executeWithAutoInstall(id, runtimeForFile(file), prefixedOutput) {
-                        executeScriptFile(file, plan.scriptPath, args = plan.scriptArgs, timeoutSeconds = minOf(plan.timeoutSeconds, timeout), extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
+                        executeScriptFile(file, scriptPath, args = plan.scriptArgs, timeoutSeconds = minOf(plan.timeoutSeconds, timeout), extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
                     }
                     if (result.status != "success") break
                 }
@@ -3919,6 +3954,19 @@ fun serveDashboardStats(): JSONObject {
         } catch (_: Exception) { emptyMap() }
     }
 
+    private fun nodeDependencyResolvable(runtime: AndroidNodeRuntime.NodeRuntimePaths, packageName: String): Pair<Boolean, String> {
+        val deps = AndroidNodeRuntime.depsDir(appContext).apply { mkdirs() }
+        val code = "const name=process.argv[1];const root=process.argv[2];console.log(require.resolve(name,{paths:[root]}));"
+        val result = runLocalProcess(
+            listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, "-e", code, packageName, deps.absolutePath),
+            deps,
+            JSONArray().put("Verifying Node dependency resolution: $packageName"),
+            30,
+        )
+        val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        return (result.exitCode == 0) to text
+    }
+
     private fun installedNpmResponse(): NanoHTTPD.Response {
         if (AndroidNodeRuntime.ensureReady(appContext) == null) {
             return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
@@ -4018,9 +4066,12 @@ fun serveDashboardStats(): JSONObject {
                 if (result.exitCode != 0) "failed" to text else {
                     val after = queryNpmInstalledPackages()
                     val normalized = DependencyStorage.normalizedName("nodejs", name)
-                    val verified = after.containsKey(normalized) || after.any { (pkg, version) -> before[pkg] != version }
-                    if (verified) "installed" to "$text\nPost-install verification: npm list confirmed $name"
-                    else "failed" to "$text\nPOST_VERIFY_FAILED: npm list did not report $name"
+                    val listed = after.containsKey(normalized)
+                    val resolved = if (listed) true to "" else nodeDependencyResolvable(runtime, normalized)
+                    val changed = after.any { (pkg, version) -> before[pkg] != version }
+                    if (listed) "installed" to "$text\nPost-install verification: npm list confirmed $normalized"
+                    else if (resolved.first) "installed" to "$text\nPost-install verification: require.resolve confirmed $normalized"
+                    else "failed" to "$text\nPOST_VERIFY_FAILED: npm list and require.resolve did not report $normalized\n${resolved.second}" + if (changed) "\nObserved package tree changes during install" else ""
                 }
             } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: ${AndroidNodeRuntime.failureReason().ifBlank { "bundled Node runtime is not ready" }}")
         }

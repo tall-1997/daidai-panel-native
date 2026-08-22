@@ -110,6 +110,28 @@ class LocalTaskFallbackSemanticsTest {
     }
 
     @Test
+    fun `script path normalization decodes percent encoded unicode and preserves plus`() {
+        assertEquals(
+            "中文 目录/签到+通知%脚本.js",
+            LocalPanelStore.normalizeScriptPath("%E4%B8%AD%E6%96%87%20%E7%9B%AE%E5%BD%95/%E7%AD%BE%E5%88%B0+%E9%80%9A%E7%9F%A5%25%E8%84%9A%E6%9C%AC.js"),
+        )
+        assertEquals("目录/脚本.js", LocalPanelStore.normalizeScriptPath("%E7%9B%AE%E5%BD%95%2F%E8%84%9A%E6%9C%AC.js"))
+        assertEquals("签到+通知.js", LocalPanelStore.normalizeScriptPath("签到+通知.js"))
+        assertEquals("100%.js", LocalPanelStore.normalizeScriptPath("100%25.js"))
+        assertEquals("100%.js", LocalPanelStore.normalizeScriptPath("100%.js"))
+    }
+
+    @Test
+    fun `script path normalization rejects encoded traversal after decode`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalPanelStore.normalizeScriptPath("%2E%2E/%E8%84%9A%E6%9C%AC.js")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LocalPanelStore.normalizeScriptPath("%2Fdata%2Fsecret.js")
+        }
+    }
+
+    @Test
     fun `task parser reports malformed quotes and missing unicode paths`() {
         assertThrows(IllegalArgumentException::class.java) {
             LocalTaskFallbackSemantics.parseTaskCommand("task '中文/脚本.py") { true }
