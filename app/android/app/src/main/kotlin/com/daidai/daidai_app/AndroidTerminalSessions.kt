@@ -38,7 +38,7 @@ internal class AndroidTerminalSessions : Closeable {
             val handle = AndroidPtyBridge.start(command, environment, workingDirectory.absolutePath, rows.coerceIn(2, 200), columns.coerceIn(10, 400))
             Session(id, handle, shell, Instant.now().toString()).also { sessions[id] = it }
         }
-        Thread({ readOutput(session) }, "terminal-$id").apply { isDaemon = true }.start()
+        Thread({ readOutput(session) }, "terminal-${session.id}").apply { isDaemon = true }.start()
         return sessionJson(session)
     }
 
