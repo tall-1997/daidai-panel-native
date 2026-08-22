@@ -112,6 +112,10 @@ class LocalPanelStore(
 
         private fun percentDecodePath(value: String): String {
             if ('%' !in value) return value
+            val encodedBytes = Regex("%([0-9A-Fa-f]{2})").findAll(value)
+                .map { it.groupValues[1].toInt(16) }
+                .toList()
+            if (encodedBytes.isEmpty() || encodedBytes.all { it == 0x25 }) return value
             val output = StringBuilder(value.length)
             val bytes = ByteArrayOutputStream()
 

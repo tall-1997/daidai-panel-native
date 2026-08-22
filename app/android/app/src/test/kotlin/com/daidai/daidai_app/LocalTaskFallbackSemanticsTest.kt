@@ -117,7 +117,7 @@ class LocalTaskFallbackSemanticsTest {
         )
         assertEquals("目录/脚本.js", LocalPanelStore.normalizeScriptPath("%E7%9B%AE%E5%BD%95%2F%E8%84%9A%E6%9C%AC.js"))
         assertEquals("签到+通知.js", LocalPanelStore.normalizeScriptPath("签到+通知.js"))
-        assertEquals("100%.js", LocalPanelStore.normalizeScriptPath("100%25.js"))
+        assertEquals("100%25.js", LocalPanelStore.normalizeScriptPath("100%25.js"))
         assertEquals("100%.js", LocalPanelStore.normalizeScriptPath("100%.js"))
     }
 
