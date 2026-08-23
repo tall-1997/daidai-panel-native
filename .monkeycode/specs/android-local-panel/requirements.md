@@ -64,8 +64,8 @@ Android 本机面板使用户安装所选发布轨道的单个自包含呆呆面
 
 **User Story:** 作为脚本作者，我希望管理依赖和订阅，以便运行真实自动化项目。
 
-1. WHEN 用户安装 Python 依赖, Dependency Manager SHALL 接受纯 Python wheel 和兼容清单内原生 wheel。
-2. WHEN 用户安装 Node.js 依赖, Dependency Manager SHALL 默认关闭 lifecycle scripts并接受纯 JavaScript、WASM 和兼容清单内 addon。
+1. WHEN 用户安装 Python 依赖, Dependency Manager SHALL 尝试安装纯 Python wheel、原生 wheel 和源码发行包，并返回包管理器的实际安装结果。
+2. WHEN 用户安装 Node.js 依赖, Dependency Manager SHALL 启用 lifecycle scripts并尝试安装纯 JavaScript、WASM 和原生 addon。
 3. WHEN 用户同步订阅, Git Provider SHALL 支持 HTTPS、SSH 密钥、known_hosts 和原子工作区更新。
 4. IF 依赖超出兼容清单, App SHALL 展示包名、平台冲突和对应兼容清单申请文档地址。
 

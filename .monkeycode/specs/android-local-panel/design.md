@@ -156,7 +156,7 @@ type DependencyManager interface {
 
 - Node 版本以发布时仍受安全维护的 LTS 为准，兼容性清单记录与上游 Node 20 任务差异。
 - TypeScript 使用固定版本 `tsc.js`，由内置 Node 直接执行。
-- npm 默认设置 `ignore-scripts=true`、`audit=false`、`fund=false` 和 `bin-links=false`。
+- npm 用户依赖安装启用 lifecycle scripts，并继续设置 `audit=false`、`fund=false`。
 - 原生 addon 仅接受签名兼容清单。
 
 ### Shell and Git
@@ -264,7 +264,7 @@ type DependencyManager interface {
 
 - 断网执行 Python、Node.js、TypeScript、Shell、Git 与 Go smoke。
 - pip 纯 Python、Android 原生 wheel 和平台冲突样例。
-- npm 纯 JS、WASM、签名 addon 和 lifecycle script 拒绝样例。
+- npm 纯 JS、WASM、原生 addon 和 lifecycle script 安装样例。
 - Git HTTPS、SSH、凭据失效、断网恢复和原子更新。
 
 ### Android Integration

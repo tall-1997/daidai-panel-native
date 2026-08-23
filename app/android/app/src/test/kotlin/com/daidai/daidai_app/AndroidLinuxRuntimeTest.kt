@@ -169,12 +169,16 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `fallback installers receive configured mirrors as structured arguments`() {
         assertEquals(
-            listOf("install", "--no-input", "--no-cache-dir", "--only-binary=:all:", "-i", "https://pypi.org/simple", "--target", "/deps/python", "--", "requests"),
+            listOf("install", "--no-input", "--no-cache-dir", "-i", "https://pypi.org/simple", "--target", "/deps/python", "--", "requests"),
             AndroidLinuxRuntime.pipInstallArguments("https://pypi.org/simple", "/deps/python", "requests"),
         )
         assertEquals(
-            listOf("install", "--ignore-scripts", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
+            listOf("install", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
             AndroidLinuxRuntime.npmInstallArguments("https://registry.npmjs.org", "/deps/node", "/deps/cache", "lodash"),
+        )
+        assertEquals(
+            listOf("/sbin/apk", "add", "--no-cache", "build-base", "python3-dev", "linux-headers", "cargo"),
+            AndroidLinuxRuntime.nativeBuildToolchainCommand(),
         )
     }
 

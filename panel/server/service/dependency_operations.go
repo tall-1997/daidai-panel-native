@@ -18,8 +18,6 @@ const (
 	DependencyCompatibilitySupported   = "supported"
 	DependencyCompatibilityUnsupported = "unsupported"
 	DependencyReasonInvalidSpec        = "INVALID_PACKAGE_SPEC"
-	DependencyReasonNativeUnsupported  = "NATIVE_NOT_ALLOWLISTED"
-	DependencyReasonSourceUnsigned     = "SOURCE_REQUIRES_SIGNED_AUTHORIZATION"
 	DependencyReasonQuotaExceeded      = "DEPENDENCY_QUOTA_EXCEEDED"
 	DependencyReasonAndroidEquivalent  = "ANDROID_EQUIVALENT_REQUIRED"
 
@@ -125,7 +123,7 @@ func evaluateDependencyCompatibilityForPlatform(depType, packageName, pythonVers
 		CompatibilityKey: dependencyCompatibilityKey(depType, packageName, runtime),
 	}
 	if depType == model.DepTypeNodeJS {
-		details.NpmScriptPolicy = "ignore-scripts"
+		details.NpmScriptPolicy = "enabled"
 	}
 
 	if packageName == "" || strings.ContainsAny(packageName, " \t\n\r;|&`$(){}") {
@@ -156,19 +154,11 @@ func evaluateDependencyCompatibilityForPlatform(depType, packageName, pythonVers
 		}
 		if alternatives, native := knownPythonNativeDependencies[key]; native {
 			details.Native = true
-			details.Status = DependencyCompatibilityUnsupported
-			details.ReasonCode = DependencyReasonNativeUnsupported
-			details.Message = "native Python wheel is outside the signed Android ARM64 compatibility allowlist"
+			details.Message = "native Python dependency will be attempted by the selected runtime package manager"
 			details.Alternatives = append([]string{}, alternatives...)
 			return details
 		}
 	case model.DepTypeNodeJS:
-		if nodePackageSpecRequiresSignedSource(packageName) {
-			details.Status = DependencyCompatibilityUnsupported
-			details.ReasonCode = DependencyReasonSourceUnsigned
-			details.Message = "npm dependency sources must be signed with source and SHA-256 authorization"
-			return details
-		}
 		key := NormalizeNodeDependencyPackageName(packageName)
 		if entry, ok := nodeNativeDependencyAllowlist[key]; ok {
 			details.Native = true
@@ -180,9 +170,7 @@ func evaluateDependencyCompatibilityForPlatform(depType, packageName, pythonVers
 		}
 		if alternatives, native := knownNodeNativeDependencies[key]; native {
 			details.Native = true
-			details.Status = DependencyCompatibilityUnsupported
-			details.ReasonCode = DependencyReasonNativeUnsupported
-			details.Message = "native Node addon is outside the signed Android ARM64 compatibility allowlist"
+			details.Message = "native Node addon will be attempted with lifecycle scripts enabled"
 			details.Alternatives = append([]string{}, alternatives...)
 			return details
 		}
@@ -291,10 +279,9 @@ func EnforceNpmScriptPolicy(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
-	cmd.Env = appendEnvOverride(cmd.Env, "npm_config_ignore_scripts", "true")
-	if !stringSliceContains(cmd.Args, "--ignore-scripts") {
-		cmd.Args = append(cmd.Args, "--ignore-scripts")
-	}
+	cmd.Env = appendEnvOverride(cmd.Env, "NPM_CONFIG_IGNORE_SCRIPTS", "false")
+	cmd.Env = appendEnvOverride(cmd.Env, "npm_config_ignore_scripts", "false")
+	cmd.Args = removeString(cmd.Args, "--ignore-scripts")
 }
 
 func PrepareDependencyStaging(depType, name, pythonVersion string) (func(string) string, string) {
@@ -410,20 +397,6 @@ func dependencyCompatibilityKey(depType, packageName, runtime string) string {
 		return depType + ":" + NormalizeNodeDependencyPackageName(packageName)
 	}
 	return depType + ":" + strings.TrimSpace(packageName)
-}
-
-func nodePackageSpecRequiresSignedSource(spec string) bool {
-	spec = strings.TrimSpace(spec)
-	if spec == "" {
-		return false
-	}
-	lower := strings.ToLower(spec)
-	for _, prefix := range []string{"file:", "link:", "workspace:", "http://", "https://", "git+", "git://", "ssh://", "github:", "gitlab:", "bitbucket:"} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func directorySize(root string) int64 {

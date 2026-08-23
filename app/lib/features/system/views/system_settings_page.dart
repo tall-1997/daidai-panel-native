@@ -46,7 +46,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   final _updateImageMirrorC = TextEditingController();
   final _binaryUpdateProxyC = TextEditingController();
   bool _autoInstallDeps = false;
-  bool _allowUnverifiedAndroidAbiWheels = false;
 
   static const _dockerMirrorOptions = [
     'https://docker.1ms.run',
@@ -144,8 +143,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
       );
       _autoInstallDeps =
           _getConfigValue(configs, 'auto_install_deps', 'false') == 'true';
-      _allowUnverifiedAndroidAbiWheels =
-          _getConfigValue(configs, 'allow_unverified_android_abi_wheels', 'false') == 'true';
       _proxyUrlC.text = _getConfigValue(configs, 'proxy_url', '');
       _updateImageMirrorC.text = _getConfigValue(
         configs,
@@ -585,8 +582,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
             'random_delay': _randomDelayC.text.trim(),
             'random_delay_extensions': _fileSuffixC.text.trim(),
             'auto_install_deps': _autoInstallDeps ? 'true' : 'false',
-            'allow_unverified_android_abi_wheels':
-                _allowUnverifiedAndroidAbiWheels ? 'true' : 'false',
             'editor_background_color': _editorBackgroundColorC.text.trim(),
             'proxy_url': _proxyUrlC.text.trim(),
             'update_image_mirror': _updateImageMirrorC.text.trim(),
@@ -1037,38 +1032,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                       value: _autoInstallDeps,
                                       onChanged: (v) =>
                                           setState(() => _autoInstallDeps = v),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 14),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            '允许未验证 Android ABI wheel',
-                                            style: TextStyle(fontSize: 13),
-                                          ),
-                                          Text(
-                                            '开启后允许从网络源安装未验证原生 wheel 和受限包',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: isLight
-                                                  ? AppColors.slate500
-                                                  : AppColors.slate400,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    AppLiquidGlassToggle(
-                                      value: _allowUnverifiedAndroidAbiWheels,
-                                      onChanged: (v) => setState(
-                                        () => _allowUnverifiedAndroidAbiWheels = v,
-                                      ),
                                     ),
                                   ],
                                 ),

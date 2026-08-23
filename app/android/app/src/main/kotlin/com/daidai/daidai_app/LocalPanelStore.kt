@@ -1283,10 +1283,6 @@ class LocalPanelStore(
                 data.put(cursor.string("key"), JSONObject().put("value", value).put("default_value", value))
             }
         }
-        if (!data.has("allow_unverified_android_abi_wheels")) {
-            val value = configPrefs.getString("allow_unverified_android_abi_wheels", "false") ?: "false"
-            data.put("allow_unverified_android_abi_wheels", JSONObject().put("value", value).put("default_value", "false"))
-        }
         if (!data.has("auto_install_deps")) {
             val value = configPrefs.getString("auto_install_deps", "true") ?: "true"
             data.put("auto_install_deps", JSONObject().put("value", value).put("default_value", "true"))
@@ -1350,7 +1346,7 @@ class LocalPanelStore(
             put("updated_at", Instant.now().toString())
         }
         writableDatabase.insertWithOnConflict("local_configs", null, values, SQLiteDatabase.CONFLICT_REPLACE)
-        if (key == "allow_unverified_android_abi_wheels" || key == "auto_install_deps") {
+        if (key == "auto_install_deps") {
             configPrefs.edit().putString(key, normalizedValue).apply()
         }
         if (persistPreference && key in mirrorConfigKeys) {
@@ -2637,7 +2633,6 @@ fun serveDashboardStats(): JSONObject {
                     "QL_DIR" to scriptsRoot().absolutePath,
                     "QL_DATA_DIR" to appContext.filesDir.absolutePath,
                     "QL_SCRIPT_DIR" to workingDir.absolutePath,
-                    "DAIDAI_ALLOW_UNVERIFIED_ANDROID_ABI_WHEELS" to if (configBool("allow_unverified_android_abi_wheels", false)) "1" else "0",
                     "DAIDAI_TEST_AUTO_INSTALL" to if (configBool("auto_install_deps", true)) "1" else "0",
                     "PYTHONPATH" to listOf(
                         scriptsRoot().absolutePath,
@@ -4097,24 +4092,24 @@ fun serveDashboardStats(): JSONObject {
     private fun installDependencyForFallbackUnlocked(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val mirrors = AndroidLinuxRuntime.mirrorConfig(appContext)
         if (depType == "python") {
-            val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
                 val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
                 val importName = LocalTaskFallbackSemantics.pythonImportName(name)
                     ?: return "blocked" to "UNSAFE_PYTHON_IMPORT_NAME"
                 val existing = verifyRootfsPythonImport(importName, target, taskId)
                 if (existing.first) return "installed" to "Rootfs import verification confirmed $importName"
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--only-binary=:all:", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
-                val result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
+                    onLine?.invoke("Native build toolchain installed; retrying Python dependency")
+                    result = runLocalProcess(command, target, JSONArray().put("Retrying Python dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                }
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) return "failed" to text
                 val verified = verifyRootfsPythonImport(importName, target, taskId)
                 return if (verified.first) "installed" to "$text\nPost-install import verification confirmed $importName"
                 else "failed" to "$text\nPOST_VERIFY_FAILED: ${verified.second}"
-            }
-            if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
-                return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
             }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
             runtime ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
@@ -4131,25 +4126,23 @@ fun serveDashboardStats(): JSONObject {
             val result = runLocalProcess(command, target, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             if (result.exitCode != 0) {
-                val noWheel = text.contains("No matching distribution found", true) || text.contains("Could not find a version", true)
-                return "failed" to if (noWheel) "$text\nANDROID_WHEEL_UNAVAILABLE: no compatible Android wheel; source builds are disabled" else text
+                return "failed" to text
             }
             val verified = queryPipInstalledPackages().containsKey(DependencyStorage.normalizedName("python", name))
             return if (verified) "installed" to "$text\nPost-install verification: pip list confirmed $name"
             else "failed" to "$text\nPOST_VERIFY_FAILED: pip list did not report $name"
         }
         if (depType == "nodejs") {
-            val restricted = setOf("@tencent-qqmail/agently-cli", "agent-browser", "clawhub")
-            val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
-            if (restricted.contains(name.lowercase()) && !allowUnverifiedNative) {
-                return "blocked" to "RESTRICTED_NODE_PACKAGE_BLOCKED: enable allow_unverified_android_abi_wheels before installing restricted automation packages"
-            }
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                 val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
                 val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
-                val result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                var result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
+                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
+                    onLine?.invoke("Native build toolchain installed; retrying Node dependency")
+                    result = runLocalProcess(command, deps, JSONArray().put("Retrying Node dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
+                }
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
@@ -4165,9 +4158,8 @@ fun serveDashboardStats(): JSONObject {
                     .put(DependencyStorage.nodeInstallCompatibilityNotice(name))
                     .put("Installing Node dependency from network source: $installSpec")
                     .put("npm_registry=${mirrors.npmMirror}")
-                    .put("allow_unverified_android_abi_wheels=$allowUnverifiedNative")
                 val before = queryNpmInstalledPackages()
-                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
                 DependencyStorage.trimDirectory(cache, DependencyStorage.MAX_CACHE_BYTES)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) "failed" to text else {
@@ -4212,6 +4204,28 @@ fun serveDashboardStats(): JSONObject {
         val result = runLocalProcess(command, target, JSONArray().put("Verifying rootfs Python import: $importName"), 30, taskId = taskId)
         val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         return (result.exitCode == 0 && text.contains("PYTHON_IMPORT_OK")) to text
+    }
+
+    private fun npmLifecycleEnvironment(): Map<String, String> = mapOf(
+        "NPM_CONFIG_IGNORE_SCRIPTS" to "false",
+        "npm_config_ignore_scripts" to "false",
+    )
+
+    private fun installRootfsBuildToolchain(onLine: ((String) -> Unit)?, taskId: Long?): Boolean {
+        val command = AndroidLinuxRuntime.guestCommand(
+            appContext,
+            appContext.filesDir,
+            AndroidLinuxRuntime.nativeBuildToolchainCommand(),
+        ) ?: return false
+        onLine?.invoke("Installing rootfs native build toolchain")
+        return runLocalProcess(
+            command,
+            appContext.filesDir,
+            JSONArray().put("Installing rootfs native build toolchain"),
+            ScriptCompatibility.INSTALL_TIMEOUT_SECONDS,
+            onLine,
+            taskId,
+        ).exitCode == 0
     }
 
     private fun dependencyLog(id: Long): NanoHTTPD.Response {

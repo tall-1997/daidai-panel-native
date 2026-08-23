@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v1.0.14 - 2026-08-23
+
+### Android 依赖安装
+
+- 移除 Android/Bionic 原生 wheel 阻断开关和 PyCryptodome 特判。
+- pip 允许纯 Python wheel、原生 wheel和源码发行包，Go Core 与 Kotlin fallback 使用一致参数。
+- 移除 Node 受限包名单，所有合法 npm 包均进入真实安装流程。
+- 原生依赖首次失败后自动安装 rootfs C/C++、Python headers、Linux headers 和 Rust 工具链并重试一次。
+- 保留结构化参数、包名校验、私有安装目录、超时、缓存上限和安装后导入验证。
+
 ## v1.0.13 - 2026-08-23
 
 ### Python Crypto 兼容

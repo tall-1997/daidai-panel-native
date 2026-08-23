@@ -80,6 +80,33 @@ func TestOfflinePureWheelInstallsListsAndUninstallsInPrivateDirectory(t *testing
 	}
 }
 
+func TestPipInstallAllowsNativeWheelsAndSourceDistributions(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	version := runtimePythonVersionForTest()
+
+	install, err := NewPipInstallCommandForPythonVersion(version, "native-package")
+	if err != nil {
+		t.Fatalf("build unrestricted pip install: %v", err)
+	}
+	for _, arg := range install.Args {
+		if arg == "--only-binary=:all:" {
+			t.Fatalf("pip install still blocks source distributions: %v", install.Args)
+		}
+	}
+	if !containsArgPair(install.Args, "--target", ManagedPythonSitePackagesDir(version)) {
+		t.Fatalf("pip install must retain the private target directory: %v", install.Args)
+	}
+}
+
+func containsArgPair(args []string, key, value string) bool {
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == key && args[index+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOfflinePureNodeTarballInstallsListsAndUninstallsInPrivateDirectory(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	tarball := writeNodeTarballFixture(t, "local-fixture", "1.0.0")
@@ -198,15 +225,15 @@ func writeNodeTarballFixture(t *testing.T, name, version string) string {
 	return path
 }
 
-func TestEvaluateDependencyCompatibilityReturnsStableUnsupportedDetails(t *testing.T) {
+func TestEvaluateDependencyCompatibilityAllowsNativeAddonAttempt(t *testing.T) {
 	details := EvaluateDependencyCompatibility(model.DepTypeNodeJS, "sharp", "")
-	if details.Supported() {
-		t.Fatalf("expected native addon to be unsupported: %+v", details)
+	if !details.Supported() {
+		t.Fatalf("expected native addon installation attempt to be supported: %+v", details)
 	}
-	if details.ReasonCode != DependencyReasonNativeUnsupported {
-		t.Fatalf("expected native reason, got %s", details.ReasonCode)
+	if !details.Native || details.ReasonCode != "" {
+		t.Fatalf("expected native metadata without a policy rejection: %+v", details)
 	}
-	if details.ABI != "android-arm64-bionic" || details.NpmScriptPolicy != "ignore-scripts" {
+	if details.ABI != "android-arm64-bionic" || details.NpmScriptPolicy != "enabled" {
 		t.Fatalf("expected stable ABI and npm script policy, got %+v", details)
 	}
 	if len(details.Alternatives) == 0 {
@@ -227,7 +254,7 @@ func TestEvaluateDependencyCompatibilityAcceptsSignedNativeAllowlist(t *testing.
 	}
 }
 
-func TestEnforceNpmScriptPolicy(t *testing.T) {
+func TestEnforceNpmScriptPolicyEnablesInstallScripts(t *testing.T) {
 	cmd := exec.Command("npm", "install", "left-pad")
 	cmd.Env = []string{
 		"PATH=/usr/bin",
@@ -240,16 +267,13 @@ func TestEnforceNpmScriptPolicy(t *testing.T) {
 	EnforceNpmScriptPolicy(cmd)
 	EnforceNpmScriptPolicy(cmd)
 
-	if !stringSliceContains(cmd.Args, "--ignore-scripts") {
-		t.Fatalf("expected --ignore-scripts in args: %v", cmd.Args)
-	}
-	if count := countString(cmd.Args, "--ignore-scripts"); count != 1 {
-		t.Fatalf("expected one --ignore-scripts argument, got %d in %v", count, cmd.Args)
+	if stringSliceContains(cmd.Args, "--ignore-scripts") {
+		t.Fatalf("dependency install must allow lifecycle scripts: %v", cmd.Args)
 	}
 
 	policyEntries := 0
 	for _, entry := range cmd.Env {
-		if entry == "npm_config_ignore_scripts=true" {
+		if entry == "npm_config_ignore_scripts=false" {
 			policyEntries++
 			continue
 		}
@@ -258,7 +282,7 @@ func TestEnforceNpmScriptPolicy(t *testing.T) {
 		}
 	}
 	if policyEntries != 1 {
-		t.Fatalf("expected one npm_config_ignore_scripts=true entry, got %d in %v", policyEntries, cmd.Env)
+		t.Fatalf("expected one npm_config_ignore_scripts=false entry, got %d in %v", policyEntries, cmd.Env)
 	}
 }
 

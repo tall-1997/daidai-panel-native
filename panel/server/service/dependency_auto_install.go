@@ -311,7 +311,7 @@ func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*e
 	}
 	args := BuildPipInstallArgs(spec.extraFlags, packageName)
 	args = removeString(args, "--user")
-	args = append(args[:1], append([]string{"--target", target, "--only-binary=:all:"}, args[1:]...)...)
+	args = append(args[:1], append([]string{"--target", target}, args[1:]...)...)
 	cmd := spec.command(args)
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
 	return cmd, nil
@@ -328,7 +328,7 @@ func NewPipInstallCommandForPythonVersionWithFlags(pythonVersion, packageName st
 	}
 	args := BuildPipInstallArgs(extraFlags, packageName)
 	args = removeString(args, "--user")
-	args = append(args[:1], append([]string{"--target", target, "--only-binary=:all:"}, args[1:]...)...)
+	args = append(args[:1], append([]string{"--target", target}, args[1:]...)...)
 	cmd := spec.command(args)
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
 	return cmd, nil

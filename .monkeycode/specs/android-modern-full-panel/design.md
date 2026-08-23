@@ -180,7 +180,7 @@ CI 对每个入口执行以下门禁：
 
 ### Script Isolation
 
-完整 Python、Node、Shell 和依赖兼容采用同应用 UID 的 `:runner` 受管进程。该模型允许访问版本化 stdlib、node_modules、工作目录和构建数据，也意味着用户代码理论上可访问 App 私有文件。产品信任模型定义为：用户手工创建的脚本属于受信任本地代码；订阅脚本、npm lifecycle、原生 wheel 和 Node addon 默认禁止执行。授权记录绑定来源、版本、SHA-256、能力集合和授权时间；任一内容摘要或能力变化均使授权失效并要求重新确认。
+完整 Python、Node、Shell 和依赖兼容采用同应用 UID 的 `:runner` 受管进程。该模型允许访问版本化 stdlib、node_modules、工作目录和构建数据，也意味着用户代码理论上可访问 App 私有文件。产品信任模型定义为：用户主动创建的脚本和主动安装的依赖属于受信任本地代码；订阅脚本执行前继续要求来源和摘要授权。原生 wheel、源码发行包和 Node addon 均可进入安装流程，并继承接近完整 App 私有数据权限。授权记录绑定来源、版本、SHA-256、能力集合和授权时间；任一内容摘要或能力变化均使授权失效并要求重新确认。
 
 Secret Store中的密钥保持密文，正常调用路径只向Runner传递任务明确选择的解密值；数据库、备份和授权 Token不通过环境变量传递。由于Runner与App共享UID，获授权代码仍可能读取或修改App私有文件，并可能利用同UID可用的平台能力。授权提示必须表述为“接近完整App私有数据权限”。路径限制、结构化argv、网络能力声明和进程配额属于纵深防护，并不构成UID内安全边界。
 
@@ -300,7 +300,7 @@ sequenceDiagram
 - 运行时入口只接受 Manifest 中的固定程序 ID。
 - argv 使用结构化参数，禁止拼接 Shell 字符串。
 - Secret Store使用 Android Keystore封装数据密钥。
-- pip/npm 禁止来源不明的原生代码和默认 lifecycle scripts。
+- pip/npm 对用户主动提交的合法包规格执行安装，原生代码和 lifecycle scripts 继承 App 私有数据权限提示。
 - Git hooks、外部 filter、pager、editor 和 credential helper 默认关闭。
 - Runtime、Secret Store、签名清单和 isolated Worker 是 Execution 里程碑的前置条件。
 

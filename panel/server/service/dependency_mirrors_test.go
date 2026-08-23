@@ -179,20 +179,18 @@ func TestSetNpmMirrorWritesAndClearsConfig(t *testing.T) {
 	}
 }
 
-func TestNpmInstallEnvDisablesLifecycleScriptsByDefault(t *testing.T) {
+func TestNpmInstallEnvEnablesLifecycleScripts(t *testing.T) {
 	t.Setenv("DAIDAI_NPM_ENABLE_LIFECYCLE_SCRIPTS", "")
 	env := NpmInstallEnv([]string{"PATH=/usr/bin"}, "")
 
-	assertContainsEnv(t, env, "NPM_CONFIG_IGNORE_SCRIPTS=true")
-	assertContainsEnv(t, env, "npm_config_ignore_scripts=true")
+	assertContainsEnv(t, env, "npm_config_ignore_scripts=false")
 }
 
-func TestNpmInstallEnvCanEnableLifecycleScriptsByEnv(t *testing.T) {
+func TestNpmInstallEnvOverridesRuntimeScriptPolicy(t *testing.T) {
 	t.Setenv("DAIDAI_NPM_ENABLE_LIFECYCLE_SCRIPTS", "true")
 	env := NpmInstallEnv([]string{"PATH=/usr/bin"}, "")
 
-	assertMissingEnvPrefix(t, env, "NPM_CONFIG_IGNORE_SCRIPTS=")
-	assertMissingEnvPrefix(t, env, "npm_config_ignore_scripts=")
+	assertContainsEnv(t, env, "npm_config_ignore_scripts=false")
 }
 
 func assertContainsEnv(t *testing.T, env []string, want string) {

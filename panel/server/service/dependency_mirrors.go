@@ -93,6 +93,8 @@ func SanitizePipEnv(base []string) []string {
 
 func NpmInstallEnv(base []string, configured string) []string {
 	env := ApplyNodeRuntimePolicy(append([]string{}, base...))
+	env = appendEnvOverride(env, "NPM_CONFIG_IGNORE_SCRIPTS", "false")
+	env = appendEnvOverride(env, "npm_config_ignore_scripts", "false")
 	mirror := EffectiveNpmMirror(configured)
 	if mirror == "" {
 		return env

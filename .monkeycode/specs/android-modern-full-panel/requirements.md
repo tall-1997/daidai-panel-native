@@ -56,7 +56,7 @@ Android Modern 全功能本机面板面向普通非 Root ARM64 设备。用户�
 
 1. Dependency Manager SHALL 支持纯 Python wheel 和兼容清单内 Android wheel。
 2. Dependency Manager SHALL 支持纯 JavaScript、WASM 和兼容清单内 Node addon。
-3. Dependency Manager SHALL 默认关闭 npm lifecycle scripts并校验包来源、摘要和空间配额。
+3. Dependency Manager SHALL 为用户主动安装的 npm 依赖启用 lifecycle scripts，并校验包规格和空间配额。
 4. IF 依赖超出兼容清单, App SHALL 展示包名、ABI 冲突和可用替代方案。
 
 ## Requirement 6：Git 与订阅

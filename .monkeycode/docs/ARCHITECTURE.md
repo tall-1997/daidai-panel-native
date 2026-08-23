@@ -116,7 +116,7 @@ managed-local 系统页展示动态 API endpoint、Core 状态、Android `:panel
 
 Android 7-15 ARM64 优先启动完整 Go Core；Android 16 使用 Kotlin fallback 并分别探测 Python、Node、Shell 和依赖安装能力。ARM32 与 x86_64 多架构预研已搁置到 `shelved/multi-arch-runtime` 分支，主分支不进入相关发布矩阵。fallback 对 exact cron 明确报告 unsupported，持续调度依赖 Foreground Service 与 WorkManager 恢复。
 
-Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在后续安装操作重试。npm 安装关闭 lifecycle、audit、fund 和 update notifier；本地 tgz、URL 和 alias 通过安装前后顶层依赖变化验证。Node launcher 由 CI 使用 16 KB linker page-size 参数重新生成，并作为 preBuild runtime 门禁输入。
+Node runtime 初始化只缓存成功结果，临时解包或 I/O 失败可在后续安装操作重试。用户主动发起的 npm 依赖安装启用 lifecycle scripts，并关闭 audit、fund 和 update notifier；本地 tgz、URL 和 alias 通过安装前后顶层依赖变化验证。Node launcher 由 CI 使用 16 KB linker page-size 参数重新生成，并作为 preBuild runtime 门禁输入。
 
 Release 生成 ARM64 完整版 APK。主分支通过 ABI filter 固定 `arm64-v8a`，确保发布链路聚焦当前稳定 runtime。
 
@@ -170,7 +170,7 @@ sequenceDiagram
 
 ## 发布结构
 
-- 单一版本源为 `VERSION.json`，当前版本为 `1.0.13`、Android version code 为 `1000130`；`scripts/version.py` 校验派生版本字段。
+- 单一版本源为 `VERSION.json`，当前版本为 `1.0.14`、Android version code 为 `1000140`；`scripts/version.py` 校验派生版本字段。
 - Modern APK：`minSdk 24`、`compileSdk 36`、`targetSdk 35`。当前管理 Core 已接线，完整受控运行时交付仍受真实资产和设备 smoke 门禁约束。
 - Legacy APK：`minSdk 26`、`compileSdk 35`、`targetSdk 28`，增加私有目录 ELF 执行能力以承载实验性的 `go run`、`go test` 和 `go build`，支持 Android 8 至 Android 15 的已验证设备。
 - 每个 Release 分配十位版本代码区间：Modern 使用 `releaseBase + 0`，Legacy 使用 `releaseBase + 1`，基于上一稳定源码构建的 Recovery APK 使用 `releaseBase + 2`。Modern 与 Legacy 通过可移植备份切换；Recovery APK 以更高版本代码覆盖当前故障版本并恢复迁移快照。
@@ -194,5 +194,5 @@ sequenceDiagram
 - 每次安装生成本地授权密钥，API 校验 Host、Origin 和本地授权头。
 - 工作目录经过规范化并限制在 App 私有空间或用户授权目录。
 - 进程代理接受结构化程序 ID、argv、环境和工作目录。
-- pip 接受纯 Python wheel 与签名兼容清单；npm 默认关闭 lifecycle scripts。
+- pip 接受纯 Python wheel、原生 wheel 和源码发行包；用户主动发起的 npm 安装启用 lifecycle scripts。
 - 日志和诊断包对 Token、Cookie、环境变量值和私钥执行脱敏。
