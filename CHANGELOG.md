@@ -10,6 +10,7 @@
 - rootfs Python 自动依赖安装使用同一解释器和 `PYTHONPATH` 执行真实 import 验证。
 - rootfs 模式不再套用 Android/Bionic 原生 wheel 阻断策略，也不再使用 Android Python 的 `pip list` 判断 rootfs 可导入性。
 - Device Smoke 新增 PyCryptodome 双模块导入门禁。
+- PRoot/BusyBox 构建默认验证已提交制品；显式刷新才访问固定上游包，避免 Termux 仓库滚动清理导致 CI 404。
 
 ## v1.0.12 - 2026-08-23
 

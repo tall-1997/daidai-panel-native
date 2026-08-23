@@ -7,6 +7,19 @@ abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
 repo_base="${TERMUX_REPO_BASE:-https://packages.termux.dev/apt/termux-main}"
 cache_root="${ANDROID_PROOT_BUSYBOX_CACHE:-$HOME/.cache/daidai-android-proot-busybox}"
 download_dir="$cache_root/downloads"
+refresh_artifacts="${ANDROID_REFRESH_PROOT_BUSYBOX:-0}"
+
+if test "$refresh_artifacts" != "1"; then
+  for abi in $abis; do
+    native_dir="$repo_root/app/android/app/src/main/jniLibs/$abi"
+    manifest="$repo_root/app/android/app/src/main/assets/android-runtime/$abi/native-runtime-manifest.json"
+    python3 "$script_dir/verify-android-linux-runtime.py" \
+      --native-dir "$native_dir" \
+      --native-manifest "$manifest"
+    printf 'Verified committed Android runtime native tools for %s in %s\n' "$abi" "$native_dir"
+  done
+  exit 0
+fi
 
 # Every artifact is pinned to an immutable package coordinate and SHA-256. This
 # is intentionally a verified binary import: no source patch is claimed here.
