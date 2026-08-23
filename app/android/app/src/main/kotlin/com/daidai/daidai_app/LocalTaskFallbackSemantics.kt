@@ -38,6 +38,24 @@ internal object LocalTaskFallbackSemantics {
         return detectMissingDependencies(runtime, output).firstOrNull()
     }
 
+    internal fun pythonImportName(packageName: String): String? {
+        val normalized = packageName.trim().substringBefore(';').substringBefore('[')
+            .takeWhile { it !in "=<>!~ \t\r\n(," }
+            .lowercase().replace(Regex("[-_.]+"), "-")
+        val importName = when (normalized) {
+        "pycryptodome" -> "Crypto"
+        "pycryptodomex" -> "Cryptodome"
+        "beautifulsoup4" -> "bs4"
+        "python-dateutil" -> "dateutil"
+        "python-dotenv" -> "dotenv"
+        "opencv-python" -> "cv2"
+        "pillow" -> "PIL"
+        "pyyaml" -> "yaml"
+        else -> normalized.replace('-', '_')
+        }
+        return importName.takeIf { Regex("[A-Za-z_][A-Za-z0-9_.]*").matches(it) }
+    }
+
     internal fun detectMissingDependencies(runtime: String, output: String): List<DependencyCandidate> {
         val candidates = linkedSetOf<DependencyCandidate>()
         return when (runtime.lowercase()) {

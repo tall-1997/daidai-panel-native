@@ -7,7 +7,7 @@ asset_root="$repo_root/app/android/app/src/main/assets/android-runtime"
 cache_root="${ANDROID_ALPINE_ROOTFS_CACHE:-$HOME/.cache/daidai-android-alpine-rootfs}"
 mirror="${ALPINE_APK_MIRROR:-https://repo.huaweicloud.com/alpine}"
 release_branch="${ALPINE_RELEASE_BRANCH:-latest-stable}"
-required_packages=(bash python3 py3-pip nodejs npm uv pnpm ca-certificates)
+required_packages=(bash python3 py3-pip py3-pycryptodome nodejs npm uv pnpm ca-certificates)
 required_commands=(apk bash python3 pip3 node npm uv pnpm)
 extra_packages="${ALPINE_ROOTFS_PACKAGES:-curl git openssh-client tzdata}"
 packages="$extra_packages ${required_packages[*]}"
@@ -124,6 +124,10 @@ build_rootfs_for_abi() {
   done
   test -s "$root_dir/etc/ssl/certs/ca-certificates.crt" || {
     printf 'Required CA certificate bundle is missing.\n' >&2
+    exit 1
+  }
+  test -d "$root_dir/usr/lib/python3.14/site-packages/Crypto" || {
+    printf 'Required PyCryptodome Crypto package is missing.\n' >&2
     exit 1
   }
   tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' -cf - -C "$root_dir" . | gzip -n > "$output_dir/rootfs.tar.gz.bin"

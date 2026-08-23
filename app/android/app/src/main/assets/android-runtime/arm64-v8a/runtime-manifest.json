@@ -3,8 +3,8 @@
   "abi": "arm64-v8a",
   "alpine_arch": "aarch64",
   "alpine_version": "3.24.1",
-  "sha256": "5ecc989fb8ca960140e9f543273b0f0f8fddf8c4e96af1f7d0c7fb10976d22ad",
-  "size": 73547467,
+  "sha256": "f389c9134c9c6ff47e0e63f9f8c99fc710cd517bbc1012902d9c23b93b74b333",
+  "size": 76938366,
   "packages": [
     "curl",
     "git",
@@ -13,6 +13,7 @@
     "bash",
     "python3",
     "py3-pip",
+    "py3-pycryptodome",
     "nodejs",
     "npm",
     "uv",

@@ -56,6 +56,10 @@ class RootfsVerificationTest(unittest.TestCase):
                 ca_member.mode = 0o644
                 ca_member.size = len(ca_data)
                 bundle.addfile(ca_member, io.BytesIO(ca_data))
+                crypto_member = tarfile.TarInfo("usr/lib/python3.14/site-packages/Crypto/Cipher/AES.py")
+                crypto_member.mode = 0o644
+                crypto_member.size = 0
+                bundle.addfile(crypto_member, io.BytesIO())
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             checksum = root / "rootfs.tar.gz.bin.sha256"
             checksum.write_text(digest + "\n")
@@ -64,7 +68,7 @@ class RootfsVerificationTest(unittest.TestCase):
                 "schema_version": 2,
                 "sha256": digest,
                 "size": archive.stat().st_size,
-                "packages": ["bash", "python3", "py3-pip", "nodejs", "npm", "uv", "pnpm", "ca-certificates"],
+                "packages": ["bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"],
                 "required_commands": list(runtime_verifier.REQUIRED_COMMANDS),
                 "capabilities": runtime_verifier.REQUIRED_CAPABILITIES,
             }))

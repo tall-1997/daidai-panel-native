@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.0.13 - 2026-08-23
+
+### Python Crypto 兼容
+
+- Alpine rootfs 预装官方 `py3-pycryptodome`，直接支持 `Crypto.Cipher.AES` 和 `PKCS1_v1_5`。
+- rootfs Python 自动依赖安装使用同一解释器和 `PYTHONPATH` 执行真实 import 验证。
+- rootfs 模式不再套用 Android/Bionic 原生 wheel 阻断策略，也不再使用 Android Python 的 `pip list` 判断 rootfs 可导入性。
+- Device Smoke 新增 PyCryptodome 双模块导入门禁。
+
 ## v1.0.12 - 2026-08-23
 
 ### Android PRoot Loader

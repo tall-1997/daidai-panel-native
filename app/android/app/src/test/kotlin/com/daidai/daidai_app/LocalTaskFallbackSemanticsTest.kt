@@ -11,6 +11,15 @@ import java.io.ByteArrayOutputStream
 
 class LocalTaskFallbackSemanticsTest {
     @Test
+    fun `python package names map to their import modules`() {
+        assertEquals("Crypto", LocalTaskFallbackSemantics.pythonImportName("pycryptodome"))
+        assertEquals("Cryptodome", LocalTaskFallbackSemantics.pythonImportName("pycryptodomex"))
+        assertEquals("yaml", LocalTaskFallbackSemantics.pythonImportName("PyYAML"))
+        assertEquals("requests", LocalTaskFallbackSemantics.pythonImportName("requests==2.32.0"))
+        assertNull(LocalTaskFallbackSemantics.pythonImportName("../unsafe"))
+    }
+
+    @Test
     fun `detects Python and Node missing dependencies`() {
         assertEquals(
             LocalTaskFallbackSemantics.DependencyCandidate("python", "pycryptodome"),

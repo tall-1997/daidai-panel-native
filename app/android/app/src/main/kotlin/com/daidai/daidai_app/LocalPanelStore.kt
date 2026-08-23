@@ -4079,6 +4079,9 @@ fun serveDashboardStats(): JSONObject {
             else -> "rootfs"
         }
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
+            if (depType == "python" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) {
+                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
+            }
             val installedVersion = when (depType) {
                 "python" -> queryPipInstalledPackages()[DependencyStorage.normalizedName(depType, name)]
                 "nodejs" -> queryNpmInstalledPackages()[DependencyStorage.normalizedName(depType, name)]
@@ -4095,16 +4098,23 @@ fun serveDashboardStats(): JSONObject {
         val mirrors = AndroidLinuxRuntime.mirrorConfig(appContext)
         if (depType == "python") {
             val allowUnverifiedNative = configBool("allow_unverified_android_abi_wheels", false)
-            if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
-                return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
-            }
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
                 val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
+                val importName = LocalTaskFallbackSemantics.pythonImportName(name)
+                    ?: return "blocked" to "UNSAFE_PYTHON_IMPORT_NAME"
+                val existing = verifyRootfsPythonImport(importName, target, taskId)
+                if (existing.first) return "installed" to "Rootfs import verification confirmed $importName"
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--only-binary=:all:", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
                 val result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-                return if (result.exitCode == 0) "installed" to text else "failed" to text
+                if (result.exitCode != 0) return "failed" to text
+                val verified = verifyRootfsPythonImport(importName, target, taskId)
+                return if (verified.first) "installed" to "$text\nPost-install import verification confirmed $importName"
+                else "failed" to "$text\nPOST_VERIFY_FAILED: ${verified.second}"
+            }
+            if (name.equals("pycryptodome", ignoreCase = true) && !allowUnverifiedNative) {
+                return "blocked" to "UNVERIFIED_ANDROID_ABI_WHEEL_BLOCKED: enable allow_unverified_android_abi_wheels before installing native wheels"
             }
             val runtime = AndroidPythonRuntime.ensureReady(appContext)
             runtime ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
@@ -4190,6 +4200,18 @@ fun serveDashboardStats(): JSONObject {
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
+    }
+
+    private fun verifyRootfsPythonImport(importName: String, target: File, taskId: Long?): Pair<Boolean, String> {
+        val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+        val command = AndroidLinuxRuntime.guestCommand(
+            appContext,
+            appContext.filesDir,
+            listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "/usr/bin/python3", "-c", "import $importName; print('PYTHON_IMPORT_OK')"),
+        ) ?: return false to "ROOTFS_PYTHON_UNAVAILABLE"
+        val result = runLocalProcess(command, target, JSONArray().put("Verifying rootfs Python import: $importName"), 30, taskId = taskId)
+        val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+        return (result.exitCode == 0 && text.contains("PYTHON_IMPORT_OK")) to text
     }
 
     private fun dependencyLog(id: Long): NanoHTTPD.Response {

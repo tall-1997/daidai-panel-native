@@ -81,6 +81,29 @@ class AndroidRuntimeSmokeTest {
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
             }
 
+            step("rootfs.python_crypto") {
+                val command = requireNotNull(AndroidLinuxRuntime.guestCommand(
+                    context,
+                    context.filesDir,
+                    listOf(
+                        "/usr/bin/python3",
+                        "-c",
+                        "from Crypto.Cipher import AES, PKCS1_v1_5; print('PYCRYPTODOME_OK')",
+                    ),
+                )) { "Packaged rootfs Python is unavailable" }
+                val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
+                builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                val process = builder.start()
+                process.outputStream.close()
+                val finished = process.waitFor(60, TimeUnit.SECONDS)
+                if (!finished) process.destroyForcibly()
+                check(finished) { "Rootfs PyCryptodome import timed out" }
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(0, process.exitValue())
+                assertTrue(output.contains("PYCRYPTODOME_OK"))
+                JSONObject().put("imports", "AES,PKCS1_v1_5").put("output", "PYCRYPTODOME_OK")
+            }
+
             val envId = step("env.create") {
                 val response = request("POST", "/api/v1/envs", JSONObject()
                     .put("name", "ANDROID_RUNTIME_SMOKE")

@@ -257,7 +257,7 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
     description = "Verifies the rootfs contract and pinned 16 KB-aligned Android native tools."
     doLast {
         val requiredCommands = listOf("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm")
-        val requiredPackages = setOf("bash", "python3", "py3-pip", "nodejs", "npm", "uv", "pnpm", "ca-certificates")
+            val requiredPackages = setOf("bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates")
         val requiredCapabilities = mapOf(
             "package_manager" to listOf("apk"),
             "shell" to listOf("bash"),

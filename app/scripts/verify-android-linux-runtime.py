@@ -35,7 +35,7 @@ def verify_rootfs(archive: pathlib.Path, checksum: pathlib.Path, manifest_path: 
     assert manifest.get("required_commands") == list(REQUIRED_COMMANDS), "required_commands contract mismatch"
     assert manifest.get("capabilities") == REQUIRED_CAPABILITIES, "capabilities contract mismatch"
     packages = set(manifest.get("packages", []))
-    assert {"bash", "python3", "py3-pip", "nodejs", "npm", "uv", "pnpm", "ca-certificates"} <= packages, "required packages missing"
+    assert {"bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"} <= packages, "required packages missing"
     with tarfile.open(archive, mode="r:gz") as rootfs:
         members = {member.name.removeprefix("./"): member for member in rootfs.getmembers()}
     for command in REQUIRED_COMMANDS:
@@ -45,6 +45,7 @@ def verify_rootfs(archive: pathlib.Path, checksum: pathlib.Path, manifest_path: 
         assert command_member.issym() or command_member.mode & 0o111, f"rootfs command is not executable: {command}"
     ca_bundle = members.get("etc/ssl/certs/ca-certificates.crt")
     assert ca_bundle is not None and ca_bundle.size > 0, "rootfs CA certificate bundle missing"
+    assert any(name.startswith("usr/lib/python3.14/site-packages/Crypto/Cipher/") for name in members), "rootfs PyCryptodome Crypto package missing"
 
 
 def elf_metadata(path: pathlib.Path) -> tuple[int, list[int]]:
