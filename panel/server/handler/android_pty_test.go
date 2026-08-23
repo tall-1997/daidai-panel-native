@@ -8,6 +8,31 @@ import (
 	"time"
 )
 
+func TestAndroidTerminalRequiresPackagedPRootLoader(t *testing.T) {
+	t.Setenv("DAIDAI_PROOT_PATH", "/missing/proot")
+	t.Setenv("DAIDAI_PROOT_LOADER_PATH", "")
+	registry := terminalRegistry{sessions: make(map[string]*terminalSession)}
+
+	_, err := registry.create(24, 80)
+	if err == nil || err.Error() != "ROOTFS_TERMINAL_UNAVAILABLE" {
+		t.Fatalf("create error=%v", err)
+	}
+}
+
+func TestAndroidTerminalInjectsPackagedPRootLoader(t *testing.T) {
+	environment := androidTerminalEnvironment(nil, "/files", "/cache", "/native/libproot_loader.so", "/native")
+	joined := strings.Join(environment, "\n")
+	for _, expected := range []string{
+		"PROOT_LOADER=/native/libproot_loader.so",
+		"PROOT_TMP_DIR=/cache",
+		"LD_LIBRARY_PATH=/native",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("environment missing %q: %v", expected, environment)
+		}
+	}
+}
+
 func TestAndroidPTYStartsInteractiveProcessWithChildControllingTerminal(t *testing.T) {
 	command := exec.Command("/bin/sh", "-c", "printf 'PTY_OK\\n'")
 	master, err := startAndroidPTY(command, 24, 80)

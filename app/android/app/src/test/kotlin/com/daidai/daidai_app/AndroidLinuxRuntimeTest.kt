@@ -86,6 +86,28 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `base runtime contract uses packaged proot loader name`() {
+        assertEquals("libproot_loader.so", AndroidLinuxRuntime.prootLoaderLibraryName())
+    }
+
+    @Test
+    fun `proot environment overrides Termux loader path with packaged ELF`() {
+        val dir = Files.createTempDirectory("proot-environment-test").toFile()
+        val loader = dir.resolve("libproot_loader.so")
+        val cache = dir.resolve("cache")
+
+        assertEquals(
+            mapOf(
+                "PROOT_LOADER" to loader.absolutePath,
+                "PROOT_NO_SECCOMP" to "1",
+                "PROOT_TMP_DIR" to cache.absolutePath,
+                "PROOT_VERBOSE" to "0",
+            ),
+            AndroidLinuxRuntime.prootEnvironment(loader, cache),
+        )
+    }
+
+    @Test
     fun `mirror defaults use Huawei Alibaba and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 

@@ -2744,6 +2744,10 @@ fun serveDashboardStats(): JSONObject {
         "NPM_CONFIG_CACHE",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
+        "PROOT_LOADER",
+        "PROOT_NO_SECCOMP",
+        "PROOT_TMP_DIR",
+        "PROOT_VERBOSE",
     )
 
     private fun recordDetectedDependencies(logs: JSONArray) {

@@ -1260,6 +1260,22 @@ func TestServeFailureConcurrentWithStopLeavesNoCore(t *testing.T) {
 	}
 }
 
+func TestApplyAndroidTerminalEnvExportsPRootLoader(t *testing.T) {
+	t.Setenv("DAIDAI_PROOT_LOADER_PATH", "")
+	applyAndroidTerminalEnv(options{PRootLoaderPath: "/native/libproot_loader.so"})
+	if got := os.Getenv("DAIDAI_PROOT_LOADER_PATH"); got != "/native/libproot_loader.so" {
+		t.Fatalf("DAIDAI_PROOT_LOADER_PATH=%q", got)
+	}
+}
+
+func TestApplyAndroidTerminalEnvClearsStalePRootLoader(t *testing.T) {
+	t.Setenv("DAIDAI_PROOT_LOADER_PATH", "/stale/libproot_loader.so")
+	applyAndroidTerminalEnv(options{})
+	if _, exists := os.LookupEnv("DAIDAI_PROOT_LOADER_PATH"); exists {
+		t.Fatal("DAIDAI_PROOT_LOADER_PATH must be cleared when the packaged loader is unavailable")
+	}
+}
+
 func TestStopRestoresTimezoneEnvironmentAndGinMode(t *testing.T) {
 	oldTZ, oldTZSet := os.LookupEnv("TZ")
 	oldTimezone := service.CurrentPanelTimezone()

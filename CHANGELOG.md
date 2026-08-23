@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.0.12 - 2026-08-23
+
+### Android PRoot Loader
+
+- 将固定版本 PRoot 的 AArch64 helper loader 作为签名 APK ELF 交付，并通过 `PROOT_LOADER` 覆盖 Termux 绝对 loader 路径。
+- Kotlin fallback、runtime health smoke 与 Go Core PTY 使用同一 PRoot loader 环境契约。
+- rootfs 在 PRoot 或 helper loader 缺失时 fail-closed，避免任务进入含糊的 guest `execve` 失败。
+- CI 校验 helper loader 的 SHA-256、AArch64、16 KB `PT_LOAD` alignment 和 manifest override；Device Smoke 直接执行 rootfs `/usr/bin/env`。
+
 ## v1.0.11 - 2026-08-22
 
 ### Android Linux Runtime

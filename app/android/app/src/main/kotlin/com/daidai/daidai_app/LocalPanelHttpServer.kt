@@ -346,9 +346,7 @@ class LocalPanelHttpServer(
             val process = ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .apply {
-                    environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir.orEmpty()
-                    environment()["HOME"] = context.filesDir.absolutePath
-                    environment()["TMPDIR"] = context.cacheDir.absolutePath
+                    environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
                     AndroidNodeRuntime.ensureReady(context)?.let { runtime ->
                         environment()["NODE_PATH"] = runtime.modules
                     }

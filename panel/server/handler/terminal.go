@@ -184,10 +184,11 @@ func (h *TerminalHandler) Delete(c *gin.Context) {
 
 func (registry *terminalRegistry) create(rows, columns uint16) (*terminalSession, error) {
 	proot := strings.TrimSpace(os.Getenv("DAIDAI_PROOT_PATH"))
+	prootLoader := strings.TrimSpace(os.Getenv("DAIDAI_PROOT_LOADER_PATH"))
 	rootfs := strings.TrimSpace(os.Getenv("DAIDAI_LINUX_ROOTFS_DIR"))
 	files := strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_FILES_DIR"))
 	cache := strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_CACHE_DIR"))
-	if !regularFile(proot) || !directory(rootfs) || !regularFile(filepath.Join(rootfs, "bin/bash")) || !directory(files) || !directory(cache) {
+	if !regularFile(proot) || !regularFile(prootLoader) || !directory(rootfs) || !regularFile(filepath.Join(rootfs, "bin/bash")) || !directory(files) || !directory(cache) {
 		return nil, errors.New("ROOTFS_TERMINAL_UNAVAILABLE")
 	}
 	registry.mu.Lock()
@@ -212,10 +213,7 @@ func (registry *terminalRegistry) create(rows, columns uint16) (*terminalSession
 	args = append(args, "/bin/bash", "-l")
 	cmd := exec.Command(proot, args...)
 	cmd.Dir = files
-	cmd.Env = append(os.Environ(), "HOME="+files, "TERM=xterm-256color", "PROOT_NO_SECCOMP=1", "PROOT_TMP_DIR="+cache)
-	if nativeDir := strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR")); nativeDir != "" {
-		cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+nativeDir)
-	}
+	cmd.Env = androidTerminalEnvironment(os.Environ(), files, cache, prootLoader, strings.TrimSpace(os.Getenv("DAIDAI_ANDROID_NATIVE_LIB_DIR")))
 	ptmx, err := startAndroidPTY(cmd, rows, columns)
 	if err != nil {
 		return nil, err
@@ -225,6 +223,15 @@ func (registry *terminalRegistry) create(rows, columns uint16) (*terminalSession
 	go readTerminal(session)
 	registry.trimLocked()
 	return session, nil
+}
+
+func androidTerminalEnvironment(base []string, files, cache, prootLoader, nativeDir string) []string {
+	environment := append([]string{}, base...)
+	environment = append(environment, "HOME="+files, "TERM=xterm-256color", "PROOT_NO_SECCOMP=1", "PROOT_TMP_DIR="+cache, "PROOT_LOADER="+prootLoader)
+	if nativeDir != "" {
+		environment = append(environment, "LD_LIBRARY_PATH="+nativeDir)
+	}
+	return environment
 }
 
 func (registry *terminalRegistry) get(id string) *terminalSession {

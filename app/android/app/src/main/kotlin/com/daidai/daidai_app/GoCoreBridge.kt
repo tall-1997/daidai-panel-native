@@ -50,6 +50,7 @@ object GoCoreBridge {
             .put("androidCacheDir", context.cacheDir.canonicalPath)
             .put("linuxRootfsDir", rootfs?.root?.canonicalPath.orEmpty())
             .put("prootPath", rootfs?.proot?.canonicalPath.orEmpty())
+            .put("prootLoaderPath", rootfs?.prootLoader?.canonicalPath.orEmpty())
             .put("webDir", webDir)
             .put("androidKeystoreMasterKey", AndroidRuntimeSecretBridge.runtimeMasterKey(context))
             .put("runtimeManifestPath", runtimeMetadata.getValue("runtimeManifestPath"))

@@ -18,7 +18,7 @@
 
 ## 当前实现状态
 
-- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `1.0.11`，Android version code 为 `1000110`。
+- 单一版本源为仓库根目录 `VERSION.json`，当前版本 `1.0.12`，Android version code 为 `1000120`。
 - capability 状态为 `enabled` 时，请求进入已注册的真实 Go Handler；禁用或未声明能力返回稳定的 `PLATFORM_CAPABILITY` 结果。
 - Go Core 在运行时组件受阻时保持管理核心可用并报告 `degraded-ready`，运行时执行保持 fail-closed。
 - Kotlin fallback 提供控制面兼容 API，复用安装级 token，并严格校验回环 Host 与 Origin；能力响应逐项标记 native runtime、Git 订阅、Open API token、2FA 和多设备会话支持状态。

@@ -61,6 +61,7 @@ type options struct {
 	AndroidCacheDir      string                             `json:"androidCacheDir"`
 	LinuxRootfsDir       string                             `json:"linuxRootfsDir"`
 	PRootPath            string                             `json:"prootPath"`
+	PRootLoaderPath      string                             `json:"prootLoaderPath"`
 	WebDir               string                             `json:"webDir"`
 	AndroidKeystoreKey   string                             `json:"androidKeystoreMasterKey"`
 	RuntimeManifestPath  string                             `json:"runtimeManifestPath"`
@@ -555,12 +556,16 @@ func applyAndroidTerminalEnv(parsed options) {
 		"DAIDAI_ANDROID_CACHE_DIR":      parsed.AndroidCacheDir,
 		"DAIDAI_LINUX_ROOTFS_DIR":       parsed.LinuxRootfsDir,
 		"DAIDAI_PROOT_PATH":             parsed.PRootPath,
+		"DAIDAI_PROOT_LOADER_PATH":      parsed.PRootLoaderPath,
 		"DAIDAI_ANDROID_NATIVE_LIB_DIR": parsed.NativeLibraryDir,
 	}
 	for key, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			_ = os.Setenv(key, value)
+		value = strings.TrimSpace(value)
+		if value == "" {
+			_ = os.Unsetenv(key)
+			continue
 		}
+		_ = os.Setenv(key, value)
 	}
 }
 

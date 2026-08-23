@@ -84,7 +84,7 @@ ResourceProvider    提供 App 与设备资源状态
 LifecycleHost       接收前台服务和重启请求
 ```
 
-当前八个 runtime ID 已统一到 `runtime/manifest.json`、`runtime/compatibility.json`、`runtime/smoke-evidence.json`、APK 元数据提取和 device smoke evidence。Alpine rootfs 作为首选完整 Linux 执行层，内置 `apk`、Bash、Python、pip、Node.js、npm、uv、pnpm、CA、Git 和 SSH。生产设备的 API 28/4K、API 35/4K、API 35/16K 通过证据继续由 device smoke 收集。
+当前八个 runtime ID 已统一到 `runtime/manifest.json`、`runtime/compatibility.json`、`runtime/smoke-evidence.json`、APK 元数据提取和 device smoke evidence。Alpine rootfs 作为首选完整 Linux 执行层，内置 `apk`、Bash、Python、pip、Node.js、npm、uv、pnpm、CA、Git 和 SSH。PRoot helper loader 作为签名 APK ELF 交付，并通过 `PROOT_LOADER` 覆盖上游 Termux 安装路径。生产设备的 API 28/4K、API 35/4K、API 35/16K 通过证据继续由 device smoke 收集。
 
 ### Flutter Adapter
 
@@ -170,7 +170,7 @@ sequenceDiagram
 
 ## 发布结构
 
-- 单一版本源为 `VERSION.json`，当前版本为 `1.0.11`、Android version code 为 `1000110`；`scripts/version.py` 校验派生版本字段。
+- 单一版本源为 `VERSION.json`，当前版本为 `1.0.12`、Android version code 为 `1000120`；`scripts/version.py` 校验派生版本字段。
 - Modern APK：`minSdk 24`、`compileSdk 36`、`targetSdk 35`。当前管理 Core 已接线，完整受控运行时交付仍受真实资产和设备 smoke 门禁约束。
 - Legacy APK：`minSdk 26`、`compileSdk 35`、`targetSdk 28`，增加私有目录 ELF 执行能力以承载实验性的 `go run`、`go test` 和 `go build`，支持 Android 8 至 Android 15 的已验证设备。
 - 每个 Release 分配十位版本代码区间：Modern 使用 `releaseBase + 0`，Legacy 使用 `releaseBase + 1`，基于上一稳定源码构建的 Recovery APK 使用 `releaseBase + 2`。Modern 与 Legacy 通过可移植备份切换；Recovery APK 以更高版本代码覆盖当前故障版本并恢复迁移快照。

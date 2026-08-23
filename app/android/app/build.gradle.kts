@@ -105,6 +105,10 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            keepDebugSymbols += setOf(
+                "**/liboperit_proot.so",
+                "**/libproot_loader.so",
+            )
         }
     }
 
@@ -312,8 +316,11 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             }
             @Suppress("UNCHECKED_CAST")
             val artifacts = nativeManifest["artifacts"] as? List<Map<String, Any>> ?: error("Android native artifacts are missing for $abi.")
-            val requiredNativeFiles = setOf("liboperit_proot.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
+            val requiredNativeFiles = setOf("liboperit_proot.so", "libproot_loader.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
             check(requiredNativeFiles.all { required -> artifacts.any { it["name"] == required } }) { "Android PRoot/BusyBox dependency manifest is incomplete for $abi." }
+            @Suppress("UNCHECKED_CAST")
+            val runtimeOverrides = provenance["runtime_overrides"] as? Map<String, Any> ?: error("Android PRoot loader override is missing for $abi.")
+            check(runtimeOverrides["PROOT_LOADER"] == "libproot_loader.so") { "Android PRoot loader override contract mismatch for $abi." }
             val expectedDependencies = mapOf(
                 "liboperit_proot.so" to listOf("libtalloc_2.so", "libandroid-shmem.so"),
                 "liboperit_busybox.so" to listOf("libbusybox_1_38_0.so"),
@@ -331,6 +338,9 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                 }
                 val binaryStrings = binary.readText(Charsets.ISO_8859_1)
                 check(expectedDependencies[name].orEmpty().all(binaryStrings::contains)) { "Android native artifact dependency contract mismatch: $name." }
+            }
+            check(file("$nativeDir/liboperit_proot.so").readText(Charsets.ISO_8859_1).contains("PROOT_LOADER")) {
+                "Android PRoot binary does not support PROOT_LOADER for $abi."
             }
         }
     }

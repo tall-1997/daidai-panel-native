@@ -16,6 +16,7 @@ object AndroidLinuxRuntime {
     private const val ROOTFS_READY_MARKER = ".daidai-rootfs-ready"
     private const val ROOTFS_ASSET_NAME = "rootfs.tar.gz.bin"
     private const val ROOTFS_SHA256_ASSET_NAME = "rootfs.tar.gz.bin.sha256"
+    private const val PROOT_LOADER_LIBRARY_NAME = "libproot_loader.so"
     private val REQUIRED_COMMANDS = linkedMapOf(
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
@@ -45,6 +46,7 @@ object AndroidLinuxRuntime {
     data class RootfsPaths(
         val root: File,
         val proot: File,
+        val prootLoader: File,
         val busybox: File?,
         val packageManager: String,
         val commands: Map<String, String>,
@@ -81,6 +83,7 @@ object AndroidLinuxRuntime {
 
     fun baseEnvironment(context: Context, workingDir: File): MutableMap<String, String> {
         val mirrors = mirrorConfig(context)
+        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME))
         return mutableMapOf(
             "HOME" to context.filesDir.absolutePath,
             "TMPDIR" to context.cacheDir.absolutePath,
@@ -89,11 +92,18 @@ object AndroidLinuxRuntime {
             "DAIDAI_RUNTIME_ISOLATION" to "android-app-sandbox",
             "DAIDAI_RUNTIME_ABI" to currentAbi(),
             "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
-            "PROOT_NO_SECCOMP" to "1",
-            "PROOT_TMP_DIR" to context.cacheDir.absolutePath,
-            "PROOT_VERBOSE" to "0",
-        ).apply { putAll(mirrorEnvironment(mirrors)) }
+        ).apply {
+            prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
+            putAll(mirrorEnvironment(mirrors))
+        }
     }
+
+    internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
+        "PROOT_LOADER" to loader.absolutePath,
+        "PROOT_NO_SECCOMP" to "1",
+        "PROOT_TMP_DIR" to cacheDir.absolutePath,
+        "PROOT_VERBOSE" to "0",
+    )
 
     internal fun mirrorEnvironment(mirrors: MirrorConfig): Map<String, String> = mapOf(
         "PIP_INDEX_URL" to mirrors.pipMirror,
@@ -150,6 +160,7 @@ object AndroidLinuxRuntime {
         val abi = currentAbi()
         val root = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return@synchronized null
+        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return@synchronized null
         val busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so"))
         if (!rootfsMarkerMatchesAsset(context, root)) {
             installRootfsAsset(context, root, mirrors) ?: return@synchronized null
@@ -157,7 +168,7 @@ object AndroidLinuxRuntime {
         prepareRuntimeDirectories(root, mirrors)
         val commands = detectCommands(root)
         if (!commands.keys.containsAll(REQUIRED_COMMANDS.keys)) return@synchronized null
-        RootfsPaths(root = root, proot = proot, busybox = busybox, packageManager = detectPackageManager(root), commands = commands)
+        RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = busybox, packageManager = detectPackageManager(root), commands = commands)
     }
 
     fun shellCommand(context: Context, hostScript: File, workingDir: File, shell: GuestShell = GuestShell.SH): List<String>? {
@@ -208,7 +219,8 @@ object AndroidLinuxRuntime {
     fun hasPackagedRootfsRunner(context: Context): Boolean {
         val abi = currentAbi()
         return assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME") &&
-            resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) != null
+            resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) != null &&
+            resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) != null
     }
 
     internal fun isSafeSystemPackageSpec(value: String): Boolean =
@@ -261,6 +273,8 @@ object AndroidLinuxRuntime {
         "-0",
     )
 
+    internal fun prootLoaderLibraryName(): String = PROOT_LOADER_LIBRARY_NAME
+
     private fun installRootfsAsset(context: Context, root: File, mirrors: MirrorConfig): RootfsPaths? {
         val abi = currentAbi()
         val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME"
@@ -295,7 +309,8 @@ object AndroidLinuxRuntime {
             root.deleteRecursively()
             return null
         }
-        return RootfsPaths(root = root, proot = proot, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")), packageManager = detectPackageManager(root), commands = detectCommands(root))
+        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return null
+        return RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")), packageManager = detectPackageManager(root), commands = detectCommands(root))
     }
 
     private fun extractTar(root: File, tar: TarArchiveInputStream) {
@@ -505,6 +520,8 @@ object AndroidLinuxRuntime {
         return JSONObject()
             .put("proot", File(nativeDir, "libdaidai_proot.so").isFile || File(nativeDir, "liboperit_proot.so").isFile)
             .put("proot_executable", listOf("libdaidai_proot.so", "liboperit_proot.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
+            .put("proot_loader", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).isFile)
+            .put("proot_loader_executable", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).let { it.isFile && it.canExecute() })
             .put("busybox", File(nativeDir, "libdaidai_busybox.so").isFile || File(nativeDir, "liboperit_busybox.so").isFile)
             .put("busybox_executable", listOf("libdaidai_busybox.so", "liboperit_busybox.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
     }

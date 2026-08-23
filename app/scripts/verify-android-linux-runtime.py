@@ -80,8 +80,9 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
     assert packages and all(len(item.get("sha256", "")) == 64 for item in packages), "unpinned Termux package"
     artifacts = manifest.get("artifacts", [])
     names = {item.get("name") for item in artifacts}
-    required = {"liboperit_proot.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so"}
+    required = {"liboperit_proot.so", "libproot_loader.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so"}
     assert required <= names, "native runtime dependency manifest is incomplete"
+    assert provenance.get("runtime_overrides", {}).get("PROOT_LOADER") == "libproot_loader.so", "PRoot loader override contract is missing"
     expected_dependencies = {
         "liboperit_proot.so": (b"libtalloc_2.so", b"libandroid-shmem.so"),
         "liboperit_busybox.so": (b"libbusybox_1_38_0.so",),
@@ -98,6 +99,8 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
         assert all(value >= 16384 for value in alignments), f"native artifact has PT_LOAD alignment below 16KB: {path.name}"
         data = path.read_bytes()
         assert all(dependency in data for dependency in expected_dependencies.get(path.name, ())), f"native artifact dependency contract mismatch: {path.name}"
+    proot_data = (native_dir / "liboperit_proot.so").read_bytes()
+    assert b"PROOT_LOADER" in proot_data, "packaged PRoot does not support the required loader override"
 
 
 def main() -> None:

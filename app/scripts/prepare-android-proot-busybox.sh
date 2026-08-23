@@ -106,6 +106,7 @@ for abi in $abis; do
   for package in busybox proot libtalloc libandroid-shmem libandroid-selinux pcre2; do extract_deb "$package"; done
   stage_binary "$work_dir/busybox/data/data/com.termux/files/usr/bin/busybox" liboperit_busybox.so
   stage_binary "$work_dir/proot/data/data/com.termux/files/usr/bin/proot" liboperit_proot.so
+  stage_binary "$work_dir/proot/data/data/com.termux/files/usr/libexec/proot/loader" libproot_loader.so
   rewrite_needed "$native_dir/liboperit_proot.so" libtalloc.so.2 libtalloc_2.so
   rewrite_needed "$native_dir/liboperit_busybox.so" libbusybox.so.1.38.0 libbusybox_1_38_0.so
   stage_glob "$work_dir/libtalloc/data/data/com.termux/files/usr/lib/libtalloc.so.2.*" libtalloc_2.so
@@ -130,6 +131,7 @@ packages = {
 }
 roles = {
     "liboperit_proot.so": "proot",
+    "libproot_loader.so": "proot-loader",
     "liboperit_busybox.so": "busybox-launcher",
     "libtalloc_2.so": "proot-dependency",
     "libtalloc_v2.so": "compatibility-alias",
@@ -166,6 +168,9 @@ manifest = {
             {"artifact": "liboperit_proot.so", "operation": "dt-needed-equal-length-rewrite", "from": "libtalloc.so.2", "to": "libtalloc_2.so"},
             {"artifact": "liboperit_busybox.so", "operation": "dt-needed-equal-length-rewrite", "from": "libbusybox.so.1.38.0", "to": "libbusybox_1_38_0.so"},
         ],
+        "runtime_overrides": {
+            "PROOT_LOADER": "libproot_loader.so",
+        },
         "note": "Pinned upstream binaries are verified fail-closed; this manifest makes no source-patch claim.",
     },
     "packages": [

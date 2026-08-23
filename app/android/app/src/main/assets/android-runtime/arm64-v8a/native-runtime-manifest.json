@@ -30,6 +30,9 @@
         "to": "libbusybox_1_38_0.so"
       }
     ],
+    "runtime_overrides": {
+      "PROOT_LOADER": "libproot_loader.so"
+    },
     "note": "Pinned upstream binaries are verified fail-closed; this manifest makes no source-patch claim."
   },
   "packages": [
@@ -76,6 +79,12 @@
       "role": "proot",
       "sha256": "76661c07a346b37f58731b8be56750c3536d8fc19ecce8bee5ad301b9e608f28",
       "size": 241240
+    },
+    {
+      "name": "libproot_loader.so",
+      "role": "proot-loader",
+      "sha256": "44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04",
+      "size": 18136
     },
     {
       "name": "liboperit_busybox.so",
