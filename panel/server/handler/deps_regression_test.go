@@ -30,8 +30,12 @@ func newDepsTestRouter() *gin.Engine {
 	return engine
 }
 
-func TestDependencyCreateReturnsCompatibilityDetailsForUnsupportedPackage(t *testing.T) {
+func TestDependencyCreateAllowsNativePackageInstallAttempt(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	originalRunner := dependencyInstallRunner
+	t.Cleanup(func() { dependencyInstallRunner = originalRunner })
+	done := make(chan uint, 1)
+	dependencyInstallRunner = func(id uint, depType, name string) { done <- id }
 
 	engine := newDepsTestRouter()
 	token := testutil.MustCreateAccessToken(t, "admin", "admin")
@@ -41,14 +45,16 @@ func TestDependencyCreateReturnsCompatibilityDetailsForUnsupportedPackage(t *tes
 	}, map[string]string{
 		"Authorization": "Bearer " + token,
 	})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte(`"reason_code":"NATIVE_NOT_ALLOWLISTED"`)) {
-		t.Fatalf("expected stable compatibility reason details: %s", rec.Body.String())
-	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte(`"npm_script_policy":"ignore-scripts"`)) {
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"npm_script_policy":"enabled"`)) {
 		t.Fatalf("expected npm script policy in compatibility details: %s", rec.Body.String())
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("native package install attempt was not scheduled")
 	}
 }
 
