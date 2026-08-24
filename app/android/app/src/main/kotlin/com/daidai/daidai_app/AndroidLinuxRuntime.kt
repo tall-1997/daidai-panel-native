@@ -17,6 +17,7 @@ object AndroidLinuxRuntime {
     private const val ROOTFS_ASSET_NAME = "rootfs.tar.gz.bin"
     private const val ROOTFS_SHA256_ASSET_NAME = "rootfs.tar.gz.bin.sha256"
     private const val PROOT_LOADER_LIBRARY_NAME = "libproot_loader.so"
+    internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     private val REQUIRED_COMMANDS = linkedMapOf(
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
@@ -120,6 +121,12 @@ object AndroidLinuxRuntime {
 
     internal fun nativeBuildToolchainCommand(): List<String> =
         listOf("/sbin/apk", "add", "--no-cache", "build-base", "python3-dev", "linux-headers", "cargo")
+
+    internal fun applyGuestEnvironment(command: List<String>, environment: MutableMap<String, String>) {
+        if (command.firstOrNull()?.substringAfterLast('/') in setOf("liboperit_proot.so", "libdaidai_proot.so")) {
+            environment["PATH"] = GUEST_PATH
+        }
+    }
 
     fun mirrorConfig(context: Context): MirrorConfig = synchronized(mirrorConfigLock) {
         val preferences = context.getSharedPreferences(MIRROR_PREFERENCES, Context.MODE_PRIVATE)

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.0.15 - 2026-08-23
+
+### Rootfs Guest PATH
+
+- 所有 PRoot 任务、依赖安装、健康检查和 PTY 统一注入 Linux guest `PATH`。
+- 修复 npm 的 `#!/usr/bin/env node` 在 Android 宿主 PATH 下找不到 rootfs Node 的问题。
+- Device Smoke 新增 `/usr/bin/npm --version` 门禁，直接覆盖 env shebang 启动链。
+
 ## v1.0.14 - 2026-08-23
 
 ### Android 依赖安装

@@ -45,4 +45,11 @@
   - Android 内置 Alpine rootfs 资产通过 `app/scripts/prepare-android-alpine-rootfs.sh` 生成
   - Android PRoot/BusyBox native 工具通过 `app/scripts/prepare-android-proot-busybox.sh` 从 Termux aarch64 包提取到 `app/android/app/src/main/jniLibs/arm64-v8a/`
   - 默认镜像源：Alpine APK 使用 Huawei，Python pip 使用 Alibaba，Node.js npm 使用 npmmirror
-  - APK 构建前 `verifyLinuxRootfsRuntime` 会校验 `android-runtime/arm64-v8a/rootfs.tar.gz.bin`、checksum、PRoot 和 BusyBox 是否存在
+   - APK 构建前 `verifyLinuxRootfsRuntime` 会校验 `android-runtime/arm64-v8a/rootfs.tar.gz.bin`、checksum、PRoot 和 BusyBox 是否存在
+
+### 补丁发布采用必要测试
+- Date: 2026-08-24
+- Context: 用户要求修复 rootfs PATH 后直接发布
+- Instructions:
+  - 补丁发布优先执行与改动直接相关的必要测试和发布门禁，避免追加无关的本地全量测试
+  - 必要测试通过后直接进入提交和 stable 发布流程

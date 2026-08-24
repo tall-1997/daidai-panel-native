@@ -25,6 +25,7 @@ func TestAndroidTerminalInjectsPackagedPRootLoader(t *testing.T) {
 	for _, expected := range []string{
 		"PROOT_LOADER=/native/libproot_loader.so",
 		"PROOT_TMP_DIR=/cache",
+		"PATH=" + androidGuestPATH,
 		"LD_LIBRARY_PATH=/native",
 	} {
 		if !strings.Contains(joined, expected) {

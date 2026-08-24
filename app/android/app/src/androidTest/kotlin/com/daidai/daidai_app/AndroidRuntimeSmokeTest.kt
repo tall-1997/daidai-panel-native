@@ -70,6 +70,7 @@ class AndroidRuntimeSmokeTest {
                 )) { "Packaged rootfs runner is unavailable" }
                 val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
                 builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
                 val process = builder.start()
                 process.outputStream.close()
                 val finished = process.waitFor(60, TimeUnit.SECONDS)
@@ -93,6 +94,7 @@ class AndroidRuntimeSmokeTest {
                 )) { "Packaged rootfs Python is unavailable" }
                 val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
                 builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
                 val process = builder.start()
                 process.outputStream.close()
                 val finished = process.waitFor(60, TimeUnit.SECONDS)
@@ -102,6 +104,26 @@ class AndroidRuntimeSmokeTest {
                 assertEquals(0, process.exitValue())
                 assertTrue(output.contains("PYCRYPTODOME_OK"))
                 JSONObject().put("imports", "AES,PKCS1_v1_5").put("output", "PYCRYPTODOME_OK")
+            }
+
+            step("rootfs.npm_env_node") {
+                val command = requireNotNull(AndroidLinuxRuntime.guestCommand(
+                    context,
+                    context.filesDir,
+                    listOf("/usr/bin/npm", "--version"),
+                )) { "Packaged rootfs npm is unavailable" }
+                val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
+                builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
+                val process = builder.start()
+                process.outputStream.close()
+                val finished = process.waitFor(60, TimeUnit.SECONDS)
+                if (!finished) process.destroyForcibly()
+                check(finished) { "Rootfs npm env node smoke timed out" }
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(0, process.exitValue())
+                assertTrue(output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
+                JSONObject().put("command", "/usr/bin/npm --version").put("version", output.trim())
             }
 
             val envId = step("env.create") {

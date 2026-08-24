@@ -347,6 +347,7 @@ class LocalPanelHttpServer(
                 .redirectErrorStream(true)
                 .apply {
                     environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                    AndroidLinuxRuntime.applyGuestEnvironment(command, environment())
                     AndroidNodeRuntime.ensureReady(context)?.let { runtime ->
                         environment()["NODE_PATH"] = runtime.modules
                     }

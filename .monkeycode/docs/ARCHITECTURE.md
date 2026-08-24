@@ -96,7 +96,7 @@ LifecycleHost       接收前台服务和重启请求
 
 Go Core 与 Kotlin fallback 使用统一任务日志契约：排队状态持续跟踪，运行输出通过增量 cursor 推送，内存日志释放后回读持久日志。日志文件响应包含 `filename`、`path`、`log_id`、大小和创建时间，日志列表关联任务名称。
 
-本地依赖以类型、规范包名和运行时版本作为安装身份。并发任务共享同一安装操作；Python 用户依赖位于运行时目录之外，npm 与 pip 使用共享目录和有界缓存。Python、Node 和依赖安装优先进入 rootfs，Android/Bionic runtime 提供快速兼容路径。fallback 使用固定并发 2、队列 32，并限制内存日志窗口。
+本地依赖以类型、规范包名和运行时版本作为安装身份。并发任务共享同一安装操作；Python 用户依赖位于运行时目录之外，npm 与 pip 使用共享目录和有界缓存。Python、Node 和依赖安装优先进入 rootfs，Android/Bionic runtime 提供快速兼容路径。所有 PRoot 进程使用标准 Linux guest `PATH`，确保 `/usr/bin/env` 可解析 Node、Python 和 Bash。fallback 使用固定并发 2、队列 32，并限制内存日志窗口。
 
 Shell planner 对 `.sh`、`.bash`、task command 和 hook 执行保守 Bashism 扫描；POSIX 输入使用 rootfs `/bin/sh`，Bash shebang、数组、双中括号、process substitution 等语法使用 rootfs `/bin/bash`。Go Core 与 Kotlin fallback 暴露同一 PTY session API，支持输入、base64 原始输出块、resize、停止、会话限额和进程组回收。
 
@@ -170,7 +170,7 @@ sequenceDiagram
 
 ## 发布结构
 
-- 单一版本源为 `VERSION.json`，当前版本为 `1.0.14`、Android version code 为 `1000140`；`scripts/version.py` 校验派生版本字段。
+- 单一版本源为 `VERSION.json`，当前版本为 `1.0.15`、Android version code 为 `1000150`；`scripts/version.py` 校验派生版本字段。
 - Modern APK：`minSdk 24`、`compileSdk 36`、`targetSdk 35`。当前管理 Core 已接线，完整受控运行时交付仍受真实资产和设备 smoke 门禁约束。
 - Legacy APK：`minSdk 26`、`compileSdk 35`、`targetSdk 28`，增加私有目录 ELF 执行能力以承载实验性的 `go run`、`go test` 和 `go build`，支持 Android 8 至 Android 15 的已验证设备。
 - 每个 Release 分配十位版本代码区间：Modern 使用 `releaseBase + 0`，Legacy 使用 `releaseBase + 1`，基于上一稳定源码构建的 Recovery APK 使用 `releaseBase + 2`。Modern 与 Legacy 通过可移植备份切换；Recovery APK 以更高版本代码覆盖当前故障版本并恢复迁移快照。

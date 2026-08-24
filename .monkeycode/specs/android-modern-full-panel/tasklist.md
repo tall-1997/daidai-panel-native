@@ -212,7 +212,7 @@ Implement Android Keystore envelope encryption and source/version/SHA-256/capabi
 
 ### Task 2.7: First-Class Rootfs and PTY Sessions
 
-**Status:** Complete for implementation and CI contracts in v1.0.14. The PRoot helper loader is packaged and injected through `PROOT_LOADER`; rootfs Python includes verified PyCryptodome support; Python and Node dependency installers attempt all validated package specs; strict physical-device 16 KB execution evidence remains part of the release matrix.
+**Status:** Complete for implementation and CI contracts in v1.0.15. The PRoot helper loader and Linux guest PATH are injected into every rootfs process; rootfs Python includes verified PyCryptodome support; Python and Node dependency installers attempt all validated package specs; strict physical-device 16 KB execution evidence remains part of the release matrix.
 
 Promote Alpine rootfs to the preferred Python, Node, Shell and dependency layer. Bundle Bash, Python, pip, Node.js, npm, uv, pnpm and CA certificates. Route Bashisms to rootfs Bash, validate pinned PRoot/BusyBox artifacts with 16 KB alignment, and expose bounded PTY sessions through Go Core and Kotlin fallback.
 

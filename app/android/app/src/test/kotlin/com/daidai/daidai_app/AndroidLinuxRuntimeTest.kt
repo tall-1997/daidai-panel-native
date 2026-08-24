@@ -86,6 +86,20 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `proot command receives guest PATH for env shebangs`() {
+        val environment = mutableMapOf("PATH" to "/system/bin")
+        AndroidLinuxRuntime.applyGuestEnvironment(listOf("/native/liboperit_proot.so", "/usr/bin/npm"), environment)
+        assertEquals(AndroidLinuxRuntime.GUEST_PATH, environment["PATH"])
+    }
+
+    @Test
+    fun `direct Android command preserves host PATH`() {
+        val environment = mutableMapOf("PATH" to "/system/bin")
+        AndroidLinuxRuntime.applyGuestEnvironment(listOf("/system/bin/sh", "node-wrapper.sh"), environment)
+        assertEquals("/system/bin", environment["PATH"])
+    }
+
+    @Test
     fun `base runtime contract uses packaged proot loader name`() {
         assertEquals("libproot_loader.so", AndroidLinuxRuntime.prootLoaderLibraryName())
     }

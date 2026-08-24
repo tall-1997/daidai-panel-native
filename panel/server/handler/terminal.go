@@ -25,6 +25,7 @@ const (
 	terminalMaxInput    = 64 << 10
 	terminalMaxOutput   = 1 << 20
 	terminalMaxRetained = 20
+	androidGuestPATH    = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
 type terminalChunk struct {
@@ -227,7 +228,7 @@ func (registry *terminalRegistry) create(rows, columns uint16) (*terminalSession
 
 func androidTerminalEnvironment(base []string, files, cache, prootLoader, nativeDir string) []string {
 	environment := append([]string{}, base...)
-	environment = append(environment, "HOME="+files, "TERM=xterm-256color", "PROOT_NO_SECCOMP=1", "PROOT_TMP_DIR="+cache, "PROOT_LOADER="+prootLoader)
+	environment = append(environment, "HOME="+files, "TERM=xterm-256color", "PATH="+androidGuestPATH, "PROOT_NO_SECCOMP=1", "PROOT_TMP_DIR="+cache, "PROOT_LOADER="+prootLoader)
 	if nativeDir != "" {
 		environment = append(environment, "LD_LIBRARY_PATH="+nativeDir)
 	}

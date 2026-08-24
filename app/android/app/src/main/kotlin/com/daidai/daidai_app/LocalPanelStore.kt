@@ -2690,6 +2690,7 @@ fun serveDashboardStats(): JSONObject {
     ) {
         LocalTaskFallbackSemantics.applyRuntimeEnvironment(target, runtimeEnvironment(workingDir))
         target.putAll(extraEnvironment)
+        AndroidLinuxRuntime.applyGuestEnvironment(command, target)
         if (command.firstOrNull()?.substringAfterLast('/') !in setOf("liboperit_proot.so", "libdaidai_proot.so")) return
         target.remove("PYTHONHOME")
         target["HOME"] = "/root"
@@ -2708,7 +2709,7 @@ fun serveDashboardStats(): JSONObject {
         put("PWD", "/host-files")
         put("TMPDIR", "/tmp")
         put("TERM", "xterm-256color")
-        put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        put("PATH", AndroidLinuxRuntime.GUEST_PATH)
         remove("PYTHONHOME")
         remove("PYTHONPATH")
         remove("NODE_OPTIONS")
@@ -2737,6 +2738,7 @@ fun serveDashboardStats(): JSONObject {
         "NPM_CONFIG_GLOBALCONFIG",
         "NPM_CONFIG_IGNORE_SCRIPTS",
         "NPM_CONFIG_CACHE",
+        "PATH",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
         "PROOT_LOADER",
