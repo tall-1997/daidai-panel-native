@@ -114,6 +114,7 @@ object AndroidLinuxRuntime {
             "DAIDAI_ANDROID_LOCAL" to "1",
             "DAIDAI_RUNTIME_ISOLATION" to "android-app-sandbox",
             "DAIDAI_RUNTIME_ABI" to currentAbi(),
+            "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
             "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
