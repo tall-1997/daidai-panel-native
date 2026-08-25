@@ -4052,24 +4052,6 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("dependencies", dependencies))
     }
 
-    private fun queryDependencyRecord(depType: String, name: String): Pair<String, String>? {
-        val normalizedName = DependencyStorage.normalizedName(depType, name)
-        val runtimeVersion = if (depType == "python") DependencyStorage.PYTHON_VERSION else ""
-        val cursor = readableDatabase.query(
-            "dependencies",
-            arrayOf("status", "version"),
-            "type = ? AND name = ? AND python_version = ?",
-            arrayOf(depType, normalizedName, runtimeVersion),
-            null,
-            null,
-            null,
-        )
-        cursor.use {
-            if (!it.moveToFirst()) return null
-            return it.string("status") to it.string("version")
-        }
-    }
-
     private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val runtimeVersion = when (depType) {
             "python" -> DependencyStorage.PYTHON_VERSION
@@ -4077,10 +4059,6 @@ fun serveDashboardStats(): JSONObject {
             else -> "rootfs"
         }
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
-            val cached = queryDependencyRecord(depType, name)
-            if (cached != null && cached.first == "installed" && DependencyStorage.satisfies(depType, name, cached.second)) {
-                return@withInstallLock "installed" to "Already installed (cached)${cached.second.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}; skipped rootfs verification"
-            }
             if (depType == "python" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) {
                 return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
             }
