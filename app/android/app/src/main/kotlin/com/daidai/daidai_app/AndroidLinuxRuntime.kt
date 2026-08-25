@@ -690,7 +690,7 @@ object AndroidLinuxRuntime {
     private fun prootRunnerStatus(context: Context): JSONObject {
         val nativeDir = nativeLibraryDir(context)
         return JSONObject()
-            .put("proot", File(nativeDir, "libdaidai_proot.so").isFile || File(nativeDir, ).isFile)
+            .put("proot", File(nativeDir, "libdaidai_proot.so").isFile)
             .put("proot_executable", listOf("libdaidai_proot.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
             .put("proot_loader", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).isFile)
             .put("proot_loader_executable", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).let { it.isFile && it.canExecute() })
