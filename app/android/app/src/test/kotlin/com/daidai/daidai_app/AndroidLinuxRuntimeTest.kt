@@ -113,7 +113,6 @@ class AndroidLinuxRuntimeTest {
         assertEquals(
             mapOf(
                 "PROOT_LOADER" to loader.absolutePath,
-                "PROOT_NO_SECCOMP" to "1",
                 "PROOT_TMP_DIR" to cache.absolutePath,
                 "PROOT_VERBOSE" to "0",
             ),

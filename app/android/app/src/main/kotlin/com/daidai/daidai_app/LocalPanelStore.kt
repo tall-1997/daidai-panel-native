@@ -2747,7 +2747,6 @@ fun serveDashboardStats(): JSONObject {
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
         "PROOT_LOADER",
-        "PROOT_NO_SECCOMP",
         "PROOT_TMP_DIR",
         "PROOT_VERBOSE",
     )

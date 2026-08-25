@@ -124,7 +124,6 @@ object AndroidLinuxRuntime {
 
     internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
         "PROOT_LOADER" to loader.absolutePath,
-        "PROOT_NO_SECCOMP" to "1",
         "PROOT_TMP_DIR" to cacheDir.absolutePath,
         "PROOT_VERBOSE" to "0",
     )
