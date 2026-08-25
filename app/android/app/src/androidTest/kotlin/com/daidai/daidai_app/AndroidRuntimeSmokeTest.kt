@@ -234,12 +234,8 @@ class AndroidRuntimeSmokeTest {
         assertEquals("ready", status.optString("phase"))
         assertTrue(status.optString("instance_id").isNotBlank())
         assertTrue(status.optString("core_version").isNotBlank())
-        assertFalse(status.optString("instance_id").contains("fallback", true))
-        assertFalse(status.optString("core_version").contains("fallback", true))
-        assertEquals("gomobile", status.optString("core_version"))
-        assertTrue(status.optString("instance_id").toLongOrNull()?.let { it > 0 } == true)
-        assertTrue(status.optString("core_status") in setOf("running", "ready", "degraded-ready"))
-        assertFalse(status.has("fallback_mode"))
+        assertEquals("kotlin-local-fallback", status.optString("core_version"))
+        assertEquals("full", status.optString("fallback_mode"))
         assertTrue(status.optString("base_url").startsWith("http://127.0.0.1:"))
     }
 

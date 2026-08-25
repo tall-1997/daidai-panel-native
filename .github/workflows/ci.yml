@@ -69,14 +69,12 @@ jobs:
               - 'app/android/**'
               - 'app/pubspec.yaml'
               - 'app/pubspec.lock'
-              - 'app/scripts/build-mobile-core-aar.sh'
               - 'app/scripts/prepare-android-python-runtime.sh'
               - 'app/scripts/prepare-android-yaegi-runtime.sh'
               - 'app/scripts/prepare-android-alpine-rootfs.sh'
               - 'app/scripts/verify-android-linux-runtime.py'
               - 'app/scripts/test_verify_android_linux_runtime.py'
               - 'app/runtime-tools/yaegi/**'
-              - 'panel/server/mobilecore/**'
               - 'panel/server/go.mod'
               - 'panel/server/go.sum'
               - 'runtime/manifest.json'
@@ -150,7 +148,7 @@ jobs:
           cache-dependency-path: panel/server/go.sum
 
       - name: Run race detector on critical packages
-        run: go test -race -count=1 ./router ./mobilecore ./database
+        run: go test -race -count=1 ./router ./database
 
   route-contract:
     name: Route contract
@@ -254,12 +252,6 @@ jobs:
       - name: Prepare Android Yaegi runtime
         working-directory: app
         run: ANDROID_RUNTIME_ABIS='arm64-v8a' bash scripts/prepare-android-yaegi-runtime.sh
-
-      - name: Build embedded Core AAR
-        working-directory: app
-        env:
-          PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
-        run: bash scripts/build-mobile-core-aar.sh
 
       - name: Run Kotlin tests
         working-directory: app

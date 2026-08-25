@@ -93,7 +93,6 @@ jobs:
           bash scripts/prepare-android-python-runtime.sh
           bash scripts/prepare-android-alpine-rootfs.sh
           bash scripts/prepare-android-yaegi-runtime.sh
-          bash scripts/build-mobile-core-aar.sh
           flutter pub get
       - name: Build debug application and instrumentation APKs
         working-directory: app

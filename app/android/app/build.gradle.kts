@@ -2,7 +2,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
-import java.util.zip.ZipFile
 import java.util.Properties
 import groovy.json.JsonSlurper
 import org.gradle.api.tasks.Sync
@@ -193,44 +192,6 @@ dependencies {
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
-    if (file("libs/mobilecore.aar").exists()) {
-        implementation(files("libs/mobilecore.aar"))
-    }
-}
-
-val verifyMobileCoreAar = tasks.register("verifyMobileCoreAar") {
-    group = "verification"
-    description = "Fails when the CI-produced gomobile AAR is missing."
-    doLast {
-        val aar = file("libs/mobilecore.aar")
-        check(aar.isFile) {
-            "Missing android/app/libs/mobilecore.aar. Build it from daidai-panel-native/server with gomobile before assembling Android."
-        }
-        ZipFile(aar).use { archive ->
-            check(archive.getEntry("classes.jar") != null) {
-                "Invalid mobilecore.aar: classes.jar is missing."
-            }
-            requestedAbis.forEach { abi ->
-                check(archive.getEntry("jni/$abi/libgojni.so") != null) {
-                    "Invalid mobilecore.aar: jni/$abi/libgojni.so is missing."
-                }
-            }
-            val temporaryJar = layout.buildDirectory.file("mobilecore-verification/classes.jar").get().asFile
-            temporaryJar.parentFile.mkdirs()
-            archive.getInputStream(archive.getEntry("classes.jar")).use { input ->
-                temporaryJar.outputStream().use { output -> input.copyTo(output) }
-            }
-            ZipFile(temporaryJar).use { classes ->
-                val expectedClasses = listOf(
-                    "mobilecore/Mobilecore.class",
-                    "mobilecore/mobilecore/Mobilecore.class",
-                )
-                check(expectedClasses.any { classes.getEntry(it) != null }) {
-                    "Invalid mobilecore.aar: Mobilecore.class is missing. Expected one of ${expectedClasses.joinToString()}."
-                }
-            }
-        }
-    }
 }
 
 val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
@@ -424,7 +385,6 @@ fun sha256(file: File): String {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn(verifyMobileCoreAar)
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
     dependsOn(verifyLocalPanelWeb)

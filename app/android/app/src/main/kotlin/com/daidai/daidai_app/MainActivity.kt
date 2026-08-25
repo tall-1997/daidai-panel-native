@@ -216,7 +216,7 @@ class MainActivity : FlutterActivity() {
         "phase" to "failed",
         "base_url" to "",
         "instance_id" to "",
-        "core_version" to "gomobile",
+        "core_version" to "kotlin-local-fallback",
         "schema_version" to 0,
         "failure_stage" to "binder",
         "message" to (error?.message?.takeIf(String::isNotBlank) ?: "Local panel service unavailable"),

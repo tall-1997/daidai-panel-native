@@ -15,6 +15,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONObject
 
 class LocalPanelHostService : Service() {
     companion object {
@@ -152,7 +153,7 @@ class LocalPanelHostService : Service() {
         super.onDestroy()
     }
 
-    private fun encodeWithState(status: Map<String, Any>): String = GoCoreResultMapper.encode(
+    private fun encodeWithState(status: Map<String, Any>): String = JSONObject(
         mergeLocalPanelHostStatus(
             coreStatus = status,
             foregroundServiceEnabled = persistentPolicy.foregroundActive,
@@ -163,7 +164,7 @@ class LocalPanelHostService : Service() {
             ),
             recoveryFailure = recoveryFailure,
         ),
-    )
+    ).toString()
 
     @Synchronized
     private fun setPersistentScheduling(enabled: Boolean) {

@@ -8,17 +8,6 @@ import org.junit.Test
 
 class LocalPanelFallbackContractTest {
     @Test
-    fun `degraded ready Go core remains the primary endpoint`() {
-        val status = GoCoreResultMapper.toStatus(
-            """{"ok":true,"id":8,"running":true,"status":"degraded-ready","endpoint":"http://127.0.0.1:43211"}""",
-            localToken = "process-token",
-        )
-
-        assertFalse(LocalPanelRuntime.requiresFallback(status))
-        assertEquals("http://127.0.0.1:43211", status["base_url"])
-    }
-
-    @Test
     fun `full Kotlin fallback exposes a ready local endpoint`() {
         val status = LocalPanelRuntime.fallbackStatus(
             endpoint = "http://127.0.0.1:5700",

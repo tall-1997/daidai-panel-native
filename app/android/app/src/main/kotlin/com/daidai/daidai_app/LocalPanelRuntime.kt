@@ -5,7 +5,7 @@ import fi.iki.elonen.NanoHTTPD
 
 object LocalPanelRuntime {
     private var fallbackServer: LocalPanelHttpServer? = null
-    private var lastFallbackReason: String = ""
+    private val kotlinFallbackReason = "kotlin_local_fallback"
 
     @Volatile
     private var cachedResult: Map<String, Any>? = null
@@ -14,7 +14,7 @@ object LocalPanelRuntime {
 
     fun tryEnsureStarted(context: Context, localToken: String): Map<String, Any> {
         val current = status(localToken)
-        if (!requiresFallback(current) || fallbackServer != null) return current
+        if (fallbackServer != null) return current
         return ensureStarted(context, localToken)
     }
 
@@ -22,13 +22,7 @@ object LocalPanelRuntime {
     fun ensureStarted(context: Context, localToken: String): Map<String, Any> {
         initializing = true
         try {
-            val coreStatus = GoCoreBridge.ensureStarted(context.applicationContext, localToken)
-            val result = if (!requiresFallback(coreStatus)) {
-                stopFallback()
-                coreStatus
-            } else {
-                ensureFallbackStarted(context.applicationContext, localToken, fallbackReason(coreStatus))
-            }
+            val result = ensureFallbackStarted(context.applicationContext, localToken)
             cachedResult = result
             return result
         } finally {
@@ -40,7 +34,15 @@ object LocalPanelRuntime {
     fun stop(localToken: String): Map<String, Any> {
         cachedResult = null
         stopFallback()
-        return GoCoreBridge.stop(localToken).also { cachedResult = null }
+        return mapOf(
+            "phase" to "stopped",
+            "base_url" to "",
+            "instance_id" to "kotlin-local-fallback",
+            "core_version" to "kotlin-local-fallback",
+            "schema_version" to LocalPanelStore.SCHEMA_VERSION,
+            "message" to "Kotlin fallback stopped",
+            "local_token" to localToken,
+        ).also { cachedResult = null }
     }
 
     @Synchronized
@@ -49,45 +51,29 @@ object LocalPanelRuntime {
 
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
-        val coreStatus = GoCoreBridge.status(localToken)
-        if (!requiresFallback(coreStatus)) {
-            stopFallback()
-            cachedResult = coreStatus
-            return coreStatus
-        }
         return fallbackServer?.let { server ->
-            val reason = lastFallbackReason.ifBlank { fallbackReason(coreStatus) }
-            server.updateBoundary(reason, localToken)
-            fallbackStatus(server, localToken, reason)
-        } ?: coreStatus.also { cachedResult = null }
+            server.updateBoundary(kotlinFallbackReason, localToken)
+            fallbackStatus(server, localToken, kotlinFallbackReason)
+        } ?: (cachedResult ?: fallbackStatus("", localToken, "not_started"))
     }
 
-    @Synchronized
     fun createBrowserUrl(context: Context, localToken: String): String {
-        val status = ensureStarted(context, localToken)
         val fallback = fallbackServer
-        return if (fallback != null && status["base_url"] == fallback.endpoint) {
-            fallback.createBrowserUrl()
-        } else {
-            GoCoreBridge.createBrowserUrl()
-        }
+        return if (fallback != null) fallback.createBrowserUrl() else ""
     }
 
     private fun stopFallback() {
         fallbackServer?.shutdown()
         fallbackServer = null
-        lastFallbackReason = ""
     }
 
-    private fun ensureFallbackStarted(context: Context, localToken: String, reason: String): Map<String, Any> {
-        val normalizedReason = reason.ifBlank { "go_core_unavailable" }
-        lastFallbackReason = normalizedReason
+    private fun ensureFallbackStarted(context: Context, localToken: String): Map<String, Any> {
         val existing = fallbackServer
         if (existing != null) {
-            existing.updateBoundary(normalizedReason, localToken)
-            return fallbackStatus(existing, localToken, normalizedReason)
+            existing.updateBoundary(kotlinFallbackReason, localToken)
+            return fallbackStatus(existing, localToken, kotlinFallbackReason)
         }
-        val server = LocalPanelHttpServer(context, normalizedReason, localToken)
+        val server = LocalPanelHttpServer(context, kotlinFallbackReason, localToken)
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             server.startScheduler()
@@ -96,17 +82,8 @@ object LocalPanelRuntime {
             throw error
         }
         fallbackServer = server
-        return fallbackStatus(server, localToken, normalizedReason)
+        return fallbackStatus(server, localToken, kotlinFallbackReason)
     }
-
-    private fun fallbackReason(status: Map<String, Any>): String {
-        val stage = status["failure_stage"]?.toString().orEmpty().ifBlank { "go_core_unavailable" }
-        val errorType = status["go_core_error_type"]?.toString().orEmpty()
-        val rootType = status["go_core_root_error_type"]?.toString().orEmpty()
-        return listOf(stage, errorType, rootType).filter(String::isNotBlank).joinToString(":")
-    }
-
-    internal fun requiresFallback(status: Map<String, Any>): Boolean = status["phase"] != "ready"
 
     private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> =
         fallbackStatus(server.endpoint, localToken, reason)
