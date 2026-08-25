@@ -109,7 +109,6 @@ build_rootfs_for_abi() {
   run_in_rootfs "$root_dir" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends ${required_packages[*]} ${extra_packages}"
 
   run_in_rootfs "$root_dir" "export HOME=/root; npm install -g pnpm@${pnpm_major} --registry=https://registry.npmmirror.com"
-  ln -sf /usr/local/bin/pnpm "$root_dir/usr/bin/pnpm"
 
   for command in "${required_commands[@]}"; do
     test -x "$root_dir/usr/bin/$command" || test -x "$root_dir/bin/$command" || test -x "$root_dir/sbin/$command" || test -x "$root_dir/usr/sbin/$command" || test -x "$root_dir/usr/local/bin/$command" || {

@@ -40,7 +40,7 @@ object AndroidLinuxRuntime {
         "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
         "node" to listOf("/usr/bin/node"),
         "npm" to listOf("/usr/bin/npm"),
-        "pnpm" to listOf("/usr/bin/pnpm"),
+        "pnpm" to listOf("/usr/local/bin/pnpm"),
     )
     private val REQUIRED_PACKAGE_MANAGERS = mapOf(
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
