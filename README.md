@@ -6,19 +6,19 @@
 [![Release](https://img.shields.io/github/v/release/tall-1997/daidai-panel-native)](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 [![License](https://img.shields.io/github/license/tall-1997/daidai-panel-native)](LICENSE)
 
-呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。当前主分支聚焦 ARM64 完整本地 Go Core 与运行时；ARM32 与 x86_64 多架构预研已搁置到 `shelved/multi-arch-runtime` 分支。
+呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
-当前稳定版：**v1.0.5**
+当前版本：**v1.0.15**
 
-Android versionCode：**1000050**
+Android versionCode：**1000150**
 
 默认分支：**main**
 
 ## 下载
 
 - 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
-- v1.0.5：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.5)
-- ARM64 完整版：`daidai-panel-native-1.0.5-release-arm64.apk`
+- v1.0.15：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.15)
+- ARM64 完整版：`daidai-panel-native-1.0.15-release-arm64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -28,8 +28,9 @@ Android versionCode：**1000050**
 - Flutter UI 统一管理 Android 本地实例和远程呆呆面板。
 - 本地 Go Core 运行于 Android `:panel` 独立进程，并监听动态 `127.0.0.1` 端口。
 - Kotlin fallback 在 Go Core 不可用时提供兼容管理与执行能力。
+- **内置 Linux 终端**：NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，无需依赖 Termux。
 - 支持任务、Cron、脚本、日志、环境变量、订阅、通知、用户、安全、SSH、Open API、平台令牌和备份恢复。
-- 内置 Python 3.14、Node.js 18.20.4、TypeScript、受控 Shell、Git、SSH、Yaegi 和 Go Builder 运行时契约。
+- 包管理：Alpine 使用 apk，Ubuntu 使用 apt，默认清华镜像源，支持按需安装 node、git、python3 等开发工具。
 - 支持 pip/npm 依赖安装、指定版本、安装去重、共享目录、镜像配置和缓存限制。
 - 支持实时增量日志、持久日志回读、任务停止、进程树回收和 Android 本地通知。
 - 支持中文脚本路径、空格、引号、显式空参数和多账号变量。
@@ -39,19 +40,20 @@ Android versionCode：**1000050**
 
 ## 架构与能力
 
-| 安装包 | ABI | 本地业务 API | 本地多语言运行时 | 推荐场景 |
+| 安装包 | ABI | 本地业务 API | 本地终端环境 | 推荐场景 |
 | --- | --- | --- | --- | --- |
-| ARM64 完整版 | `arm64-v8a` | 完整 Go Core，与 upstream 后端能力一致 | Python、Node.js、TypeScript、Shell、Git、SSH、Yaegi/Go | ARM64 手机、平板、云手机 |
-| ARM32/x86_64 预研 | `armeabi-v7a` / `x86_64` | 已搁置 | 分支 `shelved/multi-arch-runtime` 保留历史实现 | 后续重新评估 |
+| ARM64 完整版 | `arm64-v8a` | 完整 Go Core，与 upstream 后端能力一致 | PRoot + Alpine/Ubuntu，apk/apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
 
-依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 ARM64 Go Core 提供；其他架构预研暂不进入主分支发布。
+依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 ARM64 Go Core 提供；Node.js 和 Python 通过 apk/apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
 
 ## 平台边界
 
 - 正式 Release 提供 ARM64 APK。
 - 本地服务仅监听 `127.0.0.1`，不会暴露到局域网。
-- Python 与 npm 纯脚本包兼容性最好。
-- 依赖 glibc、桌面 Linux API、`node-gyp` 或不兼容 Android ARM64 的原生扩展可能无法使用。
+- Linux 终端内核为 NDK 自编译 PRoot 5.4.0，不使用 Termux 预编译二进制。
+- Alpine 镜像内置 APK 中，Ubuntu 首次运行时从官方镜像下载。
+- 默认 Linux 包管理器镜像源为清华 TUNA，可在设置中切换。
+- 依赖 glibc、桌面 Linux API 或不兼容 ARM64 的原生扩展可能无法使用。
 - APK 内置 runtime 随 App 更新，本地实例不提供后端自更新或 runtime 卸载。
 - 持续调度开启时使用可见 Foreground Service；普通后台模式会暂停 Flutter 连接轮询并降低 fallback 调度唤醒频率。
 - GitHub 云 runner 不支持 ARM64 Android 模拟器，ARM64 矩阵以 blocked evidence 如实记录，真机证据可通过 self-hosted runner 补充。
@@ -64,7 +66,7 @@ Android versionCode：**1000050**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.5` |
+| 当前稳定标签 | `v1.0.15` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |
@@ -95,14 +97,16 @@ Android versionCode：**1000050**
 | 路径 | 用途 |
 | --- | --- |
 | `app/` | Flutter App、Android Host、Kotlin fallback 和移动端测试 |
+| `app/android/app/src/main/jniLibs/` | NDK 自编译原生二进制（PRoot、BusyBox、Talloc） |
+| `app/android/app/src/main/assets/android-runtime/` | 嵌入式 Linux 运行时资产（Alpine rootfs、Manifest） |
 | `panel/server/` | Go Core、HTTP API、Scheduler、Executor 和服务测试 |
 | `panel/web/` | 本机浏览器面板 Web 前端 |
 | `runtime/` | 运行时清单、兼容矩阵和 smoke evidence |
 | `contracts/` | 移动端 API 路由契约 |
 | `scripts/` | 版本、运行时、路由和发行证据工具 |
 | `.github/workflows/` | Quality、Android Build 和 Device Smoke 工作流 |
-| `.docs/` | 项目架构与开发文档 |
-| `.specs/` | 需求、设计和实施任务 |
+| `docs/` | 项目架构与开发文档 |
+| `specs/` | 需求、设计和实施任务 |
 
 ## 构建环境
 
@@ -165,9 +169,8 @@ flutter test
 ```bash
 cd app
 bash scripts/prepare-android-python-runtime.sh
-bash scripts/prepare-android-node-runtime.sh
 bash scripts/prepare-android-alpine-rootfs.sh
-bash scripts/prepare-android-proot-busybox.sh
+bash scripts/prepare-android-yaegi-runtime.sh
 ```
 
 ### 5. 构建嵌入式 Go Core AAR
