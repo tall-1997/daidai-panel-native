@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased
+## v1.0.16 - 2026-08-25
+
+### 移除 Termux 依赖，改用 NDK 自编译运行时
+
+- 删除全部 Termux 预编译 .so（liboperit_*、libicu*、libandroid-* 等），仅保留 NDK 自编译的 PRoot、loader 与 BusyBox。
+- 内置 Linux 终端改为 NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，无需依赖 Termux。
+- 新增 stat.sh/vmstat.sh busybox 兼容包装脚本。
+
+### proot TLS 段 16 KB 对齐修复
+
+- 修复 proot TLS 段 p_align，满足 Android ARM64 Bionic 对 16 KB 页对齐的要求。
+- 修复 proot 在 Android 15/16 设备上因 `alignment is 8` 导致的加载失败。
+
+### 依赖镜像源默认值恢复国内源
+
+- Alpine APK 默认镜像恢复为华为云（repo.huaweicloud.com/alpine）。
+- Python pip 默认镜像为阿里云（mirrors.aliyun.com/pypi/simple）。
+- Node.js npm 默认镜像为 npmmirror（registry.npmmirror.com）。
+- Go Core 与 Kotlin fallback 两侧默认值对齐，App 内可自由设置与选择镜像源。
+
+### 发行版选择
+
+- 新增 `/api/android-runtime/distribution` 端点，支持 alpine/ubuntu 发行版选择。
 
 ## v1.0.15 - 2026-08-23
 

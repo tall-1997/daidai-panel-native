@@ -8,17 +8,17 @@
 
 呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
-当前版本：**v1.0.15**
+当前版本：**v1.0.16**
 
-Android versionCode：**1000150**
+Android versionCode：**1000160**
 
 默认分支：**main**
 
 ## 下载
 
 - 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
-- v1.0.15：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.15)
-- ARM64 完整版：`daidai-panel-native-1.0.15-release-arm64.apk`
+- v1.0.16：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.16)
+- ARM64 完整版：`daidai-panel-native-1.0.16-release-arm64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -30,7 +30,7 @@ Android versionCode：**1000150**
 - Kotlin fallback 在 Go Core 不可用时提供兼容管理与执行能力。
 - **内置 Linux 终端**：NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，无需依赖 Termux。
 - 支持任务、Cron、脚本、日志、环境变量、订阅、通知、用户、安全、SSH、Open API、平台令牌和备份恢复。
-- 包管理：Alpine 使用 apk，Ubuntu 使用 apt，默认清华镜像源，支持按需安装 node、git、python3 等开发工具。
+- 包管理：Alpine 使用 apk，Ubuntu 使用 apt，默认华为云/阿里云/npmmirror 镜像源，支持按需安装 node、git、python3 等开发工具。
 - 支持 pip/npm 依赖安装、指定版本、安装去重、共享目录、镜像配置和缓存限制。
 - 支持实时增量日志、持久日志回读、任务停止、进程树回收和 Android 本地通知。
 - 支持中文脚本路径、空格、引号、显式空参数和多账号变量。
@@ -66,7 +66,7 @@ Android versionCode：**1000150**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.15` |
+| 当前稳定标签 | `v1.0.16` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |
