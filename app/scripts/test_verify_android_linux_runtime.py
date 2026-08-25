@@ -46,7 +46,7 @@ class RootfsVerificationTest(unittest.TestCase):
             root = pathlib.Path(directory)
             archive = root / "rootfs.tar.gz.bin"
             with tarfile.open(archive, "w:gz") as bundle:
-                for command in runtime_verifier.REQUIRED_COMMANDS:
+                for command in runtime_verifier.DISTRO_COMMANDS["alpine"]:
                     member = tarfile.TarInfo(f"usr/bin/{command}")
                     member.mode = 0o755
                     member.size = 0
@@ -66,11 +66,12 @@ class RootfsVerificationTest(unittest.TestCase):
             manifest = root / "runtime-manifest.json"
             manifest.write_text(json.dumps({
                 "schema_version": 2,
+                "distribution": "alpine",
                 "sha256": digest,
                 "size": archive.stat().st_size,
                 "packages": ["bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"],
-                "required_commands": list(runtime_verifier.REQUIRED_COMMANDS),
-                "capabilities": runtime_verifier.REQUIRED_CAPABILITIES,
+                "required_commands": list(runtime_verifier.DISTRO_COMMANDS["alpine"]),
+                "capabilities": runtime_verifier.DISTRO_CAPABILITIES["alpine"],
             }))
             runtime_verifier.verify_rootfs(archive, checksum, manifest)
 
