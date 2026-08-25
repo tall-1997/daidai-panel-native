@@ -156,8 +156,8 @@ class AndroidLinuxRuntimeTest {
             ),
         )
         assertEquals(
-            AndroidLinuxRuntime.ALPINE_APK_HUAWEI_MIRROR,
-            AndroidLinuxRuntime.resolveMirrorValue(null, null, AndroidLinuxRuntime.ALPINE_APK_HUAWEI_MIRROR),
+            AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.resolveMirrorValue(null, null, AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR),
         )
     }
 
