@@ -337,7 +337,6 @@ object AndroidLinuxRuntime {
             "--link2symlink",
             "--sysvipc",
             "--kill-on-exit",
-            "-v", "1",
             "-k", "4.14.0",
             "-r", rootfs.root.absolutePath,
             "-w", guestWorkingDir,
