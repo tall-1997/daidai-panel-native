@@ -267,13 +267,12 @@ jobs:
 
       - name: Prepare Android Node runtime
         working-directory: app
-        run: bash scripts/prepare-android-node-runtime.sh
+        run: echo "Android Node runtime is deprecated; Node.js is installed via apk/apt in the rootfs."
 
       - name: Prepare Android Linux runtime
         working-directory: app
         run: |
           bash scripts/prepare-android-alpine-rootfs.sh
-          bash scripts/prepare-android-proot-busybox.sh
           bash scripts/prepare-android-yaegi-runtime.sh
 
       - name: Test embedded Go core
