@@ -2,3 +2,5 @@
 app/.flutter-plugins-dependencies
 __pycache__/
 *.py[cod]
+logcat.txt
+.monkeycode-tmp-files/
