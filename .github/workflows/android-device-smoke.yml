@@ -46,7 +46,6 @@ on:
       - 'app/android/**'
       - 'app/scripts/prepare-android-*-runtime.sh'
       - 'app/scripts/prepare-android-alpine-rootfs.sh'
-      - 'app/scripts/prepare-android-proot-busybox.sh'
       - 'app/scripts/verify-android-linux-runtime.py'
       - 'app/scripts/test_verify_android_linux_runtime.py'
       - 'panel/server/**'
@@ -92,9 +91,7 @@ jobs:
           PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
         run: |
           bash scripts/prepare-android-python-runtime.sh
-          bash scripts/prepare-android-node-runtime.sh
           bash scripts/prepare-android-alpine-rootfs.sh
-          bash scripts/prepare-android-proot-busybox.sh
           bash scripts/prepare-android-yaegi-runtime.sh
           bash scripts/build-mobile-core-aar.sh
           flutter pub get

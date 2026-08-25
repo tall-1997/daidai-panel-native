@@ -71,13 +71,10 @@ jobs:
               - 'app/pubspec.lock'
               - 'app/scripts/build-mobile-core-aar.sh'
               - 'app/scripts/prepare-android-python-runtime.sh'
-              - 'app/scripts/prepare-android-node-runtime.sh'
               - 'app/scripts/prepare-android-yaegi-runtime.sh'
               - 'app/scripts/prepare-android-alpine-rootfs.sh'
-              - 'app/scripts/prepare-android-proot-busybox.sh'
               - 'app/scripts/verify-android-linux-runtime.py'
               - 'app/scripts/test_verify_android_linux_runtime.py'
-              - 'app/scripts/verify-android-node-runtime.sh'
               - 'app/runtime-tools/yaegi/**'
               - 'panel/server/mobilecore/**'
               - 'panel/server/go.mod'
@@ -247,13 +244,12 @@ jobs:
 
       - name: Prepare Android Node runtime
         working-directory: app
-        run: bash scripts/prepare-android-node-runtime.sh
+        run: echo "Android Node runtime is deprecated; Node.js is installed via apk/apt in the rootfs."
 
       - name: Prepare Android Linux runtime
         working-directory: app
         run: |
           bash scripts/prepare-android-alpine-rootfs.sh
-          bash scripts/prepare-android-proot-busybox.sh
 
       - name: Prepare Android Yaegi runtime
         working-directory: app
