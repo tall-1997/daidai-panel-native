@@ -23,7 +23,7 @@ object AndroidLinuxRuntime {
     internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     private const val DISTRO_PREFERENCES = "daidai-linux-distro"
     private const val DISTRO_KEY = "selected_distribution"
-    private const val DEFAULT_DISTRIBUTION = "ubuntu"
+    private const val DEFAULT_DISTRIBUTION = "alpine"
     internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine", "ubuntu")
     private val REQUIRED_COMMANDS_ALPINE = linkedMapOf(
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
