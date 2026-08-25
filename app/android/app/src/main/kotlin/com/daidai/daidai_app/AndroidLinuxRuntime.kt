@@ -320,6 +320,7 @@ object AndroidLinuxRuntime {
             rootfs.proot.absolutePath,
             "--link2symlink",
             "--kill-on-exit",
+            "-v", "1",
             "-k", "4.14.0",
             "-r", rootfs.root.absolutePath,
             "-w", guestWorkingDir,
