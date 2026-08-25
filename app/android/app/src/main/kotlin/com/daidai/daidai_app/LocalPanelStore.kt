@@ -84,6 +84,7 @@ class LocalPanelStore(
         private const val FALLBACK_WORKERS = 2
         private const val FALLBACK_QUEUE_CAPACITY = 32
         private const val LOG_PERSIST_BATCH_SIZE = 16
+        private const val MAX_JSON_BODY_BYTES = 16L * 1024 * 1024
 
         private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
             FALLBACK_WORKERS,
@@ -109,6 +110,24 @@ class LocalPanelStore(
             require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段: $decodedPath" }
             require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段: $decodedPath" }
             return segments.joinToString("/")
+        }
+
+        internal fun readUtf8JsonBody(session: NanoHTTPD.IHTTPSession): String? {
+            val contentType = session.headers["content-type"]?.lowercase().orEmpty()
+            if (session.method != NanoHTTPD.Method.POST || "application/json" !in contentType) return null
+            val contentLength = session.headers["content-length"]?.trim()?.toLongOrNull() ?: return null
+            if (contentLength <= 0L || contentLength > MAX_JSON_BODY_BYTES) return null
+            return try {
+                val input = session.inputStream
+                val buffer = ByteArray(contentLength.toInt())
+                var offset = 0
+                while (offset < buffer.size) {
+                    val read = input.read(buffer, offset, buffer.size - offset)
+                    if (read < 0) break
+                    offset += read
+                }
+                String(buffer, 0, offset, Charsets.UTF_8).trim()
+            } catch (_: Exception) { null }
         }
 
         private fun percentDecodePath(value: String): String {
@@ -1621,6 +1640,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun readBody(session: NanoHTTPD.IHTTPSession): String {
+        readUtf8JsonBody(session)?.let { return it }
         val body = HashMap<String, String>()
         try { session.parseBody(body) } catch (_: Exception) { }
         return body["postData"] ?: ""
@@ -4352,25 +4372,29 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun body(session: NanoHTTPD.IHTTPSession): JSONObject {
-        val files = HashMap<String, String>()
-        session.parseBody(files)
-        val raw = when {
-            files["postData"] != null -> files["postData"].orEmpty()
-            files["content"] != null -> File(files.getValue("content")).readText()
-            else -> ""
-        }.trim()
+        val raw = readUtf8JsonBody(session) ?: run {
+            val files = HashMap<String, String>()
+            try { session.parseBody(files) } catch (_: Exception) {}
+            when {
+                files["postData"] != null -> files["postData"].orEmpty()
+                files["content"] != null -> runCatching { File(files.getValue("content")).readText() }.getOrDefault("")
+                else -> ""
+            }.trim()
+        }
         return if (raw.isEmpty()) JSONObject() else JSONObject(raw)
     }
 
     private fun bodyOrUploadedJson(session: NanoHTTPD.IHTTPSession): JSONObject {
-        val files = HashMap<String, String>()
-        session.parseBody(files)
-        val raw = when {
-            files["file"] != null -> File(files.getValue("file")).readText()
-            files["content"] != null -> File(files.getValue("content")).readText()
-            files["postData"] != null -> files["postData"].orEmpty()
-            else -> ""
-        }.trim()
+        val raw = readUtf8JsonBody(session) ?: run {
+            val files = HashMap<String, String>()
+            try { session.parseBody(files) } catch (_: Exception) {}
+            when {
+                files["file"] != null -> runCatching { File(files.getValue("file")).readText() }.getOrDefault("")
+                files["content"] != null -> runCatching { File(files.getValue("content")).readText() }.getOrDefault("")
+                files["postData"] != null -> files["postData"].orEmpty()
+                else -> ""
+            }.trim()
+        }
         return if (raw.isEmpty()) JSONObject() else JSONObject(raw)
     }
 

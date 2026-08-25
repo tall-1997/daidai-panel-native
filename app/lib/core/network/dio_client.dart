@@ -40,7 +40,7 @@ class DioClient {
       receiveTimeout: const Duration(seconds: 30),
       sendTimeout: const Duration(seconds: 15),
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
         'Accept': 'application/json',
         ...AppUserAgent.defaultHeaders,
       },

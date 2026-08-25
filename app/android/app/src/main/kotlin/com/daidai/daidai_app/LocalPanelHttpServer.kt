@@ -476,9 +476,11 @@ class LocalPanelHttpServer(
 
     private fun parseBodyJson(session: IHTTPSession): JSONObject? {
         return try {
-            val files = HashMap<String, String>()
-            session.parseBody(files)
-            val body = files["postData"] ?: return null
+            val body = LocalPanelStore.readUtf8JsonBody(session) ?: run {
+                val files = HashMap<String, String>()
+                session.parseBody(files)
+                files["postData"] ?: return null
+            }
             JSONObject(body)
         } catch (_: Exception) {
             null
