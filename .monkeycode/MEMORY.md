@@ -43,4 +43,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - manifest 输出路径必须用显式绝对路径（`$repo_root/app/android/app/src/main/assets/android-runtime/$abi/...`），勿用 `$native_dir/../assets`（会落到 jniLibs/assets，与 verify 读取的 main/assets 不一致）。
   - 多 ABI 支持：`ANDROID_RUNTIME_ABIS="arm64-v8a x86_64"` 运行 prepare-android-native-source-build.sh；脚本 target_and_toolchain 已含两 ABI 映射，talloc 的 qemu 选择 `qemu-${target%%-*}`（qemu-x86_64 存在）。
   - qemu-user 冒烟 busybox：直接 `qemu-aarch64 <path.so> --list` 会报 "applet not found"（guest argv[0] 是 .so 文件名，busybox 按 argv[0] basename 解析 applet）。必须用 `qemu-aarch64 -0 busybox <path.so> --list` 设置 guest argv[0]；sh 冒烟用 `-0 sh`。
-  - jniLibs 中的 liboperit_*/libpython3.14.so 等旧库是 AndroidLinuxRuntime.kt 的回退路径（`resolveNativeTool(context, listOf("libdaidai_*", "liboperit_*"))`）与 python/node runtime 依赖，勿删除。
+  - jniLibs 已移除所有 Termux 预编译 .so（liboperit_*、libicu*、libandroid-* 等），只保留 NDK 自编译的 libdaidai_proot.so、libproot_loader.so、libdaidai_busybox.so 及少量系统库；AndroidLinuxRuntime.kt 的 resolveNativeTool 只回退到 libdaidai_*，不再引用 liboperit_*。
+
+[Project Knowledge Summary]
+- Date: 2026-08-25
+- Context: Discovered by Agent while fixing CI failures after the Termux-dependency removal refactor
+- Category: Build Methods | Troubleshooting & Debugging
+- Instructions:
+  - `native-runtime-manifest.json` 的 `artifacts` 列表只放原生 ELF 二进制（.so），不放 shell 脚本；`verifyLinuxRootfsRuntime` 会遍历 artifacts 逐个断言 `isArm64Elf` + PT_LOAD 对齐 >=16384 + sha256/size 与 jniLibs 内文件一致，shell 脚本会必然失败。
+  - proot 的 TLS 段 p_align 需 >=64（ARM64 Bionic 要求），构建时必须对 proot 主二进制和 loader 追加 `-z,max-page-size=16384`（见 62c37a8）。
+  - 镜像常量统一为 `ALPINE_APK_DEFAULT_MIRROR`（清华 TUNA）、`UBUNTU_APT_DEFAULT_MIRROR`、`PYTHON_PIP_ALIBABA_INDEX`、`NODE_NPM_NPMMIRROR_REGISTRY`；旧名 `ALPINE_APK_HUAWEI_MIRROR` 已废弃，主代码与测试文件都要同步改名，否则 compileDebugUnitTestKotlin 会报 Unresolved reference。
+  - commit 前检查 `.git/hooks/prepare-commit-msg` 会自动从 local git config 的 coauthor.* 条目追加 Co-authored-by；本项目已移除 monkeycode-ai co-author，作者统一为 tall-1997。
