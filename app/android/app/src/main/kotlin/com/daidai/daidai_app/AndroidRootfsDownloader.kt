@@ -34,7 +34,7 @@ object AndroidRootfsDownloader {
         val totalBytes: Long = 0L,
     )
 
-    interface ProgressListener {
+    fun interface ProgressListener {
         fun onProgress(progress: RootfsDownloadProgress)
     }
 
@@ -202,7 +202,7 @@ object AndroidRootfsDownloader {
             val connection = openConnection(url, start.takeIf { it > 0L })
             try {
                 val code = connection.responseCode
-                if (code == HttpURLConnection.HTTP_RANGE_NOT_SATISFIABLE && start > 0L) {
+                if (code == 416 && start > 0L) {
                     partial.delete()
                     attempt = 0
                     continue

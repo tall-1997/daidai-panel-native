@@ -204,7 +204,7 @@ class LocalPanelHttpServer(
             if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
             if(AndroidRootfsDownloader.downloadRunning)return jsonError(Response.Status.CONFLICT,"A rootfs download is already in progress")
             val abi=AndroidLinuxRuntime.currentAbi()
-            Thread{runCatching{AndroidRootfsDownloader.downloadRootfs(context,distribution,abi,AndroidRootfsDownloader.ProgressListener{})}}.start()
+            Thread{runCatching{AndroidRootfsDownloader.downloadRootfs(context,distribution,abi,AndroidRootfsDownloader.ProgressListener{},java.util.concurrent.atomic.AtomicBoolean(false))}}.start()
             return jsonResponse(JSONObject().put("status","accepted").put("distribution",distribution).put("source_id",AndroidRootfsDownloader.selectedSourceId(context,distribution)))
         }
         if(session.uri.endsWith("/download-status")&&session.method==Method.GET){
