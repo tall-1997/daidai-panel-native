@@ -335,6 +335,7 @@ object AndroidLinuxRuntime {
         val command = mutableListOf(
             rootfs.proot.absolutePath,
             "--link2symlink",
+            "--sysvipc",
             "--kill-on-exit",
             "-v", "1",
             "-k", "4.14.0",
@@ -343,6 +344,7 @@ object AndroidLinuxRuntime {
             "-b", "${hostWorkingDir.absolutePath}:$guestWorkingDir",
             "-b", "${context.filesDir.absolutePath}:/host-files",
             "-b", "${context.cacheDir.absolutePath}:/tmp/host-cache",
+            "-L",
             "-0",
         )
         listOf("/proc", "/dev", "/sys", "/sdcard", "/storage").forEach { path ->
@@ -354,8 +356,10 @@ object AndroidLinuxRuntime {
 
     internal fun prootCompatibilityFlags(): List<String> = listOf(
         "--link2symlink",
+        "--sysvipc",
         "--kill-on-exit",
         "-k", "4.14.0",
+        "-L",
         "-0",
     )
 

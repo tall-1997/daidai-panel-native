@@ -16,9 +16,15 @@
     "upstream_source": [
       {
         "name": "proot",
-        "version": "5.4.0",
-        "url": "https://github.com/proot-me/proot/archive/refs/tags/v5.4.0.tar.gz",
-        "sha256": "29248aac2a7ce10c3bd5ee5602742ec33b2532310ff9cf73b79f3c133e5a5f68"
+        "version": "5.1.107.92",
+        "url": "https://github.com/termux/proot/archive/refs/tags/v5.1.107.92.zip",
+        "sha256": "29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135"
+      },
+      {
+        "name": "libandroid-shmem",
+        "version": "1.0.0",
+        "url": "https://github.com/termux/libandroid-shmem",
+        "sha256": "48e80a854df55dd8eb2a5026cb3cc90a10165aae68c591acdabad24488ce621f"
       },
       {
         "name": "talloc",
@@ -37,26 +43,38 @@
     "runtime_overrides": {
       "PROOT_LOADER": "libproot_loader.so"
     },
-    "note": "Built from pinned upstream source with the Android NDK; no prebuilt binaries are imported."
+    "note": "Built from pinned termux/proot fork (SysV IPC support) and other pinned upstream sources with the Android NDK."
   },
   "artifacts": [
     {
       "name": "libdaidai_proot.so",
       "role": "proot",
-      "sha256": "48498428ab47303f5f1d41deba98a8bf441657db127662ba0915709d9a227c91",
-      "size": 2995824
+      "sha256": "6ffe20bd8f85c17127f2779b2c47f3153e23420bbab3bc693756386b656cb795",
+      "size": 326104
     },
     {
       "name": "libproot_loader.so",
       "role": "proot-loader",
-      "sha256": "7149fe1f05f3ea69079c0e3028f3b418a1467c6d966d7fa782ccd9cd8ada5160",
-      "size": 17672
+      "sha256": "722b12da915658aed15b885c85502deb0864398780816b912ae586e15f97706b",
+      "size": 18296
     },
     {
       "name": "libdaidai_busybox.so",
       "role": "busybox",
       "sha256": "31965abc88c03ebc7bb9e4573baf9feff5ec37eae77b77ad1e41c4717329c01f",
       "size": 1553528
+    },
+    {
+      "name": "libtalloc.so",
+      "role": "talloc-runtime",
+      "sha256": "ef8000e7dd106d54defc04fd360c1c47b7cdd431fc1c8494536f683b7e3e1e60",
+      "size": 42288
+    },
+    {
+      "name": "libandroid-shmem.so",
+      "role": "android-shmem-runtime",
+      "sha256": "f48dd4d2196f331b1054e41cbafb544f09d0aa148b846562b65fb5b439ac633f",
+      "size": 18536
     }
   ]
 }
