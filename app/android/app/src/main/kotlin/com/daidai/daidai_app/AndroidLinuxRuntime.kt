@@ -35,8 +35,8 @@ object AndroidLinuxRuntime {
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "apt" to listOf("/usr/bin/apt-get"),
     )
-    const val ALPINE_APK_HUAWEI_MIRROR = "https://repo.huaweicloud.com/alpine"
-    const val UBUNTU_APT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
+    const val ALPINE_APK_DEFAULT_MIRROR = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+    const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
@@ -49,7 +49,7 @@ object AndroidLinuxRuntime {
     data class MirrorConfig(
         val pipMirror: String = PYTHON_PIP_ALIBABA_INDEX,
         val npmMirror: String = NODE_NPM_NPMMIRROR_REGISTRY,
-        val linuxMirror: String = ALPINE_APK_HUAWEI_MIRROR,
+        val linuxMirror: String = ALPINE_APK_DEFAULT_MIRROR,
     )
 
     data class RootfsPaths(
@@ -137,7 +137,7 @@ object AndroidLinuxRuntime {
     }
 
     internal fun applyGuestEnvironment(command: List<String>, environment: MutableMap<String, String>) {
-        if (command.firstOrNull()?.substringAfterLast('/') in setOf("liboperit_proot.so", "libdaidai_proot.so")) {
+        if (command.firstOrNull()?.substringAfterLast('/') == "libdaidai_proot.so") {
             environment["PATH"] = GUEST_PATH
         }
     }
@@ -165,7 +165,7 @@ object AndroidLinuxRuntime {
             ?: DEFAULT_DISTRIBUTION
 
     internal fun defaultLinuxMirror(distribution: String): String =
-        if (distribution == "ubuntu") UBUNTU_APT_MIRROR else ALPINE_APK_HUAWEI_MIRROR
+        if (distribution == "ubuntu") UBUNTU_APT_DEFAULT_MIRROR else ALPINE_APK_DEFAULT_MIRROR
 
     fun distributionPackageManager(distribution: String): String =
         if (distribution == "ubuntu") "apt" else "apk"
@@ -216,9 +216,9 @@ object AndroidLinuxRuntime {
         cachedLinuxRootfs?.let { return@synchronized it }
         val abi = currentAbi()
         val root = File(context.filesDir, "runtimes/linux-rootfs/$abi")
-        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return@synchronized null
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so")) ?: return@synchronized null
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return@synchronized null
-        val busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so"))
+        val busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so"))
         if (!rootfsMarkerMatchesAsset(context, root)) {
             if (!rootfsMarkerMatchesDownloaded(context, root)) {
                 val installed = installRootfsAsset(context, root, mirrors) ?: installDownloadedRootfs(context, root, mirrors)
@@ -288,7 +288,7 @@ object AndroidLinuxRuntime {
         return SUPPORTED_DISTRIBUTIONS.any { distribution ->
             assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME")
         } &&
-            resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) != null &&
+            resolveNativeTool(context, listOf("libdaidai_proot.so")) != null &&
             resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) != null
     }
 
@@ -350,7 +350,7 @@ object AndroidLinuxRuntime {
         val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME"
         val checksumName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_SHA256_ASSET_NAME"
         if (!assetExists(context, assetName)) return null
-        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return null
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so")) ?: return null
         root.deleteRecursively()
         root.mkdirs()
         try {
@@ -383,7 +383,7 @@ object AndroidLinuxRuntime {
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return null
         val commands = detectCommands(root)
         val packageManager = detectPackageManager(root)
-        return RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")), packageManager = packageManager, commands = commands)
+        return RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so")), packageManager = packageManager, commands = commands)
     }
 
     private fun installDownloadedRootfs(context: Context, root: File, mirrors: MirrorConfig): RootfsPaths? {
@@ -414,7 +414,7 @@ object AndroidLinuxRuntime {
             root.deleteRecursively()
             return null
         }
-        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return null
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so")) ?: return null
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return null
         val commands = detectCommands(root)
         val packageManager = detectPackageManager(root)
@@ -422,7 +422,7 @@ object AndroidLinuxRuntime {
             root = root,
             proot = proot,
             prootLoader = prootLoader,
-            busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")),
+            busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so")),
             packageManager = packageManager,
             commands = commands,
         )
@@ -620,7 +620,6 @@ object AndroidLinuxRuntime {
             .put("supported", true)
             .put("arch", currentAbi())
             .put("bin_dir", nativeLibraryDir(context).absolutePath)
-            .put("termux_detected", false)
             .put("container_model", "layered-linux-runtime")
             .put("distribution", selectedDistribution(context))
             .put("rootfs", rootfs)
@@ -691,12 +690,12 @@ object AndroidLinuxRuntime {
     private fun prootRunnerStatus(context: Context): JSONObject {
         val nativeDir = nativeLibraryDir(context)
         return JSONObject()
-            .put("proot", File(nativeDir, "libdaidai_proot.so").isFile || File(nativeDir, "liboperit_proot.so").isFile)
-            .put("proot_executable", listOf("libdaidai_proot.so", "liboperit_proot.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
+            .put("proot", File(nativeDir, "libdaidai_proot.so").isFile || File(nativeDir, ).isFile)
+            .put("proot_executable", listOf("libdaidai_proot.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
             .put("proot_loader", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).isFile)
             .put("proot_loader_executable", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).let { it.isFile && it.canExecute() })
-            .put("busybox", File(nativeDir, "libdaidai_busybox.so").isFile || File(nativeDir, "liboperit_busybox.so").isFile)
-            .put("busybox_executable", listOf("libdaidai_busybox.so", "liboperit_busybox.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
+            .put("busybox", File(nativeDir, "libdaidai_busybox.so").isFile)
+            .put("busybox_executable", listOf("libdaidai_busybox.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
     }
 
     private fun resolveNativeTool(context: Context, candidates: List<String>): File? {

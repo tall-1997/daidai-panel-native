@@ -106,7 +106,6 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += setOf(
-                "**/liboperit_proot.so",
                 "**/libproot_loader.so",
             )
         }
@@ -280,7 +279,7 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
         )
         requestedAbis.forEach { abi ->
             val nativeDir = file("src/main/jniLibs/$abi")
-            val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
+            val proot = listOf("libdaidai_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
             check(proot != null && isArm64Elf(proot) && hasMinimumElfLoadAlignment(proot, 16384L)) {
                 "Android PRoot runner for $abi must be an arm64 ELF with 16 KB PT_LOAD alignment."
             }
@@ -338,11 +337,7 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             }
             @Suppress("UNCHECKED_CAST")
             val artifacts = nativeManifest["artifacts"] as? List<Map<String, Any>> ?: error("Android native artifacts are missing for $abi.")
-            val requiredNativeFiles = if (provenance["source_patch_applied"] == true) {
-                setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
-            } else {
-                setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so")
-            }
+            val requiredNativeFiles = setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so")
             check(requiredNativeFiles.all { required -> artifacts.any { it["name"] == required } }) { "Android PRoot/BusyBox dependency manifest is incomplete for $abi." }
             artifacts.forEach { artifact ->
                 val name = artifact["name"] as? String ?: error("Android native artifact has no name for $abi.")

@@ -74,11 +74,8 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
     assert manifest.get("minimum_load_alignment") == 16384, "native alignment policy mismatch"
     provenance = manifest.get("provenance", {})
     strategy = provenance.get("strategy")
-    assert strategy in ("pinned-termux-binary-packages", "self-contained-source-build"), "unapproved PRoot provenance strategy"
-    if strategy == "self-contained-source-build":
-        _verify_source_build(provenance)
-    else:
-        _verify_import_provenance(provenance, manifest, native_dir)
+    assert strategy == "self-contained-source-build", "unapproved PRoot provenance strategy (Termux packages are no longer supported)"
+    _verify_source_build(provenance)
     artifacts = manifest.get("artifacts", [])
     assert artifacts, "native runtime manifest has no artifacts"
     names = {item.get("name") for item in artifacts}
@@ -94,7 +91,7 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
         assert expected_machine is not None, f"unsupported ABI: {abi}"
         assert machine == expected_machine, f"native artifact does not match ABI {abi}: {path.name}"
         assert all(value >= 16384 for value in alignments), f"native artifact has PT_LOAD alignment below 16KB: {path.name}"
-    proot_name = next((name for name in names if name in ("liboperit_proot.so", "libdaidai_proot.so")), None)
+    proot_name = next((name for name in names if name == "libdaidai_proot.so"), None)
     if proot_name is not None:
         proot_data = (native_dir / proot_name).read_bytes()
         assert b"PROOT_LOADER" in proot_data, "packaged PRoot does not support the required loader override"
@@ -112,27 +109,7 @@ def _verify_source_build(provenance: dict) -> None:
     assert toolchain.get("load_alignment") == 16384, "toolchain load alignment policy mismatch"
 
 
-def _verify_import_provenance(provenance: dict, manifest: dict, native_dir: pathlib.Path) -> None:
-    assert provenance.get("source_build") is False, "binary import must not claim a source build"
-    assert provenance.get("source_patch_applied") is False, "binary import must not claim source patches"
-    assert len(provenance.get("termux_recipe", {}).get("commit", "")) == 40, "Termux recipe commit is not pinned"
-    assert len(provenance.get("upstream_source", {}).get("sha256", "")) == 64, "upstream PRoot source is not pinned"
-    packages = manifest.get("packages", [])
-    assert packages and all(len(item.get("sha256", "")) == 64 for item in packages), "unpinned Termux package"
-    artifacts = manifest.get("artifacts", [])
-    names = {item.get("name") for item in artifacts}
-    required = {"liboperit_proot.so", "libproot_loader.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so"}
-    assert required <= names, "native runtime dependency manifest is incomplete"
-    expected_dependencies = {
-        "liboperit_proot.so": (b"libtalloc_2.so", b"libandroid-shmem.so"),
-        "liboperit_busybox.so": (b"libbusybox_1_38_0.so",),
-        "libbusybox_1_38_0.so": (b"libandroid-selinux.so",),
-        "libandroid-selinux.so": (b"libpcre2-8.so",),
-    }
-    for artifact in artifacts:
-        path = native_dir / artifact["name"]
-        data = path.read_bytes()
-        assert all(dependency in data for dependency in expected_dependencies.get(path.name, ())), f"native artifact dependency contract mismatch: {path.name}"
+
 
 
 def main() -> None:

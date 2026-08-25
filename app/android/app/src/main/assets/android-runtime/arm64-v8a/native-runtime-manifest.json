@@ -57,6 +57,18 @@
       "role": "busybox",
       "sha256": "31965abc88c03ebc7bb9e4573baf9feff5ec37eae77b77ad1e41c4717329c01f",
       "size": 1553528
+    },
+    {
+      "name": "stat.sh",
+      "role": "stat-helper",
+      "sha256": "f2d4f36478c3e09d1995b36a03b1c8e018a686471e506435837f52e6b171d47d",
+      "size": 161
+    },
+    {
+      "name": "vmstat.sh",
+      "role": "vmstat-helper",
+      "sha256": "8ea59fc5ed7eff3f3a11ef1927d33f036204f42095878b54a1e2914ba4911f33",
+      "size": 165
     }
   ]
 }

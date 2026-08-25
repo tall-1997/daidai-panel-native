@@ -191,6 +191,14 @@ class LocalPanelHttpServer(
     private fun androidRuntime(session:IHTTPSession):Response {
         val parameters = session.parameters
         if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",AndroidLinuxRuntime.statusJson(context)))
+        if(session.uri.endsWith("/distribution")&&session.method==Method.POST){
+            val body = parseBodyJson(session)
+            val distribution = (body?.optString("distribution") ?: parameters["distribution"]?.firstOrNull() ?: "").trim()
+            if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
+            AndroidLinuxRuntime.selectDistribution(context, distribution)
+            return jsonResponse(JSONObject().put("status","ok").put("distribution",distribution))
+        }
+        if(session.uri.endsWith("/distribution")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",JSONObject().put("distribution",AndroidLinuxRuntime.selectedDistribution(context)).put("supported",JSONArray(AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS))))
         if(session.uri.endsWith("/source")&&session.method==Method.POST){
             val distribution=(parameters["distribution"]?.firstOrNull() ?: "").trim()
             val sourceId=(parameters["source_id"]?.firstOrNull() ?: "").trim()
@@ -465,4 +473,15 @@ class LocalPanelHttpServer(
         "application/json; charset=utf-8",
         JSONObject().put("error", message).toString()
     )
+
+    private fun parseBodyJson(session: IHTTPSession): JSONObject? {
+        return try {
+            val files = HashMap<String, String>()
+            session.parseBody(files)
+            val body = files["postData"] ?: return null
+            JSONObject(body)
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
