@@ -107,7 +107,7 @@ build_rootfs_for_abi() {
   download "$mirror/$branch/releases/$alpine_arch/$file" "$archive"
   printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
   local root_dir="$cache_root/work/$abi/rootfs-$(date +%s)-$$"
-  local output_dir="$asset_root/$abi"
+  local output_dir="$asset_root/$abi/alpine"
   mkdir -p "$root_dir" "$output_dir"
   tar -xzf "$archive" -C "$root_dir"
   write_rootfs_config "$root_dir" "$branch"
@@ -137,7 +137,7 @@ import hashlib, json, pathlib, sys
 target, abi, arch, version, archive, packages, required_commands = sys.argv[1:]
 path = pathlib.Path(archive)
 pathlib.Path(target).write_text(json.dumps({
-    "schema_version": 2, "abi": abi, "alpine_arch": arch, "alpine_version": version,
+    "schema_version": 2, "abi": abi, "distribution": "alpine", "alpine_arch": arch, "alpine_version": version,
     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size,
     "packages": packages.split(),
     "required_commands": required_commands.split(),

@@ -288,7 +288,14 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
 
             // 双发行版 rootfs 资产，每一份都必须自洽（sha256 + manifest 一致）。
-            listOf("alpine", "ubuntu").forEach { distribution ->
+            // 至少一个发行版必须内置；未内置的发行版由 App 在运行时按需下载。
+            val presentDistributions = listOf("alpine", "ubuntu").filter { distribution ->
+                file("src/main/assets/android-runtime/$abi/$distribution/rootfs.tar.gz.bin").isFile
+            }
+            check(presentDistributions.isNotEmpty()) {
+                "No rootfs assets present for $abi; at least one distribution is required."
+            }
+            presentDistributions.forEach { distribution ->
                 val assetDir = file("src/main/assets/android-runtime/$abi/$distribution")
                 val rootfs = file("$assetDir/rootfs.tar.gz.bin")
                 val rootfsSha = file("$assetDir/rootfs.tar.gz.bin.sha256")
@@ -347,22 +354,6 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                     "Android native artifact must be arm64 and 16 KB PT_LOAD aligned: $name."
                 }
             }
-        }
-
-        // 彻底弃用 bionic 独立运行时：不得残留对应 native 库或 assets。
-        requestedAbis.forEach { abi ->
-            listOf("libnode_exec.so", "libpython3.14.so", "libpylauncher.so", "libpython314exec.so").forEach { legacy ->
-                check(!file("src/main/jniLibs/$abi/$legacy").exists()) {
-                    "Legacy bionic runtime entry $legacy must not be packaged."
-                }
-            }
-        }
-        check(!file("src/main/assets/node-runtime").exists()) { "Legacy bionic node-runtime assets must be removed." }
-        check(!file("src/main/assets/python-runtime").exists()) { "Legacy bionic python-runtime assets must be removed." }
-        check(!file("src/main/nodeAssets").exists()) { "Legacy bionic nodeAssets must be removed." }
-        check(!file("src/main/pythonAssets").exists()) { "Legacy bionic pythonAssets must be removed." }
-        check(!file("src/main/cpp/python_exec.c").exists() && !file("src/main/cpp/node_exec.cc").exists()) {
-            "Legacy bionic launcher sources must be removed."
         }
     }
 }

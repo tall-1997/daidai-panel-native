@@ -48,5 +48,6 @@
       "pnpm"
     ],
     "tls_ca_certificates": true
-  }
+  },
+  "distribution": "alpine"
 }
