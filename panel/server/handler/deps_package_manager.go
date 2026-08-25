@@ -506,7 +506,7 @@ func isHTTPMirror(value string) bool {
 func defaultLinuxMirror(manager linuxPackageManager, distribution string) string {
 	switch manager.Name {
 	case "apk":
-		return "https://mirrors.aliyun.com/alpine"
+		return "https://repo.huaweicloud.com/alpine"
 	case "apt":
 		switch strings.ToLower(strings.TrimSpace(distribution)) {
 		case "debian":

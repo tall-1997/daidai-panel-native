@@ -127,10 +127,10 @@ func TestRewriteAPTSourcesContent(t *testing.T) {
 
 func TestEffectiveLinuxMirrorFallsBackToDefaultAcceleratedMirror(t *testing.T) {
 	apkManager := linuxPackageManager{Name: "apk", Binary: "apk"}
-	if got := effectiveLinuxMirror(apkManager, "", ""); got != "https://mirrors.aliyun.com/alpine" {
+	if got := effectiveLinuxMirror(apkManager, "", ""); got != "https://repo.huaweicloud.com/alpine" {
 		t.Fatalf("expected apk default mirror, got %q", got)
 	}
-	if got := effectiveLinuxMirror(apkManager, "", "https://dl-cdn.alpinelinux.org/alpine"); got != "https://mirrors.aliyun.com/alpine" {
+	if got := effectiveLinuxMirror(apkManager, "", "https://dl-cdn.alpinelinux.org/alpine"); got != "https://repo.huaweicloud.com/alpine" {
 		t.Fatalf("expected apk official mirror to fall back to accelerated mirror, got %q", got)
 	}
 

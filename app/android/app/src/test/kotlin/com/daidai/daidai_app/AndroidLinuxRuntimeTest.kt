@@ -122,10 +122,10 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
-    fun `mirror defaults use Tsinghua Aliyun and npmmirror`() {
+    fun `mirror defaults use Huawei Alibaba and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 
-        assertEquals("https://mirrors.tuna.tsinghua.edu.cn/alpine", mirrors.linuxMirror)
+        assertEquals("https://repo.huaweicloud.com/alpine", mirrors.linuxMirror)
         assertEquals("https://mirrors.aliyun.com/pypi/simple", mirrors.pipMirror)
         assertEquals("https://registry.npmmirror.com", mirrors.npmMirror)
     }

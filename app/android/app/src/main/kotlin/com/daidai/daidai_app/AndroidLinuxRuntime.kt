@@ -35,8 +35,8 @@ object AndroidLinuxRuntime {
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "apt" to listOf("/usr/bin/apt-get"),
     )
-    const val ALPINE_APK_DEFAULT_MIRROR = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
-    const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
+    const val ALPINE_APK_DEFAULT_MIRROR = "https://repo.huaweicloud.com/alpine"
+    const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
