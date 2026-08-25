@@ -91,9 +91,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommandContext(ctx, argv[0], argv[1:], workDir)
 	cmd.Env = filterProcessEnv(spec.Env)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 
 	proc := &defaultSupervisedProcess{

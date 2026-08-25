@@ -73,8 +73,9 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 				continue
 			}
 			if _, err := os.Stat(pipBin); err == nil {
-				showCmd := exec.Command(pipBin, "show", name)
+				showCmd := androidManagedCommand(pipBin, []string{"show", name}, "")
 				showCmd.Env = SanitizePipEnv(os.Environ())
+				androidFinalizeCommand(showCmd)
 				if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
 					return pythonShowVersionSatisfies(name, string(out))
 				}
@@ -85,11 +86,12 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 			return false
 		}
 		showCmd.Env = SanitizePipEnv(os.Environ())
+		androidFinalizeCommand(showCmd)
 		if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
 			return pythonShowVersionSatisfies(name, string(out))
 		}
 	case model.DepTypeLinux:
-		if _, err := exec.LookPath(name); err == nil {
+		if _, ok := managedRuntimeBinary(name); ok {
 			return true
 		}
 		for _, probe := range []struct {
@@ -100,10 +102,20 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 			{binary: "dpkg-query", args: []string{"-W", "-f=${Status}", name}},
 			{binary: "rpm", args: []string{"-q", name}},
 		} {
-			if _, err := exec.LookPath(probe.binary); err != nil {
-				continue
+			bin := probe.binary
+			if _, err := exec.LookPath(bin); err != nil {
+				if rt := androidContainer(); rt.active {
+					guest := rt.rootfsBinary(bin)
+					if guest == "" {
+						continue
+					}
+					bin = guest
+				} else {
+					continue
+				}
 			}
-			if out, err := exec.Command(probe.binary, probe.args...).CombinedOutput(); err == nil {
+			probeCmd := androidManagedCommand(bin, probe.args, "")
+			if out, err := probeCmd.CombinedOutput(); err == nil {
 				if probe.binary != "dpkg-query" || strings.Contains(string(out), "install ok installed") {
 					return true
 				}

@@ -139,8 +139,9 @@ func NewNpmInstallCommand(packageName string) (*exec.Cmd, error) {
 	}
 
 	installSpec := ResolveNodeInstallPackageSpec(packageName)
-	cmd := exec.Command("npm", "install", "--cache", cacheDir, "--prefix", nodeDir, installSpec)
+	cmd := androidManagedCommand("npm", []string{"install", "--cache", cacheDir, "--prefix", nodeDir, installSpec}, "")
 	cmd.Env = NpmInstallEnv(AppendProxyEnv(os.Environ()), CurrentNpmMirror())
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
@@ -219,8 +220,9 @@ func NewNpmUninstallCommand(packageName string, force bool) (*exec.Cmd, error) {
 	}
 	args = append(args, packageName)
 
-	cmd := exec.Command("npm", args...)
+	cmd := androidManagedCommand("npm", args, "")
 	cmd.Env = NpmInstallEnv(AppendProxyEnv(os.Environ()), CurrentNpmMirror())
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 

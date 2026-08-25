@@ -1165,9 +1165,9 @@ func CreateScriptRuntimeCommand(runtimeID, scriptPath string, scriptArgs []strin
 	}
 
 	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
-	cmd := exec.Command(executable.Path, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(executable.Path, args, workDir)
 	cmd.Env = buildEnv(envVars)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, func() {}, nil
 }

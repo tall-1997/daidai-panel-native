@@ -2388,7 +2388,6 @@ fun serveDashboardStats(): JSONObject {
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
                 val guestPythonPath = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
                 AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "/usr/bin/python3", "/workspace/${file.name}"))
-                    ?: AndroidPythonRuntime.ensureReady(appContext)?.let { listOf(it.executable, it.wrapperScript, file.absolutePath) }
                     ?: run {
                     val sysPy = try {
                         val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
@@ -2400,10 +2399,8 @@ fun serveDashboardStats(): JSONObject {
             }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) ->
                 AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
-                    ?: AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, file.absolutePath) }
             ext == "ts" || languageHint.equals("typescript", ignoreCase = true) ->
                 AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "-e", typeScriptEvalCode(), "/workspace/${file.name}"))
-                    ?: AndroidNodeRuntime.ensureReady(appContext)?.let { listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", typeScriptEvalCode(), file.absolutePath) }
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
                 ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/go", "run", "/workspace/${file.name}"))
             else -> null
@@ -2641,25 +2638,13 @@ fun serveDashboardStats(): JSONObject {
                     "PIP_TARGET" to DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
                     "NODE_PATH" to listOf(
                         scriptsRoot().absolutePath,
-                        AndroidNodeRuntime.ensureReady(appContext)?.modules.orEmpty(),
-                        File(AndroidNodeRuntime.depsDir(appContext), "node_modules").absolutePath,
+                        File(appContext.filesDir, "deps/nodejs/node_modules").absolutePath,
                     ).filter(String::isNotBlank).joinToString(File.pathSeparator),
                     "NODE_OPTIONS" to "--require=${File(scriptsRoot(), "sendNotify.js").absolutePath}",
                     "NPM_CONFIG_IGNORE_SCRIPTS" to "true",
                     "NPM_CONFIG_CACHE" to DependencyStorage.npmCache(appContext.filesDir).absolutePath,
                 )
             )
-        }
-        AndroidPythonRuntime.ensureReady(appContext)?.let { runtime ->
-            env["PYTHONHOME"] = runtime.home
-            env["PYTHONPATH"] = listOf(
-                scriptsRoot().absolutePath,
-                runtime.sitePackages,
-                DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
-            ).joinToString(File.pathSeparator)
-        }
-        AndroidNodeRuntime.ensureReady(appContext)?.let { runtime ->
-            env["NPM_CONFIG_GLOBALCONFIG"] = File(runtime.home, "etc/npmrc").absolutePath
         }
         val grouped = linkedMapOf<String, MutableList<String>>()
         readableDatabase.query(
@@ -3973,40 +3958,32 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun queryPipInstalledPackages(): Map<String, String> {
-        val runtime = AndroidPythonRuntime.ensureReady(appContext) ?: return emptyMap()
+        if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) return emptyMap()
         val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
-        val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_list.py")
-        script.parentFile?.mkdirs()
-        val pyCode = listOf(
-            "import sys,os,json",
-            "sp=os.environ.get('PIP_TARGET','')",
-            "sys.path.insert(0,sp)",
-            "from pip._internal.cli.main import main as pip_main",
-            "import io",
-            "old=sys.stdout",
-            "sys.stdout=io.StringIO()",
-            "try:",
-            "    pip_main(['list','--format=json','--path',sp])",
-            "except: pass",
-            "out=sys.stdout.getvalue()",
-            "sys.stdout=old",
-            "print(out)"
-        ).joinToString("\n")
-        script.writeText(pyCode)
-        val command = listOf(runtime.executable, runtime.wrapperScript, script.absolutePath)
+        val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+        val code = "import os,json\n" +
+            "from importlib.metadata import distributions\n" +
+            "sp=os.environ.get('PIP_TARGET','.')\n" +
+            "out={}\n" +
+            "for d in distributions(path=[sp]):\n" +
+            "    try: out[d.metadata['Name'].lower()]=d.version\n" +
+            "    except Exception: pass\n" +
+            "print(json.dumps(out))"
+        val command = AndroidLinuxRuntime.guestCommand(
+            appContext,
+            appContext.filesDir,
+            listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/python3", "-c", code),
+        ) ?: return emptyMap()
         val logs = JSONArray()
         val result = runLocalProcess(command, target, logs)
         val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         return try {
-            val start = text.indexOf("[")
-            val end = text.lastIndexOf("]") + 1
-            if (start >= 0 && end > start) {
-                val pkgs = org.json.JSONArray(text.substring(start, end))
-                (0 until pkgs.length()).associate { i ->
-                    val pkg = pkgs.getJSONObject(i)
-                    pkg.getString("name").lowercase() to pkg.getString("version")
-                }
-            } else { emptyMap() }
+            val start = text.indexOf("{")
+            val end = text.lastIndexOf("}") + 1
+            if (start < 0 || end <= start) emptyMap() else {
+                val obj = JSONObject(text.substring(start, end))
+                obj.keys().asSequence().associateWith { obj.optString(it) }
+            }
         } catch (_: Exception) { emptyMap() }
     }
 
@@ -4018,8 +3995,8 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun installedPipResponse(): NanoHTTPD.Response {
-        if (AndroidPythonRuntime.ensureReady(appContext) == null) {
-            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready")
+        if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) {
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs Python runtime is not ready")
         }
         val packages = queryPipInstalledPackages()
         val rows = JSONArray()
@@ -4028,10 +4005,10 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun queryNpmInstalledPackages(): Map<String, String> {
-        val runtime = AndroidNodeRuntime.ensureReady(appContext) ?: return emptyMap()
-        val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
-        val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-        val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "list", "--json", "--depth=0", "--prefix", deps.absolutePath)
+        if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) return emptyMap()
+        val deps = File(appContext.filesDir, "deps/nodejs").apply { mkdirs() }.also(DependencyStorage::ensureNodePackageManifest)
+        val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "list", "--json", "--depth=0", "--prefix", "/host-files/deps/nodejs"))
+            ?: return emptyMap()
         val result = runLocalProcess(command, deps, JSONArray())
         val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
         val start = text.indexOf('{')
@@ -4045,22 +4022,9 @@ fun serveDashboardStats(): JSONObject {
         } catch (_: Exception) { emptyMap() }
     }
 
-    private fun nodeDependencyResolvable(runtime: AndroidNodeRuntime.NodeRuntimePaths, packageName: String): Pair<Boolean, String> {
-        val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
-        val code = "const name=process.argv[1];const root=process.argv[2];console.log(require.resolve(name,{paths:[root]}));"
-        val result = runLocalProcess(
-            listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, "-e", code, packageName, deps.absolutePath),
-            deps,
-            JSONArray().put("Verifying Node dependency resolution: $packageName"),
-            30,
-        )
-        val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-        return (result.exitCode == 0) to text
-    }
-
     private fun installedNpmResponse(): NanoHTTPD.Response {
-        if (AndroidNodeRuntime.ensureReady(appContext) == null) {
-            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: bundled Node runtime is not ready")
+        if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
+            return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs Node.js runtime is not ready")
         }
         val dependencies = JSONObject()
         queryNpmInstalledPackages().toSortedMap().forEach { (name, version) ->
@@ -4077,6 +4041,9 @@ fun serveDashboardStats(): JSONObject {
         }
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
             if (depType == "python" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) {
+                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
+            }
+            if (depType == "nodejs" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                 return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
             }
             val installedVersion = when (depType) {
@@ -4113,30 +4080,11 @@ fun serveDashboardStats(): JSONObject {
                 return if (verified.first) "installed" to "$text\nPost-install import verification confirmed $importName"
                 else "failed" to "$text\nPOST_VERIFY_FAILED: ${verified.second}"
             }
-            val runtime = AndroidPythonRuntime.ensureReady(appContext)
-            runtime ?: return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: Python runtime is not ready"
-            val installScript = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_install.py")
-            installScript.parentFile?.mkdirs()
-            installScript.writeText("import sys, os\nsp = os.path.join(os.environ.get('PYTHONHOME',''), 'lib/python3.14/site-packages')\nsys.path.insert(0, sp)\nfrom pip._internal.cli.main import main as pip_main\nresult = pip_main(sys.argv[1:])\nsys.exit(result)\n")
-
-            val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
-            val pipArguments = AndroidLinuxRuntime.pipInstallArguments(mirrors.pipMirror, target.absolutePath, name)
-            val command = listOf(runtime.executable, runtime.wrapperScript, installScript.absolutePath) + pipArguments
-            val logs = JSONArray()
-                .put("Installing Python dependency: " + name)
-                .put("pip_index=${mirrors.pipMirror}")
-            val result = runLocalProcess(command, target, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
-            val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-            if (result.exitCode != 0) {
-                return "failed" to text
-            }
-            val verified = queryPipInstalledPackages().containsKey(DependencyStorage.normalizedName("python", name))
-            return if (verified) "installed" to "$text\nPost-install verification: pip list confirmed $name"
-            else "failed" to "$text\nPOST_VERIFY_FAILED: pip list did not report $name"
+            return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs Python runtime is not ready"
         }
         if (depType == "nodejs") {
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
-                val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
+                val deps = File(appContext.filesDir, "deps/nodejs").apply { mkdirs() }.also(DependencyStorage::ensureNodePackageManifest)
                 val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
@@ -4148,33 +4096,7 @@ fun serveDashboardStats(): JSONObject {
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
-            val directNode = AndroidNodeRuntime.ensureReady(appContext)
-            return directNode?.let { runtime ->
-                val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
-                val cache = DependencyStorage.npmCache(appContext.filesDir).apply { mkdirs() }
-                val npm = File(runtime.modules, "npm/bin/npm-cli.js")
-                val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
-                val npmArguments = AndroidLinuxRuntime.npmInstallArguments(mirrors.npmMirror, deps.absolutePath, cache.absolutePath, installSpec)
-                val command = listOf(runtime.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath) + npmArguments
-                val logs = JSONArray()
-                    .put(DependencyStorage.nodeInstallCompatibilityNotice(name))
-                    .put("Installing Node dependency from network source: $installSpec")
-                    .put("npm_registry=${mirrors.npmMirror}")
-                val before = queryNpmInstalledPackages()
-                val result = runLocalProcess(command, deps.also { it.mkdirs() }, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
-                DependencyStorage.trimDirectory(cache, DependencyStorage.MAX_CACHE_BYTES)
-                val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-                if (result.exitCode != 0) "failed" to text else {
-                    val after = queryNpmInstalledPackages()
-                    val normalized = DependencyStorage.normalizedName("nodejs", name)
-                    val listed = after.containsKey(normalized)
-                    val resolved = if (listed) true to "" else nodeDependencyResolvable(runtime, normalized)
-                    val changed = after.any { (pkg, version) -> before[pkg] != version }
-                    if (listed) "installed" to "$text\nPost-install verification: npm list confirmed $normalized"
-                    else if (resolved.first) "installed" to "$text\nPost-install verification: require.resolve confirmed $normalized"
-                    else "failed" to "$text\nPOST_VERIFY_FAILED: npm list and require.resolve did not report $normalized\n${resolved.second}" + if (changed) "\nObserved package tree changes during install" else ""
-                }
-            } ?: ("unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: ${AndroidNodeRuntime.failureReason().ifBlank { "bundled Node runtime is not ready" }}")
+            return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs Node.js runtime is not ready"
         }
         if (depType in setOf("system", "linux", "os", "apk", "apt", "apt-get", "yum", "dnf")) {
             val preferredManager = when (depType) {
@@ -4217,7 +4139,7 @@ fun serveDashboardStats(): JSONObject {
         val command = AndroidLinuxRuntime.guestCommand(
             appContext,
             appContext.filesDir,
-            AndroidLinuxRuntime.nativeBuildToolchainCommand(),
+            AndroidLinuxRuntime.nativeBuildToolchainCommand(appContext),
         ) ?: return false
         onLine?.invoke("Installing rootfs native build toolchain")
         return runLocalProcess(
@@ -4321,44 +4243,24 @@ fun serveDashboardStats(): JSONObject {
         val normalized = DependencyStorage.normalizedName(depType, name)
         val runtimeVersion = if (depType == "python") DependencyStorage.PYTHON_VERSION else DependencyStorage.NODE_VERSION
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
-            val runtime = if (depType == "python") AndroidPythonRuntime.ensureReady(appContext) else null
             val command = when (depType) {
                 "python" -> {
-                    if (runtime == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
-                        AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "uninstall", "-y", normalized))
-                            ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
-                    } else {
-                    runtime ?: return@withInstallLock false to "Python runtime is not ready"
-                    val script = File(appContext.filesDir, "runtimes/python-3.14/prefix/bin/pip_uninstall.py")
-                    script.parentFile?.mkdirs()
-                    script.writeText(
-                        "import importlib.metadata,os,shutil,sys\n" +
-                            "root=os.path.realpath(os.environ['PIP_TARGET'])\n" +
-                            "dist=importlib.metadata.distribution(sys.argv[1])\n" +
-                            "for item in (dist.files or []):\n" +
-                            " p=os.path.realpath(os.path.join(root,str(item)))\n" +
-                            " if p.startswith(root+os.sep):\n" +
-                            "  shutil.rmtree(p,ignore_errors=True) if os.path.isdir(p) else os.path.exists(p) and os.remove(p)\n" +
-                            "shutil.rmtree(os.path.realpath(str(dist._path)),ignore_errors=True)\n",
-                    )
-                    listOf(runtime.executable, runtime.wrapperScript, script.absolutePath, normalized)
+                    if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
+                        return@withInstallLock false to "Packaged rootfs Python runtime is not ready"
                     }
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "uninstall", "-y", normalized))
+                        ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
                 }
                 "nodejs" -> {
-                    val node = AndroidNodeRuntime.ensureReady(appContext)
-                    if (node == null && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
-                        AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "uninstall", "--ignore-scripts", "--prefix", "/host-files/deps/nodejs", normalized))
-                            ?: return@withInstallLock false to "Rootfs Node runtime is not ready"
-                    } else {
-                    node ?: return@withInstallLock false to "Node runtime is not ready"
-                    val deps = AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
-                    val npm = File(node.modules, "npm/bin/npm-cli.js")
-                    listOf(node.executable, AndroidNodeRuntime.wrapperPath, npm.absolutePath, "uninstall", "--ignore-scripts", "--cache", DependencyStorage.npmCache(appContext.filesDir).absolutePath, "--prefix", deps.absolutePath, normalized)
+                    if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
+                        return@withInstallLock false to "Packaged rootfs Node.js runtime is not ready"
                     }
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "uninstall", "--ignore-scripts", "--prefix", "/host-files/deps/nodejs", normalized))
+                        ?: return@withInstallLock false to "Rootfs Node runtime is not ready"
                 }
                 else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
             }
-            val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else AndroidNodeRuntime.depsDir(appContext).also(DependencyStorage::ensureNodePackageManifest)
+            val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else File(appContext.filesDir, "deps/nodejs").also(DependencyStorage::ensureNodePackageManifest)
             val result = runLocalProcess(command, workingDir.apply { mkdirs() }, JSONArray(), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
             val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             (result.exitCode == 0) to log

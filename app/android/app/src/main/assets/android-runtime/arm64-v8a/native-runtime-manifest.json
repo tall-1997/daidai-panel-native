@@ -3,136 +3,60 @@
   "abi": "arm64-v8a",
   "minimum_load_alignment": 16384,
   "provenance": {
-    "strategy": "pinned-termux-binary-packages",
-    "repository": "https://packages.termux.dev/apt/termux-main",
-    "termux_recipe": {
-      "commit": "670227d182d0186b6c8112beedc1f188fcbbcf0e",
-      "url": "https://github.com/termux/termux-packages/blob/670227d182d0186b6c8112beedc1f188fcbbcf0e/packages/proot/build.sh"
-    },
-    "upstream_source": {
-      "url": "https://github.com/termux/proot/archive/v5.1.107.91.zip",
-      "sha256": "a7bc2fab34bf9a39073e8291f08a662e848c61a67494e59f5f84f5ca10690128"
-    },
-    "source_build": false,
+    "strategy": "self-contained-source-build",
+    "source_build": true,
     "source_patch_applied": false,
     "patches_applied": [],
-    "binary_transforms": [
+    "toolchain": {
+      "name": "android-ndk-r27",
+      "api_level": 24,
+      "compiler": "aarch64-linux-android24-clang",
+      "load_alignment": 16384
+    },
+    "upstream_source": [
       {
-        "artifact": "liboperit_proot.so",
-        "operation": "dt-needed-equal-length-rewrite",
-        "from": "libtalloc.so.2",
-        "to": "libtalloc_2.so"
+        "name": "proot",
+        "version": "5.4.0",
+        "url": "https://github.com/proot-me/proot/archive/refs/tags/v5.4.0.tar.gz",
+        "sha256": "29248aac2a7ce10c3bd5ee5602742ec33b2532310ff9cf73b79f3c133e5a5f68"
       },
       {
-        "artifact": "liboperit_busybox.so",
-        "operation": "dt-needed-equal-length-rewrite",
-        "from": "libbusybox.so.1.38.0",
-        "to": "libbusybox_1_38_0.so"
+        "name": "talloc",
+        "version": "2.4.3",
+        "url": "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz",
+        "sha256": "dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd"
+      },
+      {
+        "name": "busybox",
+        "version": "1.36.1",
+        "url": "https://busybox.net/downloads/busybox-1.36.1.tar.bz2",
+        "sha256": "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314"
       }
     ],
+    "binary_transforms": [],
     "runtime_overrides": {
       "PROOT_LOADER": "libproot_loader.so"
     },
-    "note": "Pinned upstream binaries are verified fail-closed; this manifest makes no source-patch claim."
+    "note": "Built from pinned upstream source with the Android NDK; no prebuilt binaries are imported."
   },
-  "packages": [
-    {
-      "name": "proot",
-      "version": "5.1.107.91",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.91_aarch64.deb",
-      "sha256": "1ad09f7ddf65f297a7b59a398cd1f23a48748b1144b225f0c1e2d9f447ef3efc"
-    },
-    {
-      "name": "busybox",
-      "version": "1.38.0-1",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/b/busybox/busybox_1.38.0-1_aarch64.deb",
-      "sha256": "1bb7f1d4c00cadd0e1117b6dd7110311b8bf749ef00b486e96cfdc11c98f8fd9"
-    },
-    {
-      "name": "libtalloc",
-      "version": "2.4.3",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb",
-      "sha256": "ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da"
-    },
-    {
-      "name": "libandroid-shmem",
-      "version": "0.7",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
-      "sha256": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6"
-    },
-    {
-      "name": "libandroid-selinux",
-      "version": "14.0.0.11-1",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-selinux/libandroid-selinux_14.0.0.11-1_aarch64.deb",
-      "sha256": "00afd8c34087c2864737b51fd9d104dc5e955f6ec3c0f50c0c7ef5b4a56866b9"
-    },
-    {
-      "name": "pcre2",
-      "version": "10.47",
-      "url": "https://packages.termux.dev/apt/termux-main/pool/main/p/pcre2/pcre2_10.47_aarch64.deb",
-      "sha256": "51f915d22de639bfca6ec029ae613987bbe3bc73626eede13319fd2e95f50b63"
-    }
-  ],
   "artifacts": [
     {
-      "name": "liboperit_proot.so",
+      "name": "libdaidai_proot.so",
       "role": "proot",
-      "sha256": "76661c07a346b37f58731b8be56750c3536d8fc19ecce8bee5ad301b9e608f28",
-      "size": 241240
+      "sha256": "1f0d7d2a69e255dd1cf3827549d4eb84fb0bb51d4df036bce413bb57ca6abc41",
+      "size": 2995608
     },
     {
       "name": "libproot_loader.so",
       "role": "proot-loader",
-      "sha256": "44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04",
-      "size": 18136
+      "sha256": "7149fe1f05f3ea69079c0e3028f3b418a1467c6d966d7fa782ccd9cd8ada5160",
+      "size": 17672
     },
     {
-      "name": "liboperit_busybox.so",
-      "role": "busybox-launcher",
-      "sha256": "af4109461015524386586eb064b21f02a1adba7255b5f1b1a3ee8f7b4936a227",
-      "size": 4320
-    },
-    {
-      "name": "libtalloc_2.so",
-      "role": "proot-dependency",
-      "sha256": "3c9b207c0a6ea2896b7523e03f55d9ab0d9e88baa115d4c32b84058ff4246fbb",
-      "size": 31440
-    },
-    {
-      "name": "libtalloc_v2.so",
-      "role": "compatibility-alias",
-      "sha256": "3c9b207c0a6ea2896b7523e03f55d9ab0d9e88baa115d4c32b84058ff4246fbb",
-      "size": 31440
-    },
-    {
-      "name": "libandroid-shmem.so",
-      "role": "proot-dependency",
-      "sha256": "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731",
-      "size": 14432
-    },
-    {
-      "name": "libbusybox_1_38_0.so",
-      "role": "busybox-dependency",
-      "sha256": "b8153ac191754afcd6dd1896f961c7ecf3965cafd727a2690f648fdd9ba57cc1",
-      "size": 876576
-    },
-    {
-      "name": "libbusybox_v138.so",
-      "role": "compatibility-alias",
-      "sha256": "b8153ac191754afcd6dd1896f961c7ecf3965cafd727a2690f648fdd9ba57cc1",
-      "size": 876576
-    },
-    {
-      "name": "libandroid-selinux.so",
-      "role": "busybox-dependency",
-      "sha256": "d769bc3757df751e4c302cdb55062a33cda2041ba0483d953d93100cd321a810",
-      "size": 179056
-    },
-    {
-      "name": "libpcre2-8.so",
-      "role": "busybox-dependency",
-      "sha256": "a6bbeb410e269e50aee795b4fd1b11cbddb8b54959d1cfcd927b55b04dc19f5c",
-      "size": 489384
+      "name": "libdaidai_busybox.so",
+      "role": "busybox",
+      "sha256": "31965abc88c03ebc7bb9e4573baf9feff5ec37eae77b77ad1e41c4717329c01f",
+      "size": 1553528
     }
   ]
 }

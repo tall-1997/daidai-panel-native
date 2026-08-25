@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -440,7 +439,7 @@ func executeRuntimeSmokeCheck(id string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, command.name, command.args...).CombinedOutput()
+	output, err := androidManagedCommandContext(ctx, command.name, command.args, "").CombinedOutput()
 	if err != nil {
 		return strings.TrimSpace(string(output)), fmt.Errorf("smoke command failed")
 	}

@@ -189,7 +189,38 @@ class LocalPanelHttpServer(
     }
 
     private fun androidRuntime(session:IHTTPSession):Response {
+        val parameters = session.parameters
         if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",AndroidLinuxRuntime.statusJson(context)))
+        if(session.uri.endsWith("/source")&&session.method==Method.POST){
+            val distribution=(parameters["distribution"]?.firstOrNull() ?: "").trim()
+            val sourceId=(parameters["source_id"]?.firstOrNull() ?: "").trim()
+            if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
+            if(AndroidRootfsDownloader.sourcesFor(distribution).none{it.id==sourceId})return jsonError(Response.Status.BAD_REQUEST,"Unknown rootfs image source: $sourceId")
+            AndroidRootfsDownloader.selectSource(context,distribution,sourceId)
+            return jsonResponse(JSONObject().put("status","ok").put("distribution",distribution).put("source_id",sourceId))
+        }
+        if(session.uri.endsWith("/download")&&session.method==Method.POST){
+            val distribution=(parameters["distribution"]?.firstOrNull() ?: "").trim()
+            if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
+            if(AndroidRootfsDownloader.downloadRunning)return jsonError(Response.Status.CONFLICT,"A rootfs download is already in progress")
+            val abi=AndroidLinuxRuntime.currentAbi()
+            Thread{runCatching{AndroidRootfsDownloader.downloadRootfs(context,distribution,abi,AndroidRootfsDownloader.ProgressListener{})}}.start()
+            return jsonResponse(JSONObject().put("status","accepted").put("distribution",distribution).put("source_id",AndroidRootfsDownloader.selectedSourceId(context,distribution)))
+        }
+        if(session.uri.endsWith("/download-status")&&session.method==Method.GET){
+            val distribution=(parameters["distribution"]?.firstOrNull() ?: "").trim()
+            if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
+            val status=JSONObject()
+                .put("running",AndroidRootfsDownloader.downloadRunning)
+                .put("distribution",distribution)
+                .put("downloaded",AndroidRootfsDownloader.downloadedArchive(context,AndroidLinuxRuntime.currentAbi(),distribution)!=null)
+                .put("error",AndroidRootfsDownloader.lastError(distribution) ?: JSONObject.NULL)
+            AndroidRootfsDownloader.lastProgress(distribution)?.let{progress->
+                status.put("phase",progress.phase).put("message",progress.message)
+                    .put("downloaded_bytes",progress.downloadedBytes).put("total_bytes",progress.totalBytes)
+            }
+            return jsonResponse(status)
+        }
         if((session.uri.endsWith("/install")||session.uri.endsWith("/uninstall"))&&session.method==Method.POST)return jsonError(Response.Status.CONFLICT,"Android runtime is embedded and immutable; update the APK to change it")
         return jsonError(Response.Status.NOT_FOUND,"Android runtime endpoint unavailable")
     }
@@ -242,11 +273,11 @@ class LocalPanelHttpServer(
                 .put("backup_schedule", true)
                 .put("system_monitor", true)
                 .put("dependency_install", AndroidLinuxRuntime.isRootfsReady(context))
-                .put("python", AndroidPythonRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/python3"))
-                .put("pip", AndroidPythonRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/pip3"))
-                .put("node", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/node"))
-                .put("npm", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/npm"))
-                .put("typescript", AndroidNodeRuntime.ensureReady(context) != null || AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc"))
+                .put("python", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/python3"))
+                .put("pip", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/pip3"))
+                .put("node", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/node"))
+                .put("npm", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/npm"))
+                .put("typescript", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc"))
                 .put("shell", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
                 .put("git", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
                 .put("ssh", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/ssh"))
@@ -319,9 +350,8 @@ class LocalPanelHttpServer(
         "libshell_exec.so",
     ).any { java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), it).isFile }
 
-    private fun pythonSmokeCommand(): List<String>? = AndroidPythonRuntime.ensureReady(context)?.let {
-        listOf(it.executable, it.wrapperScript, "-c", "print('PY_OK')")
-    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/python3", "-c", "import ssl,sqlite3,venv;print('PY_OK')"))
+    private fun pythonSmokeCommand(): List<String>? =
+        AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/python3", "-c", "import ssl,sqlite3,venv;print('PY_OK')"))
 
     private fun pythonSeedStatusItem(): JSONObject {
         val status = "ok"
@@ -332,13 +362,11 @@ class LocalPanelHttpServer(
         }
     }
 
-    private fun nodeSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "console.log('NODE_OK')")
-    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/node", "-e", "console.log('NODE_OK')"))
+    private fun nodeSmokeCommand(): List<String>? =
+        AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/node", "-e", "console.log('NODE_OK')"))
 
-    private fun typeScriptSmokeCommand(): List<String>? = AndroidNodeRuntime.ensureReady(context)?.let {
-        listOf(it.executable, AndroidNodeRuntime.wrapperPath, "-e", "const ts=require('typescript');const out=ts.transpileModule(\"const msg:string='TS_OK'; console.log(msg)\",{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;eval(out)")
-    } ?: AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/env", "NODE_PATH=/usr/lib/node_modules", "/usr/bin/node", "-e", "const ts=require('typescript');console.log('TS_OK')"))
+    private fun typeScriptSmokeCommand(): List<String>? =
+        AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/env", "NODE_PATH=/usr/lib/node_modules", "/usr/bin/node", "-e", "const ts=require('typescript');console.log('TS_OK')"))
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
         if (command == null) return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime is not packaged or not executable")
@@ -348,9 +376,6 @@ class LocalPanelHttpServer(
                 .apply {
                     environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
                     AndroidLinuxRuntime.applyGuestEnvironment(command, environment())
-                    AndroidNodeRuntime.ensureReady(context)?.let { runtime ->
-                        environment()["NODE_PATH"] = runtime.modules
-                    }
                 }
                 .start()
             val output = StringBuilder()

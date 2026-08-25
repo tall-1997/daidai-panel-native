@@ -341,16 +341,18 @@ func managedPythonVenvHealthyForVersion(venvDir, pythonVersion string) bool {
 		return false
 	}
 
-	cmd := exec.Command(pipBin, "--version")
+	cmd := androidManagedCommand(pipBin, []string{"--version"}, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.Contains(strings.ToLower(string(out)), "pip")
 }
 
 func managedPythonBinaryMatchesVersion(pythonBin, pythonVersion string) bool {
 	pythonVersion = NormalizePythonVersionOrDefault(pythonVersion)
-	cmd := exec.Command(pythonBin, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+	cmd := androidManagedCommand(pythonBin, []string{"-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"}, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == pythonVersion
 }
@@ -381,8 +383,9 @@ func repairManagedPythonVenvPip(venvDir string) bool {
 		return false
 	}
 
-	cmd := exec.Command(pythonBin, "-m", "ensurepip", "--upgrade")
+	cmd := androidManagedCommand(pythonBin, []string{"-m", "ensurepip", "--upgrade"}, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("warn: managed python venv pip repair failed at %s: %v: %s", venvDir, err, strings.TrimSpace(string(out)))
@@ -457,8 +460,9 @@ func detectManagedPythonVenvVersion(venvDir string) string {
 		return ""
 	}
 
-	cmd := exec.Command(pythonBin, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+	cmd := androidManagedCommand(pythonBin, []string{"-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"}, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
@@ -665,9 +669,11 @@ func ensureManagedPythonVenvForVersion(pythonVersion string, syncCreate bool) bo
 		// 导致执行的是 `python3 -m venv`（不带目标路径）必然失败。venv 永远建不出来，
 		// ResolveManagedPipBinary 返回空，自动安装 fallback 到系统 pip3，
 		// Alpine/Debian 上的 PEP 668 把"externally-managed-environment"砸到用户脸上。
+		// Android 容器模式下 python 来自内置 rootfs，venvDir 会映射为 guest 路径。
 		args := append(append([]string(nil), candidate.args...), venvDir)
-		cmd := exec.Command(candidate.binary, args...)
+		cmd := androidManagedCommand(candidate.binary, args, "")
 		cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+		androidFinalizeCommand(cmd)
 		out, runErr := cmd.CombinedOutput()
 		if runErr == nil {
 			if managedPythonVenvHealthyForVersion(venvDir, pythonVersion) {
@@ -811,12 +817,14 @@ func createManagedPythonCommand(scriptPath string, scriptArgs []string, workDir 
 	}
 	_ = tempDir
 
+	androidMapRuntimeEnvVars(envVars)
+
 	args := []string{"-u", "-c", pythonEnvBootstrap, envFile, scriptPath, strings.TrimSpace(envVars["PYTHONPATH"])}
 	args = append(args, scriptArgs...)
 
-	cmd := exec.Command(pythonBin, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(pythonBin, args, workDir)
 	cmd.Env = buildPythonBootstrapProcessEnv(envVars)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, cleanup, nil
 }
@@ -855,12 +863,14 @@ func createManagedPythonModuleCommand(interpreter string, moduleName string, mod
 	}
 	_ = tempDir
 
+	androidMapRuntimeEnvVars(envVars)
+
 	args := []string{"-u", "-c", pythonModuleEnvBootstrap, envFile, moduleName, strings.TrimSpace(envVars["PYTHONPATH"])}
 	args = append(args, cleanManagedProcessArgs(moduleArgs)...)
 
-	cmd := exec.Command(pythonBin, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(pythonBin, args, workDir)
 	cmd.Env = buildPythonBootstrapProcessEnv(envVars)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, cleanup, nil
 }
@@ -875,11 +885,11 @@ func createManagedExecutableCommand(commandName string, commandArgs []string, wo
 		return nil, nil, fmt.Errorf("找不到托管依赖命令 %s，请先在依赖页面安装对应 Python/Node 依赖，或改用脚本文件命令", commandName)
 	}
 
-	cmd := exec.Command(binary, cleanManagedProcessArgs(commandArgs)...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(binary, cleanManagedProcessArgs(commandArgs), workDir)
 	// 依赖命令不是面板脚本，无法走 Python/Node bootstrap，只能通过真实进程环境传入任务变量。
 	// 这里仍然过滤危险变量和 NUL，避免 LD_PRELOAD 等变量污染托管运行时。
 	cmd.Env = appendPythonBootstrapEnv(buildEnv(envVars))
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, func() {}, nil
 }
@@ -906,9 +916,9 @@ func createManagedNodeCommand(scriptPath string, scriptArgs []string, workDir st
 	args := []string{"--require", preloadFile, scriptPath}
 	args = append(args, scriptArgs...)
 
-	cmd := exec.Command(nodeBin, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(nodeBin, args, workDir)
 	cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }
@@ -931,9 +941,9 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 	if tsErr == nil {
 		args := []string{"--require", preloadFile, scriptPath}
 		args = append(args, scriptArgs...)
-		cmd := exec.Command(tsNodeBin, args...)
-		cmd.Dir = workDir
+		cmd := androidManagedCommand(tsNodeBin, args, workDir)
 		cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
+		androidFinalizeCommand(cmd)
 		setPgid(cmd)
 		return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 	}
@@ -948,9 +958,9 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 	args := []string{"ts-node", "--require", preloadFile, scriptPath}
 	args = append(args, scriptArgs...)
 
-	cmd := exec.Command(npxBin, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(npxBin, args, workDir)
 	cmd.Env = ApplyNodeRuntimePolicy(buildBootstrapProcessEnv(envVars))
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }
@@ -970,9 +980,9 @@ func createStandardManagedCommand(interpreter, scriptPath string, scriptArgs []s
 
 	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
 
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(binary, args, workDir)
 	cmd.Env = buildBootstrapProcessEnv(envVars)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, func() {}, nil
 }
@@ -992,12 +1002,14 @@ func createManagedShellCommand(scriptPath string, scriptArgs []string, workDir s
 		return nil, nil, err
 	}
 
+	androidMapRuntimeEnvVars(envVars)
+
 	args := []string{"-c", shellEnvBootstrap, scriptPath, envFile, scriptPath}
 	args = append(args, cleanManagedProcessArgs(scriptArgs)...)
 
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(binary, args, workDir)
 	cmd.Env = buildBootstrapProcessEnv(envVars)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, cleanup, nil
 }
@@ -1027,9 +1039,9 @@ func createManagedGoCommand(scriptPath string, scriptArgs []string, workDir stri
 	args := []string{"run", wrapperPath, scriptPath}
 	args = append(args, cleanManagedProcessArgs(scriptArgs)...)
 
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = workDir
+	cmd := androidManagedCommand(binary, args, workDir)
 	cmd.Env = append(buildBootstrapProcessEnv(envVars), "DAIDAI_RUNTIME_ENV_FILE="+envFile)
+	androidFinalizeCommand(cmd)
 	setPgid(cmd)
 	return cmd, cleanup, nil
 }
@@ -1186,7 +1198,7 @@ func appendPythonBootstrapEnv(env []string) []string {
 }
 
 func writeManagedRuntimeEnvFile(envVars map[string]string) (string, string, func(), error) {
-	tempDir, err := os.MkdirTemp("", "daidai-runtime-*")
+	tempDir, err := os.MkdirTemp(androidContainerRuntimeTempDir(), "daidai-runtime-*")
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -1219,7 +1231,7 @@ func writeManagedRuntimeEnvFile(envVars map[string]string) (string, string, func
 }
 
 func writeManagedRuntimeShellEnvFile(envVars map[string]string) (string, string, func(), error) {
-	tempDir, err := os.MkdirTemp("", "daidai-runtime-*")
+	tempDir, err := os.MkdirTemp(androidContainerRuntimeTempDir(), "daidai-runtime-*")
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -1592,6 +1604,14 @@ func resolveManagedBinary(name string, preferredDirs []string, fallbackDirs []st
 		}
 	}
 
+	// Android 容器模式：宿主 PATH 没有 python/node/bash 等解释器，
+	// 兜底在内置 rootfs 内查找，返回 guest 侧绝对路径（如 /usr/bin/python3）。
+	if rt := androidContainer(); rt.active {
+		if guest := rt.rootfsBinary(name); guest != "" {
+			return guest, nil
+		}
+	}
+
 	return "", fmt.Errorf("找不到可执行文件: %s", name)
 }
 
@@ -1662,6 +1682,12 @@ func findVenvSitePackages(venvDir string) string {
 }
 
 func ensureManagedNodeModulesAccess(workDir, nodeModules string) func() {
+	// Android 容器模式下 node 进程运行在 rootfs 内，host 侧 node_modules 通过
+	// NODE_PATH（映射为 /host-files/...）注入，symlink 方案在 guest 中不可见，
+	// 直接跳过。
+	if rt := androidContainer(); rt.active {
+		return func() {}
+	}
 	workDir = strings.TrimSpace(workDir)
 	nodeModules = strings.TrimSpace(nodeModules)
 	if workDir == "" || nodeModules == "" {

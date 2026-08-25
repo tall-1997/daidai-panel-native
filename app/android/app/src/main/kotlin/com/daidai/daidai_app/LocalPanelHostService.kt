@@ -84,9 +84,8 @@ class LocalPanelHostService : Service() {
                 try {
                     // First: start fallback HTTP server (fast)
                     LocalPanelRuntime.ensureStarted(applicationContext, localToken)
-                    // Second: preload Python and Node runtimes in background
-                    AndroidPythonRuntime.preload(applicationContext)
-                    AndroidNodeRuntime.preload(applicationContext)
+                    // Second: preload the packaged Linux rootfs runner in the background
+                    AndroidLinuxRuntime.preload(applicationContext)
                 } catch (_: Exception) { }
             }.start()
             recoveryCoordinator = PersistentCoreRecoveryCoordinator(

@@ -161,6 +161,7 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 			return AutoInstallResult{Error: err.Error()}
 		}
 		cmd.Env = pipEnv
+		androidFinalizeCommand(cmd)
 		out, err := cmd.CombinedOutput()
 
 		// 二次兜底：即使 ResolvePipInstallCommand 用的是 venv pip，某些极端场景下
@@ -173,6 +174,7 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 				return AutoInstallResult{Log: string(out), Error: buildErr.Error()}
 			}
 			retry.Env = pipEnv
+			androidFinalizeCommand(retry)
 			retryOut, retryErr := retry.CombinedOutput()
 			combined := append([]byte{}, out...)
 			combined = append(combined, []byte("\n[PEP 668 检测到 externally-managed-environment，自动加 --break-system-packages --user 重试]\n")...)
@@ -192,6 +194,7 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 			return AutoInstallResult{Error: err.Error()}
 		}
 		cmd.Env = NpmInstallEnv(baseEnv, CurrentNpmMirror())
+		androidFinalizeCommand(cmd)
 		out, err := cmd.CombinedOutput()
 		if notice != "" {
 			// 自动安装成功后也会把安装日志写入依赖记录，先把兼容映射决策一起存进去。
@@ -199,9 +202,9 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 		}
 		return completeAutoInstall(candidate, out, err)
 	case "go":
-		cmd := exec.Command("go", "get", candidate.PackageName)
-		cmd.Dir = candidate.WorkDir
+		cmd := androidManagedCommand("go", []string{"get", candidate.PackageName}, candidate.WorkDir)
 		cmd.Env = baseEnv
+		androidFinalizeCommand(cmd)
 		out, err := cmd.CombinedOutput()
 		return completeAutoInstall(candidate, out, err)
 	default:
@@ -234,7 +237,7 @@ type pipCommandSpec struct {
 func (spec pipCommandSpec) command(args []string) *exec.Cmd {
 	fullArgs := append([]string{}, spec.prefixArgs...)
 	fullArgs = append(fullArgs, args...)
-	return exec.Command(spec.binary, fullArgs...)
+	return androidManagedCommand(spec.binary, fullArgs, "")
 }
 
 func resolvePipCommandSpecForPythonVersion(pythonVersion string, includeSystemInstallFlags bool) (pipCommandSpec, error) {
@@ -272,8 +275,9 @@ func resolvePipCommandSpecForPythonVersion(pythonVersion string, includeSystemIn
 }
 
 func pipBinaryMatchesVersion(binary, pythonVersion string) bool {
-	cmd := exec.Command(binary, "--version")
+	cmd := androidManagedCommand(binary, []string{"--version"}, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -297,6 +301,7 @@ func NewPipCommandForPythonVersion(pythonVersion string, args []string) (*exec.C
 	}
 	cmd := spec.command(args)
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
@@ -314,6 +319,7 @@ func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*e
 	args = append(args[:1], append([]string{"--target", target}, args[1:]...)...)
 	cmd := spec.command(args)
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
@@ -331,6 +337,7 @@ func NewPipInstallCommandForPythonVersionWithFlags(pythonVersion, packageName st
 	args = append(args[:1], append([]string{"--target", target}, args[1:]...)...)
 	cmd := spec.command(args)
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
@@ -351,6 +358,7 @@ func NewPipUninstallCommandForPythonVersion(pythonVersion, packageName string, e
 	}
 	cmd := spec.command(BuildPipUninstallArgs(spec.extraFlags, packageName, extraOptions...))
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
+	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
@@ -369,6 +377,11 @@ func ManagedPythonDependencyEnv(base []string, pythonVersion string) []string {
 	value := target
 	if strings.TrimSpace(existing) != "" {
 		value += string(os.PathListSeparator) + existing
+	}
+	// Android 容器模式下 pip 运行在 rootfs 内，PYTHONPATH/PIP_TARGET 需映射为 guest 路径。
+	if rt := androidContainer(); rt.active {
+		value = rt.mapEnvPathList(value)
+		target = rt.mapEnvPathList(target)
 	}
 	base = appendEnvOverride(base, "PYTHONPATH", value)
 	return appendEnvOverride(base, "PIP_TARGET", target)

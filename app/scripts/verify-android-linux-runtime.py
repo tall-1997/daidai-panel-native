@@ -69,10 +69,50 @@ def elf_metadata(path: pathlib.Path) -> tuple[int, list[int]]:
 def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None:
     manifest = json.loads(manifest_path.read_text())
     assert manifest.get("schema_version") == 1, "native manifest schema_version must be 1"
-    assert manifest.get("abi") == "arm64-v8a", "native runtime must target arm64-v8a"
+    abi = manifest.get("abi")
+    assert abi == native_dir.name, "native manifest abi does not match its directory"
     assert manifest.get("minimum_load_alignment") == 16384, "native alignment policy mismatch"
     provenance = manifest.get("provenance", {})
-    assert provenance.get("strategy") == "pinned-termux-binary-packages", "unapproved PRoot provenance strategy"
+    strategy = provenance.get("strategy")
+    assert strategy in ("pinned-termux-binary-packages", "self-contained-source-build"), "unapproved PRoot provenance strategy"
+    if strategy == "self-contained-source-build":
+        _verify_source_build(provenance)
+    else:
+        _verify_import_provenance(provenance, manifest, native_dir)
+    artifacts = manifest.get("artifacts", [])
+    assert artifacts, "native runtime manifest has no artifacts"
+    names = {item.get("name") for item in artifacts}
+    assert {"libproot_loader.so"} <= names, "native runtime loader manifest is incomplete"
+    assert provenance.get("runtime_overrides", {}).get("PROOT_LOADER") == "libproot_loader.so", "PRoot loader override contract is missing"
+    for artifact in artifacts:
+        path = native_dir / artifact["name"]
+        assert path.is_file(), f"native artifact missing: {path}"
+        assert artifact.get("size") == path.stat().st_size, f"native artifact size mismatch: {path.name}"
+        assert artifact.get("sha256") == sha256(path), f"native artifact checksum mismatch: {path.name}"
+        machine, alignments = elf_metadata(path)
+        expected_machine = {"arm64-v8a": 183, "x86_64": 62}.get(abi)
+        assert expected_machine is not None, f"unsupported ABI: {abi}"
+        assert machine == expected_machine, f"native artifact does not match ABI {abi}: {path.name}"
+        assert all(value >= 16384 for value in alignments), f"native artifact has PT_LOAD alignment below 16KB: {path.name}"
+    proot_name = next((name for name in names if name in ("liboperit_proot.so", "libdaidai_proot.so")), None)
+    if proot_name is not None:
+        proot_data = (native_dir / proot_name).read_bytes()
+        assert b"PROOT_LOADER" in proot_data, "packaged PRoot does not support the required loader override"
+
+
+def _verify_source_build(provenance: dict) -> None:
+    assert provenance.get("source_build") is True, "source-build provenance must claim a source build"
+    assert provenance.get("source_patch_applied") is False, "source-build must not claim applied patches"
+    assert isinstance(provenance.get("patches_applied", []), list), "patches_applied must be a list"
+    upstream = provenance.get("upstream_source", [])
+    assert len(upstream) >= 3, "expected proot, talloc and busybox upstream sources to be pinned"
+    assert all(len(item.get("sha256", "")) == 64 for item in upstream), "upstream sources are not pinned by SHA-256"
+    assert all(item.get("name") and item.get("url") and item.get("version") for item in upstream), "incomplete upstream source pin"
+    toolchain = provenance.get("toolchain", {})
+    assert toolchain.get("load_alignment") == 16384, "toolchain load alignment policy mismatch"
+
+
+def _verify_import_provenance(provenance: dict, manifest: dict, native_dir: pathlib.Path) -> None:
     assert provenance.get("source_build") is False, "binary import must not claim a source build"
     assert provenance.get("source_patch_applied") is False, "binary import must not claim source patches"
     assert len(provenance.get("termux_recipe", {}).get("commit", "")) == 40, "Termux recipe commit is not pinned"
@@ -83,7 +123,6 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
     names = {item.get("name") for item in artifacts}
     required = {"liboperit_proot.so", "libproot_loader.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so"}
     assert required <= names, "native runtime dependency manifest is incomplete"
-    assert provenance.get("runtime_overrides", {}).get("PROOT_LOADER") == "libproot_loader.so", "PRoot loader override contract is missing"
     expected_dependencies = {
         "liboperit_proot.so": (b"libtalloc_2.so", b"libandroid-shmem.so"),
         "liboperit_busybox.so": (b"libbusybox_1_38_0.so",),
@@ -92,16 +131,8 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path) -> None
     }
     for artifact in artifacts:
         path = native_dir / artifact["name"]
-        assert path.is_file(), f"native artifact missing: {path}"
-        assert artifact.get("size") == path.stat().st_size, f"native artifact size mismatch: {path.name}"
-        assert artifact.get("sha256") == sha256(path), f"native artifact checksum mismatch: {path.name}"
-        machine, alignments = elf_metadata(path)
-        assert machine == 183, f"native artifact is not AArch64: {path.name}"
-        assert all(value >= 16384 for value in alignments), f"native artifact has PT_LOAD alignment below 16KB: {path.name}"
         data = path.read_bytes()
         assert all(dependency in data for dependency in expected_dependencies.get(path.name, ())), f"native artifact dependency contract mismatch: {path.name}"
-    proot_data = (native_dir / "liboperit_proot.so").read_bytes()
-    assert b"PROOT_LOADER" in proot_data, "packaged PRoot does not support the required loader override"
 
 
 def main() -> None:

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -348,8 +347,9 @@ func discoverSystemPythonForVersion(version string) string {
 func managedBootstrapCommandMatchesVersion(candidate managedBootstrapCommand, version string) bool {
 	args := append([]string{}, candidate.versionArgsPrefix...)
 	args = append(args, "--version")
-	cmd := exec.Command(candidate.binary, args...)
+	cmd := androidManagedCommand(candidate.binary, args, "")
 	cmd.Env = appendPythonBootstrapEnv(SanitizePipEnv(os.Environ()))
+	androidFinalizeCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false

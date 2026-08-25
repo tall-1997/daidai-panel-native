@@ -18,8 +18,11 @@ object AndroidLinuxRuntime {
     private const val ROOTFS_SHA256_ASSET_NAME = "rootfs.tar.gz.bin.sha256"
     private const val PROOT_LOADER_LIBRARY_NAME = "libproot_loader.so"
     internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    private const val DISTRO_PREFERENCES = "daidai-linux-distro"
+    private const val DISTRO_KEY = "selected_distribution"
+    private const val DEFAULT_DISTRIBUTION = "alpine"
+    internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine", "ubuntu")
     private val REQUIRED_COMMANDS = linkedMapOf(
-        "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
         "python3" to listOf("/usr/bin/python3"),
         "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
@@ -28,7 +31,12 @@ object AndroidLinuxRuntime {
         "pnpm" to listOf("/usr/bin/pnpm"),
         "uv" to listOf("/usr/bin/uv"),
     )
+    private val REQUIRED_PACKAGE_MANAGERS = mapOf(
+        "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
+        "apt" to listOf("/usr/bin/apt-get"),
+    )
     const val ALPINE_APK_HUAWEI_MIRROR = "https://repo.huaweicloud.com/alpine"
+    const val UBUNTU_APT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
@@ -119,8 +127,14 @@ object AndroidLinuxRuntime {
     internal fun npmInstallArguments(mirror: String, prefix: String, cacheDir: String, packageSpec: String): List<String> =
         listOf("install", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", mirror, "--cache", cacheDir, "--prefix", prefix, "--", packageSpec)
 
-    internal fun nativeBuildToolchainCommand(): List<String> =
-        listOf("/sbin/apk", "add", "--no-cache", "build-base", "python3-dev", "linux-headers", "cargo")
+    internal fun nativeBuildToolchainCommand(context: Context): List<String> {
+        val manager = ensureRootfsReady(context)?.packageManager.orEmpty()
+        return when (manager) {
+            "apk" -> listOf("/sbin/apk", "add", "--no-cache", "build-base", "python3-dev", "linux-headers", "cargo")
+            "apt" -> listOf("/bin/sh", "-lc", "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y build-essential python3-dev linux-headers-generic cargo")
+            else -> listOf("/bin/sh", "-lc", "echo 'no package manager available'; exit 1")
+        }
+    }
 
     internal fun applyGuestEnvironment(command: List<String>, environment: MutableMap<String, String>) {
         if (command.firstOrNull()?.substringAfterLast('/') in setOf("liboperit_proot.so", "libdaidai_proot.so")) {
@@ -133,8 +147,38 @@ object AndroidLinuxRuntime {
         MirrorConfig(
             pipMirror = normalizeMirrorUrl(preferences.getString(PIP_MIRROR_KEY, null).orEmpty()) ?: PYTHON_PIP_ALIBABA_INDEX,
             npmMirror = normalizeMirrorUrl(preferences.getString(NPM_MIRROR_KEY, null).orEmpty()) ?: NODE_NPM_NPMMIRROR_REGISTRY,
-            linuxMirror = normalizeMirrorUrl(preferences.getString(LINUX_MIRROR_KEY, null).orEmpty()) ?: ALPINE_APK_HUAWEI_MIRROR,
+            linuxMirror = normalizeMirrorUrl(preferences.getString(LINUX_MIRROR_KEY, null).orEmpty()) ?: defaultLinuxMirror(selectedDistribution(context)),
         )
+    }
+
+    // 发行版选择：写入 SharedPreferences，下次启动生效。返回当前选中的发行版 id。
+    fun selectDistribution(context: Context, distribution: String): String {
+        val normalized = if (distribution.trim().lowercase() in SUPPORTED_DISTRIBUTIONS) distribution.trim().lowercase() else DEFAULT_DISTRIBUTION
+        context.getSharedPreferences(DISTRO_PREFERENCES, Context.MODE_PRIVATE).edit().putString(DISTRO_KEY, normalized).apply()
+        synchronized(mirrorConfigLock) { cachedLinuxRootfs = null }
+        return normalized
+    }
+
+    fun selectedDistribution(context: Context): String =
+        context.getSharedPreferences(DISTRO_PREFERENCES, Context.MODE_PRIVATE)
+            .getString(DISTRO_KEY, null)?.trim()?.lowercase()?.takeIf { it in SUPPORTED_DISTRIBUTIONS }
+            ?: DEFAULT_DISTRIBUTION
+
+    internal fun defaultLinuxMirror(distribution: String): String =
+        if (distribution == "ubuntu") UBUNTU_APT_MIRROR else ALPINE_APK_HUAWEI_MIRROR
+
+    fun distributionPackageManager(distribution: String): String =
+        if (distribution == "ubuntu") "apt" else "apk"
+
+    private fun rootfsAssetPrefix(context: Context): String {
+        val abi = currentAbi()
+        val distribution = selectedDistribution(context)
+        return "$ROOTFS_ASSET_PREFIX/$abi/$distribution"
+    }
+
+    // 预加载：后台完成 rootfs 解包与就绪校验，避免首次任务时阻塞。
+    fun preload(context: Context) {
+        Thread { try { ensureRootfsReady(context) } catch (_: Exception) { } }.start()
     }
 
     internal fun normalizeMirrorUrl(value: String): String? {
@@ -166,19 +210,32 @@ object AndroidLinuxRuntime {
         }
     }
 
+    @Volatile private var cachedLinuxRootfs: RootfsPaths? = null
+
     fun ensureRootfsReady(context: Context, mirrors: MirrorConfig = mirrorConfig(context)): RootfsPaths? = synchronized(mirrorConfigLock) {
+        cachedLinuxRootfs?.let { return@synchronized it }
         val abi = currentAbi()
         val root = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return@synchronized null
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return@synchronized null
         val busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so"))
         if (!rootfsMarkerMatchesAsset(context, root)) {
-            installRootfsAsset(context, root, mirrors) ?: return@synchronized null
+            if (!rootfsMarkerMatchesDownloaded(context, root)) {
+                val installed = installRootfsAsset(context, root, mirrors) ?: installDownloadedRootfs(context, root, mirrors)
+                if (installed == null) return@synchronized null
+            }
         }
         prepareRuntimeDirectories(root, mirrors)
         val commands = detectCommands(root)
-        if (!commands.keys.containsAll(REQUIRED_COMMANDS.keys)) return@synchronized null
-        RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = busybox, packageManager = detectPackageManager(root), commands = commands)
+        val packageManager = detectPackageManager(root)
+        if (!rootfsFirstClass(commands, packageManager)) return@synchronized null
+        cachedLinuxRootfs = RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = busybox, packageManager = packageManager, commands = commands)
+        cachedLinuxRootfs
+    }
+
+    internal fun rootfsFirstClass(commands: Map<String, String>, packageManager: String): Boolean {
+        if (!commands.keys.containsAll(REQUIRED_COMMANDS.keys)) return false
+        return commands[packageManager] != null
     }
 
     fun shellCommand(context: Context, hostScript: File, workingDir: File, shell: GuestShell = GuestShell.SH): List<String>? {
@@ -228,7 +285,9 @@ object AndroidLinuxRuntime {
 
     fun hasPackagedRootfsRunner(context: Context): Boolean {
         val abi = currentAbi()
-        return assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME") &&
+        return SUPPORTED_DISTRIBUTIONS.any { distribution ->
+            assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME")
+        } &&
             resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) != null &&
             resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) != null
     }
@@ -287,8 +346,9 @@ object AndroidLinuxRuntime {
 
     private fun installRootfsAsset(context: Context, root: File, mirrors: MirrorConfig): RootfsPaths? {
         val abi = currentAbi()
-        val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME"
-        val checksumName = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_SHA256_ASSET_NAME"
+        val distribution = selectedDistribution(context)
+        val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME"
+        val checksumName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_SHA256_ASSET_NAME"
         if (!assetExists(context, assetName)) return null
         val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return null
         root.deleteRecursively()
@@ -311,16 +371,74 @@ object AndroidLinuxRuntime {
             }
             prepareRuntimeDirectories(root, mirrors)
             val commands = detectCommands(root)
-            require(commands.keys.containsAll(REQUIRED_COMMANDS.keys)) {
+            val packageManager = detectPackageManager(root)
+            require(rootfsFirstClass(commands, packageManager)) {
                 "rootfs missing required commands: ${REQUIRED_COMMANDS.keys - commands.keys}"
             }
-            File(root, ROOTFS_READY_MARKER).writeText("ready:$abi:${assetChecksum(context, checksumName)}")
+            File(root, ROOTFS_READY_MARKER).writeText("ready:$abi:$distribution:${assetChecksum(context, checksumName)}")
         } catch (_: Exception) {
             root.deleteRecursively()
             return null
         }
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return null
-        return RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")), packageManager = detectPackageManager(root), commands = detectCommands(root))
+        val commands = detectCommands(root)
+        val packageManager = detectPackageManager(root)
+        return RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")), packageManager = packageManager, commands = commands)
+    }
+
+    private fun installDownloadedRootfs(context: Context, root: File, mirrors: MirrorConfig): RootfsPaths? {
+        val abi = currentAbi()
+        val distribution = selectedDistribution(context)
+        val archive = AndroidRootfsDownloader.downloadedArchive(context, abi, distribution) ?: return null
+        val expected = AndroidRootfsDownloader.downloadedChecksum(context, abi, distribution) ?: return null
+        val actual = sha256File(archive)
+        if (expected.length != 64 || !expected.equals(actual, true)) return null
+        root.deleteRecursively()
+        root.mkdirs()
+        try {
+            archive.inputStream().use { raw ->
+                GZIPInputStream(raw).use { gzip ->
+                    TarArchiveInputStream(gzip).use { tar ->
+                        extractTar(root, tar)
+                    }
+                }
+            }
+            prepareRuntimeDirectories(root, mirrors)
+            val commands = detectCommands(root)
+            val packageManager = detectPackageManager(root)
+            require(rootfsFirstClass(commands, packageManager)) {
+                "rootfs missing required commands: ${REQUIRED_COMMANDS.keys - commands.keys}"
+            }
+            File(root, ROOTFS_READY_MARKER).writeText("downloaded:$abi:$distribution:$expected")
+        } catch (_: Exception) {
+            root.deleteRecursively()
+            return null
+        }
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so", "liboperit_proot.so")) ?: return null
+        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return null
+        val commands = detectCommands(root)
+        val packageManager = detectPackageManager(root)
+        return RootfsPaths(
+            root = root,
+            proot = proot,
+            prootLoader = prootLoader,
+            busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so", "liboperit_busybox.so")),
+            packageManager = packageManager,
+            commands = commands,
+        )
+    }
+
+    private fun sha256File(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun extractTar(root: File, tar: TarArchiveInputStream) {
@@ -378,15 +496,29 @@ object AndroidLinuxRuntime {
         else -> ""
     }
 
-    private fun detectCommands(root: File): Map<String, String> = REQUIRED_COMMANDS.mapNotNull { (name, candidates) ->
-        candidates.firstOrNull { File(root, it.trimStart('/')).let { file -> file.isFile && file.canExecute() } }?.let { name to it }
-    }.toMap()
+    private fun detectCommands(root: File): Map<String, String> {
+        val required = REQUIRED_COMMANDS.mapNotNull { (name, candidates) ->
+            candidates.firstOrNull { File(root, it.trimStart('/')).let { file -> file.isFile && file.canExecute() } }?.let { name to it }
+        }.toMap()
+        val packageManager = detectPackageManager(root)
+        val managerPath = REQUIRED_PACKAGE_MANAGERS[packageManager].orEmpty()
+            .firstOrNull { File(root, it.trimStart('/')).isFile }
+        return if (managerPath != null) required + (packageManager to managerPath) else required
+    }
 
     private fun rootfsMarkerMatchesAsset(context: Context, root: File): Boolean {
-        val checksumName = "$ROOTFS_ASSET_PREFIX/${currentAbi()}/$ROOTFS_SHA256_ASSET_NAME"
+        val checksumName = "${rootfsAssetPrefix(context)}/$ROOTFS_SHA256_ASSET_NAME"
         val marker = File(root, ROOTFS_READY_MARKER).readTextOrNull()?.trim().orEmpty()
         val expected = runCatching { assetChecksum(context, checksumName) }.getOrNull() ?: return false
-        return marker == "ready:${currentAbi()}:$expected"
+        return marker == "ready:${currentAbi()}:${selectedDistribution(context)}:$expected"
+    }
+
+    private fun rootfsMarkerMatchesDownloaded(context: Context, root: File): Boolean {
+        val abi = currentAbi()
+        val distribution = selectedDistribution(context)
+        val marker = File(root, ROOTFS_READY_MARKER).readTextOrNull()?.trim().orEmpty()
+        val expected = AndroidRootfsDownloader.downloadedChecksum(context, abi, distribution) ?: return false
+        return marker == "downloaded:$abi:$distribution:$expected"
     }
 
     private fun assetChecksum(context: Context, name: String): String =
@@ -398,6 +530,19 @@ object AndroidLinuxRuntime {
             File(root, "etc/apk/repositories").apply {
                 parentFile?.mkdirs()
                 writeText("${mirrors.linuxMirror}/v$release/main\n${mirrors.linuxMirror}/v$release/community\n")
+            }
+        }
+        if (File(root, "etc/os-release").readTextOrNull()?.contains("Ubuntu", ignoreCase = true) == true || File(root, "usr/bin/apt-get").isFile) {
+            val release = File(root, "etc/lsb-release").readTextOrNull()
+                ?.lineSequence()?.firstOrNull { it.startsWith("DISTRIB_CODENAME=") }?.substringAfter("=")?.trim().orEmpty()
+            if (release.isNotEmpty() && File(root, "etc/apt/sources.list").let { !it.isFile || !it.readTextOrNull().orEmpty().contains("mirror") }) {
+                File(root, "etc/apt/sources.list").apply {
+                    parentFile?.mkdirs()
+                    writeText("deb ${mirrors.linuxMirror}/ $release main restricted universe multiverse\n" +
+                        "deb ${mirrors.linuxMirror}/ $release-updates main restricted universe multiverse\n" +
+                        "deb ${mirrors.linuxMirror}/ $release-security main restricted universe multiverse\n")
+                }
+                listOf("etc/apt/sources.list.d").forEach { dir -> File(root, dir).let { if (it.isDirectory) it.listFiles()?.forEach { child -> child.delete() } } }
             }
         }
         val pipConfig = "[global]\nindex-url = ${mirrors.pipMirror}\ntimeout = 60\n"
@@ -430,29 +575,40 @@ object AndroidLinuxRuntime {
     }
 
     fun statusJson(context: Context): JSONObject {
-        val python = AndroidPythonRuntime.ensureReady(context)
-        val node = AndroidNodeRuntime.ensureReady(context)
         val rootfs = rootfsStatus(context)
+        val pythonAvailable = guestRuntimeAvailable(context, "/usr/bin/python3")
+        val nodeAvailable = guestRuntimeAvailable(context, "/usr/bin/node")
+        val rootfsHome = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}").absolutePath
         val runtimes = JSONArray()
-            .put(descriptorJson(RuntimeDescriptor(
-                id = "python-3.14-android-arm64",
-                language = "python",
-                version = if (python != null) "3.14" else "",
-                installed = python != null,
-                executable = python?.wrapperScript.orEmpty(),
-                home = python?.home.orEmpty(),
-                isolation = "android-app-sandbox",
-                capabilities = listOf("python", "pip", "venv", "ssl", "sqlite"),
-            )))
             .put(descriptorJson(RuntimeDescriptor(
                 id = "linux-runtime-${currentAbi()}",
                 language = "linux",
                 version = rootfs.optString("distribution"),
                 installed = rootfs.optBoolean("installed"),
                 executable = rootfs.optJSONObject("runner")?.optString("path").orEmpty(),
-                home = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}").absolutePath,
+                home = rootfsHome,
                 isolation = "layered-rootfs",
                 capabilities = listOf("shell", "python", "pip", "node", "npm", "typescript", "git", "ssh", "go-build"),
+            )))
+            .put(descriptorJson(RuntimeDescriptor(
+                id = "python-rootfs-android-${currentAbi()}",
+                language = "python",
+                version = if (pythonAvailable) rootfs.optString("distribution") else "",
+                installed = pythonAvailable,
+                executable = "/usr/bin/python3",
+                home = rootfsHome,
+                isolation = "layered-rootfs",
+                capabilities = listOf("python", "pip", "venv", "ssl", "sqlite"),
+            )))
+            .put(descriptorJson(RuntimeDescriptor(
+                id = "node-rootfs-android-${currentAbi()}",
+                language = "node",
+                version = if (nodeAvailable) rootfs.optString("distribution") else "",
+                installed = nodeAvailable,
+                executable = "/usr/bin/node",
+                home = rootfsHome,
+                isolation = "layered-rootfs",
+                capabilities = listOf("node", "npm", "typescript", "commonjs", "esm"),
             )))
             .put(descriptorJson(RuntimeDescriptor(
                 id = "yaegi-go-${currentAbi()}", language = "go", version = "0.16.1",
@@ -460,22 +616,13 @@ object AndroidLinuxRuntime {
                 executable = File(nativeLibraryDir(context), "libyaegi_exec.so").absolutePath,
                 home = "", isolation = "isolated-worker", capabilities = listOf("go-interpret"),
             )))
-            .put(descriptorJson(RuntimeDescriptor(
-                id = "node-lts-android-arm64",
-                language = "node",
-                version = if (node != null) "18.20.4" else "",
-                installed = node != null,
-                executable = AndroidNodeRuntime.wrapperPath,
-                home = node?.home.orEmpty(),
-                isolation = "android-app-sandbox",
-                capabilities = listOf("node", "npm", "typescript", "commonjs", "esm"),
-            )))
         return JSONObject()
             .put("supported", true)
             .put("arch", currentAbi())
             .put("bin_dir", nativeLibraryDir(context).absolutePath)
             .put("termux_detected", false)
             .put("container_model", "layered-linux-runtime")
+            .put("distribution", selectedDistribution(context))
             .put("rootfs", rootfs)
             .put("presets", JSONArray())
             .put("runtimes", runtimes)
@@ -495,23 +642,39 @@ object AndroidLinuxRuntime {
     private fun rootfsStatus(context: Context): JSONObject {
         val mirrors = mirrorConfig(context)
         val abi = currentAbi()
-        val rootfsAsset = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_ASSET_NAME"
-        val checksumAsset = "$ROOTFS_ASSET_PREFIX/$abi/$ROOTFS_SHA256_ASSET_NAME"
-        val rootfsPackaged = assetExists(context, rootfsAsset)
+        val distribution = selectedDistribution(context)
+        val rootfsAsset = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME"
+        val checksumAsset = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_SHA256_ASSET_NAME"
         val rootfsDir = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         val commandPaths = detectCommands(rootfsDir)
         val commandStatus = JSONObject()
         REQUIRED_COMMANDS.keys.forEach { name -> commandStatus.put(name, commandPaths[name] ?: false) }
+        val distributions = JSONObject()
+        SUPPORTED_DISTRIBUTIONS.forEach { dist ->
+            distributions.put(dist, assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$dist/$ROOTFS_ASSET_NAME"))
+        }
         return JSONObject()
-            .put("id", "alpine-rootfs-android-$abi")
+            .put("id", "linux-rootfs-android-$abi")
             .put("distribution", rootfsDistribution(rootfsDir))
-            .put("installed", rootfsMarkerMatchesAsset(context, rootfsDir))
-            .put("packaged", rootfsPackaged)
-            .put("asset", if (rootfsPackaged) rootfsAsset else "")
+            .put("selected_distribution", distribution)
+            .put("installed", rootfsMarkerMatchesAsset(context, rootfsDir) || rootfsMarkerMatchesDownloaded(context, rootfsDir))
+            .put("packaged", distributions.optBoolean(distribution))
+            .put("asset", if (distributions.optBoolean(distribution)) rootfsAsset else "")
             .put("sha256_asset", if (assetExists(context, checksumAsset)) checksumAsset else "")
+            .put("distributions_available", distributions)
+            .put("image", JSONObject()
+                .put("sources", JSONArray(AndroidRootfsDownloader.sourcesFor(distribution).map { source ->
+                    JSONObject()
+                        .put("id", source.id)
+                        .put("display_name", source.displayName)
+                        .put("distribution", source.distribution)
+                        .put("base_url", source.baseUrl)
+                }))
+                .put("selected_source", AndroidRootfsDownloader.selectedSourceId(context, distribution))
+                .put("downloaded", AndroidRootfsDownloader.downloadedArchive(context, abi, distribution) != null))
             .put("runner", prootRunnerStatus(context))
             .put("package_manager", detectPackageManager(rootfsDir))
-            .put("first_class", commandPaths.keys.containsAll(REQUIRED_COMMANDS.keys))
+            .put("first_class", rootfsFirstClass(commandPaths, detectPackageManager(rootfsDir)))
             .put("commands", commandStatus)
             .put("compatibility", JSONObject()
                 .put("no_seccomp", true)
@@ -520,7 +683,7 @@ object AndroidLinuxRuntime {
                 .put("fake_kernel_release", "4.14.0")
                 .put("binds", JSONArray(listOf("/proc", "/dev", "/sys", "/sdcard", "/storage", "/host-files", "/tmp/host-cache"))))
             .put("mirrors", JSONObject()
-                .put("apk", mirrors.linuxMirror)
+                .put("linux", mirrors.linuxMirror)
                 .put("pip", mirrors.pipMirror)
                 .put("npm", mirrors.npmMirror))
     }

@@ -254,79 +254,89 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
 
 val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
     group = "verification"
-    description = "Verifies the rootfs contract and pinned 16 KB-aligned Android native tools."
+    description = "Verifies the dual-distribution rootfs assets and pinned 16 KB-aligned Android native tools."
     doLast {
-        val requiredCommands = listOf("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm")
-            val requiredPackages = setOf("bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates")
-        val requiredCapabilities = mapOf(
-            "package_manager" to listOf("apk"),
-            "shell" to listOf("bash"),
-            "python" to listOf("python3", "pip3", "uv"),
-            "node" to listOf("node", "npm", "pnpm"),
+        val distroCommands = mapOf(
+            "alpine" to listOf("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm"),
+            "ubuntu" to listOf("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
+        )
+        val distroPackages = mapOf(
+            "alpine" to setOf("bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"),
+            "ubuntu" to setOf("bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"),
+        )
+        val distroCapabilities = mapOf(
+            "alpine" to mapOf(
+                "package_manager" to listOf("apk"),
+                "shell" to listOf("bash"),
+                "python" to listOf("python3", "pip3", "uv"),
+                "node" to listOf("node", "npm", "pnpm"),
+            ),
+            "ubuntu" to mapOf(
+                "package_manager" to listOf("apt-get"),
+                "shell" to listOf("bash"),
+                "python" to listOf("python3", "pip3"),
+                "node" to listOf("node", "npm", "pnpm"),
+            ),
         )
         requestedAbis.forEach { abi ->
-            val assetDir = file("src/main/assets/android-runtime/$abi")
-            val rootfs = file("$assetDir/rootfs.tar.gz.bin")
-            val rootfsSha = file("$assetDir/rootfs.tar.gz.bin.sha256")
-            val rootfsManifestFile = file("$assetDir/runtime-manifest.json")
-            val nativeManifestFile = file("$assetDir/native-runtime-manifest.json")
             val nativeDir = file("src/main/jniLibs/$abi")
             val proot = listOf("libdaidai_proot.so", "liboperit_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
-            check(rootfs.isFile && rootfsSha.isFile && rootfsManifestFile.isFile) { "Missing Android Linux rootfs assets or manifest for $abi." }
-            check(nativeManifestFile.isFile) { "Missing pinned native runtime manifest for $abi." }
             check(proot != null && isArm64Elf(proot) && hasMinimumElfLoadAlignment(proot, 16384L)) {
                 "Android PRoot runner for $abi must be an arm64 ELF with 16 KB PT_LOAD alignment."
             }
+            check(file("$nativeDir/libproot_loader.so").isFile) { "Missing PRoot loader for $abi." }
             check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
-            val expected = rootfsSha.readText().trim().substringBefore(' ')
-            val actualRootfsSha = sha256(rootfs)
-            check(expected.length == 64 && expected.equals(actualRootfsSha, ignoreCase = true)) { "Android Linux rootfs checksum mismatch for $abi." }
 
-            @Suppress("UNCHECKED_CAST")
-            val rootfsManifest = JsonSlurper().parse(rootfsManifestFile) as Map<String, Any>
-            check((rootfsManifest["schema_version"] as? Number)?.toInt() == 2) { "Android rootfs manifest schema must be version 2 for $abi." }
-            check(rootfsManifest["abi"] == abi && rootfsManifest["sha256"] == actualRootfsSha) { "Android rootfs manifest identity or checksum mismatch for $abi." }
-            check((rootfsManifest["size"] as? Number)?.toLong() == rootfs.length()) { "Android rootfs manifest size mismatch for $abi." }
-            check((rootfsManifest["required_commands"] as? List<*>) == requiredCommands) { "Android rootfs required_commands mismatch for $abi." }
-            check(requiredPackages.all { it in (rootfsManifest["packages"] as? List<*>).orEmpty() }) { "Android rootfs required package list is incomplete for $abi." }
-            @Suppress("UNCHECKED_CAST")
-            val capabilities = rootfsManifest["capabilities"] as? Map<String, Any> ?: error("Android rootfs capabilities are missing for $abi.")
-            requiredCapabilities.forEach { (name, commands) -> check(capabilities[name] == commands) { "Android rootfs capability $name mismatch for $abi." } }
-            check(capabilities["tls_ca_certificates"] == true) { "Android rootfs TLS CA capability is missing for $abi." }
+            // 双发行版 rootfs 资产，每一份都必须自洽（sha256 + manifest 一致）。
+            listOf("alpine", "ubuntu").forEach { distribution ->
+                val assetDir = file("src/main/assets/android-runtime/$abi/$distribution")
+                val rootfs = file("$assetDir/rootfs.tar.gz.bin")
+                val rootfsSha = file("$assetDir/rootfs.tar.gz.bin.sha256")
+                val rootfsManifestFile = file("$assetDir/runtime-manifest.json")
+                check(rootfs.isFile && rootfsSha.isFile && rootfsManifestFile.isFile) {
+                    "Missing $distribution rootfs assets or manifest for $abi."
+                }
+                val expected = rootfsSha.readText().trim().substringBefore(' ')
+                val actualRootfsSha = sha256(rootfs)
+                check(expected.length == 64 && expected.equals(actualRootfsSha, ignoreCase = true)) { "$distribution rootfs checksum mismatch for $abi." }
 
+                @Suppress("UNCHECKED_CAST")
+                val rootfsManifest = JsonSlurper().parse(rootfsManifestFile) as Map<String, Any>
+                check((rootfsManifest["schema_version"] as? Number)?.toInt() == 2) { "$distribution rootfs manifest schema must be version 2 for $abi." }
+                check(rootfsManifest["abi"] == abi && rootfsManifest["distribution"] == distribution && rootfsManifest["sha256"] == actualRootfsSha) { "$distribution rootfs manifest identity or checksum mismatch for $abi." }
+                check((rootfsManifest["size"] as? Number)?.toLong() == rootfs.length()) { "$distribution rootfs manifest size mismatch for $abi." }
+                check((rootfsManifest["required_commands"] as? List<*>) == distroCommands[distribution]) { "$distribution rootfs required_commands mismatch for $abi." }
+                check(distroPackages[distribution]!!.all { it in (rootfsManifest["packages"] as? List<*>).orEmpty() }) { "$distribution rootfs required package list is incomplete for $abi." }
+                @Suppress("UNCHECKED_CAST")
+                val capabilities = rootfsManifest["capabilities"] as? Map<String, Any> ?: error("$distribution rootfs capabilities are missing for $abi.")
+                distroCapabilities[distribution]!!.forEach { (name, commands) -> check(capabilities[name] == commands) { "$distribution rootfs capability $name mismatch for $abi." } }
+                check(capabilities["tls_ca_certificates"] == true) { "$distribution rootfs TLS CA capability is missing for $abi." }
+            }
+
+            val nativeManifestFile = file("src/main/assets/android-runtime/$abi/native-runtime-manifest.json")
+            check(nativeManifestFile.isFile) { "Missing pinned native runtime manifest for $abi." }
             @Suppress("UNCHECKED_CAST")
             val nativeManifest = JsonSlurper().parse(nativeManifestFile) as Map<String, Any>
             check((nativeManifest["schema_version"] as? Number)?.toInt() == 1 && nativeManifest["abi"] == abi) { "Android native runtime manifest identity mismatch for $abi." }
             check((nativeManifest["minimum_load_alignment"] as? Number)?.toLong() == 16384L) { "Android native runtime alignment policy mismatch for $abi." }
             @Suppress("UNCHECKED_CAST")
             val provenance = nativeManifest["provenance"] as? Map<String, Any> ?: error("Android native runtime provenance is missing for $abi.")
-            check(provenance["strategy"] == "pinned-termux-binary-packages" && provenance["source_build"] == false && provenance["source_patch_applied"] == false) {
-                "Android native runtime provenance makes an unsupported source-build or patch claim for $abi."
+            check(provenance["strategy"] == "self-contained-source-build" && provenance["source_build"] == true) {
+                "Android native runtime must be a self-contained source build for $abi."
             }
             @Suppress("UNCHECKED_CAST")
-            val termuxRecipe = provenance["termux_recipe"] as? Map<String, Any> ?: error("Pinned Termux recipe metadata is missing for $abi.")
-            @Suppress("UNCHECKED_CAST")
-            val upstreamSource = provenance["upstream_source"] as? Map<String, Any> ?: error("Pinned upstream PRoot source metadata is missing for $abi.")
-            check((termuxRecipe["commit"] as? String)?.matches(Regex("[0-9a-f]{40}")) == true) { "Termux recipe commit is not pinned for $abi." }
-            check((upstreamSource["sha256"] as? String)?.matches(Regex("[0-9a-f]{64}")) == true) { "Upstream PRoot source hash is not pinned for $abi." }
-            @Suppress("UNCHECKED_CAST")
-            val packageSources = nativeManifest["packages"] as? List<Map<String, Any>> ?: error("Android native package sources are missing for $abi.")
-            check(packageSources.isNotEmpty() && packageSources.all { (it["sha256"] as? String)?.matches(Regex("[0-9a-f]{64}")) == true }) {
-                "Android native runtime contains an unpinned Termux package for $abi."
+            val upstreamSource = provenance["upstream_source"] as? List<Map<String, Any>> ?: error("Pinned upstream source metadata is missing for $abi.")
+            check(upstreamSource.size >= 3 && upstreamSource.all { (it["sha256"] as? String)?.matches(Regex("[0-9a-f]{64}")) == true }) {
+                "Upstream sources are not pinned for $abi."
             }
             @Suppress("UNCHECKED_CAST")
             val artifacts = nativeManifest["artifacts"] as? List<Map<String, Any>> ?: error("Android native artifacts are missing for $abi.")
-            val requiredNativeFiles = setOf("liboperit_proot.so", "libproot_loader.so", "liboperit_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
+            val requiredNativeFiles = if (provenance["source_patch_applied"] == true) {
+                setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so", "libtalloc_2.so", "libandroid-shmem.so", "libbusybox_1_38_0.so")
+            } else {
+                setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so")
+            }
             check(requiredNativeFiles.all { required -> artifacts.any { it["name"] == required } }) { "Android PRoot/BusyBox dependency manifest is incomplete for $abi." }
-            @Suppress("UNCHECKED_CAST")
-            val runtimeOverrides = provenance["runtime_overrides"] as? Map<String, Any> ?: error("Android PRoot loader override is missing for $abi.")
-            check(runtimeOverrides["PROOT_LOADER"] == "libproot_loader.so") { "Android PRoot loader override contract mismatch for $abi." }
-            val expectedDependencies = mapOf(
-                "liboperit_proot.so" to listOf("libtalloc_2.so", "libandroid-shmem.so"),
-                "liboperit_busybox.so" to listOf("libbusybox_1_38_0.so"),
-                "libbusybox_1_38_0.so" to listOf("libandroid-selinux.so"),
-                "libandroid-selinux.so" to listOf("libpcre2-8.so"),
-            )
             artifacts.forEach { artifact ->
                 val name = artifact["name"] as? String ?: error("Android native artifact has no name for $abi.")
                 val binary = file("$nativeDir/$name")
@@ -336,147 +346,23 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                 check(isArm64Elf(binary) && hasMinimumElfLoadAlignment(binary, 16384L)) {
                     "Android native artifact must be arm64 and 16 KB PT_LOAD aligned: $name."
                 }
-                val binaryStrings = binary.readText(Charsets.ISO_8859_1)
-                check(expectedDependencies[name].orEmpty().all(binaryStrings::contains)) { "Android native artifact dependency contract mismatch: $name." }
-            }
-            check(file("$nativeDir/liboperit_proot.so").readText(Charsets.ISO_8859_1).contains("PROOT_LOADER")) {
-                "Android PRoot binary does not support PROOT_LOADER for $abi."
             }
         }
-    }
-}
 
-val verifyNodeNativeRuntime = tasks.register("verifyNodeNativeRuntime") {
-    group = "verification"
-    description = "Fails when the Android Node, npm, npx, or TypeScript bundle is incomplete or inconsistent."
-    doLast {
-        val version = "18.20.4"
-        val npmVersion = "10.9.4"
-        val typescriptVersion = "5.9.3"
-        val nativeAbis = listOf("arm64-v8a").filter { file("src/main/jniLibs/$it/libnode.so").isFile }
-        check(nativeAbis.isNotEmpty()) { "No Android Node native libraries found." }
-        val primaryAbi = nativeAbis.first()
-        val nativeDir = file("src/main/jniLibs/$primaryAbi")
-        val launcher = file("$nativeDir/libnode_exec.so")
-        val libnode = file("$nativeDir/libnode.so")
-        val legacyNodeEntrypoints = listOf("libnodejs_exec.so", "libnodelauncher.so")
-        val assets = file("src/main/nodeAssets/node-runtime/$version/usr")
-        val metadataFile = file("$assets/runtime-metadata.json")
-        val requiredAssets = listOf(
-            "lib/node_modules/npm/package.json",
-            "lib/node_modules/npm/bin/npm-cli.js",
-            "lib/node_modules/npm/bin/npx-cli.js",
-            "lib/node_modules/typescript/package.json",
-            "lib/node_modules/typescript/bin/tsc",
-            "etc/npmrc",
-        )
-        legacyNodeEntrypoints.forEach { legacy ->
-            check(!file("$nativeDir/$legacy").exists()) {
-                "Legacy Node runtime entry $legacy must not be packaged; run app/scripts/prepare-android-node-runtime.sh."
+        // 彻底弃用 bionic 独立运行时：不得残留对应 native 库或 assets。
+        requestedAbis.forEach { abi ->
+            listOf("libnode_exec.so", "libpython3.14.so", "libpylauncher.so", "libpython314exec.so").forEach { legacy ->
+                check(!file("src/main/jniLibs/$abi/$legacy").exists()) {
+                    "Legacy bionic runtime entry $legacy must not be packaged."
+                }
             }
         }
-        check(launcher.isFile && isAndroidElf(launcher) && !launcher.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
-            "Missing real Android Node launcher. Run app/scripts/prepare-android-node-runtime.sh."
-        }
-        check(!launcher.readText(Charsets.ISO_8859_1).contains("/data/data/com.termux/files/usr/lib")) {
-            "Android Node launcher must not contain Termux RUNPATH."
-        }
-        check(libnode.isFile && isAndroidElf(libnode) && !libnode.readText(Charsets.ISO_8859_1).contains("RUNTIME_STUB_OK")) {
-            "Missing real Android libnode.so. Run app/scripts/prepare-android-node-runtime.sh."
-        }
-        check(metadataFile.isFile) { "Missing Node runtime metadata: ${metadataFile.path}" }
-        requiredAssets.forEach { relative -> check(file("$assets/$relative").isFile) { "Missing Node runtime asset: $relative" } }
-
-        @Suppress("UNCHECKED_CAST")
-        val metadata = JsonSlurper().parse(metadataFile) as Map<String, Any>
-        @Suppress("UNCHECKED_CAST")
-        val npmPackage = JsonSlurper().parse(file("$assets/lib/node_modules/npm/package.json")) as Map<String, Any>
-        @Suppress("UNCHECKED_CAST")
-        val typescriptPackage = JsonSlurper().parse(file("$assets/lib/node_modules/typescript/package.json")) as Map<String, Any>
-        check(metadata["node_version"] == version && metadata["npm_version"] == npmVersion && metadata["typescript_version"] == typescriptVersion)
-        check(npmPackage["version"] == npmVersion && typescriptPackage["version"] == typescriptVersion)
-        check(metadata["launcher_sha256"] == sha256(launcher) && metadata["libnode_sha256"] == sha256(libnode))
-        val bundleDigest = MessageDigest.getInstance("SHA-256")
-        requiredAssets.forEach { relative ->
-            bundleDigest.update(relative.toByteArray())
-            bundleDigest.update(0.toByte())
-            bundleDigest.update(file("$assets/$relative").readBytes())
-        }
-        check(metadata["bundle_sha256"] == bundleDigest.digest().joinToString("") { "%02x".format(it) })
-        check(metadata["npm_ignore_scripts"] == true && file("$assets/etc/npmrc").readText().lineSequence().any { it == "ignore-scripts=true" })
-        @Suppress("UNCHECKED_CAST")
-        val manifest = JsonSlurper().parse(rootProject.file("../../runtime/manifest.json")) as Map<String, Any>
-        @Suppress("UNCHECKED_CAST")
-        val components = manifest["components"] as List<Map<String, Any>>
-        mapOf("node-lts-android-arm64" to version, "typescript-stable" to typescriptVersion).forEach { (id, expectedVersion) ->
-            val component = components.singleOrNull { it["id"] == id }
-            check(component?.get("version") == expectedVersion && component["sha256"] == metadata["launcher_sha256"]) {
-                "$id manifest version or hash mismatch."
-            }
-        }
-    }
-}
-
-val verifyPythonNativeRuntime = tasks.register("verifyPythonNativeRuntime") {
-    group = "verification"
-    description = "Fails when the CPython 3.14 Android runtime, stdlib, native dependencies, or wheels are invalid."
-    doLast {
-        val nativeAbis = listOf("arm64-v8a").filter { file("src/main/jniLibs/$it/libpython3.14.so").isFile }
-        check(nativeAbis.isNotEmpty()) { "No Android Python native libraries found." }
-        val primaryAbi = nativeAbis.first()
-        val nativeDir = file("src/main/jniLibs/$primaryAbi")
-        val prefix = file("src/main/pythonAssets/python-runtime/3.14/prefix")
-        val stdlib = file("$prefix/lib/python3.14")
-        val wheelhouse = file("$prefix/wheelhouse")
-        val launcher = file("$nativeDir/libpython_exec.so")
-        val python = file("$nativeDir/libpython3.14.so")
-        val requiredAssets = listOf(
-            "ssl.py",
-            "sqlite3/__init__.py",
-            "venv/__init__.py",
-            "ensurepip/__init__.py",
-        ) + if (primaryAbi == "arm64-v8a") listOf(
-            "lib-dynload/_ssl.cpython-314-aarch64-linux-android.so",
-            "lib-dynload/_sqlite3.cpython-314-aarch64-linux-android.so",
-        ) else listOf(
-            "lib-dynload/_ssl.cpython-314-x86_64-linux-android.so",
-            "lib-dynload/_sqlite3.cpython-314-x86_64-linux-android.so",
-        )
-        val requiredNativeLibraries = listOf(
-            "libpython3.14.so",
-            "libssl_python.so",
-            "libcrypto_python.so",
-            "libsqlite3_python.so",
-        )
-        check(prefix.isDirectory) { "Missing Python runtime assets. Run app/scripts/prepare-android-python-runtime.sh." }
-        requiredAssets.forEach { relative -> check(file("$stdlib/$relative").isFile) { "Missing Python runtime asset: $relative" } }
-        check(file("$prefix/etc/ssl/certs/cacert.pem").isFile) { "Missing Python CA certificate bundle." }
-        check(file("$prefix/runtime-manifest.json").isFile) { "Missing Python runtime asset manifest." }
-        check(file("$wheelhouse/wheelhouse-manifest.json").isFile) { "Missing Python wheelhouse manifest." }
-        check(fileTree("$stdlib/ensurepip/_bundled").matching { include("pip-*-py3-none-any.whl") }.files.size == 1) {
-            "CPython ensurepip must contain exactly one pure Python pip wheel."
-        }
-        check(launcher.isFile && isAndroidElf(launcher)) { "Python launcher must be an Android ELF." }
-        check(launcher.readText(Charsets.ISO_8859_1).contains("libpython3.14.so")) { "Python launcher is not linked to libpython3.14.so." }
-        requiredNativeLibraries.forEach { name ->
-            val library = file("$nativeDir/$name")
-            check(library.isFile && isAndroidElf(library)) { "$name must be an Android ELF." }
-        }
-
-        @Suppress("UNCHECKED_CAST")
-        val wheelManifest = JsonSlurper().parse(file("$wheelhouse/wheelhouse-manifest.json")) as Map<String, Any>
-        @Suppress("UNCHECKED_CAST")
-        val manifestWheels = wheelManifest["wheels"] as? List<Map<String, Any>> ?: error("Python wheelhouse manifest has no wheels.")
-        val expectedWheels = manifestWheels.map { it["filename"] as String }.toSet()
-        val actualWheels = wheelhouse.listFiles { item -> item.isFile && item.extension == "whl" }.orEmpty().map { it.name }.toSet()
-        check(expectedWheels.isNotEmpty() && expectedWheels == actualWheels) { "Python wheelhouse files do not match its manifest." }
-        expectedWheels.forEach { name ->
-            check(isCompatiblePythonWheel(name)) { "Incompatible Python wheel in APK assets: $name" }
-            val metadata = manifestWheels.single { it["filename"] == name }
-            check(metadata["sha256"] == sha256(file("$wheelhouse/$name"))) { "Python wheel checksum mismatch: $name" }
-        }
-        fileTree(prefix).matching { include("**/*.whl") }.files.forEach { wheel ->
-            check(isCompatiblePythonWheel(wheel.name)) { "Incompatible Python wheel in APK assets: ${wheel.path}" }
+        check(!file("src/main/assets/node-runtime").exists()) { "Legacy bionic node-runtime assets must be removed." }
+        check(!file("src/main/assets/python-runtime").exists()) { "Legacy bionic python-runtime assets must be removed." }
+        check(!file("src/main/nodeAssets").exists()) { "Legacy bionic nodeAssets must be removed." }
+        check(!file("src/main/pythonAssets").exists()) { "Legacy bionic pythonAssets must be removed." }
+        check(!file("src/main/cpp/python_exec.c").exists() && !file("src/main/cpp/node_exec.cc").exists()) {
+            "Legacy bionic launcher sources must be removed."
         }
     }
 }
@@ -497,16 +383,6 @@ fun isArm64Elf(file: File): Boolean {
     if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
     val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
     return machine == 183
-}
-
-fun isAndroidElf(file: File): Boolean {
-    val header = file.inputStream().use { input -> ByteArray(20).also { input.read(it) } }
-    if (header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
-        return false
-    }
-    if (header[4] !in listOf(1.toByte(), 2.toByte()) || header[5] != 1.toByte()) return false
-    val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
-    return machine == 40 || machine == 183 || machine == 62
 }
 
 fun hasMinimumElfLoadAlignment(file: File, minimumAlignment: Long): Boolean {
@@ -566,9 +442,7 @@ tasks.named("preBuild").configure {
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
     dependsOn(verifyLocalPanelWeb)
-    dependsOn(verifyNodeNativeRuntime)
-    dependsOn(verifyPythonNativeRuntime)
-    
+
 }
 
 dependencies {
