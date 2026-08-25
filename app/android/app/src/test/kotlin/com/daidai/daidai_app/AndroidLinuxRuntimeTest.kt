@@ -88,7 +88,7 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `proot command receives guest PATH for env shebangs`() {
         val environment = mutableMapOf("PATH" to "/system/bin")
-        AndroidLinuxRuntime.applyGuestEnvironment(listOf("/native/liboperit_proot.so", "/usr/bin/npm"), environment)
+        AndroidLinuxRuntime.applyGuestEnvironment(listOf("/native/libdaidai_proot.so", "/usr/bin/npm"), environment)
         assertEquals(AndroidLinuxRuntime.GUEST_PATH, environment["PATH"])
     }
 
@@ -122,10 +122,10 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
-    fun `mirror defaults use Huawei Alibaba and npmmirror`() {
+    fun `mirror defaults use Tsinghua Aliyun and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 
-        assertEquals("https://repo.huaweicloud.com/alpine", mirrors.linuxMirror)
+        assertEquals("https://mirrors.tuna.tsinghua.edu.cn/alpine", mirrors.linuxMirror)
         assertEquals("https://mirrors.aliyun.com/pypi/simple", mirrors.pipMirror)
         assertEquals("https://registry.npmmirror.com", mirrors.npmMirror)
     }

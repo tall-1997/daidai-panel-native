@@ -2676,7 +2676,7 @@ fun serveDashboardStats(): JSONObject {
         LocalTaskFallbackSemantics.applyRuntimeEnvironment(target, runtimeEnvironment(workingDir))
         target.putAll(extraEnvironment)
         AndroidLinuxRuntime.applyGuestEnvironment(command, target)
-        if (command.firstOrNull()?.substringAfterLast('/') !in setOf("liboperit_proot.so", "libdaidai_proot.so")) return
+        if (command.firstOrNull()?.substringAfterLast('/') != "libdaidai_proot.so") return
         target.remove("PYTHONHOME")
         target["HOME"] = "/root"
         target["PWD"] = "/workspace"
