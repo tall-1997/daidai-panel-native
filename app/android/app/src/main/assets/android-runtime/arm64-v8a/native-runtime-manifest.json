@@ -43,8 +43,8 @@
     {
       "name": "libdaidai_proot.so",
       "role": "proot",
-      "sha256": "1f0d7d2a69e255dd1cf3827549d4eb84fb0bb51d4df036bce413bb57ca6abc41",
-      "size": 2995608
+      "sha256": "48498428ab47303f5f1d41deba98a8bf441657db127662ba0915709d9a227c91",
+      "size": 2995824
     },
     {
       "name": "libproot_loader.so",

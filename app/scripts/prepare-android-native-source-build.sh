@@ -133,6 +133,10 @@ build_proot() {
   local talloc_pc="$work_dir/$target/talloc.pc"
   local talloc_inc="$work_dir/$target/talloc/include"
   local talloc_lib="$work_dir/$target/talloc/lib"
+  # Android arm64 Bionic 强制 PT_TLS 段对齐 >= 64 字节（否则 dlopen 报 TLS underaligned），
+  # 链接一个 aligned(64) 的 TLS 锚点变量把段对齐抬到 64。
+  local anchor="$work_dir/$target/tls_anchor.o"
+  "$tool" -fno-emulated-tls -c "$script_dir/talloc-tls-anchor.c" -o "$anchor"
   # make 命令行变量会覆盖 GNUmakefile 内 "CFLAGS/CPPFLAGS += ..."，
   # 必须补齐默认的 -I. 与 uthash 路径，以及 talloc 的 include/lib。
   local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -I. -I$root/lib/uthash/include"
@@ -155,14 +159,14 @@ EOF
     make -C . V=1 \
       CC="$tool" STRIP="$strip" OBJCOPY="$prefix/bin/llvm-objcopy" OBJDUMP="$prefix/bin/llvm-objdump" \
       CPPFLAGS="$cppflags" CFLAGS="$cflags" \
-      LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size" \
+      LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size $anchor -Wl,--undefined=daidai_tls_anchor" \
       loader.elf
   log "building proot binary for $abi"
   PKG_CONFIG_PATH="$(dirname "$talloc_pc")" \
     make -C . V=1 \
       CC="$tool" STRIP="$strip" OBJCOPY="$prefix/bin/llvm-objcopy" OBJDUMP="$prefix/bin/llvm-objdump" \
       CPPFLAGS="$cppflags" CFLAGS="$cflags" \
-      LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size -static -L$talloc_lib -ltalloc" \
+      LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size -static -L$talloc_lib -ltalloc $anchor -Wl,--undefined=daidai_tls_anchor" \
       proot
   cp loader.elf "$out/libproot_loader.so"
   cp proot "$out/libdaidai_proot.so"
