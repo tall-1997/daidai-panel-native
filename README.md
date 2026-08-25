@@ -101,8 +101,8 @@ Android versionCode：**1000050**
 | `contracts/` | 移动端 API 路由契约 |
 | `scripts/` | 版本、运行时、路由和发行证据工具 |
 | `.github/workflows/` | Quality、Android Build 和 Device Smoke 工作流 |
-| `.monkeycode/docs/` | 项目架构与开发文档 |
-| `.monkeycode/specs/` | 需求、设计和实施任务 |
+| `.docs/` | 项目架构与开发文档 |
+| `.specs/` | 需求、设计和实施任务 |
 
 ## 构建环境
 
@@ -310,10 +310,10 @@ gh workflow run android-release.yml \
 
 ## 项目文档
 
-- 架构：`.monkeycode/docs/ARCHITECTURE.md`
-- 发布证据：`.monkeycode/docs/RELEASE_EVIDENCE.md`
-- 项目索引：`.monkeycode/docs/INDEX.md`
-- 完整需求与设计：`.monkeycode/specs/android-modern-full-panel/`
+- 架构：`docs/ARCHITECTURE.md`
+- 发布证据：`docs/RELEASE_EVIDENCE.md`
+- 项目索引：`docs/INDEX.md`
+- 完整需求与设计：`specs/android-modern-full-panel/`
 
 ## 上游来源
 

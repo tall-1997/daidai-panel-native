@@ -109,7 +109,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    allowedHosts: ['.monkeycode-ai.online'],
+    allowedHosts: ['.daidai-panel.local'],
     proxy: {
       '/api': {
         target: 'http://localhost:5701',
