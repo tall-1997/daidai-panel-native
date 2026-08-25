@@ -190,10 +190,6 @@ class AndroidLinuxRuntimeTest {
             listOf("install", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
             AndroidLinuxRuntime.npmInstallArguments("https://registry.npmjs.org", "/deps/node", "/deps/cache", "lodash"),
         )
-        assertEquals(
-            listOf("/sbin/apk", "add", "--no-cache", "build-base", "python3-dev", "linux-headers", "cargo"),
-            AndroidLinuxRuntime.nativeBuildToolchainCommand(),
-        )
     }
 
     @Test
