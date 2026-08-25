@@ -8,13 +8,29 @@ import pathlib
 import struct
 import tarfile
 
-REQUIRED_COMMANDS = ("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm")
-REQUIRED_CAPABILITIES = {
-    "package_manager": ["apk"],
-    "shell": ["bash"],
-    "python": ["python3", "pip3", "uv"],
-    "node": ["node", "npm", "pnpm"],
-    "tls_ca_certificates": True,
+DISTRO_COMMANDS = {
+    "alpine": ("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm"),
+    "ubuntu": ("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
+}
+DISTRO_CAPABILITIES = {
+    "alpine": {
+        "package_manager": ["apk"],
+        "shell": ["bash"],
+        "python": ["python3", "pip3", "uv"],
+        "node": ["node", "npm", "pnpm"],
+        "tls_ca_certificates": True,
+    },
+    "ubuntu": {
+        "package_manager": ["apt-get"],
+        "shell": ["bash"],
+        "python": ["python3", "pip3"],
+        "node": ["node", "npm", "pnpm"],
+        "tls_ca_certificates": True,
+    },
+}
+DISTRO_PACKAGES = {
+    "alpine": {"bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"},
+    "ubuntu": {"bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"},
 }
 def sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
@@ -26,26 +42,32 @@ def sha256(path: pathlib.Path) -> str:
 
 def verify_rootfs(archive: pathlib.Path, checksum: pathlib.Path, manifest_path: pathlib.Path) -> None:
     manifest = json.loads(manifest_path.read_text())
+    distribution = manifest.get("distribution")
+    commands = DISTRO_COMMANDS.get(distribution)
+    assert commands is not None, f"unsupported distribution: {distribution}"
+    capabilities = DISTRO_CAPABILITIES[distribution]
+    required_packages = DISTRO_PACKAGES[distribution]
     expected_sha = checksum.read_text().strip().split()[0]
     actual_sha = sha256(archive)
     assert len(expected_sha) == 64 and expected_sha == actual_sha, "rootfs checksum mismatch"
     assert manifest.get("schema_version") == 2, "rootfs manifest schema_version must be 2"
     assert manifest.get("sha256") == actual_sha, "rootfs manifest sha256 mismatch"
     assert manifest.get("size") == archive.stat().st_size, "rootfs manifest size mismatch"
-    assert manifest.get("required_commands") == list(REQUIRED_COMMANDS), "required_commands contract mismatch"
-    assert manifest.get("capabilities") == REQUIRED_CAPABILITIES, "capabilities contract mismatch"
+    assert manifest.get("required_commands") == list(commands), "required_commands contract mismatch"
+    assert manifest.get("capabilities") == capabilities, "capabilities contract mismatch"
     packages = set(manifest.get("packages", []))
-    assert {"bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"} <= packages, "required packages missing"
-    with tarfile.open(archive, mode="r:gz") as rootfs:
+    assert required_packages <= packages, "required packages missing"
+    with tarfile.open(archive, mode="r:*") as rootfs:
         members = {member.name.removeprefix("./"): member for member in rootfs.getmembers()}
-    for command in REQUIRED_COMMANDS:
-        candidates = (f"usr/bin/{command}", f"bin/{command}", f"usr/sbin/{command}", f"sbin/{command}")
+    for command in commands:
+        candidates = (f"usr/bin/{command}", f"bin/{command}", f"usr/sbin/{command}", f"sbin/{command}", f"usr/local/bin/{command}")
         command_member = next((members[name] for name in candidates if name in members), None)
         assert command_member is not None, f"rootfs command missing: {command}"
         assert command_member.issym() or command_member.mode & 0o111, f"rootfs command is not executable: {command}"
     ca_bundle = members.get("etc/ssl/certs/ca-certificates.crt")
     assert ca_bundle is not None and ca_bundle.size > 0, "rootfs CA certificate bundle missing"
-    assert any(name.startswith("usr/lib/python3.14/site-packages/Crypto/Cipher/") for name in members), "rootfs PyCryptodome Crypto package missing"
+    if distribution == "alpine":
+        assert any(name.startswith("usr/lib/python3.14/site-packages/Crypto/Cipher/") for name in members), "rootfs PyCryptodome Crypto package missing"
 
 
 def elf_metadata(path: pathlib.Path) -> tuple[int, list[int]]:

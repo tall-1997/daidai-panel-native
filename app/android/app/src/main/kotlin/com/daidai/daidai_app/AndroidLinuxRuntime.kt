@@ -1,13 +1,16 @@
 package com.daidai.daidai_app
 
 import android.content.Context
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.InputStream
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.zip.GZIPInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,9 +23,9 @@ object AndroidLinuxRuntime {
     internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     private const val DISTRO_PREFERENCES = "daidai-linux-distro"
     private const val DISTRO_KEY = "selected_distribution"
-    private const val DEFAULT_DISTRIBUTION = "alpine"
+    private const val DEFAULT_DISTRIBUTION = "ubuntu"
     internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine", "ubuntu")
-    private val REQUIRED_COMMANDS = linkedMapOf(
+    private val REQUIRED_COMMANDS_ALPINE = linkedMapOf(
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
         "python3" to listOf("/usr/bin/python3"),
         "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
@@ -31,10 +34,21 @@ object AndroidLinuxRuntime {
         "pnpm" to listOf("/usr/bin/pnpm"),
         "uv" to listOf("/usr/bin/uv"),
     )
+    private val REQUIRED_COMMANDS_UBUNTU = linkedMapOf(
+        "bash" to listOf("/bin/bash", "/usr/bin/bash"),
+        "python3" to listOf("/usr/bin/python3"),
+        "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
+        "node" to listOf("/usr/bin/node"),
+        "npm" to listOf("/usr/bin/npm"),
+        "pnpm" to listOf("/usr/bin/pnpm"),
+    )
     private val REQUIRED_PACKAGE_MANAGERS = mapOf(
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
         "apt" to listOf("/usr/bin/apt-get"),
     )
+
+    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> =
+        if (packageManager == "apk") REQUIRED_COMMANDS_ALPINE else REQUIRED_COMMANDS_UBUNTU
     const val ALPINE_APK_DEFAULT_MIRROR = "https://repo.huaweicloud.com/alpine"
     const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
@@ -234,7 +248,7 @@ object AndroidLinuxRuntime {
     }
 
     internal fun rootfsFirstClass(commands: Map<String, String>, packageManager: String): Boolean {
-        if (!commands.keys.containsAll(REQUIRED_COMMANDS.keys)) return false
+        if (!commands.keys.containsAll(requiredCommandsFor(packageManager).keys)) return false
         return commands[packageManager] != null
     }
 
@@ -260,8 +274,10 @@ object AndroidLinuxRuntime {
     }
 
     fun rootfsCapabilities(context: Context): Map<String, Boolean> {
-        val rootfs = ensureRootfsReady(context) ?: return REQUIRED_COMMANDS.keys.associateWith { false }
-        return REQUIRED_COMMANDS.keys.associateWith { it in rootfs.commands }
+        val rootfs = ensureRootfsReady(context)
+        val commands = requiredCommandsFor(rootfs?.packageManager ?: "apt")
+        return if (rootfs == null) commands.keys.associateWith { false }
+        else commands.keys.associateWith { it in rootfs.commands }
     }
 
     fun guestRuntimeVersion(context: Context, executable: String): String =
@@ -364,17 +380,15 @@ object AndroidLinuxRuntime {
             val actual = digest.digest().joinToString("") { "%02x".format(it) }
             require(expected.length == 64 && expected.equals(actual, true)) { "rootfs checksum mismatch" }
             context.assets.open(assetName).use { raw ->
-                GZIPInputStream(raw).use { gzip ->
-                    TarArchiveInputStream(gzip).use { tar ->
-                        extractTar(root, tar)
-                    }
+                openRootfsTar(raw).use { tar ->
+                    extractTar(root, tar)
                 }
             }
             prepareRuntimeDirectories(root, mirrors)
             val commands = detectCommands(root)
             val packageManager = detectPackageManager(root)
             require(rootfsFirstClass(commands, packageManager)) {
-                "rootfs missing required commands: ${REQUIRED_COMMANDS.keys - commands.keys}"
+                "rootfs missing required commands: ${requiredCommandsFor(packageManager).keys - commands.keys}"
             }
             File(root, ROOTFS_READY_MARKER).writeText("ready:$abi:$distribution:${assetChecksum(context, checksumName)}")
         } catch (_: Exception) {
@@ -398,17 +412,15 @@ object AndroidLinuxRuntime {
         root.mkdirs()
         try {
             archive.inputStream().use { raw ->
-                GZIPInputStream(raw).use { gzip ->
-                    TarArchiveInputStream(gzip).use { tar ->
-                        extractTar(root, tar)
-                    }
+                openRootfsTar(raw).use { tar ->
+                    extractTar(root, tar)
                 }
             }
             prepareRuntimeDirectories(root, mirrors)
             val commands = detectCommands(root)
             val packageManager = detectPackageManager(root)
             require(rootfsFirstClass(commands, packageManager)) {
-                "rootfs missing required commands: ${REQUIRED_COMMANDS.keys - commands.keys}"
+                "rootfs missing required commands: ${requiredCommandsFor(packageManager).keys - commands.keys}"
             }
             File(root, ROOTFS_READY_MARKER).writeText("downloaded:$abi:$distribution:$expected")
         } catch (_: Exception) {
@@ -440,6 +452,19 @@ object AndroidLinuxRuntime {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun openRootfsTar(raw: InputStream): TarArchiveInputStream {
+        val buffered = BufferedInputStream(raw)
+        buffered.mark(6)
+        val magic = ByteArray(6).also { buffered.read(it) }
+        buffered.reset()
+        val compressor: InputStream = when {
+            magic[0] == 0x1f.toByte() && magic[1] == 0x8b.toByte() -> GZIPInputStream(buffered)
+            magic[0] == 0xfd.toByte() && magic[1] == 0x37.toByte() && magic[2] == 0x7a.toByte() && magic[3] == 0x58.toByte() && magic[4] == 0x5a.toByte() && magic[5] == 0x00.toByte() -> XZCompressorInputStream(buffered)
+            else -> throw IllegalArgumentException("unsupported rootfs compression format")
+        }
+        return TarArchiveInputStream(compressor)
     }
 
     private fun extractTar(root: File, tar: TarArchiveInputStream) {
@@ -498,10 +523,10 @@ object AndroidLinuxRuntime {
     }
 
     private fun detectCommands(root: File): Map<String, String> {
-        val required = REQUIRED_COMMANDS.mapNotNull { (name, candidates) ->
+        val packageManager = detectPackageManager(root)
+        val required = requiredCommandsFor(packageManager).mapNotNull { (name, candidates) ->
             candidates.firstOrNull { File(root, it.trimStart('/')).let { file -> file.isFile && file.canExecute() } }?.let { name to it }
         }.toMap()
-        val packageManager = detectPackageManager(root)
         val managerPath = REQUIRED_PACKAGE_MANAGERS[packageManager].orEmpty()
             .firstOrNull { File(root, it.trimStart('/')).isFile }
         return if (managerPath != null) required + (packageManager to managerPath) else required
@@ -648,7 +673,7 @@ object AndroidLinuxRuntime {
         val rootfsDir = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         val commandPaths = detectCommands(rootfsDir)
         val commandStatus = JSONObject()
-        REQUIRED_COMMANDS.keys.forEach { name -> commandStatus.put(name, commandPaths[name] ?: false) }
+        requiredCommandsFor(detectPackageManager(rootfsDir)).keys.forEach { name -> commandStatus.put(name, commandPaths[name] ?: false) }
         val distributions = JSONObject()
         SUPPORTED_DISTRIBUTIONS.forEach { dist ->
             distributions.put(dist, assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$dist/$ROOTFS_ASSET_NAME"))

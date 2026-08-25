@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "abi": "arm64-v8a",
+  "distribution": "ubuntu",
+  "ubuntu_arch": "arm64",
+  "ubuntu_version": "24.04.4",
+  "sha256": "46b3f223230b7a6b12995b310710c18b6bca3e8abcdaa30aa017c70397afba42",
+  "size": 79952596,
+  "packages": [
+    "bash",
+    "python3",
+    "python3-pip",
+    "nodejs",
+    "npm",
+    "pnpm",
+    "ca-certificates",
+    "curl",
+    "git",
+    "openssh-client",
+    "tzdata"
+  ],
+  "required_commands": [
+    "apt-get",
+    "bash",
+    "python3",
+    "pip3",
+    "node",
+    "npm",
+    "pnpm"
+  ],
+  "capabilities": {
+    "package_manager": [
+      "apt-get"
+    ],
+    "shell": [
+      "bash"
+    ],
+    "python": [
+      "python3",
+      "pip3"
+    ],
+    "node": [
+      "node",
+      "npm",
+      "pnpm"
+    ],
+    "tls_ca_certificates": true
+  }
+}
