@@ -110,7 +110,13 @@ class LocalPanelHttpServer(
                 origin = endpoint,
                 localToken = localToken,
             ).rejection(session.headers, browserSession)?.let { status ->
-                return jsonError(status, "Invalid local diagnostic request boundary")
+                val reason = when (status) {
+                    NanoHTTPD.Response.Status.BAD_REQUEST -> "host mismatch"
+                    NanoHTTPD.Response.Status.FORBIDDEN -> "origin mismatch"
+                    NanoHTTPD.Response.Status.UNAUTHORIZED -> "local token mismatch"
+                    else -> "request boundary rejected"
+                }
+                return jsonError(status, "Invalid local diagnostic request boundary ($reason)")
             }
             if (!isFallbackRouteAllowed(session.method, session.uri)) {
                 return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")
