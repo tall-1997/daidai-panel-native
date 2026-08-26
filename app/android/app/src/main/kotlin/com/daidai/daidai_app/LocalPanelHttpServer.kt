@@ -116,7 +116,19 @@ class LocalPanelHttpServer(
                     NanoHTTPD.Response.Status.UNAUTHORIZED -> "local token mismatch"
                     else -> "request boundary rejected"
                 }
-                return jsonError(status, "Invalid local diagnostic request boundary ($reason)")
+                val headerValue = when (status) {
+                    NanoHTTPD.Response.Status.BAD_REQUEST -> session.headers.entries.singleOrNull { it.key.equals("host", ignoreCase = true) }?.value
+                    NanoHTTPD.Response.Status.FORBIDDEN -> session.headers.entries.singleOrNull { it.key.equals("origin", ignoreCase = true) }?.value
+                    NanoHTTPD.Response.Status.UNAUTHORIZED -> session.headers.entries.singleOrNull { it.key.equals("x-daidai-local-token", ignoreCase = true) }?.value
+                    else -> null
+                }
+                val expected = when (status) {
+                    NanoHTTPD.Response.Status.BAD_REQUEST -> "127.0.0.1:$listeningPort"
+                    NanoHTTPD.Response.Status.FORBIDDEN -> endpoint
+                    NanoHTTPD.Response.Status.UNAUTHORIZED -> localToken.take(8) + "..."
+                    else -> ""
+                }
+                return jsonError(status, "Invalid local diagnostic request boundary ($reason): got='$headerValue' expect='$expected'")
             }
             if (!isFallbackRouteAllowed(session.method, session.uri)) {
                 return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")
