@@ -3463,6 +3463,7 @@ fun serveDashboardStats(): JSONObject {
                 }
                 val scriptPath = cleanScriptPath(plan.scriptPath)
                 val file = scriptFile(scriptPath)
+                appLog("Task", "Task $id building task environments")
                 val environments = try {
                     LocalTaskFallbackSemantics.taskEnvironments(plan, runtimeEnvironment(file.parentFile ?: scriptsRoot()))
                 } catch (error: IllegalArgumentException) {
