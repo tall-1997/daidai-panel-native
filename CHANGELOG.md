@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.0.17 - 2026-08-26
+
+### 移除 Ubuntu 发行版
+
+- 默认并唯一发行版改为 Alpine(musl)，删除 Ubuntu 发行版支持。
+- 删除 Ubuntu rootfs 资产（约 77 MB）、Ubuntu 下载源、`prepare-android-ubuntu-rootfs.sh` 构建脚本与验证 contract。
+- APK 体积约 227 MB 减小到约 150 MB。
+- 前端「依赖管理」页删除 Ubuntu/Debian 镜像预设，`linux_mirror_supported` 仅对 Alpine(apk) 为 true。
+
+### 修复本地面板连接被拒绝的竞态
+
+- `LocalPanelHostService` 启动失败不再静默吞异常，改为重试 3 次（延迟递增），并把失败状态回传给 UI。
+- `ManagedLocalConnectionMonitor` 在 core 非 ready 时主动清空旧的本地会话，避免 UI 死抓已失效的回环地址与 token；binder 瞬时异常仍保留旧会话下次重试。
+
+### Release 说明自动生成
+
+- Release 说明改为从 `CHANGELOG.md` 动态提取对应版本的实际更新日志，不再使用硬编码模板。
+
 ## v1.0.16 - 2026-08-26
 
 ### 运行时崩溃修复：应用域 seccomp 导致脚本 SIGSYS
