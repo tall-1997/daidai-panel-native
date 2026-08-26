@@ -76,8 +76,10 @@ object LocalPanelRuntime {
         val server = LocalPanelHttpServer(context, kotlinFallbackReason, localToken)
         try {
             server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            android.util.Log.i("daidai-panel", "local server started on 0.0.0.0:${server.listeningPort}")
             server.startScheduler()
         } catch (error: Exception) {
+            android.util.Log.e("daidai-panel", "local server start FAILED: ${error.message}", error)
             server.shutdown()
             throw error
         }

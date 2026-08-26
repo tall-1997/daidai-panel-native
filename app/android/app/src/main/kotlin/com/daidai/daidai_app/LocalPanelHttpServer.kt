@@ -109,6 +109,7 @@ class LocalPanelHttpServer(
 
     override fun serve(session: IHTTPSession): Response {
         return try {
+            android.util.Log.d("daidai-panel", "serve ${session.method} ${session.uri} host=${session.headers["host"]} hasLocalToken=${session.headers["x-daidai-local-token"] != null}")
             if (session.uri == "/local-ui" || session.uri.startsWith("/local-ui/")) {
                 return browserAccess.serve(session, "127.0.0.1:$listeningPort")
             }
@@ -225,6 +226,7 @@ class LocalPanelHttpServer(
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
             }
         } catch (error: Exception) {
+            android.util.Log.e("daidai-panel", "serve ERROR ${session.uri}: ${error.message}", error)
             jsonError(Response.Status.INTERNAL_ERROR, error.message ?: "本地核心处理失败")
         }
     }
