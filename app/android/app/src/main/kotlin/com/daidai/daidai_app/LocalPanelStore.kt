@@ -2380,6 +2380,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun executeScriptFile(file: File, displayPath: String, languageHint: String = "", args: List<String> = emptyList(), timeoutSeconds: Long = 300, extraEnvironment: Map<String, String> = emptyMap(), onLine: ((String) -> Unit)? = null, taskId: Long? = null): LocalScriptResult {
+        ensureQingLongShims(file.parentFile ?: scriptsRoot())
         val logs = JSONArray().put("Android local fallback executing script: $displayPath")
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
