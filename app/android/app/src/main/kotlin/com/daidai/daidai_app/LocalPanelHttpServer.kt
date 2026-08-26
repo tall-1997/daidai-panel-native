@@ -18,7 +18,7 @@ class LocalPanelHttpServer(
     goCoreFallbackReason: String = "go_core_unavailable",
     localToken: String,
     port: Int = findAvailablePort()
-) : NanoHTTPD("127.0.0.1", port) {
+) : NanoHTTPD("0.0.0.0", port) {
     private val store = LocalPanelStore(
         context,
         endpointProvider = { endpoint },
@@ -43,6 +43,22 @@ class LocalPanelHttpServer(
 
         internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean =
             uri.startsWith("/api/")
+
+        internal fun isLocalOrLanHost(host: String?): Boolean {
+            if (host == null) return false
+            val hostPart = host.substringBefore(':').trim()
+                .removePrefix("[").removeSuffix("]").lowercase()
+            if (hostPart == "localhost" || hostPart == "::1") return true
+            val parts = hostPart.split('.')
+            if (parts.size != 4) return hostPart == "127.0.0.1"
+            val a = parts[0].toIntOrNull() ?: return false
+            val b = parts[1].toIntOrNull() ?: return false
+            if (a == 127) return true
+            if (a == 10) return true
+            if (a == 192 && b == 168) return true
+            if (a == 172 && b in 16..31) return true
+            return false
+        }
     }
 
     internal data class RequestBoundary(
@@ -54,15 +70,17 @@ class LocalPanelHttpServer(
             val host = singleHeader(headers, "host")
             val requestOrigin = singleHeader(headers, "origin")
             val token = singleHeader(headers, "x-daidai-local-token")
-            if (host != authority) return Response.Status.BAD_REQUEST
+            // 监听 0.0.0.0，Host 放宽为本机或局域网 IP。
+            if (!isLocalOrLanHost(host)) return Response.Status.BAD_REQUEST
             if (browserSession) {
+                // 本机浏览器（ticket 兑换）：Origin 若存在须匹配。
                 if (requestOrigin != null && requestOrigin != origin) return Response.Status.FORBIDDEN
-            } else {
-                // 非浏览器会话（如 sendNotify.js 本地通知）以 token 为主要认证。
-                // Origin 仅在存在且不匹配时拦截（CSRF 防护），允许缺失。
+            } else if (!token.isNullOrBlank()) {
+                // App 内部 / 本地通知（sendNotify.js）：带 local-token，token 为主要认证。
                 if (requestOrigin != null && requestOrigin != origin) return Response.Status.FORBIDDEN
                 if (localToken.isBlank() || token != localToken) return Response.Status.UNAUTHORIZED
             }
+            // LAN 浏览器（无 token 无 session）：放行，后续由 serve 强制 JWT。
             return null
         }
 
@@ -95,6 +113,9 @@ class LocalPanelHttpServer(
                 return browserAccess.serve(session, "127.0.0.1:$listeningPort")
             }
             val browserSession = browserAccess.hasSession(session.headers)
+            val hasLocalToken = !session.headers.entries
+                .singleOrNull { it.key.equals("x-daidai-local-token", ignoreCase = true) }
+                ?.value.isNullOrBlank()
             RequestBoundary(
                 authority = "127.0.0.1:$listeningPort",
                 origin = endpoint,
@@ -126,7 +147,7 @@ class LocalPanelHttpServer(
             if (session.uri.startsWith("/api/auth")) {
                 return store.serveAuth(session)
             }
-            if (browserSession && !store.isAuthorized(session)) {
+            if (!hasLocalToken && !store.isAuthorized(session)) {
                 return jsonError(Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
             }
             if (session.uri.startsWith("/api/security")) {

@@ -83,9 +83,9 @@ internal class LocalBrowserAccess(
     }
 
     fun serve(session: NanoHTTPD.IHTTPSession, authority: String): NanoHTTPD.Response {
-        if (header(session.headers, "host") != authority) return response(NanoHTTPD.Response.Status.BAD_REQUEST, "text/plain", "Invalid Host")
+        if (!LocalPanelHttpServer.isLocalOrLanHost(header(session.headers, "host"))) return response(NanoHTTPD.Response.Status.BAD_REQUEST, "text/plain", "Invalid Host")
         val origin = header(session.headers, "origin")
-        if (origin != null && origin != endpoint()) return response(NanoHTTPD.Response.Status.FORBIDDEN, "text/plain", "Invalid Origin")
+        if (origin != null && !isLocalOrLanOrigin(origin)) return response(NanoHTTPD.Response.Status.FORBIDDEN, "text/plain", "Invalid Origin")
         if (session.uri == "/local-ui/session") {
             if (session.method != NanoHTTPD.Method.POST) {
                 return response(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "text/plain", "Method not allowed")
@@ -153,6 +153,12 @@ internal class LocalBrowserAccess(
     }
 
     private fun header(headers: Map<String, String>, name: String): String? = headers.entries.singleOrNull { it.key.equals(name, true) }?.value
+
+    private fun isLocalOrLanOrigin(origin: String): Boolean {
+        val uri = runCatching { java.net.URI(origin) }.getOrNull() ?: return false
+        if (uri.scheme?.lowercase() != "http") return false
+        return LocalPanelHttpServer.isLocalOrLanHost(uri.host)
+    }
     private fun contentType(path: String): String = when (path.substringAfterLast('.', "")) {
         "html" -> "text/html; charset=utf-8"
         "js" -> "application/javascript; charset=utf-8"

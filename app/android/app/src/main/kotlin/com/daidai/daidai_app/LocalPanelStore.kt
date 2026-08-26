@@ -94,6 +94,8 @@ class LocalPanelStore(
         private const val FALLBACK_QUEUE_CAPACITY = 32
         private const val LOG_PERSIST_BATCH_SIZE = 16
         private const val MAX_JSON_BODY_BYTES = 16L * 1024 * 1024
+        private const val MAX_LOGIN_ATTEMPTS = 5
+        private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
 
         private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
             FALLBACK_WORKERS,
@@ -355,6 +357,8 @@ class LocalPanelStore(
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, access_token TEXT NOT NULL UNIQUE, ip TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_ip_whitelist (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL UNIQUE, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL DEFAULT 0, locked_at TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_login_attempts_identity ON security_login_attempts(ip, username)")
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -4463,9 +4467,67 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("message", "initialized"))
     }
 
+    private fun checkLoginLock(ip: String, username: String): Boolean {
+        val cursor = readableDatabase.query(
+            "security_login_attempts",
+            arrayOf("count", "expires_at"),
+            "ip = ? AND username = ?",
+            arrayOf(ip, username),
+            null, null, null
+        )
+        return cursor.use {
+            if (!it.moveToFirst()) return@use false
+            val count = it.getInt(0)
+            if (count < MAX_LOGIN_ATTEMPTS) return@use false
+            val expires = runCatching { Instant.parse(it.getString(1)) }.getOrNull() ?: return@use false
+            expires.isAfter(Instant.now())
+        }
+    }
+
+    private fun recordFailedLogin(ip: String, username: String): Int {
+        val now = Instant.now()
+        val existing = readableDatabase.query(
+            "security_login_attempts",
+            arrayOf("id", "count"),
+            "ip = ? AND username = ?",
+            arrayOf(ip, username),
+            null, null, null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) to cursor.getInt(1) else null
+        }
+        if (existing == null) {
+            writableDatabase.insert("security_login_attempts", null, ContentValues().apply {
+                put("ip", ip); put("username", username); put("count", 1)
+                put("expires_at", now.plusSeconds(LOGIN_LOCK_DURATION_SECONDS).toString())
+                put("created_at", now.toString()); put("updated_at", now.toString())
+            })
+            return 1
+        }
+        val (id, count) = existing
+        val newCount = count + 1
+        val values = ContentValues().apply {
+            put("count", newCount)
+            put("updated_at", now.toString())
+            if (newCount >= MAX_LOGIN_ATTEMPTS) {
+                put("locked_at", now.toString())
+                put("expires_at", now.plusSeconds(LOGIN_LOCK_DURATION_SECONDS * (newCount - MAX_LOGIN_ATTEMPTS + 1)).toString())
+            }
+        }
+        writableDatabase.update("security_login_attempts", values, "id = ?", arrayOf(id.toString()))
+        return newCount
+    }
+
+    private fun clearLoginAttempts(ip: String, username: String) {
+        writableDatabase.delete("security_login_attempts", "ip = ? AND username = ?", arrayOf(ip, username))
+    }
+
     private fun login(session: NanoHTTPD.IHTTPSession, json: JSONObject): NanoHTTPD.Response {
         val username = json.optString("username").trim()
         val password = json.optString("password")
+        val ip = requestIp(session)
+        if (checkLoginLock(ip, username)) {
+            return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "登录失败次数过多，请稍后再试")
+        }
         val cursor = readableDatabase.query(
             "local_users",
             arrayOf("password_hash", "password_salt"),
@@ -4483,8 +4545,12 @@ fun serveDashboardStats(): JSONObject {
             }
         }
         val now = Instant.now().toString()
-        writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("status", if (valid) 0 else 1); put("message", if (valid) "登录成功" else "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
-        if (!valid) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "用户名或密码错误")
+        writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", if (valid) 0 else 1); put("message", if (valid) "登录成功" else "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
+        if (!valid) {
+            recordFailedLogin(ip, username)
+            return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "用户名或密码错误")
+        }
+        clearLoginAttempts(ip, username)
         val accessToken = randomToken()
         val refreshToken = randomToken()
         val values = ContentValues().apply {

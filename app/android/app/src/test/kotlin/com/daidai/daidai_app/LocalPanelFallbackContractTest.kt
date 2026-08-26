@@ -24,7 +24,7 @@ class LocalPanelFallbackContractTest {
     }
 
     @Test
-    fun `request boundary requires exact process token host and origin`() {
+    fun `request boundary splits app internal, local browser and lan browser sources`() {
         val expected = LocalPanelHttpServer.RequestBoundary(
             authority = "127.0.0.1:5700",
             origin = "http://127.0.0.1:5700",
@@ -36,25 +36,25 @@ class LocalPanelFallbackContractTest {
             "x-daidai-local-token" to "process-token",
         )
 
+        // App 内部（带 token）：token 校验 + Origin 若存在须匹配
         assertEquals(null, expected.rejection(valid))
         assertEquals(null, expected.rejection(valid.mapKeys { it.key.uppercase() }))
-        assertEquals(NanoHTTPD.Response.Status.UNAUTHORIZED, expected.rejection(valid - "x-daidai-local-token"))
         assertEquals(NanoHTTPD.Response.Status.UNAUTHORIZED, expected.rejection(valid + ("x-daidai-local-token" to "wrong")))
-        assertEquals(NanoHTTPD.Response.Status.BAD_REQUEST, expected.rejection(valid + ("host" to "localhost:5700")))
         assertEquals(NanoHTTPD.Response.Status.FORBIDDEN, expected.rejection(valid + ("origin" to "http://localhost:5700")))
         assertEquals(null, expected.rejection(valid - "origin"))
+
+        // 非本机/局域网 host 一律拒绝
+        assertEquals(NanoHTTPD.Response.Status.BAD_REQUEST, expected.rejection(valid + ("host" to "evil.example.com:5700")))
         assertEquals(
             NanoHTTPD.Response.Status.BAD_REQUEST,
             expected.rejection(valid + ("Host" to "127.0.0.1:5700")),
         )
-        assertEquals(
-            NanoHTTPD.Response.Status.UNAUTHORIZED,
-            expected.rejection(valid + ("X-Daidai-Local-Token" to "process-token")),
-        )
-        assertEquals(
-            NanoHTTPD.Response.Status.UNAUTHORIZED,
-            expected.copy(localToken = "").rejection(valid + ("x-daidai-local-token" to "")),
-        )
+
+        // LAN 浏览器（无 token 无 session）：放行，后续由 serve 强制 JWT
+        assertEquals(null, expected.rejection(valid - "x-daidai-local-token"))
+        assertEquals(null, expected.rejection(valid + ("host" to "192.168.1.10:5700") - "x-daidai-local-token"))
+
+        // 本机浏览器（browserSession）：Origin 若存在须匹配
         assertEquals(null, expected.rejection(valid - "x-daidai-local-token" - "origin", browserSession = true))
         assertEquals(
             NanoHTTPD.Response.Status.FORBIDDEN,
