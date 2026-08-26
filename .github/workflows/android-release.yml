@@ -449,6 +449,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout for release notes
+        uses: actions/checkout@v5
+
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
@@ -465,30 +468,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > release-notes.md <<'EOF'
-          # 呆呆面板本机版 v${{ needs.verify-build.outputs.version }}
-
-          - 提供 ARM64 完整版 APK。
-          - ARM64 提供完整 Go Core 与本地运行时；其他架构按实时能力探测进入控制面降级模式。
-          - App 内嵌 Go 面板 Core，使用动态回环端口。
-          - 支持本地管理员初始化、认证和任务管理 API。
-          - 使用安装级 token、严格 Host 与 Origin 校验。
-          - 使用 Android `:panel` 专用进程隔离 Core 生命周期。
-          - 包含 Milestone 1-4 的 Core 恢复、运行时安全基线、执行 Operation、日志 cursor、SecretStore、依赖/Git/订阅/集成改进。
-          - 包含 Milestone 5-6 的调度恢复、资源保护、备份恢复与发布证据结构。
-          - 优化任务实时日志与日志文件关联，支持持久日志回读和增量 cursor。
-          - 完善中文脚本、带空格路径、参数转义和 fallback 命令解析。
-          - 增加依赖复用、安装去重、缓存限制和后台执行资源保护。
-          - 增加仅监听本机回环地址的浏览器面板入口和一次性会话票据。
-          - 修复远程面板切回本地实例时的动态端点和本地授权恢复。
-          - 优化后台连接轮询与 fallback 调度唤醒，降低空闲活动。
-          - 完善指定版本依赖安装、空参数、多账号变量和运行时环境保护。
-          - 按本地与远程实例模式展示系统设置和 Core 管理能力。
-
-          本 Release 已通过版本、正式签名、证书指纹、运行时契约与 CI 构建门禁。
-          GitHub 云 runner 不支持 ARM64 Android 模拟器，附件证据将对应 ARM64 设备矩阵记录为 blocked，等待真机补充验证。
-          EOF
           VERSION="${{ needs.verify-build.outputs.version }}"
+          python3 - "$VERSION" > release-notes.md <<'PYEOF'
+          import re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          pattern = re.compile(r'^## v' + re.escape(version) + r'.*?(?=^## v|\Z)', re.MULTILINE | re.DOTALL)
+          match = pattern.search(text)
+          body = match.group(0).strip() if match else f'# 呆呆面板本机版 v{version}'
+          print(body)
+          print()
+          print('本 Release 已通过版本、正式签名、证书指纹、运行时契约与 CI 构建门禁。')
+          print('GitHub 云 runner 不支持 ARM64 Android 模拟器，附件证据将对应 ARM64 设备矩阵记录为 blocked，等待真机补充验证。')
+          PYEOF
           CHANNEL="${{ inputs.release_channel == 'prerelease' && 'prerelease' || 'release' }}"
           APK_PATH="$(find . -maxdepth 1 -type f -name "*-${VERSION}-${CHANNEL}-arm64.apk" -print -quit)"
           if [[ -z "${APK_PATH}" ]]; then
