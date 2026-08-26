@@ -114,6 +114,8 @@ object AndroidLinuxRuntime {
             "DAIDAI_ANDROID_LOCAL" to "1",
             "DAIDAI_RUNTIME_ISOLATION" to "android-app-sandbox",
             "DAIDAI_RUNTIME_ABI" to currentAbi(),
+            "PYTHONUNBUFFERED" to "1",
+            "PYTHONIOENCODING" to "utf-8",
             "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
             "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
