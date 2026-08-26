@@ -323,7 +323,6 @@ object AndroidLinuxRuntime {
         File(rootfs.root, guestWorkingDir.trimStart('/')).mkdirs()
         val command = mutableListOf(
             rootfs.proot.absolutePath,
-            "--link2symlink",
             "--sysvipc",
             "--kill-on-exit",
             "-k", "4.14.0",
@@ -347,7 +346,6 @@ object AndroidLinuxRuntime {
     }
 
     internal fun prootCompatibilityFlags(): List<String> = listOf(
-        "--link2symlink",
         "--sysvipc",
         "--kill-on-exit",
         "-k", "4.14.0",

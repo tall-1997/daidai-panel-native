@@ -75,6 +75,45 @@ install_apk_static() {
   apk_static_bin="$apk_dir/sbin/apk.static"
 }
 
+install_apk_tools2_rootfs() {
+  local root_dir="$1"
+  local alpine_arch="$2"
+  # 技巧1：Alpine 3.24 的 apk-tools 3 写数据库用 hardlink 原子发布，无 root 设备
+  # SELinux 禁 app_data_file link，运行时 apk add 会报 "failed to write database:
+  # Permission denied"。放 apk-tools 2.x 静态版（Alpine 3.20，用 rename 写 db）到
+  # /usr/local/bin/apk.static。
+  local apk2_version="2.14.4-r1"
+  local apk2_url="https://dl-cdn.alpinelinux.org/alpine/v3.20/main/$alpine_arch/apk-tools-static-$apk2_version.apk"
+  local apk2_file="$cache_root/downloads/apk-tools-static-$apk2_version-$alpine_arch.apk"
+  download "$apk2_url" "$apk2_file"
+  local extract_dir="$cache_root/apk2-extract-$(date +%s)-$$"
+  mkdir -p "$extract_dir"
+  tar -xzf "$apk2_file" -C "$extract_dir" sbin/apk.static
+  mkdir -p "$root_dir/usr/local/bin"
+  cp "$extract_dir/sbin/apk.static" "$root_dir/usr/local/bin/apk.static"
+  chmod 755 "$root_dir/usr/local/bin/apk.static"
+  # 技巧4：并发 apk 防护——/usr/local/bin/apk 是 wrapper，用 mkdir 原子互斥锁
+  # 防止并发 apk add 抢数据库锁（EAGAIN/EINTR）。PATH 里 /usr/local/bin 优先于
+  # /sbin，所以运行时 apk 调用会走这个 wrapper。
+  cat > "$root_dir/usr/local/bin/apk" <<'WRAPPER'
+#!/bin/sh
+LOCK=/tmp/daidai-apk.lock
+i=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  if [ $i -ge 180 ]; then
+    rm -rf "$LOCK" 2>/dev/null
+    i=0
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+chmod 777 "$LOCK" 2>/dev/null
+trap 'rm -rf "$LOCK"' EXIT
+exec /usr/local/bin/apk.static "$@"
+WRAPPER
+  chmod 755 "$root_dir/usr/local/bin/apk"
+}
+
 write_rootfs_config() {
   local root_dir="$1"
   local branch="$2"
@@ -116,6 +155,7 @@ build_rootfs_for_abi() {
     usermode_args+=(--usermode)
   fi
   "$apk_static_bin" "${usermode_args[@]}" --root "$root_dir" --arch "$alpine_arch" --keys-dir "$root_dir/etc/apk/keys" --repositories-file "$root_dir/etc/apk/repositories" --no-cache --no-scripts --initdb add $packages
+  install_apk_tools2_rootfs "$root_dir" "$alpine_arch"
   for command in "${required_commands[@]}"; do
     test -x "$root_dir/usr/bin/$command" || test -x "$root_dir/bin/$command" || test -x "$root_dir/sbin/$command" || test -x "$root_dir/usr/sbin/$command" || {
       printf 'Required rootfs command is missing or not executable: %s\n' "$command" >&2

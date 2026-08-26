@@ -1,10 +1,11 @@
 {
   "schema_version": 2,
   "abi": "arm64-v8a",
+  "distribution": "alpine",
   "alpine_arch": "aarch64",
   "alpine_version": "3.24.1",
-  "sha256": "f389c9134c9c6ff47e0e63f9f8c99fc710cd517bbc1012902d9c23b93b74b333",
-  "size": 76938366,
+  "sha256": "7cc6667ed6a44c2cd282cefa67e546ecdebddf58c9a52571b48491d4d7befdfe",
+  "size": 79243985,
   "packages": [
     "curl",
     "git",
@@ -48,6 +49,5 @@
       "pnpm"
     ],
     "tls_ca_certificates": true
-  },
-  "distribution": "alpine"
+  }
 }

@@ -79,7 +79,7 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `proot compatibility flags include android safe defaults`() {
         val flags = AndroidLinuxRuntime.prootCompatibilityFlags()
-        assertTrue(flags.contains("--link2symlink"))
+        assertTrue(flags.contains("--sysvipc"))
         assertTrue(flags.contains("--kill-on-exit"))
         assertTrue(flags.contains("-0"))
         assertTrue(flags.windowed(2).any { it[0] == "-k" && it[1] == "4.14.0" })
