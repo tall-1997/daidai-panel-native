@@ -151,7 +151,6 @@ function requestNotify(title, content, params = {}) {
     return Promise.reject(new Error('DAIDAI_NOTIFY_URL 或 DAIDAI_NOTIFY_TOKEN 未配置'));
   }
 
-  console.log(`[sendNotify] url=${notifyUrl} token=${notifyToken.substring(0, 8)}... origin=${String(process.env.DAIDAI_NOTIFY_ORIGIN || '')}`);
   const payload = JSON.stringify(buildPayload(title, content, params));
   const target = new URL(notifyUrl);
   const client = target.protocol === 'https:' ? https : http;
