@@ -42,7 +42,7 @@ class LocalPanelFallbackContractTest {
         assertEquals(NanoHTTPD.Response.Status.UNAUTHORIZED, expected.rejection(valid + ("x-daidai-local-token" to "wrong")))
         assertEquals(NanoHTTPD.Response.Status.BAD_REQUEST, expected.rejection(valid + ("host" to "localhost:5700")))
         assertEquals(NanoHTTPD.Response.Status.FORBIDDEN, expected.rejection(valid + ("origin" to "http://localhost:5700")))
-        assertEquals(NanoHTTPD.Response.Status.FORBIDDEN, expected.rejection(valid - "origin"))
+        assertEquals(null, expected.rejection(valid - "origin"))
         assertEquals(
             NanoHTTPD.Response.Status.BAD_REQUEST,
             expected.rejection(valid + ("Host" to "127.0.0.1:5700")),

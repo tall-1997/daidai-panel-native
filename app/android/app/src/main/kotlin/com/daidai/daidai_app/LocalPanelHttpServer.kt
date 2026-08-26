@@ -64,7 +64,9 @@ class LocalPanelHttpServer(
                     return Response.Status.FORBIDDEN
                 }
             } else {
-                if (requestOrigin != origin) {
+                // 非浏览器会话（如 sendNotify.js 本地通知）以 token 为主要认证。
+                // Origin 仅在存在且不匹配时拦截（CSRF 防护），允许缺失。
+                if (requestOrigin != null && requestOrigin != origin) {
                     println("RequestBoundary: origin mismatch: '$requestOrigin' vs '$origin'")
                     return Response.Status.FORBIDDEN
                 }
