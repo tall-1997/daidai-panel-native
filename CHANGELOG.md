@@ -1,27 +1,38 @@
 # Changelog
 
-## v1.0.16 - 2026-08-25
+## v1.0.16 - 2026-08-26
 
-### 移除 Termux 依赖，改用 NDK 自编译运行时
+### 运行时崩溃修复：应用域 seccomp 导致脚本 SIGSYS
 
-- 删除全部 Termux 预编译 .so（liboperit_*、libicu*、libandroid-* 等），仅保留 NDK 自编译的 PRoot、loader 与 BusyBox。
-- 内置 Linux 终端改为 NDK 自编译 PRoot 5.4.0 + Alpine Linux / Ubuntu 24.04 用户空间，无需依赖 Termux。
-- 新增 stat.sh/vmstat.sh busybox 兼容包装脚本。
+真机运行脚本与安装依赖时偶发 `SIGSYS`（signal 31）崩溃，根因是三层叠加：Android 应用域继承的 seccomp filter + glibc(Ubuntu) 二进制 + 固定注入的 `PROOT_NO_SECCOMP=1`，导致 guest 进程被 seccomp 拦截后直接被杀。
 
-### proot TLS 段 16 KB 对齐修复
+- 默认发行版由 Ubuntu 改回 Alpine(musl)，规避 glibc 对 rseq 等新系统调用的依赖。
+- 移除固定注入的 `PROOT_NO_SECCOMP=1`，恢复 proot seccomp 加速（日志 `ptrace acceleration (seccomp mode 2) enabled`）。
+- PRoot 由 proot-me 5.4.0 切换为 termux/proot 5.1.107.92 fork，新增 `--sysvipc` 与 `-L` 动态 loader，补齐 `libandroid-shmem.so` 与动态 `libtalloc.so`。
+- Ubuntu 场景额外注入 `GLIBC_TUNABLES=glibc.pthread.rseq=0` 禁用 rseq。
 
-- 修复 proot TLS 段 p_align，满足 Android ARM64 Bionic 对 16 KB 页对齐的要求。
-- 修复 proot 在 Android 15/16 设备上因 `alignment is 8` 导致的加载失败。
+### 移除嵌入式 Go Core
 
-### 依赖镜像源默认值恢复国内源
+- 删除 Go Core 二进制桥接（GoCoreBridge / GoCoreReflectionContract / GoCoreResultMapper）与 `mobilecore.aar`，Kotlin fallback 成为唯一本地后端。
+- 本地业务 API、任务、脚本、依赖、通知与健康检查全部由 Kotlin fallback 提供。
 
-- Alpine APK 默认镜像恢复为华为云（repo.huaweicloud.com/alpine）。
-- Python pip 默认镜像为阿里云（mirrors.aliyun.com/pypi/simple）。
-- Node.js npm 默认镜像为 npmmirror（registry.npmmirror.com）。
-- Go Core 与 Kotlin fallback 两侧默认值对齐，App 内可自由设置与选择镜像源。
+### 脚本日志实时输出
 
-### 发行版选择
+- 注入 `PYTHONUNBUFFERED=1` 与 `PYTHONIOENCODING=utf-8`，脚本 `print` 实时刷新，不再因管道块缓冲导致输出迟迟不显示。
+- 移除 proot `-v 1` 诊断日志，脚本运行日志干净、实时。
 
+### 依赖与运行时
+
+- 中文脚本名 JSON body 解析改用 UTF-8，修复中文路径乱码。
+- 新增 XZ 压缩 rootfs 解压支持（`org.tukaani:xz`）。
+- 修复 Ubuntu rootfs 下 pnpm 检测路径（`/usr/local/bin/pnpm`）。
+- 恢复华为云 / 阿里云 / npmmirror 默认镜像源。
+- 健康诊断 `/api/system/health-check` 恢复 Python / Node.js / TypeScript runtime smoke 结果，并将误导性的 "Embedded Go core" 项改为 "Local panel core"。
+
+### 内置 Linux 终端
+
+- 删除 Termux 预编译 .so，改用 NDK 自编译 PRoot、loader 与 BusyBox，无需依赖 Termux。
+- 修复 proot TLS 段 16 KB 对齐，解决 Android 15/16 设备加载失败。
 - 新增 `/api/android-runtime/distribution` 端点，支持 alpine/ubuntu 发行版选择。
 
 ## v1.0.15 - 2026-08-23
