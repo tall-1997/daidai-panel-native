@@ -55,21 +55,21 @@ class LocalPanelHttpServer(
             val requestOrigin = singleHeader(headers, "origin")
             val token = singleHeader(headers, "x-daidai-local-token")
             if (host != authority) {
-                android.util.Log.w("RequestBoundary", "host mismatch: '$host' vs '$authority'")
+                println("RequestBoundary: host mismatch: '$host' vs '$authority'")
                 return Response.Status.BAD_REQUEST
             }
             if (browserSession) {
                 if (requestOrigin != null && requestOrigin != origin) {
-                    android.util.Log.w("RequestBoundary", "origin mismatch (browser): '$requestOrigin' vs '$origin'")
+                    println("RequestBoundary: origin mismatch (browser): '$requestOrigin' vs '$origin'")
                     return Response.Status.FORBIDDEN
                 }
             } else {
                 if (requestOrigin != origin) {
-                    android.util.Log.w("RequestBoundary", "origin mismatch: '$requestOrigin' vs '$origin'")
+                    println("RequestBoundary: origin mismatch: '$requestOrigin' vs '$origin'")
                     return Response.Status.FORBIDDEN
                 }
                 if (localToken.isBlank() || token != localToken) {
-                    android.util.Log.w("RequestBoundary", "token mismatch: blank=${localToken.isBlank()}, got='$token' expect='${localToken.take(8)}...'")
+                    println("RequestBoundary: token mismatch: blank=${localToken.isBlank()}, got='$token' expect='${localToken.take(8)}...'")
                     return Response.Status.UNAUTHORIZED
                 }
             }
