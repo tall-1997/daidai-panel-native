@@ -2597,9 +2597,10 @@ fun serveDashboardStats(): JSONObject {
     private fun copyManagedHelper(assetName: String, target: File) {
         val content = appContext.assets.open("helpers/$assetName").bufferedReader().use { it.readText() }
         val current = target.takeIf(File::isFile)?.readText()
-        if (current == null || current.contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
+        // 这些 helper 由 App 管理，内容随 App 升级；旧副本（含无标记的历史版本）需被覆盖。
+        if (current != content) {
             target.parentFile?.mkdirs()
-            if (current != content) target.writeText(content)
+            target.writeText(content)
         }
     }
 
@@ -2609,9 +2610,10 @@ fun serveDashboardStats(): JSONObject {
             val content = appContext.assets.open("helpers/notify-package/$name").bufferedReader().use { it.readText() }
             val file = File(target, name)
             val current = file.takeIf(File::isFile)?.readText()
-            if (current == null || current.contains("DAIDAI_PANEL_MANAGED_NOTIFY_HELPER v1")) {
+            // notify helper 包由 App 管理，内容随 App 升级；旧副本需被覆盖。
+            if (current != content) {
                 file.parentFile?.mkdirs()
-                if (current != content) file.writeText(content)
+                file.writeText(content)
             }
         }
     }
