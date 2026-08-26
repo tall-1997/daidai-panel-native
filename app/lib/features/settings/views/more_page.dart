@@ -174,12 +174,6 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.go('/envs'),
             ),
-            _SettingsItem(
-              icon: Icons.tune_outlined,
-              title: '环境变量高级工具',
-              isLight: isLight,
-              onTap: () => context.push('/env-tools'),
-            ),
             if (shows(PanelCapability.scriptExecution))
               _SettingsItem(
                 icon: Icons.code,
@@ -269,24 +263,6 @@ class _MorePageState extends ConsumerState<MorePage> {
                 title: '高级配置脚本',
                 isLight: isLight,
                 onTap: () => context.push('/config-script'),
-              ),
-            if (shows(PanelCapability.androidRuntime) &&
-                shows(PanelCapability.runtimeMutation))
-              _SettingsItem(
-                icon: Icons.android_outlined,
-                title: 'Android 运行时',
-                isLight: isLight,
-                onTap: gated(
-                  PanelCapability.runtimeMutation,
-                  () => context.push('/android-runtime'),
-                ),
-              ),
-            if (shows(PanelCapability.installedPackages))
-              _SettingsItem(
-                icon: Icons.list_alt_outlined,
-                title: '系统依赖清单',
-                isLight: isLight,
-                onTap: () => context.push('/installed-packages'),
               ),
             _SettingsItem(
               icon: Icons.settings,

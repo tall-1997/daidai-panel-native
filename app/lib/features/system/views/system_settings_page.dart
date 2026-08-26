@@ -803,6 +803,51 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                       }).toList(),
                                     ),
                                   ],
+                                  if (_managedLocal &&
+                                      !PanelCapabilityRegistry.isUnsupported(
+                                        PanelCapability.androidRuntime,
+                                      ) &&
+                                      !PanelCapabilityRegistry.isUnavailable(
+                                        PanelCapability.runtimeMutation,
+                                      )) ...[
+                                    const Divider(height: 16),
+                                    InkWell(
+                                      onTap: () => context.push('/android-runtime'),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 4,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.android_outlined,
+                                              size: 18,
+                                              color: isLight
+                                                  ? AppColors.slate500
+                                                  : AppColors.slate400,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            const Expanded(
+                                              child: Text(
+                                                'Android 运行时',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                            Icon(
+                                              Icons.chevron_right,
+                                              size: 18,
+                                              color: isLight
+                                                  ? AppColors.slate400
+                                                  : AppColors.slate500,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),

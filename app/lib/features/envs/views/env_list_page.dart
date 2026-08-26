@@ -773,6 +773,65 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     }
   }
 
+  Future<void> _batchRename() async {
+    final ids = _selectedIds.toList()..sort();
+    if (ids.isEmpty) return;
+    final nameController = TextEditingController();
+    final searchController = TextEditingController();
+    final replaceController = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('批量改名'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameController, decoration: const InputDecoration(labelText: '统一新名称（留空则查找替换）')),
+            TextField(controller: searchController, decoration: const InputDecoration(labelText: '查找文本')),
+            TextField(controller: replaceController, decoration: const InputDecoration(labelText: '替换文本')),
+          ],
+        ),
+        actions: [AppLiquidGlassDialogActions(actions: [
+          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
+          AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
+        ])],
+      ),
+    );
+    if (ok != true) return;
+    final name = nameController.text.trim();
+    try {
+      await DioClient.instance.dio.put(
+        ApiEndpoints.envsBatchRename,
+        data: {
+          'ids': ids,
+          if (name.isNotEmpty) 'name': name,
+          if (name.isEmpty) 'search': searchController.text,
+          if (name.isEmpty) 'replace': replaceController.text,
+        },
+      );
+      await ref.read(envListProvider.notifier).load();
+      if (mounted) AppGlassNotice.show(context, '环境变量已批量改名', type: AppGlassNoticeType.success);
+    } catch (error) {
+      if (mounted) AppGlassNotice.show(context, extractErrorMessage(error, '批量改名失败'), type: AppGlassNoticeType.error);
+    }
+  }
+
+  Future<void> _pinTop(bool top) async {
+    final ids = _selectedIds.toList()..sort();
+    if (ids.isEmpty) return;
+    try {
+      for (final id in ids) {
+        await DioClient.instance.dio.put(
+          top ? ApiEndpoints.envMoveTop(id) : ApiEndpoints.envCancelTop(id),
+        );
+      }
+      await ref.read(envListProvider.notifier).load();
+      if (mounted) AppGlassNotice.show(context, top ? '环境变量已置顶' : '环境变量已取消置顶', type: AppGlassNoticeType.success);
+    } catch (error) {
+      if (mounted) AppGlassNotice.show(context, extractErrorMessage(error, '置顶操作失败'), type: AppGlassNoticeType.error);
+    }
+  }
+
   Future<void> _performBatchGroup(List<String> groups) async {
     final ids = _selectedIds.toList()..sort();
     if (ids.isEmpty) {
@@ -1267,6 +1326,30 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               enabled: selectedCount > 0,
                               onTap: () =>
                                   _performBatchAction(_EnvBatchAction.delete),
+                            ),
+                            _BatchActionButton(
+                              label: '批量改名',
+                              icon: Icons.drive_file_rename_outline,
+                              color: AppColors.amber500,
+                              isLight: isLight,
+                              enabled: selectedCount > 0,
+                              onTap: _batchRename,
+                            ),
+                            _BatchActionButton(
+                              label: '置顶',
+                              icon: Icons.vertical_align_top,
+                              color: AppColors.primary,
+                              isLight: isLight,
+                              enabled: selectedCount > 0,
+                              onTap: () => _pinTop(true),
+                            ),
+                            _BatchActionButton(
+                              label: '取消置顶',
+                              icon: Icons.vertical_align_bottom,
+                              color: AppColors.slate500,
+                              isLight: isLight,
+                              enabled: selectedCount > 0,
+                              onTap: () => _pinTop(false),
                             ),
                           ],
                         ),

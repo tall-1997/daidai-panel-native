@@ -12,7 +12,6 @@ import '../../features/tasks/views/task_views_page.dart';
 import '../../features/logs/views/log_list_page.dart';
 import '../../features/logs/views/log_stream_page.dart';
 import '../../features/envs/views/env_list_page.dart';
-import '../../features/envs/views/env_tools_page.dart';
 import '../../features/settings/views/more_page.dart';
 import '../../features/settings/views/sponsor_page.dart';
 import '../../features/subscriptions/views/subscription_list_page.dart';
@@ -21,7 +20,6 @@ import '../../features/notifications/views/notification_list_page.dart';
 import '../../features/notifications/views/local_notification_settings_page.dart';
 import '../../features/deps/views/dep_list_page.dart';
 import '../../features/deps/views/android_runtime_page.dart';
-import '../../features/deps/views/installed_packages_page.dart';
 import '../../features/users/views/user_list_page.dart';
 import '../../features/security/views/security_page.dart';
 import '../../features/security/views/ssh_keys_page.dart';
@@ -141,14 +139,12 @@ final routerProvider = Provider<GoRouter>((ref) {
           '/platform-tokens',
           '/config-script',
           '/android-runtime',
-          '/installed-packages',
           '/health-check',
         };
         const operatorRoutes = <String>{
           '/scripts',
           '/subscriptions',
           '/envs',
-          '/env-tools',
           '/tasks/new',
           '/tasks/edit',
           '/task-views',
@@ -216,20 +212,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/profile',
         parentNavigatorKey: _rootNavigatorKey,
         pageBuilder: (_, state) => _rootPage(const ProfilePage()),
-      ),
-      GoRoute(
-        path: '/env-tools',
-        parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _rootPage(const EnvToolsPage()),
-      ),
-      GoRoute(
-        path: '/installed-packages',
-        parentNavigatorKey: _rootNavigatorKey,
-        pageBuilder: (_, state) => _capabilityPage(
-          PanelCapability.installedPackages,
-          '系统依赖清单',
-          const InstalledPackagesPage(),
-        ),
       ),
       GoRoute(
         path: '/android-runtime',

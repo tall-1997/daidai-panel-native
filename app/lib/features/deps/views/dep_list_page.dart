@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:dio/dio.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/panel_capability_registry.dart';
@@ -772,6 +773,75 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     }
   }
 
+  Future<void> _export(String type) async {
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.depsExport,
+        queryParameters: {'type': type},
+        options: Options(responseType: ResponseType.plain),
+      );
+      if (!mounted) return;
+      final content = response.data?.toString() ?? '';
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: Text('${type == 'python' ? 'Python' : 'Node'} 依赖导出'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                content,
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+            ),
+          ),
+          actions: [AppLiquidGlassDialogActions(actions: [
+            AppGlassDialogAction(label: '关闭', onPressed: () => Navigator.pop(dialogCtx)),
+          ])],
+        ),
+      );
+    } catch (error) {
+      _showMessage(_extractError(error, '导出失败'));
+    }
+  }
+
+  Future<void> _batchReinstall() async {
+    final controller = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('顺序批量重装'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: '依赖 ID，逗号分隔'),
+        ),
+        actions: [AppLiquidGlassDialogActions(actions: [
+          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
+          AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
+        ])],
+      ),
+    );
+    if (ok != true) return;
+    final ids = controller.text
+        .split(',')
+        .map((e) => int.tryParse(e.trim()))
+        .whereType<int>()
+        .toList();
+    if (ids.isEmpty) {
+      _showMessage('请输入有效的依赖 ID');
+      return;
+    }
+    try {
+      await DioClient.instance.dio.post(
+        ApiEndpoints.depsBatchReinstall,
+        data: {'ids': ids},
+      );
+      _showMessage('顺序批量重装已提交');
+    } catch (error) {
+      _showMessage(_extractError(error, '批量重装失败'));
+    }
+  }
+
   Future<void> _handleCancel(Dependency dep) async {
     try {
       await ref.read(depListProvider.notifier).cancel(dep.id);
@@ -1241,6 +1311,34 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     icon: Icons.add,
                     tooltip: '安装依赖',
                     onTap: _handleCreate,
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: '更多操作',
+                    icon: const Icon(Icons.more_vert_outlined),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'export-python':
+                          _export('python');
+                        case 'export-node':
+                          _export('nodejs');
+                        case 'batch-reinstall':
+                          _batchReinstall();
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: 'export-python',
+                        child: Text('导出 Python 依赖'),
+                      ),
+                      PopupMenuItem(
+                        value: 'export-node',
+                        child: Text('导出 Node 依赖'),
+                      ),
+                      PopupMenuItem(
+                        value: 'batch-reinstall',
+                        child: Text('顺序批量重装'),
+                      ),
+                    ],
                   ),
                 ],
               ),
