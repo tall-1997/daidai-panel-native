@@ -3,6 +3,7 @@ import 'dart:async';
 import '../network/dio_client.dart';
 import '../storage/secure_storage.dart';
 import 'local_panel_host.dart';
+import 'local_panel_models.dart';
 import 'local_panel_session_resolver.dart';
 import 'method_channel_local_panel_host.dart';
 
@@ -195,9 +196,26 @@ class ManagedLocalConnectionMonitor {
   }
 
   Future<void> _runReconcile(int generation) async {
+    final LocalPanelStatus status;
     try {
-      final status = await _host.ensureStarted();
-      if (generation != _generation) return;
+      status = await _host.ensureStarted();
+    } catch (_) {
+      // Binder/ensureStarted transient failure. Keep the last healthy session
+      // and retry on the next tick.
+      return;
+    }
+    if (generation != _generation) return;
+    if (status.phase != LocalPanelPhase.ready) {
+      // Core is not ready (e.g. :panel process just restarted and its port/token
+      // changed). Drop the stale managed session so the UI does not keep a dead
+      // baseUrl/token, and retry on the next tick.
+      await _writes.run(() async {
+        if (generation != _generation) return;
+        _clearManagedSession();
+      });
+      return;
+    }
+    try {
       final stored = await _loadCurrentPanel();
       if (generation != _generation) return;
       final existing = stored?.type == PanelType.managedLocal ? stored : _panel;

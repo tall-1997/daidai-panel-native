@@ -27,6 +27,8 @@ class LocalPanelHostService : Service() {
         const val PREF_PERSISTENT_ENABLED = "enabled"
         private const val CHANNEL_ID = "local_panel_scheduler"
         private const val NOTIFICATION_ID = 5700
+        private const val STARTUP_MAX_ATTEMPTS = 3
+        private const val STARTUP_RETRY_DELAY_MS = 2000L
 
         fun isPersistentSchedulingEnabled(context: android.content.Context): Boolean =
             context.getSharedPreferences(PERSISTENT_PREFS_NAME, android.content.Context.MODE_PRIVATE)
@@ -79,15 +81,30 @@ class LocalPanelHostService : Service() {
         }
         try {
             createNotificationChannel()
-            // Initialize panel runtime in background to avoid blocking UI
-            // Start fallback server immediately, then do heavy Python init
+            // Initialize panel runtime in background to avoid blocking UI.
+            // Start the fallback server immediately, then preload the rootfs runner.
+            // Retry on startup failure so a transient race (e.g. port/token rebuild)
+            // does not leave the core permanently down with no signal to the UI.
             Thread {
-                try {
-                    // First: start fallback HTTP server (fast)
-                    LocalPanelRuntime.ensureStarted(applicationContext, localToken)
-                    // Second: preload the packaged Linux rootfs runner in the background
-                    AndroidLinuxRuntime.preload(applicationContext)
-                } catch (_: Exception) { }
+                var attempt = 0
+                while (attempt < STARTUP_MAX_ATTEMPTS && !destroyed) {
+                    attempt++
+                    try {
+                        LocalPanelRuntime.ensureStarted(applicationContext, localToken)
+                        AndroidLinuxRuntime.preload(applicationContext)
+                        recoveryFailure = null
+                        return@Thread
+                    } catch (error: Exception) {
+                        recoveryFailure = mapOf(
+                            "recovery_phase" to "failed",
+                            "recovery_failure_stage" to "startup",
+                            "recovery_message" to (error.message ?: error.javaClass.simpleName),
+                        )
+                        if (attempt < STARTUP_MAX_ATTEMPTS && !destroyed) {
+                            try { Thread.sleep(STARTUP_RETRY_DELAY_MS * attempt) } catch (_: InterruptedException) { return@Thread }
+                        }
+                    }
+                }
             }.start()
             recoveryCoordinator = PersistentCoreRecoveryCoordinator(
                 runner = ExecutorCoreRecoveryTaskRunner(),
