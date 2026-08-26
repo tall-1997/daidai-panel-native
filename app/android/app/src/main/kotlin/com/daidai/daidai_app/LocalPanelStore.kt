@@ -3442,12 +3442,14 @@ fun serveDashboardStats(): JSONObject {
                 val dependencySucceeded = readableDatabase.query("tasks", arrayOf("last_run_status"), "id=?", arrayOf(dependencyID.toString()), null, null, null).use { dep -> dep.moveToFirst() && dep.string("last_run_status") == "success" }
                 if (!dependencySucceeded) return@use LocalScriptResult(JSONArray().put("依赖任务不存在或上次执行未成功"), "failed", true, 3)
             }
+            appLog("Task", "Task $id config loaded, command=${command.take(80)}")
             val logs = JSONArray()
             if (before.isNotEmpty()) {
                 val hook = executeHookCommand(before, id) { line -> onLine?.invoke("[before] $line") }
                 logs.put("[before] ${if (hook.status == "success") "success" else "failed"}")
                 for (i in 0 until hook.logs.length()) logs.put("[before] ${hook.logs.optString(i)}")
             }
+            appLog("Task", "Task $id before-hook done, entering runMain")
             fun runMain(): LocalScriptResult {
                 return if (taskAbortRequested.contains(id)) {
                 LocalScriptResult(JSONArray().put("Task aborted before main command"), "aborted", true, 130)
@@ -3471,6 +3473,7 @@ fun serveDashboardStats(): JSONObject {
                     val prefixedOutput: ((String) -> Unit)? = if (plan.mode == "conc") {
                         { line -> onLine?.invoke("[${plan.envName}#${selected.index}] $line") }
                     } else onLine
+                    appLog("Task", "Task $id launching script ${file.name} via proot")
                     result = executeWithAutoInstall(id, runtimeForFile(file), prefixedOutput) {
                         executeScriptFile(file, scriptPath, args = plan.scriptArgs, timeoutSeconds = minOf(plan.timeoutSeconds, timeout), extraEnvironment = selected.values, onLine = prefixedOutput, taskId = id)
                     }
