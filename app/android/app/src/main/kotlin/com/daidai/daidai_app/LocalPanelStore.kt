@@ -437,6 +437,7 @@ class LocalPanelStore(
 
     override fun onOpen(db: SQLiteDatabase) {
         super.onOpen(db)
+        createSecurityTables(db)
         synchronized(AndroidLinuxRuntime.mirrorConfigLock) {
             ensureMirrorDefaults(db)
         }
