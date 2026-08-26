@@ -54,3 +54,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - proot 的 TLS 段 p_align 需 >=64（ARM64 Bionic 要求），构建时必须对 proot 主二进制和 loader 追加 `-z,max-page-size=16384`（见 62c37a8）。
   - 镜像常量统一为 `ALPINE_APK_DEFAULT_MIRROR`（清华 TUNA）、`UBUNTU_APT_DEFAULT_MIRROR`、`PYTHON_PIP_ALIBABA_INDEX`、`NODE_NPM_NPMMIRROR_REGISTRY`；旧名 `ALPINE_APK_HUAWEI_MIRROR` 已废弃，主代码与测试文件都要同步改名，否则 compileDebugUnitTestKotlin 会报 Unresolved reference。
   - commit 前检查 `.git/hooks/prepare-commit-msg` 会自动从 local git config 的 coauthor.* 条目追加 Co-authored-by；本项目已移除 monkeycode-ai co-author，作者统一为 tall-1997。
+
+[Project Knowledge Summary]
+- Date: 2026-08-26
+- Context: Discovered by Agent while reviewing shiyi-agent (github.com/JIUSIS/shiyi-agent) for proot/Alpine reference
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - apk-tools 3 写数据库用 hardlink 原子发布，无 root 设备 SELinux 禁 app_data_file link，apk add 装完文件但写 db 报 "failed to write database: Permission denied"；解决：放 apk-tools 2.x 静态版（用 rename 写 db）到 /usr/local/bin/apk（PATH 优先于 /sbin）。
+  - seccomp 加速会破坏 apk 3 libfetch 的 connect()（报 Permission denied / DNS transient error），shiyi-agent 用 PROOT_NO_SECCOMP=1 换取 apk 兼容；本项目用默认 seccomp 保证脚本运行，若 apk add 突然报 Permission denied/DNS 错误需权衡该取舍。
+  - --link2symlink 会把 link() 转成符号链接并生成 .l2s glue 文件，破坏 node-gyp 的 link+rename 原子发布（原生模块变悬空链接 dlopen 失败）；编译 node 原生模块时应去掉 --link2symlink。
+  - proot 需 bind 系统目录 /apex /odm /product /system /system_ext /vendor /linkerconfig 等，供 rootfs 内进程访问系统库；并发 apk 用 mkdir 原子互斥锁 + 超时清理防抢数据库锁（EAGAIN/EINTR）。

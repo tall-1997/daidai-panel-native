@@ -335,7 +335,11 @@ object AndroidLinuxRuntime {
             "-L",
             "-0",
         )
-        listOf("/proc", "/dev", "/sys", "/sdcard", "/storage").forEach { path ->
+        listOf(
+            "/proc", "/dev", "/sys", "/sdcard", "/storage",
+            "/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
+            "/linkerconfig", "/plat_property_contexts", "/property_contexts",
+        ).forEach { path ->
             if (File(path).exists()) command.addAll(listOf("-b", "$path:$path"))
         }
         command += guestCommand
