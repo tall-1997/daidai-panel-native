@@ -349,20 +349,24 @@ class LocalPanelHttpServer(
         return JSONObject().put("data", dashData)
     }
 
-    private fun systemHealth(): JSONObject = JSONObject()
-        .put(
-            "items",
-                JSONArray()
-                .put(JSONObject().put("name", "Android local panel API").put("status", "ok"))
-                .put(goCoreHealthItem())
-                .put(JSONObject().put("name", "Fallback mode").put("status", "ok").put("message", "Kotlin fallback server active"))
-        )
-        .put("last_checked_at", java.time.Instant.now().toString())
+    private fun systemHealth(): JSONObject {
+        val items = JSONArray()
+            .put(JSONObject().put("name", "Android local panel API").put("status", "ok"))
+            .put(goCoreHealthItem())
+            .put(JSONObject().put("name", "Fallback mode").put("status", "ok").put("message", "Kotlin fallback server active"))
+            .put(runtimeSmokeItem("Python runtime", pythonSmokeCommand(), "PY_OK"))
+            .put(runtimeSmokeItem("Node.js runtime", nodeSmokeCommand(), "NODE_OK"))
+            .put(runtimeSmokeItem("TypeScript runtime", typeScriptSmokeCommand(), "TS_OK"))
+            .put(pythonSeedStatusItem())
+        return JSONObject()
+            .put("items", items)
+            .put("last_checked_at", java.time.Instant.now().toString())
+    }
 
     private fun goCoreHealthItem(): JSONObject = JSONObject()
-        .put("name", "Embedded Go core")
+        .put("name", "Local panel core")
         .put("status", "ok")
-        .put("message", "Kotlin fallback active (Go Core requires Android <=15)")
+        .put("message", "Kotlin fallback active")
 
     private fun hasNativeRuntimeEntries(): Boolean = listOf(
         "libpython_exec.so",
