@@ -792,24 +792,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         MapEntry('腾讯云', 'https://mirrors.cloud.tencent.com/alpine'),
       ];
     }
-    if (config.linuxPackageManager == 'apt') {
-      if (config.linuxDistribution == 'debian') {
-        return const [
-          MapEntry('阿里云 Debian (默认)', 'https://mirrors.aliyun.com/debian'),
-          MapEntry(
-            '清华大学 Debian',
-            'https://mirrors.tuna.tsinghua.edu.cn/debian',
-          ),
-          MapEntry('腾讯云 Debian', 'https://mirrors.cloud.tencent.com/debian'),
-        ];
-      }
-      return const [
-        MapEntry('阿里云 Ubuntu (默认)', 'https://mirrors.aliyun.com/ubuntu'),
-        MapEntry('清华大学 Ubuntu', 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu'),
-        MapEntry('腾讯云 Ubuntu', 'https://mirrors.cloud.tencent.com/ubuntu'),
-        MapEntry('华为云 Ubuntu', 'https://repo.huaweicloud.com/ubuntu'),
-      ];
-    }
     return const [];
   }
 

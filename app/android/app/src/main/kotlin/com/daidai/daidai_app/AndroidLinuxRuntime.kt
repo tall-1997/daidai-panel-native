@@ -24,7 +24,7 @@ object AndroidLinuxRuntime {
     private const val DISTRO_PREFERENCES = "daidai-linux-distro"
     private const val DISTRO_KEY = "selected_distribution"
     private const val DEFAULT_DISTRIBUTION = "alpine"
-    internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine", "ubuntu")
+    internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine")
     private val REQUIRED_COMMANDS_ALPINE = linkedMapOf(
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
         "python3" to listOf("/usr/bin/python3"),
@@ -34,23 +34,12 @@ object AndroidLinuxRuntime {
         "pnpm" to listOf("/usr/bin/pnpm"),
         "uv" to listOf("/usr/bin/uv"),
     )
-    private val REQUIRED_COMMANDS_UBUNTU = linkedMapOf(
-        "bash" to listOf("/bin/bash", "/usr/bin/bash"),
-        "python3" to listOf("/usr/bin/python3"),
-        "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
-        "node" to listOf("/usr/bin/node"),
-        "npm" to listOf("/usr/bin/npm"),
-        "pnpm" to listOf("/usr/local/bin/pnpm"),
-    )
     private val REQUIRED_PACKAGE_MANAGERS = mapOf(
         "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
-        "apt" to listOf("/usr/bin/apt-get"),
     )
 
-    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> =
-        if (packageManager == "apk") REQUIRED_COMMANDS_ALPINE else REQUIRED_COMMANDS_UBUNTU
+    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> = REQUIRED_COMMANDS_ALPINE
     const val ALPINE_APK_DEFAULT_MIRROR = "https://repo.huaweicloud.com/alpine"
-    const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
@@ -180,11 +169,9 @@ object AndroidLinuxRuntime {
             .getString(DISTRO_KEY, null)?.trim()?.lowercase()?.takeIf { it in SUPPORTED_DISTRIBUTIONS }
             ?: DEFAULT_DISTRIBUTION
 
-    internal fun defaultLinuxMirror(distribution: String): String =
-        if (distribution == "ubuntu") UBUNTU_APT_DEFAULT_MIRROR else ALPINE_APK_DEFAULT_MIRROR
+    internal fun defaultLinuxMirror(distribution: String): String = ALPINE_APK_DEFAULT_MIRROR
 
-    fun distributionPackageManager(distribution: String): String =
-        if (distribution == "ubuntu") "apt" else "apk"
+    fun distributionPackageManager(distribution: String): String = "apk"
 
     private fun rootfsAssetPrefix(context: Context): String {
         val abi = currentAbi()
