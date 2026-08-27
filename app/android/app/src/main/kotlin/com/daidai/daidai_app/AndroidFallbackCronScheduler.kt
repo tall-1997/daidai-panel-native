@@ -2,6 +2,7 @@ package com.daidai.daidai_app
 
 import java.time.ZonedDateTime
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -25,6 +26,7 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
         ThreadPoolExecutor.AbortPolicy(),
     )
     @Volatile private var lastCheckedMinute = Long.MIN_VALUE
+    private val inFlightTasks = ConcurrentHashMap.newKeySet<Long>()
 
     fun start() {
         if (started.compareAndSet(false, true)) {
@@ -43,18 +45,29 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             store.runScheduledBackupIfDue(now)
             store.enabledScheduledTasks()
                 .filter { task -> task.cronExpression.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
-                .forEach { task ->
-                    try {
-                        workers.execute { store.executeTaskAndSave(task.id) }
-                    } catch (_: RejectedExecutionException) {
-                        store.appLog("Cron", "Task ${task.id} rejected: fallback queue is full")
-                    }
-                }
+                .forEach { task -> submitTask(task.id) }
             store.scheduledTaskStops()
                 .filter { task -> task.stopSchedule.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
                 .forEach { store.stopScheduledTask(it.id) }
         } catch (error: Exception) {
             store.appLog("Cron", error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun submitTask(taskId: Long) {
+        if (!inFlightTasks.add(taskId)) return
+        try {
+            workers.execute {
+                try {
+                    store.executeTaskAndSave(taskId)
+                } finally {
+                    inFlightTasks.remove(taskId)
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            inFlightTasks.remove(taskId)
+            store.appLog("Cron", "Task $taskId deferred: fallback queue is full")
+            ticker.schedule({ submitTask(taskId) }, 10, TimeUnit.SECONDS)
         }
     }
 
