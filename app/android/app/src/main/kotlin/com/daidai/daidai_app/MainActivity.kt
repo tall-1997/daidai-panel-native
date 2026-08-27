@@ -214,7 +214,7 @@ class MainActivity : FlutterActivity() {
     private fun isPanelServiceRunning(): Boolean {
         val manager = getSystemService(ActivityManager::class.java) ?: return false
         @Suppress("DEPRECATION")
-        return manager.runningServices(Int.MAX_VALUE).any {
+        return manager.getRunningServices(Int.MAX_VALUE).any {
             it.service.className == LocalPanelHostService::class.java.name
         }
     }
