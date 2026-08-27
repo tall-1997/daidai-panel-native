@@ -98,6 +98,10 @@ class LocalPanelHttpServer(
 
     internal fun startScheduler() = cronScheduler.start()
 
+    internal fun triggerCronTick() = cronScheduler.tickNow()
+
+    internal fun isCronIdle(): Boolean = cronScheduler.isIdle()
+
     internal fun createBrowserUrl(): String = browserAccess.createUrl()
 
     fun shutdown() {

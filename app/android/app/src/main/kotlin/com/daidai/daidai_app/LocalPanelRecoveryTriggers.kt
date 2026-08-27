@@ -44,10 +44,6 @@ object LocalPanelRecoveryTriggers {
     }
 
     fun schedulePeriodicReconciliation(context: Context) {
-        if (!LocalPanelHostService.isPersistentSchedulingEnabled(context)) {
-            cancelPeriodicReconciliation(context)
-            return
-        }
         val request = PeriodicWorkRequestBuilder<LocalPanelRecoveryWorker>(15, TimeUnit.MINUTES)
             .setInputData(androidx.work.workDataOf("trigger" to "periodic"))
             .build()
@@ -68,12 +64,10 @@ class LocalPanelRecoveryWorker(
     params: WorkerParameters,
 ) : Worker(context, params) {
     override fun doWork(): Result {
-        if (!LocalPanelHostService.isPersistentSchedulingEnabled(applicationContext)) {
-            return Result.success()
-        }
         val trigger = inputData.getString("trigger") ?: "periodic"
+        val persistent = LocalPanelHostService.isPersistentSchedulingEnabled(applicationContext)
         val intent = Intent(applicationContext, LocalPanelHostService::class.java).apply {
-            action = LocalPanelHostService.ACTION_RECOVER_PERSISTENT
+            action = if (persistent) LocalPanelHostService.ACTION_RECOVER_PERSISTENT else LocalPanelHostService.ACTION_CRON_TICK
             putExtra(LocalPanelHostService.EXTRA_RECOVERY_TRIGGER, trigger)
         }
         return runCatching {
@@ -90,10 +84,6 @@ class LocalPanelRecoveryReceiver : BroadcastReceiver() {
             LocalPanelRecoveryTriggers.ACTION_PROCESS_RECOVERY -> LocalPanelRecoveryTriggers.reconcileNow(context, "process-recovery")
             LocalPanelRecoveryTriggers.ACTION_NETWORK_RESTORED -> LocalPanelRecoveryTriggers.reconcileWhenNetworkRestored(context)
         }
-        if (LocalPanelHostService.isPersistentSchedulingEnabled(context)) {
-            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(context)
-        } else {
-            LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(context)
-        }
+        LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(context)
     }
 }

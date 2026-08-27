@@ -6,7 +6,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.Process
 import androidx.core.app.NotificationCompat
 import java.io.File
@@ -24,6 +26,7 @@ class LocalPanelHostService : Service() {
         const val ACTION_RECOVER_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_RECOVER_PERSISTENT"
         const val ACTION_PANEL_SESSION_START = "com.daidai.daidai_app.LOCAL_PANEL_SESSION_START"
         const val ACTION_PANEL_SESSION_END = "com.daidai.daidai_app.LOCAL_PANEL_SESSION_END"
+        const val ACTION_CRON_TICK = "com.daidai.daidai_app.LOCAL_PANEL_CRON_TICK"
         const val EXTRA_RECOVERY_TRIGGER = "recovery_trigger"
         const val PERSISTENT_PREFS_NAME = "local_panel_persistent_foreground"
         const val PREF_PERSISTENT_ENABLED = "enabled"
@@ -49,6 +52,7 @@ class LocalPanelHostService : Service() {
     private var transientPanelSession = false
     @Volatile
     private var destroyed = false
+    private val cronIdleWatcher = Handler(Looper.getMainLooper())
     private val binder = object : ILocalPanelService.Stub() {
         override fun ensureStarted(): String = encodeWithState(
             recordCoreResult(LocalPanelRuntime.tryEnsureStarted(applicationContext, localToken)),
@@ -121,11 +125,7 @@ class LocalPanelHostService : Service() {
             }
             persistentPolicy = PersistentForegroundPolicy(readPersistentSelection())
             applyPersistentAction(persistentPolicy.recoveryAction())
-            if (persistentPolicy.enabled) {
-                LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
-            } else {
-                LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(applicationContext)
-            }
+            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
         } catch (error: Throwable) {
             runCatching {
                 val crashDir = File(filesDir, "panel-crash-logs")
@@ -171,6 +171,17 @@ class LocalPanelHostService : Service() {
             applyPersistentAction(persistentPolicy.endTransientSession())
             return START_NOT_STICKY
         }
+        if (intent.action == ACTION_CRON_TICK) {
+            lastRecoveryTrigger = "cron-tick"
+            if (!persistentPolicy.foregroundActive) {
+                startForeground(NOTIFICATION_ID, buildNotification(starting = true))
+            }
+            LocalPanelRuntime.triggerCronTick()
+            if (!persistentPolicy.foregroundActive) {
+                waitForCronIdleThenStop()
+            }
+            return START_NOT_STICKY
+        }
         return START_NOT_STICKY
     }
 
@@ -203,11 +214,7 @@ class LocalPanelHostService : Service() {
     private fun setPersistentScheduling(enabled: Boolean) {
         val preferences = getSharedPreferences(PERSISTENT_PREFS_NAME, MODE_PRIVATE)
         check(preferences.edit().putBoolean(PREF_PERSISTENT_ENABLED, enabled).commit())
-        if (enabled) {
-            LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
-        } else {
-            LocalPanelRecoveryTriggers.cancelPeriodicReconciliation(applicationContext)
-        }
+        LocalPanelRecoveryTriggers.schedulePeriodicReconciliation(applicationContext)
         applyPersistentAction(persistentPolicy.update(enabled))
     }
 
@@ -292,6 +299,20 @@ class LocalPanelHostService : Service() {
                 description = "保持本地面板任务调度和依赖操作运行"
             }
         )
+    }
+
+    private fun waitForCronIdleThenStop() {
+        cronIdleWatcher.postDelayed(object : Runnable {
+            override fun run() {
+                if (destroyed) return
+                if (LocalPanelRuntime.isCronIdle()) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                } else {
+                    cronIdleWatcher.postDelayed(this, 1000L)
+                }
+            }
+        }, 1000L)
     }
 
     private fun buildNotification(

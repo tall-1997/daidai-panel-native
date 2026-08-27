@@ -61,6 +61,12 @@ object LocalPanelRuntime {
         return if (fallback != null) fallback.createBrowserUrl() else ""
     }
 
+    fun triggerCronTick() {
+        fallbackServer?.triggerCronTick()
+    }
+
+    fun isCronIdle(): Boolean = fallbackServer?.isCronIdle() ?: true
+
     private fun stopFallback() {
         fallbackServer?.shutdown()
         fallbackServer = null

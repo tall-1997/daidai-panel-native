@@ -71,6 +71,16 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
         }
     }
 
+    fun tickNow() {
+        if (!started.get()) {
+            start()
+        }
+        lastCheckedMinute = Long.MIN_VALUE
+        tickSafely()
+    }
+
+    fun isIdle(): Boolean = inFlightTasks.isEmpty() && workers.activeCount == 0
+
     override fun close() {
         started.set(false)
         ticker.shutdownNow()
