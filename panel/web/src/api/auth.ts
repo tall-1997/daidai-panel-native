@@ -40,7 +40,7 @@ export const authApi = {
         'X-Client-Type': 'web',
         'X-Client-App': 'daidai-panel-web'
       }
-    }).then(res => res.data) as Promise<{ access_token: string }>
+    }).then(res => res.data) as Promise<{ access_token: string; refresh_token?: string }>
   },
 
   getUser() {

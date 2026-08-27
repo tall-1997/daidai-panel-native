@@ -76,7 +76,7 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 16
+        const val SCHEMA_VERSION = 17
         private const val CONFIG_SCRIPT_TEMPLATE = """# 呆呆面板高级配置脚本
 # 本文件会在任务运行时被解析，作为环境变量注入到脚本执行环境。
 # 优先级低于「环境变量」页配置的数据库环境变量。
@@ -97,6 +97,7 @@ class LocalPanelStore(
         private const val MAX_LOGIN_ATTEMPTS = 5
         private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
         private const val OPEN_API_TOKEN_TTL_SECONDS = 24L * 60 * 60
+        private const val ACCESS_TOKEN_TTL_SECONDS = 24L * 60 * 60
 
         private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
             FALLBACK_WORKERS,
@@ -205,6 +206,7 @@ class LocalPanelStore(
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 access_token TEXT NOT NULL,
                 refresh_token TEXT NOT NULL,
+                expires_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             )""".trimIndent()
         )
@@ -327,6 +329,9 @@ class LocalPanelStore(
             addColumnIfMissing(db, "open_api_logs", "ip", "TEXT NOT NULL DEFAULT ''")
             addColumnIfMissing(db, "open_api_logs", "duration", "INTEGER NOT NULL DEFAULT 0")
             db.execSQL("CREATE TABLE IF NOT EXISTS open_api_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, access_token TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)")
+        }
+        if (oldVersion < 17) {
+            addColumnIfMissing(db, "local_sessions", "expires_at", "TEXT NOT NULL DEFAULT ''")
         }
     }
 
@@ -729,8 +734,8 @@ class LocalPanelStore(
     fun isAuthorized(session: NanoHTTPD.IHTTPSession): Boolean {
         val token = bearerToken(session) ?: return false
         return readableDatabase.rawQuery(
-            "SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ?",
-            arrayOf(token)
+            "SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ? AND (expires_at = '' OR expires_at > ?)",
+            arrayOf(token, Instant.now().toString())
         ).use(Cursor::moveToFirst)
     }
 
@@ -863,7 +868,7 @@ class LocalPanelStore(
     fun authorizeBusinessRequest(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response? {
         val token = bearerToken(session)
         if (token == null) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
-        if (readableDatabase.rawQuery("SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ?", arrayOf(token)).use(Cursor::moveToFirst)) return null
+        if (readableDatabase.rawQuery("SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ? AND (expires_at = '' OR expires_at > ?)", arrayOf(token, Instant.now().toString())).use(Cursor::moveToFirst)) return null
         val row = readableDatabase.rawQuery(
             "SELECT t.app_id, t.expires_at, a.enabled, a.scopes, a.rate_limit FROM open_api_tokens t JOIN open_api_apps a ON a.id = t.app_id WHERE t.access_token = ?",
             arrayOf(token),
@@ -4670,6 +4675,7 @@ fun serveDashboardStats(): JSONObject {
             put("id", 1)
             put("access_token", accessToken)
             put("refresh_token", refreshToken)
+            put("expires_at", Instant.now().plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString())
             put("updated_at", Instant.now().toString())
         }
         writableDatabase.insertWithOnConflict(
@@ -4697,15 +4703,19 @@ fun serveDashboardStats(): JSONObject {
             arrayOf(refreshToken)
         ).use(Cursor::moveToFirst)
         if (!valid) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "刷新凭据已失效")
+        val now = Instant.now()
         val accessToken = randomToken()
+        val newRefreshToken = randomToken()
         val values = ContentValues().apply {
             put("access_token", accessToken)
-            put("updated_at", Instant.now().toString())
+            put("refresh_token", newRefreshToken)
+            put("expires_at", now.plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString())
+            put("updated_at", now.toString())
         }
         val oldAccessToken = readableDatabase.rawQuery("SELECT access_token FROM local_sessions WHERE id=1", null).use { if (it.moveToFirst()) it.getString(0) else "" }
         writableDatabase.update("local_sessions", values, "id = 1", null)
-        writableDatabase.update("security_sessions", ContentValues().apply { put("access_token", accessToken); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) }, "access_token=?", arrayOf(oldAccessToken))
-        return ok(JSONObject().put("access_token", accessToken))
+        writableDatabase.update("security_sessions", ContentValues().apply { put("access_token", accessToken); put("expires_at", now.plusSeconds(30L * 24 * 60 * 60).toString()) }, "access_token=?", arrayOf(oldAccessToken))
+        return ok(JSONObject().put("access_token", accessToken).put("refresh_token", newRefreshToken))
     }
 
     private fun userJson(): JSONObject {

@@ -70,6 +70,10 @@ export const useAuthStore = defineStore('auth', () => {
     if (!res.access_token) throw new Error('刷新响应格式无效')
     accessToken.value = res.access_token
     localStorage.setItem('access_token', res.access_token)
+    if (res.refresh_token) {
+      refreshToken.value = res.refresh_token
+      localStorage.setItem('refresh_token', res.refresh_token)
+    }
     return res.access_token
   }
 
