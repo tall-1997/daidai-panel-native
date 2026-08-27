@@ -9,19 +9,19 @@ import struct
 import tarfile
 
 DISTRO_COMMANDS = {
-    "alpine": ("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm"),
+    "ubuntu": ("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
 }
 DISTRO_CAPABILITIES = {
-    "alpine": {
-        "package_manager": ["apk"],
+    "ubuntu": {
+        "package_manager": ["apt-get"],
         "shell": ["bash"],
-        "python": ["python3", "pip3", "uv"],
+        "python": ["python3", "pip3"],
         "node": ["node", "npm", "pnpm"],
         "tls_ca_certificates": True,
     },
 }
 DISTRO_PACKAGES = {
-    "alpine": {"bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"},
+    "ubuntu": {"bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"},
 }
 def sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()

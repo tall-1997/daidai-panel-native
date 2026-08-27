@@ -214,19 +214,19 @@ val verifyRuntimeMetadata = tasks.register("verifyRuntimeMetadata") {
 
 val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
     group = "verification"
-    description = "Verifies the Alpine rootfs assets and pinned 16 KB-aligned Android native tools."
+    description = "Verifies the Ubuntu rootfs assets and pinned 16 KB-aligned Android native tools."
     doLast {
         val distroCommands = mapOf(
-            "alpine" to listOf("apk", "bash", "python3", "pip3", "node", "npm", "uv", "pnpm"),
+            "ubuntu" to listOf("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
         )
         val distroPackages = mapOf(
-            "alpine" to setOf("bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"),
+            "ubuntu" to setOf("bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"),
         )
         val distroCapabilities = mapOf(
-            "alpine" to mapOf(
-                "package_manager" to listOf("apk"),
+            "ubuntu" to mapOf(
+                "package_manager" to listOf("apt-get"),
                 "shell" to listOf("bash"),
-                "python" to listOf("python3", "pip3", "uv"),
+                "python" to listOf("python3", "pip3"),
                 "node" to listOf("node", "npm", "pnpm"),
             ),
         )
@@ -239,8 +239,8 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             check(file("$nativeDir/libproot_loader.so").isFile) { "Missing PRoot loader for $abi." }
             check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
 
-            // Alpine rootfs 资产必须自洽（sha256 + manifest 一致）。
-            val presentDistributions = listOf("alpine").filter { distribution ->
+            // Ubuntu rootfs 资产必须自洽（sha256 + manifest 一致）。
+            val presentDistributions = listOf("ubuntu").filter { distribution ->
                 file("src/main/assets/android-runtime/$abi/$distribution/rootfs.tar.gz.bin").isFile
             }
             check(presentDistributions.isNotEmpty()) {

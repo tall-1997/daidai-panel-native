@@ -40,7 +40,7 @@ object AndroidRootfsDownloader {
 
     private const val SOURCE_PREFERENCES = "daidai-rootfs-sources"
     private const val SOURCE_KEY_PREFIX = "source_"
-    const val ROOTFS_DOWNLOAD_VERSION_ALPINE = "3.22"
+    const val ROOTFS_DOWNLOAD_VERSION_UBUNTU = "24.04.4"
     private const val MAX_REDIRECTS = 5
     private const val CONNECT_TIMEOUT_MS = 20_000
     private const val READ_TIMEOUT_MS = 60_000
@@ -49,18 +49,17 @@ object AndroidRootfsDownloader {
     private const val PROGRESS_INTERVAL_BYTES = 256 * 1024L
     private const val DISK_SAFETY_BYTES = 32 * 1024 * 1024L
 
-    private val ALPINE_SOURCES = listOf(
-        RootfsImageSource("alpine-official", "Alpine 官方", "alpine", "https://dl-cdn.alpinelinux.org/alpine"),
-        RootfsImageSource("alpine-tsinghua", "清华 TUNA", "alpine", "https://mirrors.tuna.tsinghua.edu.cn/alpine"),
-        RootfsImageSource("alpine-huawei", "华为云", "alpine", "https://repo.huaweicloud.com/alpine"),
-        RootfsImageSource("alpine-aliyun", "阿里云", "alpine", "https://mirrors.aliyun.com/alpine"),
+    private val UBUNTU_SOURCES = listOf(
+        RootfsImageSource("ubuntu-official", "Ubuntu 官方", "ubuntu", "https://cdimage.ubuntu.com/ubuntu-base/releases"),
+        RootfsImageSource("ubuntu-tsinghua", "清华 TUNA", "ubuntu", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases"),
+        RootfsImageSource("ubuntu-aliyun", "阿里云", "ubuntu", "https://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases"),
     )
 
-    fun sourcesFor(distribution: String): List<RootfsImageSource> = ALPINE_SOURCES
+    fun sourcesFor(distribution: String): List<RootfsImageSource> = UBUNTU_SOURCES
 
-    fun sourceById(id: String): RootfsImageSource? = ALPINE_SOURCES.firstOrNull { it.id == id }
+    fun sourceById(id: String): RootfsImageSource? = UBUNTU_SOURCES.firstOrNull { it.id == id }
 
-    fun defaultSourceId(distribution: String): String = "alpine-official"
+    fun defaultSourceId(distribution: String): String = "ubuntu-official"
 
     fun selectedSourceId(context: Context, distribution: String): String =
         context.getSharedPreferences(SOURCE_PREFERENCES, Context.MODE_PRIVATE)
@@ -132,40 +131,10 @@ object AndroidRootfsDownloader {
     }
 
     private fun resolveImageUrl(source: RootfsImageSource, distribution: String, abi: String): Pair<String, Long> {
-        val arch = alpineArch(abi)
-        val yamlUrl = "${source.baseUrl}/latest-stable/releases/$arch/latest-releases.yaml"
-        val yaml = fetchSmallText(yamlUrl)
-        val (fileName, size) = parseAlpineMiniRootfs(yaml, arch)
-            ?: throw IOException("镜像源缺少 Alpine minirootfs 条目：${source.displayName}。")
-        return "${source.baseUrl}/latest-stable/releases/$arch/$fileName" to size
-    }
-
-    private fun parseAlpineMiniRootfs(yaml: String, arch: String): Pair<String, Long>? {
-        val fileName = Regex("file:\\s*(alpine-minirootfs-[0-9][0-9.]*-$arch\\.tar\\.gz)")
-            .find(yaml)?.groupValues?.get(1) ?: return null
-        val tail = yaml.substring(yaml.indexOf(fileName))
-        val size = Regex("size:\\s*(\\d+)").find(tail)?.groupValues?.get(1)?.toLongOrNull() ?: -1L
-        return fileName to size
-    }
-
-    private fun fetchSmallText(url: String): String {
-        val connection = openConnection(url, null)
-        try {
-            val code = connection.responseCode
-            if (code !in 200..299) throw IOException("获取镜像目录失败（HTTP $code）。")
-            val bytes = ByteArray(MAX_DIRECTORY_BYTES)
-            val input = connection.inputStream
-            var offset = 0
-            while (offset < bytes.size) {
-                val read = input.read(bytes, offset, bytes.size - offset)
-                if (read < 0) break
-                offset += read
-            }
-            input.close()
-            return String(bytes, 0, offset, Charsets.UTF_8)
-        } finally {
-            connection.disconnect()
-        }
+        val arch = ubuntuArch(abi)
+        val version = ROOTFS_DOWNLOAD_VERSION_UBUNTU
+        val fileName = "ubuntu-base-$version-base-$arch.tar.gz"
+        return "${source.baseUrl}/$version/release/$fileName" to -1L
     }
 
     private fun downloadWithResume(
@@ -276,9 +245,9 @@ object AndroidRootfsDownloader {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun alpineArch(abi: String): String = when (abi) {
-        "arm64-v8a" -> "aarch64"
-        "x86_64" -> "x86_64"
+    private fun ubuntuArch(abi: String): String = when (abi) {
+        "arm64-v8a" -> "arm64"
+        "x86_64" -> "amd64"
         else -> throw IOException("不支持的架构：$abi")
     }
 

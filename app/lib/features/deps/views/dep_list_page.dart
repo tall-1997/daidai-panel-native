@@ -853,13 +853,12 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   }
 
   List<MapEntry<String, String>> _linuxMirrorOptions(DepMirrorConfig config) {
-    if (config.linuxPackageManager == 'apk') {
+    if (config.linuxPackageManager == 'apt') {
       return const [
-        MapEntry('华为云 (默认)', 'https://repo.huaweicloud.com/alpine'),
-        MapEntry('Alpine 官方', 'https://dl-cdn.alpinelinux.org/alpine'),
-        MapEntry('阿里云', 'https://mirrors.aliyun.com/alpine'),
-        MapEntry('清华大学', 'https://mirrors.tuna.tsinghua.edu.cn/alpine'),
-        MapEntry('腾讯云', 'https://mirrors.cloud.tencent.com/alpine'),
+        MapEntry('阿里云 Ubuntu (默认)', 'https://mirrors.aliyun.com/ubuntu'),
+        MapEntry('清华大学 Ubuntu', 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu'),
+        MapEntry('腾讯云 Ubuntu', 'https://mirrors.cloud.tencent.com/ubuntu'),
+        MapEntry('华为云 Ubuntu', 'https://repo.huaweicloud.com/ubuntu'),
       ];
     }
     return const [];

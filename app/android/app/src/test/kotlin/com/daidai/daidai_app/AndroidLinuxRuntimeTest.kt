@@ -121,10 +121,10 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
-    fun `mirror defaults use Huawei Alibaba and npmmirror`() {
+    fun `mirror defaults use Aliyun Ubuntu and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 
-        assertEquals("https://repo.huaweicloud.com/alpine", mirrors.linuxMirror)
+        assertEquals("https://mirrors.aliyun.com/ubuntu", mirrors.linuxMirror)
         assertEquals("https://mirrors.aliyun.com/pypi/simple", mirrors.pipMirror)
         assertEquals("https://registry.npmmirror.com", mirrors.npmMirror)
     }
@@ -155,8 +155,8 @@ class AndroidLinuxRuntimeTest {
             ),
         )
         assertEquals(
-            AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
-            AndroidLinuxRuntime.resolveMirrorValue(null, null, AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR),
+            AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.resolveMirrorValue(null, null, AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR),
         )
     }
 
@@ -194,18 +194,21 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `rootfs mirror files use one supplied configuration snapshot`() {
         val root = Files.createTempDirectory("linux-runtime-mirror-test").toFile()
-        root.resolve("etc/alpine-release").apply { parentFile.mkdirs(); writeText("3.21.2") }
+        root.resolve("etc/os-release").apply { parentFile.mkdirs(); writeText("NAME=\"Ubuntu\"\n") }
+        root.resolve("etc/lsb-release").apply { writeText("DISTRIB_CODENAME=noble\n") }
         val mirrors = AndroidLinuxRuntime.MirrorConfig(
             pipMirror = "https://pypi.org/simple",
             npmMirror = "https://registry.npmjs.org",
-            linuxMirror = "https://dl-cdn.alpinelinux.org/alpine",
+            linuxMirror = "https://mirrors.aliyun.com/ubuntu",
         )
 
         AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors)
 
         assertEquals(
-            "https://dl-cdn.alpinelinux.org/alpine/v3.21/main\nhttps://dl-cdn.alpinelinux.org/alpine/v3.21/community\n",
-            root.resolve("etc/apk/repositories").readText(),
+            "deb https://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse\n" +
+                "deb https://mirrors.aliyun.com/ubuntu/ noble-updates main restricted universe multiverse\n" +
+                "deb https://mirrors.aliyun.com/ubuntu/ noble-security main restricted universe multiverse\n",
+            root.resolve("etc/apt/sources.list").readText(),
         )
         assertTrue(root.resolve("etc/pip.conf").readText().contains("index-url = https://pypi.org/simple"))
         assertTrue(root.resolve("etc/npmrc").readText().contains("registry=https://registry.npmjs.org"))

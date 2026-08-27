@@ -496,7 +496,7 @@ class LocalPanelStore(
         val defaults = mapOf(
             AndroidLinuxRuntime.PIP_MIRROR_KEY to AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX,
             AndroidLinuxRuntime.NPM_MIRROR_KEY to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
-            AndroidLinuxRuntime.LINUX_MIRROR_KEY to AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.LINUX_MIRROR_KEY to AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR,
         )
         val editor = configPrefs.edit()
         var preferencesChanged = false
@@ -1531,7 +1531,7 @@ class LocalPanelStore(
     private fun defaultMirrorValue(key: String): String = when (key) {
         AndroidLinuxRuntime.PIP_MIRROR_KEY -> AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX
         AndroidLinuxRuntime.NPM_MIRROR_KEY -> AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY
-        AndroidLinuxRuntime.LINUX_MIRROR_KEY -> AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR
+        AndroidLinuxRuntime.LINUX_MIRROR_KEY -> AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR
         else -> ""
     }
 
@@ -1979,16 +1979,16 @@ fun serveDashboardStats(): JSONObject {
 
     private fun mirrorResponseData(): JSONObject {
         val rootfs = AndroidLinuxRuntime.statusJson(appContext).optJSONObject("rootfs")
-        val manager = rootfs?.optString("package_manager").orEmpty().ifBlank { "apk" }
+        val manager = rootfs?.optString("package_manager").orEmpty().ifBlank { "apt" }
         return JSONObject()
             .put(AndroidLinuxRuntime.PIP_MIRROR_KEY, configValue(AndroidLinuxRuntime.PIP_MIRROR_KEY, AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX))
             .put(AndroidLinuxRuntime.NPM_MIRROR_KEY, configValue(AndroidLinuxRuntime.NPM_MIRROR_KEY, AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY))
-            .put(AndroidLinuxRuntime.LINUX_MIRROR_KEY, configValue(AndroidLinuxRuntime.LINUX_MIRROR_KEY, AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR))
+            .put(AndroidLinuxRuntime.LINUX_MIRROR_KEY, configValue(AndroidLinuxRuntime.LINUX_MIRROR_KEY, AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR))
             .put("linux_package_manager", manager)
-            .put("linux_distribution", rootfs?.optString("distribution").orEmpty().ifBlank { "alpine" })
-            .put("linux_mirror_supported", manager == "apk")
-            .put("linux_mirror_label", if (manager == "apk") "Alpine APK（华为云默认）" else "Linux")
-            .put("linux_mirror_message", if (manager == "apk") "默认使用华为云，支持任意合法 HTTP(S) 镜像及官方源" else "当前包管理器暂不支持镜像设置")
+            .put("linux_distribution", rootfs?.optString("distribution").orEmpty().ifBlank { "ubuntu" })
+            .put("linux_mirror_supported", manager == "apt")
+            .put("linux_mirror_label", if (manager == "apt") "Ubuntu APT（阿里云默认）" else "Linux")
+            .put("linux_mirror_message", if (manager == "apt") "默认使用阿里云，支持任意合法 HTTP(S) 镜像源" else "当前包管理器暂不支持镜像设置")
     }
     private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version","3.14");upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
     private fun exportDependencies(type: String): NanoHTTPD.Response { val lines=mutableListOf<String>();readableDatabase.query("dependencies",arrayOf("name","version"),if(type.isBlank())null else "type=?",if(type.isBlank())null else arrayOf(normalizeDependencyType(type)?:type),null,null,"name").use{c->while(c.moveToNext())lines += c.string("name") + if(c.string("version").isBlank()) "" else if(type=="npm"||type=="nodejs") "@${c.string("version")}" else "==${c.string("version")}"};return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"text/plain; charset=utf-8",lines.joinToString("\n")) }

@@ -23,23 +23,22 @@ object AndroidLinuxRuntime {
     internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     private const val DISTRO_PREFERENCES = "daidai-linux-distro"
     private const val DISTRO_KEY = "selected_distribution"
-    private const val DEFAULT_DISTRIBUTION = "alpine"
-    internal val SUPPORTED_DISTRIBUTIONS = listOf("alpine")
-    private val REQUIRED_COMMANDS_ALPINE = linkedMapOf(
+    private const val DEFAULT_DISTRIBUTION = "ubuntu"
+    internal val SUPPORTED_DISTRIBUTIONS = listOf("ubuntu")
+    private val REQUIRED_COMMANDS_UBUNTU = linkedMapOf(
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
         "python3" to listOf("/usr/bin/python3"),
         "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
         "node" to listOf("/usr/bin/node"),
         "npm" to listOf("/usr/bin/npm"),
-        "pnpm" to listOf("/usr/bin/pnpm"),
-        "uv" to listOf("/usr/bin/uv"),
+        "pnpm" to listOf("/usr/local/bin/pnpm"),
     )
     private val REQUIRED_PACKAGE_MANAGERS = mapOf(
-        "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
+        "apt" to listOf("/usr/bin/apt-get"),
     )
 
-    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> = REQUIRED_COMMANDS_ALPINE
-    const val ALPINE_APK_DEFAULT_MIRROR = "https://repo.huaweicloud.com/alpine"
+    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> = REQUIRED_COMMANDS_UBUNTU
+    const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
@@ -52,7 +51,7 @@ object AndroidLinuxRuntime {
     data class MirrorConfig(
         val pipMirror: String = PYTHON_PIP_ALIBABA_INDEX,
         val npmMirror: String = NODE_NPM_NPMMIRROR_REGISTRY,
-        val linuxMirror: String = ALPINE_APK_DEFAULT_MIRROR,
+        val linuxMirror: String = UBUNTU_APT_DEFAULT_MIRROR,
     )
 
     data class RootfsPaths(
@@ -169,9 +168,9 @@ object AndroidLinuxRuntime {
             .getString(DISTRO_KEY, null)?.trim()?.lowercase()?.takeIf { it in SUPPORTED_DISTRIBUTIONS }
             ?: DEFAULT_DISTRIBUTION
 
-    internal fun defaultLinuxMirror(distribution: String): String = ALPINE_APK_DEFAULT_MIRROR
+    internal fun defaultLinuxMirror(distribution: String): String = UBUNTU_APT_DEFAULT_MIRROR
 
-    fun distributionPackageManager(distribution: String): String = "apk"
+    fun distributionPackageManager(distribution: String): String = "apt"
 
     private fun rootfsAssetPrefix(context: Context): String {
         val abi = currentAbi()
