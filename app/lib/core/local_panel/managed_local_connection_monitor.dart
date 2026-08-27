@@ -77,6 +77,8 @@ class ManagedLocalConnectionMonitor {
   final void Function() _clearManagedSession;
   final Duration interval;
 
+  static const Duration _healthyInterval = Duration(minutes: 5);
+
   MonitorScheduleHandle? _schedule;
   PanelConfig? _panel;
   String? _localToken;
@@ -85,6 +87,7 @@ class ManagedLocalConnectionMonitor {
   int _generation = 0;
   bool _remoteTransition = false;
   bool _isForeground = true;
+  bool _healthy = false;
 
   Future<void> initializeFromStorage() async {
     if (_remoteTransition) return;
@@ -209,12 +212,16 @@ class ManagedLocalConnectionMonitor {
       // Core is not ready (e.g. :panel process just restarted and its port/token
       // changed). Drop the stale managed session so the UI does not keep a dead
       // baseUrl/token, and retry on the next tick.
+      _healthy = false;
+      _replaceSchedule();
       await _writes.run(() async {
         if (generation != _generation) return;
         _clearManagedSession();
       });
       return;
     }
+    _healthy = true;
+    _replaceSchedule();
     try {
       final stored = await _loadCurrentPanel();
       if (generation != _generation) return;
@@ -243,7 +250,7 @@ class ManagedLocalConnectionMonitor {
   void _replaceSchedule() {
     _schedule?.cancel();
     _schedule = _isForeground && _panel != null
-        ? _scheduler(interval, reconcileNow)
+        ? _scheduler(_healthy ? _healthyInterval : interval, reconcileNow)
         : null;
   }
 
