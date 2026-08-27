@@ -148,8 +148,15 @@ class LocalPanelHttpServer(
             if (session.uri.startsWith("/api/auth")) {
                 return store.serveAuth(session)
             }
-            if (!hasLocalToken && !store.isAuthorized(session)) {
-                return jsonError(Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+            if (session.uri == "/api/open-api/token" || session.uri == "/api/v1/open-api/token") {
+                return store.serveOpenApiToken(session)
+            }
+            if (!hasLocalToken) {
+                if (session.uri.startsWith("/api/open-api") || session.uri.startsWith("/api/v1/open-api")) {
+                    if (!store.isAuthorized(session)) return jsonError(Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+                } else {
+                    store.authorizeBusinessRequest(session)?.let { return it }
+                }
             }
             if (session.uri.startsWith("/api/security")) {
                 return store.serveSecurity(session)

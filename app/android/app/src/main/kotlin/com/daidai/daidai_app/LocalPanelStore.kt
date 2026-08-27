@@ -76,7 +76,7 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 15
+        const val SCHEMA_VERSION = 16
         private const val CONFIG_SCRIPT_TEMPLATE = """# 呆呆面板高级配置脚本
 # 本文件会在任务运行时被解析，作为环境变量注入到脚本执行环境。
 # 优先级低于「环境变量」页配置的数据库环境变量。
@@ -96,6 +96,7 @@ class LocalPanelStore(
         private const val MAX_JSON_BODY_BYTES = 16L * 1024 * 1024
         private const val MAX_LOGIN_ATTEMPTS = 5
         private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
+        private const val OPEN_API_TOKEN_TTL_SECONDS = 24L * 60 * 60
 
         private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
             FALLBACK_WORKERS,
@@ -322,6 +323,11 @@ class LocalPanelStore(
             addColumnIfMissing(db, "notification_channels", "last_test_status", "TEXT NOT NULL DEFAULT ''")
         }
         if (oldVersion < 15) ensureBackupCompatibilityColumns(db)
+        if (oldVersion < 16) {
+            addColumnIfMissing(db, "open_api_logs", "ip", "TEXT NOT NULL DEFAULT ''")
+            addColumnIfMissing(db, "open_api_logs", "duration", "INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("CREATE TABLE IF NOT EXISTS open_api_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, access_token TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)")
+        }
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, declaration: String) {
@@ -347,7 +353,10 @@ class LocalPanelStore(
         db.execSQL("""CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS platform_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, platform_id INTEGER NOT NULL, name TEXT NOT NULL, token TEXT NOT NULL, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_apps (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, app_key TEXT NOT NULL UNIQUE, secret TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '', rate_limit INTEGER NOT NULL DEFAULT 60, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
-        db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, method TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status_code INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, method TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status_code INTEGER NOT NULL DEFAULT 0, ip TEXT NOT NULL DEFAULT '', duration INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS open_api_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id INTEGER NOT NULL, access_token TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
+        addColumnIfMissing(db, "open_api_logs", "ip", "TEXT NOT NULL DEFAULT ''")
+        addColumnIfMissing(db, "open_api_logs", "duration", "INTEGER NOT NULL DEFAULT 0")
         val now = Instant.now().toString()
         db.execSQL("INSERT INTO platforms(name,label,icon,created_at,updated_at) SELECT 'github','GitHub','',?,? WHERE NOT EXISTS(SELECT 1 FROM platforms WHERE name='github')", arrayOf(now, now))
     }
@@ -832,6 +841,93 @@ class LocalPanelStore(
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
         }
     }
+
+    fun serveOpenApiToken(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val json = body(session)
+        val appKey = json.optString("app_key").trim()
+        val appSecret = json.optString("app_secret")
+        if (appKey.isBlank() || appSecret.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "app_key 和 app_secret 不能为空")
+        val app = readableDatabase.query("open_api_apps", arrayOf("id", "secret", "enabled"), "app_key=?", arrayOf(appKey), null, null, null).use { c ->
+            if (c.moveToFirst()) Triple(c.long("id"), c.string("secret"), c.int("enabled") != 0) else null
+        } ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "无效的 App Key 或 App Secret")
+        if (!app.third) return error(NanoHTTPD.Response.Status.FORBIDDEN, "应用已被禁用")
+        if (app.second != appSecret) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "无效的 App Key 或 App Secret")
+        val accessToken = randomToken()
+        val now = Instant.now()
+        writableDatabase.insert("open_api_tokens", null, ContentValues().apply {
+            put("app_id", app.first); put("access_token", accessToken); put("expires_at", now.plusSeconds(OPEN_API_TOKEN_TTL_SECONDS).toString()); put("created_at", now.toString())
+        })
+        return ok(JSONObject().put("data", JSONObject().put("access_token", accessToken).put("token_type", "Bearer").put("expires_in", OPEN_API_TOKEN_TTL_SECONDS)))
+    }
+
+    fun authorizeBusinessRequest(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response? {
+        val token = bearerToken(session)
+        if (token == null) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+        if (readableDatabase.rawQuery("SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ?", arrayOf(token)).use(Cursor::moveToFirst)) return null
+        val row = readableDatabase.rawQuery(
+            "SELECT t.app_id, t.expires_at, a.enabled, a.scopes, a.rate_limit FROM open_api_tokens t JOIN open_api_apps a ON a.id = t.app_id WHERE t.access_token = ?",
+            arrayOf(token),
+        ).use { c -> if (c.moveToFirst()) arrayOf<Any>(c.long("app_id"), c.string("expires_at"), c.int("enabled"), c.string("scopes"), c.int("rate_limit")) else null }
+            ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+        val appId = row[0] as Long
+        val enabled = (row[2] as Int) != 0
+        val scopes = row[3] as String
+        val rateLimit = row[4] as Int
+        if (!enabled) return error(NanoHTTPD.Response.Status.FORBIDDEN, "应用已被禁用")
+        if (runCatching { Instant.parse(row[1] as String) }.getOrNull()?.isBefore(Instant.now()) == true) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "访问令牌已过期")
+        if (!openApiScopeAllowed(scopes, session.uri.orEmpty())) return error(NanoHTTPD.Response.Status.FORBIDDEN, "未授权访问该资源")
+        if (openApiRateLimited(appId, rateLimit)) return error(NanoHTTPD.Response.Status.TOO_MANY_REQUESTS, "请求频率超出限制")
+        recordOpenApiLog(appId, session)
+        return null
+    }
+
+    private fun openApiScopeAllowed(scopes: String, uri: String): Boolean {
+        val normalized = uri.removePrefix("/api/v1").removePrefix("/api").trim('/')
+        val parts = normalized.split('/').filter(String::isNotEmpty)
+        val resource = when {
+            parts.firstOrNull() == "system" && parts.getOrNull(1) == "backup" -> "backup"
+            parts.firstOrNull() != null -> parts.first()
+            else -> "system"
+        }
+        val granted = scopes.split(',').map(String::trim).filter(String::isNotEmpty).toSet()
+        return resource in granted
+    }
+
+    private fun openApiRateLimited(appId: Long, rateLimit: Int): Boolean {
+        if (rateLimit <= 0) return false
+        val since = Instant.now().minusSeconds(3600).toString()
+        val count = readableDatabase.rawQuery("SELECT COUNT(*) FROM open_api_logs WHERE app_id=? AND created_at>=?", arrayOf(appId.toString(), since)).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        return count >= rateLimit
+    }
+
+    private fun recordOpenApiLog(appId: Long, session: NanoHTTPD.IHTTPSession) {
+        writableDatabase.insert("open_api_logs", null, ContentValues().apply {
+            put("app_id", appId)
+            put("method", session.method.toString())
+            put("path", session.uri.orEmpty())
+            put("status_code", 200)
+            put("ip", requestIp(session))
+            put("duration", 0)
+            put("created_at", Instant.now().toString())
+        })
+    }
+
+    private fun serveOpenApiLogs(s: NanoHTTPD.IHTTPSession, id: Long): NanoHTTPD.Response {
+        val page = (s.parameters["page"]?.firstOrNull()?.toIntOrNull() ?: 1).coerceAtLeast(1)
+        val size = (s.parameters["page_size"]?.firstOrNull()?.toIntOrNull() ?: 20).coerceIn(1, 200)
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM open_api_logs WHERE app_id=?", arrayOf(id.toString())).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        val rows = JSONArray()
+        readableDatabase.rawQuery("SELECT * FROM open_api_logs WHERE app_id=? ORDER BY id DESC LIMIT ? OFFSET ?", arrayOf(id.toString(), size.toString(), ((page - 1) * size).toString())).use { c ->
+            while (c.moveToNext()) rows.put(JSONObject()
+                .put("endpoint", c.string("path"))
+                .put("method", c.string("method"))
+                .put("status", c.int("status_code"))
+                .put("duration", c.int("duration"))
+                .put("ip", c.string("ip"))
+                .put("created_at", c.string("created_at")))
+        }
+        return ok(JSONObject().put("data", rows).put("total", total).put("page", page).put("page_size", size))
+    }
     private fun serveSimpleSecretCrud(s:NanoHTTPD.IHTTPSession,u:String,p:String,t:String,secret:String):NanoHTTPD.Response { val id=u.removePrefix(p).trim('/').toLongOrNull();return when { s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query(t,null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put(secret,"********").put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at")))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.GET&&id!=null->{readableDatabase.query(t,null,"id=?",arrayOf(id.toString()),null,null,null).use{c->if(!c.moveToFirst())return error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在");ok(JSONObject().put("data",JSONObject().put("id",id).put("name",c.string("name")).put(secret,c.string(secret))))}};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val n=j.optString("name").trim();val v=j.optString(secret);if(n.isBlank()||v.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称和密钥不能为空");val x=writableDatabase.insert(t,null,ContentValues().apply{put("name",n);put(secret,v);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString(secret).isNotBlank()&&j.optString(secret)!="********")put(secret,j.optString(secret));put("updated_at",Instant.now().toString())};if(writableDatabase.update(t,v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"记录不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete(t,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"接口不存在") } }
     private fun servePlatformTokens(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { if(u=="/platform-tokens/platforms"){if(s.method==NanoHTTPD.Method.GET){val a=JSONArray();readableDatabase.query("platforms",null,null,null,null,null,"name").use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("label",c.string("label")).put("icon",c.string("icon")))};return ok(JSONObject().put("data",a))};if(s.method==NanoHTTPD.Method.POST){val j=body(s);val now=Instant.now().toString();val id=writableDatabase.insert("platforms",null,ContentValues().apply{put("name",j.optString("name"));put("label",j.optString("label",j.optString("name")));put("icon",j.optString("icon"));put("created_at",now);put("updated_at",now)});return ok(JSONObject().put("data",JSONObject().put("id",id)))}};val tail=u.removePrefix("/platform-tokens").trim('/');val parts=tail.split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("platform_tokens",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};return serveTokenCrud(s,id) }
     private fun serveTokenCrud(s:NanoHTTPD.IHTTPSession,id:Long?):NanoHTTPD.Response { return when {s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();val q="SELECT t.*,p.name platform_name,p.label platform_label FROM platform_tokens t LEFT JOIN platforms p ON p.id=t.platform_id";readableDatabase.rawQuery(q,null).use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("platform_id",c.long("platform_id")).put("platform",JSONObject().put("name",c.string("platform_name")).put("label",c.string("platform_label"))).put("name",c.string("name")).put("token","********").put("remarks",c.string("remarks")).put("enabled",c.int("enabled")!=0))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val x=writableDatabase.insert("platform_tokens",null,ContentValues().apply{put("platform_id",j.optLong("platform_id"));put("name",j.optString("name"));put("token",j.optString("token"));put("remarks",j.optString("remarks"));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString("token").isNotBlank()&&j.optString("token")!="********")put("token",j.optString("token"));if(j.has("remarks"))put("remarks",j.optString("remarks"));put("updated_at",Instant.now().toString())};writableDatabase.update("platform_tokens",v,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","更新成功"))};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("platform_tokens","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"平台令牌接口不存在")} }
@@ -843,7 +939,9 @@ class LocalPanelStore(
             parts.getOrNull(1) == "reset-secret" && session.method == NanoHTTPD.Method.PUT -> {
                 val secret = randomToken()
                 val changed = writableDatabase.update("open_api_apps", ContentValues().apply { put("secret", secret); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
-                if (changed == 0) error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在") else ok(JSONObject().put("message", "密钥已重置").put("data", JSONObject().put("app_secret", secret)))
+                if (changed == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+                val appKey = readableDatabase.query("open_api_apps", arrayOf("app_key"), "id=?", arrayOf(id.toString()), null, null, null).use { c -> if (c.moveToFirst()) c.string("app_key") else "" }
+                ok(JSONObject().put("message", "密钥已重置").put("data", JSONObject().put("app_key", appKey).put("app_secret", secret)))
             }
             parts.getOrNull(1) in setOf("view-secret", "show-secret") && session.method == NanoHTTPD.Method.POST -> viewOpenApiSecret(session, id)
             else -> null
@@ -868,8 +966,13 @@ class LocalPanelStore(
         return ok(JSONObject().put("data", JSONObject().put("app_secret", secret)))
     }
 
-    private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return ok(JSONObject().put("data",JSONArray()).put("total",0).put("page",1).put("page_size",20));if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST){val password=body(s).optString("password");val valid=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->c.moveToFirst()&&hashPassword(password,Base64.decode(c.string("password_salt"),Base64.NO_WRAP))==c.string("password_hash")};if(!valid)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"管理员密码错误");val secret=readableDatabase.query("open_api_apps",arrayOf("secret"),"id=?",arrayOf(id.toString()),null,null,null).use{c->if(c.moveToFirst())c.string("secret")else return error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};return ok(JSONObject().put("data",JSONObject().put("secret",secret)))};return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
-    private fun openApiJson(c:Cursor)=JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("app_key",c.string("app_key")).put("secret","********").put("scopes",c.string("scopes")).put("rate_limit",c.int("rate_limit")).put("enabled",c.int("enabled")!=0).put("created_at",c.string("created_at")).put("updated_at",c.string("updated_at"))
+    private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return serveOpenApiLogs(s,id);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST){val password=body(s).optString("password");val valid=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->c.moveToFirst()&&hashPassword(password,Base64.decode(c.string("password_salt"),Base64.NO_WRAP))==c.string("password_hash")};if(!valid)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"管理员密码错误");val secret=readableDatabase.query("open_api_apps",arrayOf("secret"),"id=?",arrayOf(id.toString()),null,null,null).use{c->if(c.moveToFirst())c.string("secret")else return error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};return ok(JSONObject().put("data",JSONObject().put("secret",secret)))};return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("app_secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
+    private fun openApiJson(c: Cursor): JSONObject {
+        val id = c.long("id")
+        val todayStart = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.DAYS).toString()
+        val callCount = readableDatabase.rawQuery("SELECT COUNT(*) FROM open_api_logs WHERE app_id=? AND created_at>=?", arrayOf(id.toString(), todayStart)).use { cur -> if (cur.moveToFirst()) cur.getInt(0) else 0 }
+        return JSONObject().put("id", id).put("name", c.string("name")).put("app_key", c.string("app_key")).put("secret", "********").put("scopes", c.string("scopes")).put("rate_limit", c.int("rate_limit")).put("enabled", c.int("enabled") != 0).put("call_count", callCount).put("created_at", c.string("created_at")).put("updated_at", c.string("updated_at"))
+    }
 
     fun serveConfigScript(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { val file=File(appContext.filesDir,"config.sh");return when(session.method){NanoHTTPD.Method.GET->ok(JSONObject().put("content",if(file.isFile)file.readText() else CONFIG_SCRIPT_TEMPLATE).put("path",file.absolutePath));NanoHTTPD.Method.PUT->{val content=body(session).optString("content");file.writeText(content);ok(JSONObject().put("message","配置脚本已保存"))};else->error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED,"仅支持 GET/PUT")} }
 
