@@ -58,10 +58,10 @@ create_dev_nodes() {
 
 resolve_seed_deb() {
   local packages_gz="$1" pkg_name="$2"
-  zcat "$packages_gz" | awk -v pkg="$pkg_name" '
+  ( zcat "$packages_gz" | awk -v pkg="$pkg_name" '
     /^Package: / { name = $2 }
     /^Filename: / { if (name == pkg) { print $2; exit } }
-  '
+  ' ) || true
 }
 
 run_in_rootfs() {
