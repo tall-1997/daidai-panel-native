@@ -23,6 +23,13 @@ Android versionCode：**1000170**
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
 
+## 首次登录
+
+- 默认账号：**`admin`**
+- 默认密码：**`admin123`**
+
+首次登录后请及时在「我的 → 个人中心」修改密码，避免安全隐患。
+
 ## 核心能力
 
 - Flutter UI 统一管理 Android 本地实例和远程呆呆面板。
