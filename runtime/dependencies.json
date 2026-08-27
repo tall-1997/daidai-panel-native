@@ -2,7 +2,7 @@
   "version": "1",
   "updated_at": "2026-07-29T00:00:00Z",
   "mirrors": {
-    "alpine_apk": "https://repo.huaweicloud.com/alpine",
+    "ubuntu_apt": "https://mirrors.aliyun.com/ubuntu",
     "python_pip": "https://mirrors.aliyun.com/pypi/simple/",
     "node_npm": "https://registry.npmmirror.com"
   },

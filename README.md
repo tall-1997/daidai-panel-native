@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/tall-1997/daidai-panel-native)](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 [![License](https://img.shields.io/github/license/tall-1997/daidai-panel-native)](LICENSE)
 
-呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Alpine Linux 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
+呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
 当前版本：**v1.0.17**
 
@@ -34,9 +34,9 @@ Android versionCode：**1000170**
 
 - Flutter UI 统一管理 Android 本地实例和远程呆呆面板。
 - 本地 Kotlin fallback 运行于 Android `:panel` 独立进程，并监听动态 `127.0.0.1` 端口。
-- **内置 Linux 终端**：NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Alpine Linux 用户空间，无需依赖 Termux。
+- **内置 Linux 终端**：NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，无需依赖 Termux。
 - 支持任务、Cron、脚本、日志、环境变量、订阅、通知、用户、安全、SSH、Open API、平台令牌和备份恢复。
-- 包管理：Alpine 使用 apk，默认华为云/阿里云/npmmirror 镜像源，支持按需安装 node、git、python3 等开发工具。
+- 包管理：Ubuntu 使用 apt，默认阿里云镜像源，支持按需安装 node、git、python3 等开发工具。
 - 支持 pip/npm 依赖安装、指定版本、安装去重、共享目录、镜像配置和缓存限制；镜像源在「我的 → 依赖管理」页右上角切换。
 - 支持实时增量日志、持久日志回读、任务停止、进程树回收和 Android 本地通知。
 - 支持中文脚本路径、空格、引号、显式空参数和多账号变量。
@@ -49,16 +49,16 @@ Android versionCode：**1000170**
 
 | 安装包 | ABI | 本地业务 API | 本地终端环境 | 推荐场景 |
 | --- | --- | --- | --- | --- |
-| ARM64 完整版 | `arm64-v8a` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Alpine，apk 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
+| ARM64 完整版 | `arm64-v8a` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
 
-依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 Kotlin fallback 提供；Node.js 和 Python 通过 apk/apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
+依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 Kotlin fallback 提供；Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
 
 ## 平台边界
 
 - 正式 Release 提供 ARM64 APK。
 - 本地服务监听 `0.0.0.0`，支持本机与局域网浏览器访问；App 内请求走 local-token，浏览器请求强制账号密码 + JWT。
 - Linux 终端内核为 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork），不使用 Termux 预编译二进制。
-- Alpine 内置在 APK 中。
+- Ubuntu 内置在 APK 中。
 - 默认 Linux 包管理器镜像源为华为云/阿里云/npmmirror，可在「我的 → 依赖管理」页右上角切换。
 - 依赖 glibc、桌面 Linux API 或不兼容 ARM64 的原生扩展可能无法使用。
 - APK 内置 runtime 随 App 更新，本地实例不提供后端自更新或 runtime 卸载。
@@ -105,7 +105,7 @@ Android versionCode：**1000170**
 | --- | --- |
 | `app/` | Flutter App、Android Host、Kotlin fallback 和移动端测试 |
 | `app/android/app/src/main/jniLibs/` | NDK 自编译原生二进制（PRoot、BusyBox、Talloc、libandroid-shmem） |
-| `app/android/app/src/main/assets/android-runtime/` | 嵌入式 Linux 运行时资产（Alpine rootfs、Manifest） |
+| `app/android/app/src/main/assets/android-runtime/` | 嵌入式 Linux 运行时资产（Ubuntu rootfs、Manifest） |
 | `panel/server/` | upstream Go 后端源码，作为业务 API 兼容基线参考（不再编译进 APK） |
 | `panel/web/` | 本机浏览器面板 Web 前端 |
 | `runtime/` | 运行时清单、兼容矩阵和 smoke evidence |
@@ -176,7 +176,7 @@ flutter test
 ```bash
 cd app
 bash scripts/prepare-android-python-runtime.sh
-bash scripts/prepare-android-alpine-rootfs.sh
+bash scripts/prepare-android-ubuntu-rootfs.sh
 bash scripts/prepare-android-yaegi-runtime.sh
 ```
 
