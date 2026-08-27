@@ -211,7 +211,6 @@ class SseClient with WidgetsBindingObserver {
             const {408, 425, 429, 500, 502, 503, 504}.contains(
               response.statusCode,
             )) {
-          options.onError?.call(error);
           _scheduleReconnectAfterFailure(options, generation);
         } else {
           _state = SseClientState.completed;
