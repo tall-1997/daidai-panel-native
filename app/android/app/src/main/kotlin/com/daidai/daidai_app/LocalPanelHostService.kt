@@ -46,6 +46,8 @@ class LocalPanelHostService : Service() {
     @Volatile
     private var lastRecoveryTrigger: String = "app-start"
     @Volatile
+    private var transientPanelSession = false
+    @Volatile
     private var destroyed = false
     private val binder = object : ILocalPanelService.Stub() {
         override fun ensureStarted(): String = encodeWithState(
@@ -160,10 +162,12 @@ class LocalPanelHostService : Service() {
         }
         if (intent.action == ACTION_PANEL_SESSION_START) {
             lastRecoveryTrigger = "browser-session-start"
+            transientPanelSession = true
             applyPersistentAction(persistentPolicy.beginTransientSession())
             return START_STICKY
         }
         if (intent.action == ACTION_PANEL_SESSION_END) {
+            transientPanelSession = false
             applyPersistentAction(persistentPolicy.endTransientSession())
             return START_NOT_STICKY
         }
@@ -295,10 +299,11 @@ class LocalPanelHostService : Service() {
         failed: Boolean = false,
     ) = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentTitle("呆呆面板本地服务")
+        .setContentTitle(if (transientPanelSession) "呆呆面板浏览器面板" else "呆呆面板本地服务")
         .setContentText(
             when {
                 failed -> "本地面板核心恢复失败，请打开应用重试"
+                transientPanelSession -> "浏览器面板访问中，面板端口保持在线"
                 AndroidResourceProtection.evaluate(AndroidResourceProtection.snapshot(this)).state == "resource_limited" ->
                     "本地面板运行中，低优先级任务已受资源保护"
                 starting -> "正在恢复本地面板核心"
@@ -316,12 +321,12 @@ class LocalPanelHostService : Service() {
         )
         .addAction(
             0,
-            "停止",
+            if (transientPanelSession) "关闭" else "停止",
             PendingIntent.getService(
                 this,
                 1,
                 Intent(this, LocalPanelHostService::class.java).apply {
-                    action = ACTION_DISABLE_PERSISTENT
+                    action = if (transientPanelSession) ACTION_PANEL_SESSION_END else ACTION_DISABLE_PERSISTENT
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

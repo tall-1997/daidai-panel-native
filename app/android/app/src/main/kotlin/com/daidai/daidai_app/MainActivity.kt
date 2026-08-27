@@ -1,6 +1,5 @@
 package com.daidai.daidai_app
 
-import android.app.ActivityManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -179,11 +178,6 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    override fun onResume() {
-        super.onResume()
-        endPanelSession()
-    }
-
     override fun onDestroy() {
         activityDestroyed = true
         localPanelClient.close()
@@ -199,24 +193,6 @@ class MainActivity : FlutterActivity() {
                 action = LocalPanelHostService.ACTION_PANEL_SESSION_START
             },
         )
-    }
-
-    private fun endPanelSession() {
-        if (LocalPanelHostService.isPersistentSchedulingEnabled(this)) return
-        if (!isPanelServiceRunning()) return
-        startService(
-            Intent(this, LocalPanelHostService::class.java).apply {
-                action = LocalPanelHostService.ACTION_PANEL_SESSION_END
-            },
-        )
-    }
-
-    private fun isPanelServiceRunning(): Boolean {
-        val manager = getSystemService(ActivityManager::class.java) ?: return false
-        @Suppress("DEPRECATION")
-        return manager.getRunningServices(Int.MAX_VALUE).any {
-            it.service.className == LocalPanelHostService::class.java.name
-        }
     }
 
     private fun invokeLocalPanel(
