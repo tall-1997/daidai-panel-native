@@ -27,6 +27,7 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
     )
     @Volatile private var lastCheckedMinute = Long.MIN_VALUE
     private val inFlightTasks = ConcurrentHashMap.newKeySet<Long>()
+    private var lastResourceLimited = false
 
     fun start() {
         if (started.compareAndSet(false, true)) {
@@ -42,7 +43,18 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             val minute = now.toEpochSecond() / 60
             if (minute == lastCheckedMinute) return
             lastCheckedMinute = minute
-            store.runScheduledBackupIfDue(now)
+            val guarantee = store.evaluateResourceGuarantee()
+            val limited = guarantee.state == "resource_limited"
+            if (limited) {
+                if (!lastResourceLimited) {
+                    lastResourceLimited = true
+                    store.notifyLowPrioritySkipped(guarantee.reasonCode)
+                }
+                store.appLog("Cron", "resource_limited 跳过备份: ${guarantee.reasonCode}")
+            } else {
+                lastResourceLimited = false
+                store.runScheduledBackupIfDue(now)
+            }
             store.enabledScheduledTasks()
                 .filter { task -> task.cronExpression.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
                 .forEach { task -> submitTask(task.id) }

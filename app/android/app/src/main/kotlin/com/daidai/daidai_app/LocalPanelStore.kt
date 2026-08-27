@@ -1200,6 +1200,15 @@ class LocalPanelStore(
         manager.notify((System.nanoTime() and 0x7fffffff).toInt(), NotificationCompat.Builder(appContext, channelId).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(title).setContentText(content).setStyle(NotificationCompat.BigTextStyle().bigText(content)).setAutoCancel(true).build())
     }
 
+    fun evaluateResourceGuarantee(): AndroidResourceGuarantee =
+        AndroidResourceProtection.evaluate(AndroidResourceProtection.snapshot(appContext))
+
+    fun notifyLowPrioritySkipped(reason: String) {
+        runCatching {
+            postAndroidNotification("panel_channel", "本地面板已暂停低优先级任务", "设备资源紧张（$reason），定时备份/订阅拉取已暂停；定时任务正常执行。")
+        }
+    }
+
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
