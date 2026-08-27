@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.19 - 2026-08-27
+
+### 切换为 Ubuntu 唯一发行版
+
+- 内置 Linux 环境由 Alpine(musl) 切换为 Ubuntu 24.04（noble，glibc），提供更广的二进制兼容性。
+- rootfs 内置 bash、python3、pip、nodejs、npm、pnpm、git、curl、openssh-client、tzdata，包管理器使用 apt。
+- 恢复 Ubuntu rootfs 制作脚本（qemu + chroot 产物），默认软件源为阿里云镜像。
+- 前端依赖管理镜像预设恢复 Ubuntu apt 源。
+- 删除 Alpine rootfs 资产与制作脚本。
+
+注意：Ubuntu 使用 glibc，其 rseq 等新系统调用在 Android 应用域 seccomp 下曾导致 SIGSYS，本轮通过 `GLIBC_TUNABLES=glibc.pthread.rseq=0` 规避，仍需真机验证脚本执行稳定性。
+
 ## v1.0.18 - 2026-08-27
 
 ### 登录链路可靠性（浏览器面板）
