@@ -19,6 +19,7 @@ class ResourceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final safeValue = value.clamp(0.0, 100.0);
     return AppCard(
       padding: EdgeInsets.zero,
       child: Padding(
@@ -35,7 +36,7 @@ class ResourceCard extends StatelessWidget {
                     height: 56,
                     width: 56,
                     child: CircularProgressIndicator(
-                      value: value / 100,
+                      value: safeValue / 100,
                       strokeWidth: 5,
                       strokeCap: StrokeCap.round,
                       backgroundColor: color.withAlpha(25),
@@ -43,7 +44,7 @@ class ResourceCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${value.toStringAsFixed(0)}%',
+                    '${safeValue.toStringAsFixed(0)}%',
                     style: theme.textTheme.labelLarge?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: color,

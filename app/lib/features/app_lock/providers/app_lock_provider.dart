@@ -296,7 +296,7 @@ class AppLockController extends StateNotifier<AppLockState> {
         state = state.copyWith(unlockNotice: '${state.biometricLabel}验证未通过');
       }
       return ok;
-    } on PlatformException {
+    } on Exception {
       state = state.copyWith(unlockNotice: '生物识别暂时不可用，请改用其他方式');
       return false;
     }

@@ -53,7 +53,7 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
                 store.appLog("Cron", "resource_limited 跳过备份: ${guarantee.reasonCode}")
             } else {
                 lastResourceLimited = false
-                store.runScheduledBackupIfDue(now)
+                runBackupAsync(now)
             }
             store.enabledScheduledTasks()
                 .filter { task -> task.cronExpression.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matches(it, now) } }
@@ -80,6 +80,14 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             inFlightTasks.remove(taskId)
             store.appLog("Cron", "Task $taskId deferred: fallback queue is full")
             ticker.schedule({ submitTask(taskId) }, 10, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun runBackupAsync(now: ZonedDateTime) {
+        try {
+            workers.execute { store.runScheduledBackupIfDue(now) }
+        } catch (_: RejectedExecutionException) {
+            store.appLog("Cron", "backup deferred: queue is full")
         }
     }
 

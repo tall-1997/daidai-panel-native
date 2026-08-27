@@ -256,7 +256,9 @@ class LogListNotifier extends StateNotifier<LogListState> {
 
   Future<int> deleteAllMatching() async {
     // 后端日志列表单页最多 100 条，这里按当前筛选条件分页取出所有日志 ID 后批量删除。
+    // 上限 100 页（10000 条），防止运行中任务持续产生日志导致 total 持续增长、循环永不终止。
     const pageSize = 100;
+    const maxPages = 100;
     final ids = <int>[];
     var page = 1;
     var total = 0;
@@ -277,7 +279,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
       }
       ids.addAll(pageIds);
       page++;
-    } while (ids.length < total);
+    } while (ids.length < total && page <= maxPages);
 
     if (ids.isEmpty) {
       await load(refresh: true);
