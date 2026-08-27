@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
@@ -449,16 +450,18 @@ class AppLockController extends StateNotifier<AppLockState> {
     return base64UrlEncode(bytes);
   }
 
-  Future<String> _deriveSecret(String value, String salt, int rounds) async {
-    List<int> current = utf8.encode('$salt::$value');
-    for (var i = 0; i < rounds; i++) {
-      current = sha256.convert(current).bytes;
-      if ((i + 1) % 2000 == 0) {
-        await Future<void>.delayed(Duration.zero);
-      }
-    }
-    return current.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  Future<String> _deriveSecret(String value, String salt, int rounds) {
+    return compute(_computeSecretDigest, (value, salt, rounds));
   }
+}
+
+String _computeSecretDigest((String, String, int) args) {
+  final (value, salt, rounds) = args;
+  List<int> current = utf8.encode('$salt::$value');
+  for (var i = 0; i < rounds; i++) {
+    current = sha256.convert(current).bytes;
+  }
+  return current.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 }
 
 final appLockProvider = StateNotifierProvider<AppLockController, AppLockState>((

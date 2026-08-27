@@ -196,11 +196,17 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   Future<void> saveTaskOrder(List<Task> tasks) async {
     // 后端当前没有独立的任务排序接口，但任务更新接口允许写入 sort_order。
     // 这里按当前拖拽后的列表顺序写入 10、20、30...，后续插入任务时仍有间隔。
-    for (var index = 0; index < tasks.length; index++) {
-      await DioClient.instance.dio.put(
-        ApiEndpoints.taskById(tasks[index].id),
-        data: {'sort_order': (index + 1) * 10},
-      );
+    try {
+      for (var index = 0; index < tasks.length; index++) {
+        await DioClient.instance.dio.put(
+          ApiEndpoints.taskById(tasks[index].id),
+          data: {'sort_order': (index + 1) * 10},
+        );
+      }
+    } catch (_) {
+      // 部分失败：重载恢复后端真实顺序，避免 UI 与后端不一致
+      await load(refresh: true);
+      rethrow;
     }
     await load(refresh: true);
   }

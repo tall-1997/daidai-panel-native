@@ -20,13 +20,15 @@ class DashboardPage extends ConsumerStatefulWidget {
   ConsumerState<DashboardPage> createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends ConsumerState<DashboardPage> {
+class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindingObserver {
   String? _serverUrl;
   Timer? _refreshTimer;
+  bool _loading = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     SecureStorage.getServerUrl().then((url) {
       if (mounted) setState(() => _serverUrl = url);
     });
@@ -36,16 +38,45 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         await ref.read(authProvider.notifier).refreshUser();
       }
       _silentUpdateCheck();
-      _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-        if (mounted) ref.read(dashboardProvider.notifier).load();
-      });
+      _startRefreshTimer();
     });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startRefreshTimer();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+    }
+  }
+
+  void _startRefreshTimer() {
+    if (!mounted) return;
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _refresh();
+    });
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted || _loading) return;
+    _loading = true;
+    try {
+      await ref.read(dashboardProvider.notifier).load();
+    } finally {
+      _loading = false;
+    }
   }
 
   String? _buildAvatarUrl(String? avatarPath) {

@@ -457,6 +457,8 @@ class SseClient with WidgetsBindingObserver {
         return;
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
+        // 短暂 inactive（如 iOS 下拉通知/控制中心）不主动断开，避免群涌式重连
+        return;
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         pause();
