@@ -7,6 +7,8 @@ class PersistentForegroundPolicy(initiallyEnabled: Boolean) {
         private set
     var foregroundActive: Boolean = false
         private set
+    var transientSessionActive: Boolean = false
+        private set
 
     fun recoveryAction(): Action = if (enabled) {
         foregroundActive = true
@@ -20,12 +22,39 @@ class PersistentForegroundPolicy(initiallyEnabled: Boolean) {
         return reconcile()
     }
 
+    fun beginTransientSession(): Action {
+        transientSessionActive = true
+        if (enabled) {
+            foregroundActive = true
+            return Action.NONE
+        }
+        if (!foregroundActive) {
+            foregroundActive = true
+            return Action.START_FOREGROUND
+        }
+        return Action.NONE
+    }
+
+    fun endTransientSession(): Action {
+        if (!transientSessionActive) return Action.NONE
+        transientSessionActive = false
+        if (enabled) {
+            foregroundActive = true
+            return Action.NONE
+        }
+        if (foregroundActive) {
+            foregroundActive = false
+            return Action.STOP_FOREGROUND
+        }
+        return Action.NONE
+    }
+
     private fun reconcile(): Action = when {
         enabled && !foregroundActive -> {
             foregroundActive = true
             Action.START_FOREGROUND
         }
-        !enabled && foregroundActive -> {
+        !enabled && foregroundActive && !transientSessionActive -> {
             foregroundActive = false
             Action.STOP_FOREGROUND
         }

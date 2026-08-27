@@ -22,6 +22,8 @@ class LocalPanelHostService : Service() {
         const val ACTION_ENABLE_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_ENABLE_PERSISTENT"
         const val ACTION_DISABLE_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_DISABLE_PERSISTENT"
         const val ACTION_RECOVER_PERSISTENT = "com.daidai.daidai_app.LOCAL_PANEL_RECOVER_PERSISTENT"
+        const val ACTION_PANEL_SESSION_START = "com.daidai.daidai_app.LOCAL_PANEL_SESSION_START"
+        const val ACTION_PANEL_SESSION_END = "com.daidai.daidai_app.LOCAL_PANEL_SESSION_END"
         const val EXTRA_RECOVERY_TRIGGER = "recovery_trigger"
         const val PERSISTENT_PREFS_NAME = "local_panel_persistent_foreground"
         const val PREF_PERSISTENT_ENABLED = "enabled"
@@ -148,12 +150,22 @@ class LocalPanelHostService : Service() {
         }
         if (intent.action == ACTION_DISABLE_PERSISTENT) {
             setPersistentScheduling(false)
+            applyPersistentAction(persistentPolicy.endTransientSession())
             return START_NOT_STICKY
         }
         if (intent.action == ACTION_RECOVER_PERSISTENT) {
             lastRecoveryTrigger = intent.getStringExtra(EXTRA_RECOVERY_TRIGGER) ?: "process-recovery"
             restorePersistentSelection()
             return if (persistentPolicy.enabled) START_STICKY else START_NOT_STICKY
+        }
+        if (intent.action == ACTION_PANEL_SESSION_START) {
+            lastRecoveryTrigger = "browser-session-start"
+            applyPersistentAction(persistentPolicy.beginTransientSession())
+            return START_STICKY
+        }
+        if (intent.action == ACTION_PANEL_SESSION_END) {
+            applyPersistentAction(persistentPolicy.endTransientSession())
+            return START_NOT_STICKY
         }
         return START_NOT_STICKY
     }
