@@ -17,7 +17,16 @@ export function extractError(err: unknown, fallback = '操作失败'): string {
     if (data.error) return String(data.error)
     if (data.message) return String(data.message)
   }
-  if (anyErr?.message) return String(anyErr.message)
+  if (anyErr?.message) {
+    const message = String(anyErr.message)
+    if (message === 'Network Error' || message === '网络错误') {
+      return '网络异常，请检查连接'
+    }
+    if (message === 'timeout of' || /^timeout of \d+ms exceeded$/.test(message)) {
+      return '请求超时，请稍后重试'
+    }
+    return message
+  }
   return fallback
 }
 

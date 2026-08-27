@@ -56,8 +56,10 @@ request.interceptors.response.use(
   (response: AxiosResponse) => response.data,
   async (error) => {
     const originalRequest = error.config
+    const requestUrl = originalRequest?.url || ''
+    const isAuthEndpoint = /\/auth\/(login|init|refresh|check-init|logout)/.test(requestUrl)
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       const authStore = useAuthStore()
 
       if (!authStore.refreshToken) {

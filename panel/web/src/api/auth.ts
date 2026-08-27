@@ -4,7 +4,7 @@ import type { GeeTestValidateResult } from '@/utils/geetest'
 
 export const authApi = {
   checkInit() {
-    return request.get('/auth/check-init') as Promise<{ need_init: boolean }>
+    return request.get('/auth/check-init', { timeout: 10000 }) as Promise<{ need_init: boolean }>
   },
 
   init(username: string, password: string) {
@@ -34,6 +34,7 @@ export const authApi = {
   refresh() {
     const refreshToken = localStorage.getItem('refresh_token')
     return axios.post('/api/auth/refresh', null, {
+      timeout: 10000,
       headers: {
         Authorization: `Bearer ${refreshToken}`,
         'X-Client-Type': 'web',

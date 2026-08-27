@@ -109,7 +109,10 @@ onMounted(async () => {
     await loadCaptchaConfig(form.value.username);
   }
   try {
-    const vRes = await fetch("/api/system/public-version");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const vRes = await fetch("/api/system/public-version", { signal: controller.signal });
+    clearTimeout(timer);
     const vData = await vRes.json();
     if (vData.version) panelVersion.value = vData.version;
   } catch {}

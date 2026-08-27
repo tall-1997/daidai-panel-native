@@ -281,10 +281,13 @@ router.beforeEach(async (to, _from, next) => {
   if (!authStore.user) {
     try {
       await authStore.fetchUser()
-    } catch {
-      authStore.clearAuth()
-      next('/login')
-      return
+    } catch (e: unknown) {
+      if ((e as any)?.response?.status === 401) {
+        authStore.clearAuth()
+        next('/login')
+        return
+      }
+      // 瞬时网络错误：暂不登出，继续导航，避免抖动就把用户踢出登录态
     }
   }
 
