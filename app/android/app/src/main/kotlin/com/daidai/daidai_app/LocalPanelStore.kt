@@ -94,10 +94,13 @@ class LocalPanelStore(
         private const val FALLBACK_QUEUE_CAPACITY = 32
         private const val LOG_PERSIST_BATCH_SIZE = 16
         private const val MAX_JSON_BODY_BYTES = 16L * 1024 * 1024
+        private const val MAX_AVATAR_BYTES = 5L * 1024 * 1024
         private const val MAX_LOGIN_ATTEMPTS = 5
         private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
         private const val OPEN_API_TOKEN_TTL_SECONDS = 24L * 60 * 60
         private const val ACCESS_TOKEN_TTL_SECONDS = 24L * 60 * 60
+        private const val OPEN_API_LOG_RETENTION_SECONDS = 30L * 24 * 60 * 60
+        private const val SECURITY_LOG_RETENTION_SECONDS = 90L * 24 * 60 * 60
 
         private fun boundedExecutor(threadName: String) = ThreadPoolExecutor(
             FALLBACK_WORKERS,
@@ -834,7 +837,7 @@ class LocalPanelStore(
     private fun changeOwnPassword(json:JSONObject):NanoHTTPD.Response { val user=readableDatabase.rawQuery("SELECT id,password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->if(!c.moveToFirst())null else Triple(c.long("id"),c.string("password_hash"),c.string("password_salt"))}?:return error(NanoHTTPD.Response.Status.NOT_FOUND,"管理员不存在");val salt=Base64.decode(user.third,Base64.NO_WRAP);if(hashPassword(json.optString("old_password"),salt)!=user.second)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"原密码错误");return resetUserPassword(user.first,json.optString("new_password")) }
     private fun changeOwnUsername(json:JSONObject):NanoHTTPD.Response { val name=json.optString("username").trim();if(name.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空");return try{writableDatabase.update("local_users",ContentValues().apply{put("username",name);put("updated_at",Instant.now().toString())},"id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",null);ok(JSONObject().put("message","用户名已修改").put("user",userJson()))}catch(_:Exception){error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在")} }
     private fun deleteAvatar():NanoHTTPD.Response { writableDatabase.execSQL("UPDATE local_users SET avatar_url='' WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)");return ok(JSONObject().put("message","头像已删除")) }
-    private fun uploadAvatar(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { if(!session.headers["content-type"].orEmpty().contains("multipart/form-data",true))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像上传仅支持 multipart/form-data，字段名 avatar");val files=HashMap<String,String>();session.parseBody(files);val temp=files["avatar"]?:return error(NanoHTTPD.Response.Status.BAD_REQUEST,"multipart 缺少 avatar 文件");val source=File(temp);if(!source.isFile)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件无效");val target=File(appContext.filesDir,"avatar-${System.currentTimeMillis()}.bin");source.copyTo(target,true);val url="/api/auth/avatar/file";writableDatabase.execSQL("UPDATE local_users SET avatar_url=? WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",arrayOf(url));return ok(JSONObject().put("message","头像已上传").put("avatar_url",url)) }
+    private fun uploadAvatar(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { if(!session.headers["content-type"].orEmpty().contains("multipart/form-data",true))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像上传仅支持 multipart/form-data，字段名 avatar");val files=HashMap<String,String>();session.parseBody(files);val temp=files["avatar"]?:return error(NanoHTTPD.Response.Status.BAD_REQUEST,"multipart 缺少 avatar 文件");val source=File(temp);if(!source.isFile)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件无效");if(source.length()>MAX_AVATAR_BYTES)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件过大，最大 5MB");val ext=source.name.substringAfterLast('.',"").lowercase();if(ext!in setOf("jpg","jpeg","png","gif","webp"))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像仅支持 jpg/png/gif/webp 图片");val target=File(appContext.filesDir,"avatar-${System.currentTimeMillis()}.bin");source.copyTo(target,true);val url="/api/auth/avatar/file";writableDatabase.execSQL("UPDATE local_users SET avatar_url=? WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",arrayOf(url));return ok(JSONObject().put("message","头像已上传").put("avatar_url",url)) }
 
     fun serveManagement(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response {
         val uri=session.uri.removePrefix("/api/v1").removePrefix("/api")
@@ -867,13 +870,13 @@ class LocalPanelStore(
 
     fun authorizeBusinessRequest(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response? {
         val token = bearerToken(session)
-        if (token == null) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+        if (token == null) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
         if (readableDatabase.rawQuery("SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ? AND (expires_at = '' OR expires_at > ?)", arrayOf(token, Instant.now().toString())).use(Cursor::moveToFirst)) return null
         val row = readableDatabase.rawQuery(
             "SELECT t.app_id, t.expires_at, a.enabled, a.scopes, a.rate_limit FROM open_api_tokens t JOIN open_api_apps a ON a.id = t.app_id WHERE t.access_token = ?",
             arrayOf(token),
         ).use { c -> if (c.moveToFirst()) arrayOf<Any>(c.long("app_id"), c.string("expires_at"), c.int("enabled"), c.string("scopes"), c.int("rate_limit")) else null }
-            ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+            ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
         val appId = row[0] as Long
         val enabled = (row[2] as Int) != 0
         val scopes = row[3] as String
@@ -1219,6 +1222,15 @@ class LocalPanelStore(
         runCatching {
             postAndroidNotification("panel_channel", "本地面板已暂停低优先级任务", "设备资源紧张（$reason），定时备份/订阅拉取已暂停；定时任务正常执行。")
         }
+    }
+
+    fun purgeExpiredRecords() {
+        val now = Instant.now()
+        writableDatabase.delete("open_api_logs", "created_at < ?", arrayOf(now.minusSeconds(OPEN_API_LOG_RETENTION_SECONDS).toString()))
+        writableDatabase.delete("open_api_tokens", "expires_at < ?", arrayOf(now.toString()))
+        writableDatabase.delete("security_login_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
+        writableDatabase.delete("security_audit_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
+        writableDatabase.delete("security_sessions", "expires_at < ? AND expires_at != ''", arrayOf(now.toString()))
     }
 
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {

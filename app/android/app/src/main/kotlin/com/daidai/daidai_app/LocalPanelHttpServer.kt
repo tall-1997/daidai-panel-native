@@ -33,11 +33,11 @@ class LocalPanelHttpServer(
 
     companion object {
         private fun findAvailablePort(): Int {
-            val loopback = InetAddress.getByName("127.0.0.1")
+            val anyLocal = InetAddress.getByName("0.0.0.0")
             return try {
-                ServerSocket(5700, 0, loopback).use { it.localPort }
+                ServerSocket(5700, 0, anyLocal).use { it.localPort }
             } catch (_: Exception) {
-                ServerSocket(0, 0, loopback).use { it.localPort }
+                ServerSocket(0, 0, anyLocal).use { it.localPort }
             }
         }
 
@@ -157,7 +157,7 @@ class LocalPanelHttpServer(
             }
             if (!hasLocalToken) {
                 if (session.uri.startsWith("/api/open-api") || session.uri.startsWith("/api/v1/open-api")) {
-                    if (!store.isAuthorized(session)) return jsonError(Response.Status.UNAUTHORIZED, "Business API requires a valid user JWT")
+                    if (!store.isAuthorized(session)) return jsonError(Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
                 } else {
                     store.authorizeBusinessRequest(session)?.let { return it }
                 }
@@ -238,7 +238,11 @@ class LocalPanelHttpServer(
             }
         } catch (error: Exception) {
             android.util.Log.e("daidai-panel", "serve ERROR ${session.uri}: ${error.message}", error)
-            jsonError(Response.Status.INTERNAL_ERROR, error.message ?: "本地核心处理失败")
+            if (error is org.json.JSONException) {
+                jsonError(Response.Status.BAD_REQUEST, "请求体 JSON 格式错误")
+            } else {
+                jsonError(Response.Status.INTERNAL_ERROR, "本地核心处理失败")
+            }
         }
     }
 

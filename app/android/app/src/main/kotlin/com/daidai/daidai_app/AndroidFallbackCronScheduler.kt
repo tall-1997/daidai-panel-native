@@ -28,6 +28,7 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
     @Volatile private var lastCheckedMinute = Long.MIN_VALUE
     private val inFlightTasks = ConcurrentHashMap.newKeySet<Long>()
     private var lastResourceLimited = false
+    private var lastPurgeDay: java.time.LocalDate? = null
 
     fun start() {
         if (started.compareAndSet(false, true)) {
@@ -43,6 +44,11 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             val minute = now.toEpochSecond() / 60
             if (minute == lastCheckedMinute) return
             lastCheckedMinute = minute
+            val today = now.toLocalDate()
+            if (lastPurgeDay != today) {
+                lastPurgeDay = today
+                runCatching { store.purgeExpiredRecords() }
+            }
             val guarantee = store.evaluateResourceGuarantee()
             val limited = guarantee.state == "resource_limited"
             if (limited) {
