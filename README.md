@@ -18,7 +18,7 @@ Android versionCode：**1000170**
 
 - 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 - v1.0.17：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.17)
-- ARM64 完整版：`daidai-panel-native-1.0.17-prerelease-arm64.apk`
+- ARM64 完整版：`daidai-panel-native-1.0.17-release-arm64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -33,7 +33,8 @@ Android versionCode：**1000170**
 - 支持 pip/npm 依赖安装、指定版本、安装去重、共享目录、镜像配置和缓存限制；镜像源在「我的 → 依赖管理」页右上角切换。
 - 支持实时增量日志、持久日志回读、任务停止、进程树回收和 Android 本地通知。
 - 支持中文脚本路径、空格、引号、显式空参数和多账号变量。
-- 支持 App 内安全打开本机浏览器面板，一次性票据仅用于动态回环地址。
+- 支持 App 内安全打开本机浏览器面板（一次性票据），也支持局域网浏览器通过账号密码 + JWT 登录访问。
+- 内置 Open API 应用管理：App Key / App Secret 换 token，业务 API 支持 token 鉴权、scopes 权限、速率限制与调用日志。
 - 本地接口校验安装级 Token、精确 Host、Origin、JWT、角色和权限。
 - 业务 API 以同仓库 `panel/server` 为 upstream 兼容基线。
 
@@ -48,7 +49,7 @@ Android versionCode：**1000170**
 ## 平台边界
 
 - 正式 Release 提供 ARM64 APK。
-- 本地服务仅监听 `127.0.0.1`，不会暴露到局域网。
+- 本地服务监听 `0.0.0.0`，支持本机与局域网浏览器访问；App 内请求走 local-token，浏览器请求强制账号密码 + JWT。
 - Linux 终端内核为 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork），不使用 Termux 预编译二进制。
 - Alpine 内置在 APK 中。
 - 默认 Linux 包管理器镜像源为华为云/阿里云/npmmirror，可在「我的 → 依赖管理」页右上角切换。
@@ -65,7 +66,7 @@ Android versionCode：**1000170**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.16` |
+| 当前稳定标签 | `v1.0.17` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |

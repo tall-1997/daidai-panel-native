@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.17 - 2026-08-26
+## v1.0.17 - 2026-08-27
 
 ### 移除 Ubuntu 发行版
 
@@ -8,6 +8,37 @@
 - 删除 Ubuntu rootfs 资产（约 77 MB）、Ubuntu 下载源、`prepare-android-ubuntu-rootfs.sh` 构建脚本与验证 contract。
 - APK 体积约 227 MB 减小到约 150 MB。
 - 前端「依赖管理」页删除 Ubuntu/Debian 镜像预设，`linux_mirror_supported` 仅对 Alpine(apk) 为 true。
+
+### 本机 / 局域网浏览器面板访问
+
+- 本地 HTTP 服务由 `127.0.0.1` 改为 `0.0.0.0` 监听，支持本机浏览器与局域网浏览器通过账号密码 + JWT 登录面板。
+- 新增一次性票据（ticket）+ 浏览器会话（browser_session）机制，App 内安全拉起系统浏览器。
+- App 内请求带 local-token，局域网浏览器强制 JWT，Host / Origin 按来源三分流校验。
+- 登录失败锁定：`security_login_attempts` 表，同一来源 5 次失败锁定 15 分钟。
+- 临时前台会话保活：打开浏览器时自动拉起 `specialUse` 前台服务，避免 MIUI 后台冻结导致面板端口不可达；返回 App 自动结束，不残留通知。
+- 修复 keep-alive 连接空闲 5 秒被关闭导致浏览器登录请求失败（socket read timeout 5s → 60s）。
+
+### Open API 完整实现
+
+- 新增 `POST /api/open-api/token`：用 App Key + App Secret 换取 access_token（24 小时有效）。
+- 业务 API 支持 open API token 鉴权（`Bearer`），按 scopes 权限范围默认拒绝，rate_limit 超限返回 429，调用写入日志。
+- 修复创建 / 重置密钥弹窗的 App Key / App Secret 字段，列表补齐「今日调用」统计。
+- 管理侧（`/api/open-api/apps`）仍仅允许面板登录 JWT，open API token 不能越权管理应用。
+
+### Linux 运行时兼容
+
+- 应用 proot/alpine 兼容技巧：apk-tools 2.x 静态版 + mkdir 并发锁、移除 `--link2symlink`、bind 系统目录（/apex、/system 等）。
+
+### UI 整合
+
+- 系统依赖清单并入依赖管理页，支持导出 Python/Node 与顺序批量重装。
+- Android 运行时入口移入系统设置页；环境变量高级工具（批量改名/置顶）并入变量列表页。
+- 修复高级配置脚本 GET 返回空内容的问题。
+
+### 通知修复
+
+- 强制覆盖过期的 sendNotify.js 副本，任务型脚本执行同样部署 notify shims。
+- 本地通知请求允许缺失 Origin。
 
 ### 修复本地面板连接被拒绝的竞态
 
