@@ -46,7 +46,7 @@ class RootfsVerificationTest(unittest.TestCase):
             root = pathlib.Path(directory)
             archive = root / "rootfs.tar.gz.bin"
             with tarfile.open(archive, "w:gz") as bundle:
-                for command in runtime_verifier.DISTRO_COMMANDS["alpine"]:
+                for command in runtime_verifier.DISTRO_COMMANDS["ubuntu"]:
                     member = tarfile.TarInfo(f"usr/bin/{command}")
                     member.mode = 0o755
                     member.size = 0
@@ -56,22 +56,18 @@ class RootfsVerificationTest(unittest.TestCase):
                 ca_member.mode = 0o644
                 ca_member.size = len(ca_data)
                 bundle.addfile(ca_member, io.BytesIO(ca_data))
-                crypto_member = tarfile.TarInfo("usr/lib/python3.14/site-packages/Crypto/Cipher/AES.py")
-                crypto_member.mode = 0o644
-                crypto_member.size = 0
-                bundle.addfile(crypto_member, io.BytesIO())
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             checksum = root / "rootfs.tar.gz.bin.sha256"
             checksum.write_text(digest + "\n")
             manifest = root / "runtime-manifest.json"
             manifest.write_text(json.dumps({
                 "schema_version": 2,
-                "distribution": "alpine",
+                "distribution": "ubuntu",
                 "sha256": digest,
                 "size": archive.stat().st_size,
-                "packages": ["bash", "python3", "py3-pip", "py3-pycryptodome", "nodejs", "npm", "uv", "pnpm", "ca-certificates"],
-                "required_commands": list(runtime_verifier.DISTRO_COMMANDS["alpine"]),
-                "capabilities": runtime_verifier.DISTRO_CAPABILITIES["alpine"],
+                "packages": ["bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"],
+                "required_commands": list(runtime_verifier.DISTRO_COMMANDS["ubuntu"]),
+                "capabilities": runtime_verifier.DISTRO_CAPABILITIES["ubuntu"],
             }))
             runtime_verifier.verify_rootfs(archive, checksum, manifest)
 
