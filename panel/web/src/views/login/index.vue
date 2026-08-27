@@ -336,6 +336,7 @@ async function handleTOTPSubmit() {
 }
 
 async function handleSubmit() {
+  if (loading.value) return;
   if (!form.value.username || !form.value.password) {
     ElMessage.warning("请输入用户名和密码");
     return;
