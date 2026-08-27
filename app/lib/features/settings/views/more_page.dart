@@ -58,6 +58,17 @@ class _MorePageState extends ConsumerState<MorePage> {
     }
   }
 
+  bool _isLocalLoopback(String? url) {
+    if (url == null) return false;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    return host == 'localhost' ||
+        host == '127.0.0.1' ||
+        host == '::1' ||
+        (host.startsWith('127.') && host.length > 3);
+  }
+
   String? _buildAvatarUrl(String? avatarPath) {
     if (avatarPath == null || avatarPath.isEmpty || _serverUrl == null) {
       return null;
@@ -160,7 +171,7 @@ class _MorePageState extends ConsumerState<MorePage> {
             isLight: isLight,
             onTap: () => context.push('/server-config?manage=1'),
           ),
-          if (_serverUrl?.startsWith('http://127.0.0.1:') == true)
+          if (_isLocalLoopback(_serverUrl))
             _SettingsItem(
               icon: Icons.open_in_browser_outlined,
               title: '在设备浏览器打开本地面板',

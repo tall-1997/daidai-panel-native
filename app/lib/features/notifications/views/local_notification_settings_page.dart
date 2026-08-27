@@ -18,6 +18,7 @@ class _LocalNotificationSettingsPageState
   bool _taskEnabled = true;
   bool _systemEnabled = true;
   bool _loading = true;
+  bool _permissionGranted = false;
 
   @override
   void initState() {
@@ -29,10 +30,12 @@ class _LocalNotificationSettingsPageState
     final task = await _service.getChannelEnabled(NotificationChannel.task);
     final system =
         await _service.getChannelEnabled(NotificationChannel.system);
+    final granted = await _checkPermission();
     if (!mounted) return;
     setState(() {
       _taskEnabled = task;
       _systemEnabled = system;
+      _permissionGranted = granted;
       _loading = false;
     });
   }
@@ -55,7 +58,9 @@ class _LocalNotificationSettingsPageState
   Future<void> _requestPermission() async {
     final granted = await _service.requestPermissions();
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      _permissionGranted = granted;
+    });
     AppGlassNotice.show(
       context,
       granted ? '通知权限已开启' : '通知权限未开启，请在系统设置中打开',
@@ -149,32 +154,26 @@ class _LocalNotificationSettingsPageState
           ),
         ),
         const SizedBox(height: 12),
-        FutureBuilder<bool>(
-          future: _checkPermission(),
-          builder: (context, snapshot) {
-            final granted = snapshot.data ?? false;
-            return Row(
-              children: [
-                Icon(
-                  granted ? Icons.check_circle : Icons.cancel,
-                  size: 20,
-                  color: granted ? AppColors.primary : AppColors.red500,
+        Row(
+          children: [
+            Icon(
+              _permissionGranted ? Icons.check_circle : Icons.cancel,
+              size: 20,
+              color: _permissionGranted ? AppColors.primary : AppColors.red500,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _permissionGranted ? '通知权限已授予' : '通知权限未授予',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: _permissionGranted
+                      ? (isLight ? AppColors.slate700 : AppColors.slate200)
+                      : AppColors.red500,
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    granted ? '通知权限已授予' : '通知权限未授予',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: granted
-                          ? (isLight ? AppColors.slate700 : AppColors.slate200)
-                          : AppColors.red500,
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         SizedBox(

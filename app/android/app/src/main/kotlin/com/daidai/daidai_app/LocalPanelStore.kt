@@ -4739,15 +4739,15 @@ fun serveDashboardStats(): JSONObject {
 
     private fun userJson(): JSONObject {
         return readableDatabase.rawQuery(
-            "SELECT id, username, created_at, updated_at FROM local_users ORDER BY id LIMIT 1",
+            "SELECT id, username, role, enabled, created_at, updated_at FROM local_users ORDER BY id LIMIT 1",
             null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use JSONObject()
             JSONObject()
                 .put("id", cursor.long("id"))
                 .put("username", cursor.string("username"))
-                .put("role", "admin")
-                .put("enabled", true)
+                .put("role", cursor.string("role"))
+                .put("enabled", cursor.getInt(cursor.getColumnIndexOrThrow("enabled")) != 0)
                 .put("created_at", cursor.string("created_at"))
                 .put("updated_at", cursor.string("updated_at"))
         }
