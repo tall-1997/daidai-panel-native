@@ -1,7 +1,6 @@
 package com.daidai.daidai_app
 
 import android.content.Context
-import fi.iki.elonen.NanoHTTPD
 
 object LocalPanelRuntime {
     private var fallbackServer: LocalPanelHttpServer? = null
@@ -75,7 +74,7 @@ object LocalPanelRuntime {
         }
         val server = LocalPanelHttpServer(context, kotlinFallbackReason, localToken)
         try {
-            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            server.start(60_000, false)
             android.util.Log.i("daidai-panel", "local server started on 0.0.0.0:${server.listeningPort}")
             server.startScheduler()
         } catch (error: Exception) {
