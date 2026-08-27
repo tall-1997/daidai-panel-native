@@ -91,8 +91,10 @@ jobs:
           PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
         run: |
           bash scripts/prepare-android-python-runtime.sh
-          sudo apt-get update -qq && DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -qq qemu-user-static
-          bash scripts/prepare-android-ubuntu-rootfs.sh
+          python3 scripts/verify-android-linux-runtime.py \
+            --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
+            --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
+            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json
           bash scripts/prepare-android-yaegi-runtime.sh
           flutter pub get
       - name: Build debug application and instrumentation APKs
