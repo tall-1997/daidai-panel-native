@@ -881,8 +881,7 @@ class LocalPanelStore(
         if (!enabled) return error(NanoHTTPD.Response.Status.FORBIDDEN, "应用已被禁用")
         if (runCatching { Instant.parse(row[1] as String) }.getOrNull()?.isBefore(Instant.now()) == true) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "访问令牌已过期")
         if (!openApiScopeAllowed(scopes, session.uri.orEmpty())) return error(NanoHTTPD.Response.Status.FORBIDDEN, "未授权访问该资源")
-        if (openApiRateLimited(appId, rateLimit)) return error(NanoHTTPD.Response.Status.TOO_MANY_REQUESTS, "请求频率超出限制")
-        recordOpenApiLog(appId, session)
+        if (recordOpenApiCall(appId, rateLimit, session)) return error(NanoHTTPD.Response.Status.TOO_MANY_REQUESTS, "请求频率超出限制")
         return null
     }
 
@@ -898,19 +897,27 @@ class LocalPanelStore(
         return resource in granted
     }
 
-    private fun openApiRateLimited(appId: Long, rateLimit: Int): Boolean {
-        if (rateLimit <= 0) return false
-        val since = Instant.now().minusSeconds(3600).toString()
-        val count = readableDatabase.rawQuery("SELECT COUNT(*) FROM open_api_logs WHERE app_id=? AND created_at>=?", arrayOf(appId.toString(), since)).use { if (it.moveToFirst()) it.getInt(0) else 0 }
-        return count >= rateLimit
+    private fun recordOpenApiCall(appId: Long, rateLimit: Int, session: NanoHTTPD.IHTTPSession): Boolean {
+        synchronized(writableDatabase) {
+            var limited = false
+            if (rateLimit > 0) {
+                val count = readableDatabase.rawQuery(
+                    "SELECT COUNT(*) FROM open_api_logs WHERE app_id=? AND datetime(created_at) >= datetime('now', '-1 hour')",
+                    arrayOf(appId.toString()),
+                ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+                limited = count >= rateLimit
+            }
+            recordOpenApiLog(appId, session, if (limited) 429 else 200)
+            return limited
+        }
     }
 
-    private fun recordOpenApiLog(appId: Long, session: NanoHTTPD.IHTTPSession) {
+    private fun recordOpenApiLog(appId: Long, session: NanoHTTPD.IHTTPSession, statusCode: Int = 200) {
         writableDatabase.insert("open_api_logs", null, ContentValues().apply {
             put("app_id", appId)
             put("method", session.method.toString())
             put("path", session.uri.orEmpty())
-            put("status_code", 200)
+            put("status_code", statusCode)
             put("ip", requestIp(session))
             put("duration", 0)
             put("created_at", Instant.now().toString())
