@@ -56,10 +56,10 @@ class AndroidRuntimeSmokeTest {
             }
             step("auth.initialize_and_login") {
                 val credentials = JSONObject().put("username", "runtime_smoke_admin").put("password", "runtime-smoke-password")
-                val init = request("GET", "/api/v1/auth/check-init")
+                val init = request("GET", "/api/auth/check-init")
                 val initializedNow = init.body.optBoolean("need_init")
-                if (initializedNow) request("POST", "/api/v1/auth/init", credentials, expected = setOf(200))
-                val login = request("POST", "/api/v1/auth/login", credentials, expected = setOf(200))
+                if (initializedNow) request("POST", "/api/auth/init", credentials, expected = setOf(200))
+                val login = request("POST", "/api/auth/login", credentials, expected = setOf(200))
                 accessToken = login.body.getString("access_token")
                 assertEquals("runtime_smoke_admin", login.body.getJSONObject("user").getString("username"))
                 JSONObject().put("initialized_now", initializedNow).put("admin_authenticated", true)
@@ -225,7 +225,7 @@ class AndroidRuntimeSmokeTest {
                     .put("core", sanitizedCore(core))
             }
             step("persistence.after_restart") {
-                val login = request("POST", "/api/v1/auth/login", JSONObject()
+                val login = request("POST", "/api/auth/login", JSONObject()
                     .put("username", "runtime_smoke_admin").put("password", "runtime-smoke-password"))
                 accessToken = login.body.getString("access_token")
                 assertEquals("runtime_smoke_admin", login.body.getJSONObject("user").getString("username"))
