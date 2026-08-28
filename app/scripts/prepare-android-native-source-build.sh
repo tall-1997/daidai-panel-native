@@ -127,7 +127,8 @@ build_android_shmem() {
   rm -rf "$root" "$out"
   mkdir -p "$root" "$out/lib" "$out/include/sys"
   tar -xzf "$src_dir/libandroid-shmem-${ANDROID_SHMEM_VERSION}.tar.gz" -C "$root" --strip-components=1
-  "$tool" -O2 -fPIC -std=c11 -Wall -Wextra -c "$root/shmem.c" -o "$out/shmem.o"
+  "$tool" -O2 -fPIC -std=c11 -Wall -Wextra -include fcntl.h '-D_PATH_TMP="/tmp/"' \
+    -c "$root/shmem.c" -o "$out/shmem.o"
   "$prefix/bin/llvm-ar" rcs "$out/lib/libandroid-shmem.a" "$out/shmem.o"
   "$tool" -shared -Wl,-soname,libandroid-shmem.so -Wl,--version-script="$root/exports.txt" \
     -Wl,-z,max-page-size=$page_size "$out/shmem.o" -llog -landroid -o "$out/lib/libandroid-shmem.so"
