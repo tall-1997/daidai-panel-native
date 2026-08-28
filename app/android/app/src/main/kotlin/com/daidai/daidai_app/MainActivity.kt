@@ -9,7 +9,6 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
-import com.yzq.bsdiff.BsDiffTool
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.Executors
@@ -96,11 +95,7 @@ class MainActivity : FlutterActivity() {
                                 throw SecurityException("Output file is invalid")
                             }
                             if (outputFile.exists()) outputFile.delete()
-                            val status = BsDiffTool.patch(
-                                applicationInfo.sourceDir,
-                                patchFile.absolutePath,
-                                outputFile.absolutePath
-                            )
+                            val status = AndroidBsPatch.patch(File(applicationInfo.sourceDir), patchFile, outputFile)
                             if (status != 0 || !outputFile.exists()) {
                                 throw IllegalStateException("bspatch failed with status $status")
                             }
