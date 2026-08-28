@@ -48,10 +48,10 @@ class AndroidRuntimeSmokeTest {
             step("core.method_channel.ensure_started") {
                 val serviceIntent = Intent(context, LocalPanelHostService::class.java)
                 context.startService(serviceIntent)
-                invokeLocalHost("ensure-started")
-                core = waitForMethodChannelCore()
+                val started = invokeLocalHost("ensure-started")
+                core = if (started.optString("phase") == "ready") started else waitForMethodChannelCore()
                 assertCoreReady(core)
-                token = core.getString("local_token")
+                token = started.getString("local_token")
                 JSONObject().put("transport", "com.daidai.panel/local_host").put("core", sanitizedCore(core))
             }
             step("auth.initialize_and_login") {
