@@ -161,8 +161,9 @@ build_proot() {
   "$tool" -fno-emulated-tls -c "$script_dir/talloc-tls-anchor.c" -o "$anchor"
   # make 命令行变量会覆盖 GNUmakefile 内 "CFLAGS/CPPFLAGS += ..."，
   # 必须补齐默认的 -I. 与 uthash 路径，以及 talloc 的 include/lib。
-  local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -include string.h -I. -I$root/lib/uthash/include"
-  local cflags="-O2 -g -fPIC -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -DWITH_LIBANDROID_SHMEM -DVERSION=\\\"${PROOT_VERSION}\\\" -I$talloc_inc -I$shmem_inc"
+  local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -I. -I$root/lib/uthash/include"
+  local proot_cppflags="$cppflags -include string.h"
+  local cflags="-O2 -g -fPIC -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -DWITH_LIBANDROID_SHMEM -DPROOT_UNBUNDLE_LOADER=\\\"/\\\" -DVERSION=\\\"${PROOT_VERSION}\\\" -I$talloc_inc -I$shmem_inc"
   cat > "$talloc_pc" <<EOF
 prefix=$work_dir/$target/talloc
 exec_prefix=\${prefix}
@@ -184,11 +185,16 @@ EOF
       LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size $anchor -Wl,--undefined=daidai_tls_anchor" \
       loader/loader
   log "building Termux proot binary for $abi"
+  mkdir -p extension/ashmem_memfd
+  "$tool" $proot_cppflags $cflags -MD -c \
+    "$root/src/extension/ashmem_memfd/ashmem_memfd.c" \
+    -o extension/ashmem_memfd/ashmem_memfd.o
   PKG_CONFIG_PATH="$(dirname "$talloc_pc")" \
     make -C . V=1 \
       CC="$tool" STRIP="$strip" OBJCOPY="$prefix/bin/llvm-objcopy" OBJDUMP="$prefix/bin/llvm-objdump" \
       CPPFLAGS="$cppflags" CFLAGS="$cflags" \
       PROOT_WITH_LIBANDROID_SHMEM=1 \
+      PROOT_UNBUNDLE_LOADER=/ \
       LDFLAGS="-Wl,-z,noexecstack -Wl,-z,max-page-size=$page_size -L$talloc_lib -L$shmem_lib -ltalloc -landroid-shmem $anchor -Wl,--undefined=daidai_tls_anchor" \
       proot
   cp loader/loader "$out/libproot_loader.so"
