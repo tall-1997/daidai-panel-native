@@ -127,6 +127,29 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("evidence_artifact_name: ${{ needs.verify-build.outputs.stable_device_evidence_artifact_name }}", self.workflow)
         self.assertIn("name: ${{ needs.stable-device.outputs.evidence_artifact_name }}", self.workflow)
 
+    def test_downstream_jobs_construct_candidate_apk_paths_without_name_outputs(self):
+        self.assertNotIn("app_apk_name: ${{ steps.version.outputs.app_apk_name }}", self.workflow)
+        self.assertNotIn("test_apk_name: ${{ steps.version.outputs.test_apk_name }}", self.workflow)
+        self.assertNotIn("needs.verify-build.outputs.app_apk_name", self.workflow)
+        self.assertNotIn("needs.verify-build.outputs.test_apk_name", self.workflow)
+
+        stable_job = self.workflow.split("  stable-device:", 1)[1].split("  release:", 1)[0]
+        release_job = self.workflow.split("  release:", 1)[1]
+        app_assignment = 'APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"'
+        test_assignment = 'TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"'
+        for job in (stable_job, release_job):
+            self.assertIn("VERSION: ${{ needs.verify-build.outputs.version }}", job)
+            self.assertIn("CHANNEL: ${{ needs.verify-build.outputs.release_channel }}", job)
+            self.assertIn(app_assignment, job)
+            self.assertIn(test_assignment, job)
+            for channel in ("stable", "prerelease"):
+                app_name = app_assignment.split('"', 1)[1].rsplit('"', 1)[0]
+                test_name = test_assignment.split('"', 1)[1].rsplit('"', 1)[0]
+                app_path = "candidate/" + app_name.replace("${VERSION}", self.version).replace("${CHANNEL}", channel)
+                test_path = "candidate/" + test_name.replace("${VERSION}", self.version).replace("${CHANNEL}", channel)
+                self.assertEqual(app_path, f"candidate/daidai-panel-native-{self.version}-{channel}-arm64.apk")
+                self.assertEqual(test_path, f"candidate/daidai-panel-native-{self.version}-{channel}-arm64-androidTest.apk")
+
     def test_device_evidence_remains_bound_to_candidate_apk_digests(self):
         self.assertGreaterEqual(self.workflow.count("--app-apk \"${APP_APK}\""), 2)
         self.assertGreaterEqual(self.workflow.count("--test-apk \"${TEST_APK}\""), 2)

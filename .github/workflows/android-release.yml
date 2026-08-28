@@ -54,8 +54,6 @@ jobs:
       candidate_artifact_name: ${{ steps.version.outputs.candidate_artifact_name }}
       kotlin_reports_artifact_name: ${{ steps.version.outputs.kotlin_reports_artifact_name }}
       stable_device_evidence_artifact_name: ${{ steps.version.outputs.stable_device_evidence_artifact_name }}
-      app_apk_name: ${{ steps.version.outputs.app_apk_name }}
-      test_apk_name: ${{ steps.version.outputs.test_apk_name }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
@@ -165,8 +163,6 @@ jobs:
             printf 'candidate_artifact_name=%s\n' "${CANDIDATE_ARTIFACT_NAME}"
             printf 'kotlin_reports_artifact_name=%s\n' "${KOTLIN_REPORTS_ARTIFACT_NAME}"
             printf 'stable_device_evidence_artifact_name=%s\n' "${STABLE_DEVICE_EVIDENCE_ARTIFACT_NAME}"
-            printf 'app_apk_name=%s\n' "${APP_APK_NAME}"
-            printf 'test_apk_name=%s\n' "${TEST_APK_NAME}"
             printf 'strict=%s\n' "${STRICT}"
             printf 'signing_required=%s\n' "${SIGNING_REQUIRED}"
           } >> "${GITHUB_OUTPUT}"
@@ -397,10 +393,14 @@ jobs:
           path: candidate
       - name: Run stable candidate on trusted physical device
         env:
-          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
-          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
+          VERSION: ${{ needs.verify-build.outputs.version }}
+          CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
         shell: bash
         run: |
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
+          TEST_APK="candidate/${TEST_APK_NAME}"
           MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
           mkdir -p evidence
           python3 scripts/android-runtime-smoke.py run \
@@ -476,10 +476,14 @@ jobs:
       - name: Verify tested APK is the release candidate
         if: needs.verify-build.outputs.release_channel == 'stable'
         env:
-          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
-          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
+          VERSION: ${{ needs.verify-build.outputs.version }}
+          CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
         shell: bash
         run: |
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
+          TEST_APK="candidate/${TEST_APK_NAME}"
           python3 scripts/verify-release-runtime-evidence.py \
             --contract scripts/release-runtime-contract.json \
             --channel stable \
@@ -497,10 +501,12 @@ jobs:
         env:
           VERSION: ${{ needs.verify-build.outputs.version }}
           CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
-          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
-          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
         shell: bash
         run: |
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
+          TEST_APK="candidate/${TEST_APK_NAME}"
           go run ./scripts/generate-release-evidence.go \
             --apk "${APP_APK}" \
             --test-apk "${TEST_APK}" \
@@ -517,13 +523,16 @@ jobs:
 
       - name: Verify final release evidence gates
         env:
+          VERSION: ${{ needs.verify-build.outputs.version }}
           CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
         shell: bash
         run: |
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
           EVIDENCE=release/evidence/release-evidence.json
           test "$(jq -er '.bundle_status' "${EVIDENCE}")" = generated
-          APK_SHA="$(sha256sum "candidate/${{ needs.verify-build.outputs.app_apk_name }}" | cut -d ' ' -f1)"
-          test "$(jq -er --arg name '${{ needs.verify-build.outputs.app_apk_name }}' '.artifacts[] | select(.name == $name) | .sha256' "${EVIDENCE}")" = "${APK_SHA}"
+          APK_SHA="$(sha256sum "${APP_APK}" | cut -d ' ' -f1)"
+          test "$(jq -er --arg name "${APP_APK_NAME}" '.artifacts[] | select(.name == $name) | .sha256' "${EVIDENCE}")" = "${APK_SHA}"
           if [[ "${CHANNEL}" == "stable" ]]; then
             test "$(jq -er '.release.channel' "${EVIDENCE}")" = stable
             test "$(jq -er '.status' "${EVIDENCE}")" = completed
@@ -561,11 +570,13 @@ jobs:
               print('Prerelease 已通过版本、正式签名、证书指纹与 CI 构建门禁。')
               print('ARM64 Android 真机验证仍为 blocked 边界，release evidence 与 runtime gates 保持 pending。')
           PYEOF
-          APP_APK="candidate/${{ needs.verify-build.outputs.app_apk_name }}"
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
           test -s "${APP_APK}"
           EXPECTED_APK_SHA="$(cut -d ' ' -f1 "${APP_APK}.sha256")"
           test "$(sha256sum "${APP_APK}" | cut -d ' ' -f1)" = "${EXPECTED_APK_SHA}"
-          TEST_APK="candidate/${{ needs.verify-build.outputs.test_apk_name }}"
+          TEST_APK="candidate/${TEST_APK_NAME}"
           mkdir -p release/artifacts release/apk-metadata
           cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" release/artifacts/
           cp -R candidate/release/apk-metadata/. release/apk-metadata/
