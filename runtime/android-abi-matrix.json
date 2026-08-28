@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "default_abi": "arm64-v8a",
+  "abis": {
+    "arm64-v8a": {
+      "package": true,
+      "native": true,
+      "rootfs": true,
+      "yaegi": true,
+      "smoke": true,
+      "release": true,
+      "flutter_target": "android-arm64",
+      "release_suffix": "arm64",
+      "ndk_triple": "aarch64-linux-android",
+      "goarch": "arm64",
+      "elf_machine": 183,
+      "ubuntu_arch": "arm64",
+      "ubuntu_mirror": "https://mirrors.aliyun.com/ubuntu-ports",
+      "qemu_static": "qemu-aarch64-static",
+      "minimum_load_alignment": 16384
+    },
+    "x86_64": {
+      "package": true,
+      "native": true,
+      "rootfs": true,
+      "yaegi": true,
+      "smoke": true,
+      "release": true,
+      "flutter_target": "android-x64",
+      "release_suffix": "x86_64",
+      "ndk_triple": "x86_64-linux-android",
+      "goarch": "amd64",
+      "elf_machine": 62,
+      "ubuntu_arch": "amd64",
+      "ubuntu_mirror": "https://mirrors.aliyun.com/ubuntu",
+      "qemu_static": "qemu-x86_64-static",
+      "minimum_load_alignment": 16384
+    }
+  }
+}

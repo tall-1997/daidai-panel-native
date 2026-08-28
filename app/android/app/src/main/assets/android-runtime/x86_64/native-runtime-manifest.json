@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "abi": "x86_64",
+  "minimum_load_alignment": 16384,
+  "provenance": {
+    "strategy": "self-contained-source-build",
+    "source_build": true,
+    "source_patch_applied": false,
+    "patches_applied": [],
+    "toolchain": {
+      "name": "android-ndk-r27",
+      "api_level": 24,
+      "compiler": "x86_64-linux-android24-clang",
+      "load_alignment": 16384
+    },
+    "upstream_source": [
+      {
+        "name": "proot",
+        "version": "5.4.0",
+        "url": "https://github.com/proot-me/proot/archive/refs/tags/v5.4.0.tar.gz",
+        "sha256": "29248aac2a7ce10c3bd5ee5602742ec33b2532310ff9cf73b79f3c133e5a5f68"
+      },
+      {
+        "name": "talloc",
+        "version": "2.4.3",
+        "url": "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz",
+        "sha256": "dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd"
+      },
+      {
+        "name": "busybox",
+        "version": "1.36.1",
+        "url": "https://busybox.net/downloads/busybox-1.36.1.tar.bz2",
+        "sha256": "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314"
+      }
+    ],
+    "binary_transforms": [],
+    "runtime_overrides": {
+      "PROOT_LOADER": "libproot_loader.so"
+    },
+    "note": "Built from pinned upstream source with the Android NDK; no prebuilt binaries are imported."
+  },
+  "artifacts": [
+    {
+      "name": "libdaidai_busybox.so",
+      "role": "busybox",
+      "sha256": "41b74b368d52d92e910be8f43bc72ac016a2a3df78c416b29a7511f7f193d033",
+      "size": 1568224
+    },
+    {
+      "name": "libdaidai_proot.so",
+      "role": "proot",
+      "sha256": "50d733a593a9af28bae009765e4ad8a468905e7296bc71f0f81b73dfef3352ed",
+      "size": 2839184
+    },
+    {
+      "name": "libproot_loader.so",
+      "role": "proot-loader",
+      "sha256": "5dfcf6663b61ddde3673277756fe1649582bf200501a53c70d82f0ef00ebe085",
+      "size": 17928
+    },
+    {
+      "name": "libyaegi_exec.so",
+      "role": "yaegi-go",
+      "sha256": "68c044459bc51cdf930371f55db509b7fb501ae97695190ad7d9bdb033675b4e",
+      "size": 21659912
+    }
+  ]
+}

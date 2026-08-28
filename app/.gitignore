@@ -50,11 +50,9 @@ app.*.map.json
 # Local build artifacts
 /artifacts/
 
-# Shelved multi-architecture runtime artifacts may remain from local experiments.
+# ARM32 runtime artifacts remain experimental.
 /android/app/src/main/assets/android-runtime/armeabi-v7a/
-/android/app/src/main/assets/android-runtime/x86_64/
 /android/app/src/main/jniLibs/armeabi-v7a/
-/android/app/src/main/jniLibs/x86_64/
 
 # Android signing
 *.jks

@@ -120,6 +120,43 @@ void main() {
     expect(manifest.patches.single.oldApkSha256, 'old-sha');
   });
 
+  test('AndroidUpdateManifest selects a schema 2 package by ABI', () {
+    final manifest = AndroidUpdateManifest.fromJson({
+      'schemaVersion': 2,
+      'packageName': 'com.daidai.daidai_app',
+      'version': '1.1.0',
+      'versionCode': 110,
+      'packages': {
+        'arm64-v8a': {
+          'full': {'url': 'https://github.com/arm64.apk', 'name': 'arm64.apk', 'size': 10, 'sha256': 'arm64'},
+          'patches': [],
+        },
+        'x86_64': {
+          'full': {'url': 'https://github.com/x86_64.apk', 'name': 'x86_64.apk', 'size': 20, 'sha256': 'x86_64'},
+          'patches': [],
+        },
+      },
+    }, abi: 'x86_64');
+
+    expect(manifest.full.name, 'x86_64.apk');
+    expect(manifest.packages.keys, containsAll(['arm64-v8a', 'x86_64']));
+  });
+
+  test('AndroidUpdateManifest rejects schema 2 without current ABI', () {
+    expect(
+      () => AndroidUpdateManifest.fromJson({
+        'schemaVersion': 2,
+        'packages': {
+          'arm64-v8a': {
+            'full': {'url': 'https://github.com/arm64.apk', 'name': 'arm64.apk', 'size': 10, 'sha256': 'arm64'},
+            'patches': [],
+          },
+        },
+      }, abi: 'x86_64'),
+      throwsFormatException,
+    );
+  });
+
   group('notification payload navigation', () {
     test('routes task and log payloads', () {
       expect(notificationPayloadRoute(taskNotificationPayload(12)), '/tasks/12/live-logs');

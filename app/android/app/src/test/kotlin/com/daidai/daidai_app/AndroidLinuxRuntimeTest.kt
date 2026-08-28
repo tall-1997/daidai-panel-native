@@ -226,6 +226,19 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `runtime ABI follows device preference within packaged ABIs`() {
+        assertEquals("x86_64", AndroidLinuxRuntime.selectRuntimeAbi(listOf("x86_64", "arm64-v8a"), listOf("arm64-v8a", "x86_64")))
+        assertEquals("arm64-v8a", AndroidLinuxRuntime.selectRuntimeAbi(listOf("armeabi-v7a", "arm64-v8a"), listOf("arm64-v8a")))
+        assertEquals("unknown", AndroidLinuxRuntime.selectRuntimeAbi(listOf("x86"), listOf("arm64-v8a", "x86_64")))
+    }
+
+    @Test
+    fun `Ubuntu architecture comes from generated ABI contract`() {
+        assertEquals("arm64", AndroidLinuxRuntime.ubuntuArch("arm64-v8a"))
+        assertEquals("amd64", AndroidLinuxRuntime.ubuntuArch("x86_64"))
+    }
+
+    @Test
     fun `runtime capabilities only report executable artifacts that exist`() {
         val root = Files.createTempDirectory("linux-runtime-capabilities").toFile()
         root.resolve("bin/sh").apply { parentFile.mkdirs(); writeText("sh"); setExecutable(true) }

@@ -3,9 +3,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+matrix_tool="$repo_root/scripts/android-abi-matrix.py"
 asset_root="$repo_root/app/android/app/src/main/assets/android-runtime"
 cache_root="${ANDROID_UBUNTU_ROOTFS_CACHE:-$HOME/.cache/daidai-android-ubuntu-rootfs}"
-apt_mirror="${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu-ports}"
 release_version="${UBUNTU_RELEASE_VERSION:-24.04.4}"
 ubuntu_base_url="${UBUNTU_BASE_URL:-https://cdimage.ubuntu.com/ubuntu-base/releases}"
 trusted_sources="$script_dir/rootfs-trusted-sources.json"
@@ -13,16 +13,10 @@ release_codename="noble"
 required_packages=(bash python3 python3-pip nodejs npm ca-certificates curl git openssh-client tzdata)
 required_commands=(apt-get bash python3 pip3 node npm pnpm)
 extra_packages="${UBUNTU_ROOTFS_PACKAGES:-}"
-abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
-qemu_static="${QEMU_AARCH64_STATIC:-/usr/bin/qemu-aarch64-static}"
-pnpm_major="${UBUNTU_PNPM_MAJOR:-9}"
-
-ubuntu_arch_for_abi() {
-  case "$1" in
-    arm64-v8a) printf '%s\n' arm64 ;;
-    *) printf 'Unsupported ABI: %s\n' "$1" >&2; exit 1 ;;
-  esac
-}
+abis="$(python3 "$matrix_tool" list rootfs --requested "${ANDROID_RUNTIME_ABIS:-}")"
+pnpm_version="9.15.9"
+pnpm_sha256="cf86a7ad764406395d4286a6d09d730711720acc6d93e9dce9ac7ac4dc4a28a7"
+pnpm_url="https://registry.npmjs.org/pnpm/-/pnpm-${pnpm_version}.tgz"
 
 download() {
   local url="$1" output="$2"
@@ -32,11 +26,13 @@ download() {
 
 write_rootfs_config() {
   local root_dir="$1"
-  rm -f "$root_dir/etc/apt/sources.list.d/ubuntu.sources"
+  if test -f "$root_dir/etc/apt/sources.list.d/ubuntu.sources"; then
+    mv "$root_dir/etc/apt/sources.list.d/ubuntu.sources" "$root_dir/etc/apt/sources.list.d/ubuntu.sources.disabled"
+  fi
   mkdir -p "$root_dir/etc/apt/sources.list.d" "$root_dir/tmp" "$root_dir/workspace" \
-    "$root_dir/etc/profile.d" "$root_dir/root/.pip" "$root_dir/usr/local/bin"
+    "$root_dir/etc/profile.d" "$root_dir/root/.pip" "$root_dir/usr/local/bin" "$root_dir/etc/ssl/certs"
   chmod 1777 "$root_dir/tmp"
-  printf 'deb %s %s main restricted universe multiverse\ndeb %s %s-updates main restricted universe multiverse\ndeb %s %s-security main restricted universe multiverse\n' \
+  printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s main restricted universe multiverse\ndeb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s-updates main restricted universe multiverse\ndeb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] %s %s-security main restricted universe multiverse\n' \
     "$apt_mirror" "$release_codename" "$apt_mirror" "$release_codename" "$apt_mirror" "$release_codename" \
     > "$root_dir/etc/apt/sources.list"
   printf '# Managed by the Android application before each proot command.\n' > "$root_dir/etc/resolv.conf"
@@ -45,17 +41,17 @@ write_rootfs_config() {
   printf 'registry=https://registry.npmmirror.com\nignore-scripts=true\n' > "$root_dir/etc/npmrc"
   printf 'export HOME=/root\nexport LANG=C.UTF-8\nexport PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/\nexport PIP_TRUSTED_HOST=mirrors.aliyun.com\nexport NPM_CONFIG_REGISTRY=https://registry.npmmirror.com\n' > "$root_dir/etc/profile.d/daidai-runtime.sh"
   printf 'daidai-android\n' > "$root_dir/etc/hostname"
+  cp /etc/ssl/certs/ca-certificates.crt "$root_dir/etc/ssl/certs/ca-certificates.crt"
 }
 
 create_dev_nodes() {
   local root_dir="$1"
   mkdir -p "$root_dir/dev"
-  rm -f "$root_dir/dev/null"
-  mknod -m 666 "$root_dir/dev/null" c 1 3 2>/dev/null || true
-  mknod -m 666 "$root_dir/dev/zero" c 1 5 2>/dev/null || true
-  mknod -m 666 "$root_dir/dev/random" c 1 8 2>/dev/null || true
-  mknod -m 666 "$root_dir/dev/urandom" c 1 9 2>/dev/null || true
-  mknod -m 666 "$root_dir/dev/tty" c 5 0 2>/dev/null || true
+  test -e "$root_dir/dev/null" || mknod -m 666 "$root_dir/dev/null" c 1 3 2>/dev/null || true
+  test -e "$root_dir/dev/zero" || mknod -m 666 "$root_dir/dev/zero" c 1 5 2>/dev/null || true
+  test -e "$root_dir/dev/random" || mknod -m 666 "$root_dir/dev/random" c 1 8 2>/dev/null || true
+  test -e "$root_dir/dev/urandom" || mknod -m 666 "$root_dir/dev/urandom" c 1 9 2>/dev/null || true
+  test -e "$root_dir/dev/tty" || mknod -m 666 "$root_dir/dev/tty" c 5 0 2>/dev/null || true
 }
 
 resolve_seed_deb() {
@@ -67,14 +63,40 @@ resolve_seed_deb() {
 }
 
 run_in_rootfs() {
-  local root_dir="$1"; shift
-  chroot "$root_dir" /bin/bash -c "$*"
+  local root_dir="$1" qemu_name="$2"; shift 2
+  local proot_binary="${PROOT_BINARY:-$(command -v proot || true)}"
+  local native_guest=false
+  if test "$(uname -m)" = x86_64 && test "$qemu_name" = qemu-x86_64-static; then
+    native_guest=true
+  fi
+  if test -n "$proot_binary"; then
+    if test "$native_guest" = true; then
+      "$proot_binary" -0 -r "$root_dir" -b /proc -b /dev -b /sys \
+        -b /etc/resolv.conf:/etc/resolv.conf \
+        -b /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt \
+        -w /root /bin/bash -c "$*"
+    else
+      "$proot_binary" -0 -r "$root_dir" -b /proc -b /dev -b /sys \
+        -b /etc/resolv.conf:/etc/resolv.conf \
+        -b /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt -w /root \
+        -q "/usr/bin/$qemu_name" /bin/bash -c "$*"
+    fi
+  else
+    if test "$native_guest" = true; then
+      chroot "$root_dir" /bin/bash -c "$*"
+    else
+      chroot "$root_dir" "/usr/bin/$qemu_name" /bin/bash -c "$*"
+    fi
+  fi
 }
 
 build_rootfs_for_abi() {
   local abi="$1"
-  local ubuntu_arch
-  ubuntu_arch="$(ubuntu_arch_for_abi "$abi")"
+  local ubuntu_arch apt_mirror qemu_name qemu_static
+  ubuntu_arch="$(python3 "$matrix_tool" get "$abi" ubuntu_arch)"
+  apt_mirror="${UBUNTU_APT_MIRROR:-$(python3 "$matrix_tool" get "$abi" ubuntu_mirror)}"
+  qemu_name="$(python3 "$matrix_tool" get "$abi" qemu_static)"
+  qemu_static="${QEMU_STATIC:-/usr/bin/$qemu_name}"
   local archive_name="ubuntu-base-${release_version}-base-${ubuntu_arch}.tar.gz"
   local downloads="$cache_root/downloads"
   local archive="$downloads/$archive_name"
@@ -109,21 +131,20 @@ PY
     exit 1
   }
 
-  local work="$cache_root/work/$abi"
+  local work="$cache_root/work/$abi-$(date +%s)-$$"
   local root_dir="$work/rootfs"
   local output_dir="$asset_root/$abi/ubuntu"
-  rm -rf "$root_dir" "$output_dir"
   mkdir -p "$root_dir" "$output_dir"
 
   tar -xzf "$archive" -C "$root_dir"
   write_rootfs_config "$root_dir"
   create_dev_nodes "$root_dir"
 
-  cp "$qemu_static" "$root_dir/usr/bin/qemu-aarch64-static"
-  chmod 755 "$root_dir/usr/bin/qemu-aarch64-static"
+  cp "$qemu_static" "$root_dir/usr/bin/$qemu_name"
+  chmod 755 "$root_dir/usr/bin/$qemu_name"
 
-  local packages_gz="$downloads/noble-main-arm64-Packages.gz"
-  download "$apt_mirror/dists/$release_codename/main/binary-arm64/Packages.gz" "$packages_gz"
+  local packages_gz="$downloads/noble-main-${ubuntu_arch}-Packages.gz"
+  download "$apt_mirror/dists/$release_codename/main/binary-${ubuntu_arch}/Packages.gz" "$packages_gz"
   local gpgv_deb ubuntu_keyring_deb
   gpgv_deb="$(resolve_seed_deb "$packages_gz" "gpgv")"
   ubuntu_keyring_deb="$(resolve_seed_deb "$packages_gz" "ubuntu-keyring")"
@@ -135,14 +156,18 @@ PY
   download "$apt_mirror/$ubuntu_keyring_deb" "$keyring_file"
   cp "$gpgv_file" "$keyring_file" "$root_dir/tmp/"
 
-  run_in_rootfs "$root_dir" "dpkg -i /tmp/$(basename "$gpgv_deb") /tmp/$(basename "$ubuntu_keyring_deb")"
-  run_in_rootfs "$root_dir" "export DEBIAN_FRONTEND=noninteractive; apt-get update"
-  run_in_rootfs "$root_dir" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends ${required_packages[*]} ${extra_packages}"
+  run_in_rootfs "$root_dir" "$qemu_name" "dpkg -i /tmp/$(basename "$gpgv_deb") /tmp/$(basename "$ubuntu_keyring_deb")"
+  run_in_rootfs "$root_dir" "$qemu_name" "export DEBIAN_FRONTEND=noninteractive; apt-get -o APT::Sandbox::User=root update"
+  run_in_rootfs "$root_dir" "$qemu_name" "export DEBIAN_FRONTEND=noninteractive; apt-get -o APT::Sandbox::User=root install -y --no-install-recommends ${required_packages[*]} ${extra_packages}"
 
-  run_in_rootfs "$root_dir" "export HOME=/root; npm install -g pnpm@${pnpm_major} --registry=https://registry.npmmirror.com"
-  local pnpm_version
-  pnpm_version="$(run_in_rootfs "$root_dir" "/usr/local/bin/pnpm --version" | tr -d '\r\n')"
-  test -n "$pnpm_version"
+  local pnpm_archive="$downloads/pnpm-${pnpm_version}.tgz"
+  download "$pnpm_url" "$pnpm_archive"
+  test "$(sha256sum "$pnpm_archive" | cut -d' ' -f1)" = "$pnpm_sha256"
+  mkdir -p "$root_dir/usr/local/lib/node_modules/pnpm"
+  tar -xzf "$pnpm_archive" -C "$root_dir/usr/local/lib/node_modules/pnpm" --strip-components=1
+  printf '#!/bin/sh\nexec node /usr/local/lib/node_modules/pnpm/bin/pnpm.cjs "$@"\n' > "$root_dir/usr/local/bin/pnpm"
+  chmod 755 "$root_dir/usr/local/bin/pnpm"
+  test "$(run_in_rootfs "$root_dir" "$qemu_name" "/usr/local/bin/pnpm --version" | tr -d '\r\n')" = "$pnpm_version"
 
   for command in "${required_commands[@]}"; do
     test -x "$root_dir/usr/bin/$command" || test -x "$root_dir/bin/$command" || test -x "$root_dir/sbin/$command" || test -x "$root_dir/usr/sbin/$command" || test -x "$root_dir/usr/local/bin/$command" || {
@@ -155,11 +180,10 @@ PY
     exit 1
   }
 
-  rm -f "$root_dir/usr/bin/qemu-aarch64-static"
-  rm -f "$root_dir/tmp"/*.deb
-  rm -rf "$root_dir/var/lib/apt/lists"/* "$root_dir/var/cache/apt/archives"/*
-
-  tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' -cf - -C "$root_dir" . | xz -6 -T0 > "$output_dir/rootfs.tar.gz.bin"
+  tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' \
+    --exclude="./usr/bin/$qemu_name" --exclude='./tmp/*.deb' \
+    --exclude='./var/lib/apt/lists/*' --exclude='./var/cache/apt/archives/*' \
+    -cf - -C "$root_dir" . | xz -9 -T2 > "$output_dir/rootfs.tar.gz.bin"
   sha256sum "$output_dir/rootfs.tar.gz.bin" | awk '{print $1}' > "$output_dir/rootfs.tar.gz.bin.sha256"
   python3 - "$output_dir/runtime-manifest.json" "$abi" "$ubuntu_arch" "$release_version" "$output_dir/rootfs.tar.gz.bin" "${required_packages[*]} ${extra_packages}" "${required_commands[*]}" "$pnpm_version" "$archive_name" "$published_sha" "$sums_url" "$archive_url" <<'PY'
 import hashlib, json, pathlib, sys

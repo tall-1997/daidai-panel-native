@@ -221,12 +221,20 @@ jobs:
       - name: Verify Android Linux runtime rootfs
         working-directory: app
         run: |
-          python3 scripts/verify-android-linux-runtime.py \
-            --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
-            --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
-            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json \
-            --trusted-sources scripts/rootfs-trusted-sources.json
-          bash scripts/prepare-android-yaegi-runtime.sh
+          RUNTIME_ABIS="$(python3 ../scripts/android-abi-matrix.py list release)"
+          ANDROID_RUNTIME_ABIS="${RUNTIME_ABIS}" bash scripts/prepare-android-yaegi-runtime.sh
+          for ABI in ${RUNTIME_ABIS}; do
+            python3 scripts/sync-android-native-manifest.py \
+              --native-dir "android/app/src/main/jniLibs/${ABI}" \
+              --manifest "android/app/src/main/assets/android-runtime/${ABI}/native-runtime-manifest.json"
+            python3 scripts/verify-android-linux-runtime.py \
+              --rootfs "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/rootfs.tar.gz.bin" \
+              --rootfs-sha "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/rootfs.tar.gz.bin.sha256" \
+              --rootfs-manifest "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/runtime-manifest.json" \
+              --native-dir "android/app/src/main/jniLibs/${ABI}" \
+              --native-manifest "android/app/src/main/assets/android-runtime/${ABI}/native-runtime-manifest.json" \
+              --trusted-sources scripts/rootfs-trusted-sources.json
+          done
 
       - name: Test embedded Go core
         working-directory: panel/server
@@ -238,7 +246,7 @@ jobs:
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
           go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
+          python3 -m unittest scripts/test_version.py scripts/test_android_abi_matrix.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_android_update_manifest.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
 
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check
@@ -285,11 +293,15 @@ jobs:
       - name: Build installable release APK
         working-directory: app
         run: |
-          flutter build apk --release --target-platform android-arm64 \
-            --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
-          gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
-          cp build/app/outputs/flutter-apk/app-release.apk "../${APP_APK_NAME}"
-          cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../${TEST_APK_NAME}"
+          for ABI in $(python3 ../scripts/android-abi-matrix.py list release); do
+            TARGET="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" flutter_target)"
+            SUFFIX="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" release_suffix)"
+            ANDROID_RUNTIME_ABIS="${ABI}" flutter build apk --release --target-platform "${TARGET}" \
+              --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
+            ANDROID_RUNTIME_ABIS="${ABI}" gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
+            cp build/app/outputs/flutter-apk/app-release.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
+            cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"
+          done
 
       - name: Extract and verify APK runtime metadata
         shell: bash
@@ -311,6 +323,15 @@ jobs:
           for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}"; do
             sha256sum "${APK}" > "${APK}.sha256"
           done
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-x86_64-androidTest.apk"
+          python3 app/scripts/verify-android-apk-abi.py --apk "${APP_APK_NAME}" --abi arm64-v8a \
+            --output-manifest release/apk-metadata/arm64-v8a-elf-manifest.json
+          python3 app/scripts/verify-android-apk-abi.py --apk "${X64_APK_NAME}" --abi x86_64 \
+            --output-manifest release/apk-metadata/x86_64-elf-manifest.json
+          for APK in "${X64_APK_NAME}" "${X64_TEST_APK_NAME}"; do
+            sha256sum "${APK}" > "${APK}.sha256"
+          done
 
       - name: Verify release APK signing certificate
         if: steps.version.outputs.signing_required == 'true'
@@ -321,7 +342,9 @@ jobs:
             printf 'Android SDK apksigner was not found\n' >&2
             exit 1
           fi
-          for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}"; do "${APKSIGNER}" verify "${APK}"; done
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-x86_64-androidTest.apk"
+          for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}" "${X64_APK_NAME}" "${X64_TEST_APK_NAME}"; do "${APKSIGNER}" verify "${APK}"; done
           APK_CERT_SHA256="$("${APKSIGNER}" verify --print-certs "${APP_APK_NAME}" \
             | sed -n 's/.*certificate SHA-256 digest: *//p' \
             | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' \
@@ -340,21 +363,31 @@ jobs:
             | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' \
             | grep -Eo '^[0-9a-f]{64}$' | head -n 1)"
           test "${TEST_CERT_SHA256}" = "${APK_CERT_SHA256}"
+          for APK in "${X64_APK_NAME}" "${X64_TEST_APK_NAME}"; do
+            test "$("${APKSIGNER}" verify --print-certs "${APK}" | sed -n 's/.*certificate SHA-256 digest: *//p' | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' | grep -Eo '^[0-9a-f]{64}$' | head -n 1)" = "${APK_CERT_SHA256}"
+          done
 
       - name: Generate and validate Android update manifest
         shell: bash
         run: |
+          ARM64_APK="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk"
+          X64_APK="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-x86_64.apk"
           jq -n \
             --arg packageName com.daidai.daidai_app \
             --arg version "${VERSION}" \
             --argjson versionCode "${ANDROID_VERSION_CODE}" \
-            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
-            --arg name "${APP_APK_NAME}" \
-            --arg sha256 "$(sha256sum "${APP_APK_NAME}" | cut -d ' ' -f1)" \
-            --argjson size "$(stat -c '%s' "${APP_APK_NAME}")" \
-            '{schemaVersion: 1, packageName: $packageName, version: $version, versionCode: $versionCode, releaseNotes: "", full: {url: $url, name: $name, size: $size, sha256: $sha256}, patches: []}' \
+            --arg arm64Url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARM64_APK}" \
+            --arg arm64Name "${ARM64_APK}" \
+            --arg arm64Sha "$(sha256sum "${ARM64_APK}" | cut -d ' ' -f1)" \
+            --argjson arm64Size "$(stat -c '%s' "${ARM64_APK}")" \
+            --arg x64Url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${X64_APK}" \
+            --arg x64Name "${X64_APK}" \
+            --arg x64Sha "$(sha256sum "${X64_APK}" | cut -d ' ' -f1)" \
+            --argjson x64Size "$(stat -c '%s' "${X64_APK}")" \
+            '{schemaVersion: 2, packageName: $packageName, version: $version, versionCode: $versionCode, releaseNotes: "", packages: {"arm64-v8a": {full: {url: $arm64Url, name: $arm64Name, size: $arm64Size, sha256: $arm64Sha}, patches: []}, "x86_64": {full: {url: $x64Url, name: $x64Name, size: $x64Size, sha256: $x64Sha}, patches: []}}}' \
             > android-update.json
           python3 scripts/version.py check --manifest android-update.json
+          python3 scripts/verify-android-update-manifest.py --manifest android-update.json --artifact-dir .
 
       - name: Upload signed candidate APKs
         uses: actions/upload-artifact@v4
@@ -365,6 +398,10 @@ jobs:
             ${{ env.APP_APK_NAME }}.sha256
             ${{ env.TEST_APK_NAME }}
             ${{ env.TEST_APK_NAME }}.sha256
+            daidai-panel-native-${{ steps.version.outputs.version }}-${{ steps.version.outputs.release_channel }}-x86_64.apk
+            daidai-panel-native-${{ steps.version.outputs.version }}-${{ steps.version.outputs.release_channel }}-x86_64.apk.sha256
+            daidai-panel-native-${{ steps.version.outputs.version }}-${{ steps.version.outputs.release_channel }}-x86_64-androidTest.apk
+            daidai-panel-native-${{ steps.version.outputs.version }}-${{ steps.version.outputs.release_channel }}-x86_64-androidTest.apk.sha256
             android-update.json
             runtime/manifest.json
             runtime/smoke-evidence.json
@@ -373,6 +410,42 @@ jobs:
             release/apk-metadata/**
           if-no-files-found: error
           retention-days: 14
+
+  x86-device:
+    needs: verify-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.verify-build.outputs.candidate_artifact_name }}
+          path: candidate
+      - name: Run x86_64 candidate runtime smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          script: >-
+            python3 scripts/android-runtime-smoke.py run
+            --apk candidate/daidai-panel-native-${{ needs.verify-build.outputs.version }}-${{ needs.verify-build.outputs.release_channel }}-x86_64.apk
+            --test-apk candidate/daidai-panel-native-${{ needs.verify-build.outputs.version }}-${{ needs.verify-build.outputs.release_channel }}-x86_64-androidTest.apk
+            --matrix-id api35-x86_64-4k
+            --expected-api 35
+            --expected-page-size 4096
+            --expected-abi x86_64
+            --output evidence/api35-x86_64-4k.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-device-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/api35-x86_64-4k.json
+          if-no-files-found: error
+          retention-days: 90
 
   stable-device:
     if: needs.verify-build.outputs.release_channel == 'stable'
@@ -399,6 +472,8 @@ jobs:
         run: |
           APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
           TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
           APP_APK="candidate/${APP_APK_NAME}"
           TEST_APK="candidate/${TEST_APK_NAME}"
           MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
@@ -432,8 +507,8 @@ jobs:
           retention-days: 90
 
   release:
-    if: always() && needs.verify-build.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_channel == 'prerelease'))
-    needs: [verify-build, stable-device]
+    if: always() && needs.verify-build.result == 'success' && needs.x86-device.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_channel == 'prerelease'))
+    needs: [verify-build, x86-device, stable-device]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -482,6 +557,8 @@ jobs:
         run: |
           APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
           TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
           APP_APK="candidate/${APP_APK_NAME}"
           TEST_APK="candidate/${TEST_APK_NAME}"
           python3 scripts/verify-release-runtime-evidence.py \
@@ -572,13 +649,17 @@ jobs:
           PYEOF
           APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
           TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
           APP_APK="candidate/${APP_APK_NAME}"
           test -s "${APP_APK}"
           EXPECTED_APK_SHA="$(cut -d ' ' -f1 "${APP_APK}.sha256")"
           test "$(sha256sum "${APP_APK}" | cut -d ' ' -f1)" = "${EXPECTED_APK_SHA}"
           TEST_APK="candidate/${TEST_APK_NAME}"
           mkdir -p release/artifacts release/apk-metadata
-          cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" release/artifacts/
+          cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" \
+            "candidate/${X64_APK_NAME}" "candidate/${X64_APK_NAME}.sha256" \
+            "candidate/${X64_TEST_APK_NAME}" "candidate/${X64_TEST_APK_NAME}.sha256" release/artifacts/
           cp -R candidate/release/apk-metadata/. release/apk-metadata/
           tar -czf "release-evidence-${VERSION}.tar.gz" release
 
@@ -608,6 +689,10 @@ jobs:
               "${APP_APK}.sha256" \
               "${TEST_APK}" \
               "${TEST_APK}.sha256" \
+              "candidate/${X64_APK_NAME}" \
+              "candidate/${X64_APK_NAME}.sha256" \
+              "candidate/${X64_TEST_APK_NAME}" \
+              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
               "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -657,6 +742,10 @@ jobs:
               "${APP_APK}.sha256" \
               "${TEST_APK}" \
               "${TEST_APK}.sha256" \
+              "candidate/${X64_APK_NAME}" \
+              "candidate/${X64_APK_NAME}.sha256" \
+              "candidate/${X64_TEST_APK_NAME}" \
+              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
               "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -686,6 +775,10 @@ jobs:
             "${APP_APK}.sha256" \
             "${TEST_APK}" \
             "${TEST_APK}.sha256" \
+            "candidate/${X64_APK_NAME}" \
+            "candidate/${X64_APK_NAME}.sha256" \
+            "candidate/${X64_TEST_APK_NAME}" \
+            "candidate/${X64_TEST_APK_NAME}.sha256" \
             candidate/android-update.json \
             "release-evidence-${VERSION}.tar.gz" \
             --repo "${GITHUB_REPOSITORY}" \

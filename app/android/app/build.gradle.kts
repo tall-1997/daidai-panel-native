@@ -38,7 +38,21 @@ val hasReleaseSigning =
         !releaseKeyAlias.isNullOrEmpty() &&
         !releaseKeyPassword.isNullOrEmpty()
 val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
-val requestedAbis = listOf("arm64-v8a")
+@Suppress("UNCHECKED_CAST")
+val androidAbiMatrix = JsonSlurper().parse(rootProject.file("../../runtime/android-abi-matrix.json")) as Map<String, Any>
+check((androidAbiMatrix["schema_version"] as? Number)?.toInt() == 1) { "Android ABI matrix schema must be version 1." }
+@Suppress("UNCHECKED_CAST")
+val androidAbiConfigs = androidAbiMatrix["abis"] as? Map<String, Map<String, Any>>
+    ?: error("Android ABI matrix must define ABIs.")
+val defaultAndroidAbi = androidAbiMatrix["default_abi"] as? String
+    ?: error("Android ABI matrix must define a default ABI.")
+val requestedAbis = (System.getenv("ANDROID_RUNTIME_ABIS")?.replace(',', ' ')?.split(Regex("\\s+"))?.filter(String::isNotBlank)
+    ?: listOf(defaultAndroidAbi)).distinct()
+check(requestedAbis.size == 1) { "Android runtime APK builds must select exactly one ABI." }
+requestedAbis.forEach { abi ->
+    val config = androidAbiConfigs[abi] ?: error("Unknown Android runtime ABI: $abi")
+    check(config["package"] == true) { "Android runtime ABI is not packageable: $abi" }
+}
 
 check(!requireReleaseSigning || hasReleaseSigning) {
     "Release signing is required, but KEYSTORE_FILE, KEYSTORE_PASSWORD, KEYSTORE_ALIAS, or KEYSTORE_KEY_PASSWORD is missing."
@@ -123,6 +137,13 @@ android {
 
     buildFeatures {
         aidl = true
+        buildConfig = true
+    }
+
+    defaultConfig {
+        buildConfigField("String", "PACKAGED_RUNTIME_ABIS", "\"${requestedAbis.joinToString(",")}\"")
+        buildConfigField("String", "RUNTIME_UBUNTU_ARCHES", "\"${androidAbiConfigs.entries.joinToString(",") { "${it.key}=${it.value["ubuntu_arch"]}" }}\"")
+        buildConfigField("String", "RUNTIME_LINUX_MIRRORS", "\"${androidAbiConfigs.entries.joinToString(",") { "${it.key}=${it.value["ubuntu_mirror"]}" }}\"")
     }
 
     externalNativeBuild {
@@ -133,10 +154,11 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDirs(
+            assets.setSrcDirs(listOf(
                 "../../../runtime",
                 layout.buildDirectory.dir("generated/localWebAssets").get().asFile,
-            )
+                layout.buildDirectory.dir("generated/runtimeAssets").get().asFile,
+            ))
             // Python and Node payloads are packaged as archives under src/main/assets.
             // The generated pythonAssets/nodeAssets trees are build-time verification inputs;
             // adding them as Android asset roots duplicates archive metadata paths.
@@ -146,6 +168,7 @@ android {
 
 val panelWebDir = rootProject.file("../../panel/web")
 val generatedLocalWebDir = layout.buildDirectory.dir("generated/localWebAssets/local-web")
+val generatedRuntimeAssetsDir = layout.buildDirectory.dir("generated/runtimeAssets")
 val nodeVersion = providers.exec { commandLine("node", "--version") }.standardOutput.asText.map(String::trim)
 val npmVersion = providers.exec { commandLine("npm", "--version") }.standardOutput.asText.map(String::trim)
 val localWebBuildMode = "true"
@@ -186,6 +209,20 @@ val packageLocalPanelWeb = tasks.register<Sync>("packageLocalPanelWeb") {
     dependsOn(buildLocalPanelWeb)
     from(panelWebDir.resolve("dist"))
     into(generatedLocalWebDir)
+}
+
+val packageSelectedRuntimeAssets = tasks.register<Sync>("packageSelectedRuntimeAssets") {
+    group = "build"
+    description = "Stages common Android assets and the selected ABI runtime."
+    from("src/main/assets") {
+        exclude("android-runtime/**")
+    }
+    requestedAbis.forEach { abi ->
+        from("src/main/assets/android-runtime/$abi") {
+            into("android-runtime/$abi")
+        }
+    }
+    into(generatedRuntimeAssetsDir)
 }
 
 val verifyLocalPanelWeb = tasks.register("verifyLocalPanelWeb") {
@@ -252,10 +289,13 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
         val trustedRootfsSources = JsonSlurper().parse(rootProject.file("../scripts/rootfs-trusted-sources.json")) as Map<String, Any>
         check((trustedRootfsSources["schema_version"] as? Number)?.toInt() == 1) { "Trusted rootfs source schema must be version 1." }
         requestedAbis.forEach { abi ->
+            val abiConfig = androidAbiConfigs.getValue(abi)
+            val expectedMachine = (abiConfig["elf_machine"] as Number).toInt()
+            val minimumAlignment = (abiConfig["minimum_load_alignment"] as Number).toLong()
             val nativeDir = file("src/main/jniLibs/$abi")
             val proot = listOf("libdaidai_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
-            check(proot != null && isArm64Elf(proot) && hasMinimumElfLoadAlignment(proot, 16384L)) {
-                "Android PRoot runner for $abi must be an arm64 ELF with 16 KB PT_LOAD alignment."
+            check(proot != null && isExpectedElf(proot, expectedMachine) && hasMinimumElfLoadAlignment(proot, minimumAlignment)) {
+                "Android PRoot runner for $abi must match ELF machine $expectedMachine and the load alignment policy."
             }
             check(file("$nativeDir/libproot_loader.so").isFile) { "Missing PRoot loader for $abi." }
             check(file("$nativeDir/libyaegi_exec.so").isFile) { "Missing Yaegi runtime for $abi." }
@@ -334,6 +374,14 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             }
             @Suppress("UNCHECKED_CAST")
             val artifacts = nativeManifest["artifacts"] as? List<Map<String, Any>> ?: error("Android native artifacts are missing for $abi.")
+            val manifestNames = artifacts.mapNotNull { it["name"] as? String }.toSet()
+            val packagedElfNames = nativeDir.listFiles().orEmpty()
+                .filter { it.isFile && it.extension == "so" && isElf(it) }
+                .map { it.name }
+                .toSet()
+            check(manifestNames == packagedElfNames) {
+                "Android native manifest must cover every packaged ELF for $abi; missing=${packagedElfNames - manifestNames}, extra=${manifestNames - packagedElfNames}."
+            }
             val requiredNativeFiles = setOf("libdaidai_proot.so", "libproot_loader.so", "libdaidai_busybox.so")
             check(requiredNativeFiles.all { required -> artifacts.any { it["name"] == required } }) { "Android PRoot/BusyBox dependency manifest is incomplete for $abi." }
             artifacts.forEach { artifact ->
@@ -342,8 +390,8 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                 check(binary.isFile && artifact["sha256"] == sha256(binary) && (artifact["size"] as? Number)?.toLong() == binary.length()) {
                     "Android native artifact checksum or size mismatch: $name."
                 }
-                check(isArm64Elf(binary) && hasMinimumElfLoadAlignment(binary, 16384L)) {
-                    "Android native artifact must be arm64 and 16 KB PT_LOAD aligned: $name."
+                check(isExpectedElf(binary, expectedMachine) && hasMinimumElfLoadAlignment(binary, minimumAlignment)) {
+                    "Android native artifact must match $abi and its load alignment policy: $name."
                 }
             }
         }
@@ -358,14 +406,20 @@ fun isCompatiblePythonWheel(filename: String): Boolean {
         Regex(".+-cp314-(cp314|abi3)-android_[0-9]+_x86_64\\.whl").matches(lower)
 }
 
-fun isArm64Elf(file: File): Boolean {
+fun isElf(file: File): Boolean {
+    if (!file.isFile || file.length() < 20) return false
+    val header = file.inputStream().use { input -> ByteArray(20).also { input.read(it) } }
+    return header[0] == 0x7f.toByte() && header[1] == 'E'.code.toByte() && header[2] == 'L'.code.toByte() && header[3] == 'F'.code.toByte()
+}
+
+fun isExpectedElf(file: File, expectedMachine: Int): Boolean {
     val header = file.inputStream().use { input -> ByteArray(20).also { input.read(it) } }
     if (header[0] != 0x7f.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
         return false
     }
     if (header[4] != 2.toByte() || header[5] != 1.toByte()) return false
     val machine = (header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)
-    return machine == 183
+    return machine == expectedMachine
 }
 
 fun hasMinimumElfLoadAlignment(file: File, minimumAlignment: Long): Boolean {
@@ -421,6 +475,7 @@ fun sha256(file: File): String {
 }
 
 tasks.named("preBuild").configure {
+    dependsOn(packageSelectedRuntimeAssets)
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
     dependsOn(verifyLocalPanelWeb)

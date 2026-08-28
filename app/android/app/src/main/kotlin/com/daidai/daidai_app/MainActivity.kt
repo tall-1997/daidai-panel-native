@@ -76,6 +76,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "getRuntimeAbi" -> result.success(AndroidLinuxRuntime.currentAbi())
                 "applyPatch" -> {
                     val patchPath = call.argument<String>("patchPath")
                     val outputName = call.argument<String>("outputName")

@@ -364,11 +364,7 @@ object AndroidRootfsDownloader {
         entries > 0 && hasOsRelease && hasShell
     }.getOrDefault(false)
 
-    private fun ubuntuArch(abi: String): String = when (abi) {
-        "arm64-v8a" -> "arm64"
-        "x86_64" -> "amd64"
-        else -> throw IOException("不支持的架构：$abi")
-    }
+    private fun ubuntuArch(abi: String): String = AndroidLinuxRuntime.ubuntuArch(abi)
 
     private fun formatMiB(bytes: Long): String = String.format(java.util.Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
 

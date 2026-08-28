@@ -16,7 +16,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-abis="${ANDROID_RUNTIME_ABIS:-arm64-v8a}"
+matrix_tool="$repo_root/scripts/android-abi-matrix.py"
+abis="$(python3 "$matrix_tool" list native --requested "${ANDROID_RUNTIME_ABIS:-}")"
 ndk="${ANDROID_NDK_HOME:-/opt/android-sdk/android-ndk-r27}"
 api="${ANDROID_API_LEVEL:-24}"
 cache_root="${ANDROID_NATIVE_BUILD_CACHE:-$HOME/.cache/daidai-android-native-source}"
@@ -257,8 +258,9 @@ roles = {
     "libdaidai_busybox.so": "busybox",
 }
 artifacts = []
-for name, role in roles.items():
-    path = root / name
+for path in sorted(root.glob("*.so")):
+    name = path.name
+    role = roles.get(name, "packaged-native-library")
     data = path.read_bytes()
     artifacts.append({"name": name, "role": role, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)})
 manifest = {
@@ -338,6 +340,9 @@ for abi in $abis; do
   cp "$work_dir/$target/busybox/busybox" "$native_dir/libdaidai_busybox.so"
   chmod 755 "$native_dir/libdaidai_proot.so" "$native_dir/libproot_loader.so" "$native_dir/libdaidai_busybox.so"
   write_manifest "$abi" "$native_dir" "$target"
+  python3 "$script_dir/sync-android-native-manifest.py" \
+    --native-dir "$native_dir" \
+    --manifest "$repo_root/app/android/app/src/main/assets/android-runtime/$abi/native-runtime-manifest.json"
   stage_and_verify "$abi" "$native_dir"
   log "Android native tools built and staged for $abi"
 done

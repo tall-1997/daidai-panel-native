@@ -47,6 +47,42 @@
   },
   "artifacts": [
     {
+      "name": "libandroid-shmem.so",
+      "role": "android-shmem-runtime",
+      "sha256": "f48dd4d2196f331b1054e41cbafb544f09d0aa148b846562b65fb5b439ac633f",
+      "size": 18536
+    },
+    {
+      "name": "libbusybox_1_38_0.so",
+      "role": "packaged-native-library",
+      "sha256": "b8153ac191754afcd6dd1896f961c7ecf3965cafd727a2690f648fdd9ba57cc1",
+      "size": 876576
+    },
+    {
+      "name": "libbusybox_v138.so",
+      "role": "packaged-native-library",
+      "sha256": "b8153ac191754afcd6dd1896f961c7ecf3965cafd727a2690f648fdd9ba57cc1",
+      "size": 876576
+    },
+    {
+      "name": "libc++_shared.so",
+      "role": "packaged-native-library",
+      "sha256": "e09c2f45cf4cf8ae574f94b6c2650d99ead0d332d5396f6613f062a2d2d73540",
+      "size": 1374336
+    },
+    {
+      "name": "libcrypto.so",
+      "role": "packaged-native-library",
+      "sha256": "a0dd60d620cd61bac7306a8293bcb82103971a4dcfc8c11fd55be3653beb42c4",
+      "size": 4537384
+    },
+    {
+      "name": "libdaidai_busybox.so",
+      "role": "busybox",
+      "sha256": "31965abc88c03ebc7bb9e4573baf9feff5ec37eae77b77ad1e41c4717329c01f",
+      "size": 1553528
+    },
+    {
       "name": "libdaidai_proot.so",
       "role": "proot",
       "sha256": "66c31dfdbbfb5bee56ad4428b92a6a918568c5c2215469d3b5c675a45e3499f2",
@@ -59,10 +95,16 @@
       "size": 18296
     },
     {
-      "name": "libdaidai_busybox.so",
-      "role": "busybox",
-      "sha256": "31965abc88c03ebc7bb9e4573baf9feff5ec37eae77b77ad1e41c4717329c01f",
-      "size": 1553528
+      "name": "libsqlite3.so",
+      "role": "packaged-native-library",
+      "sha256": "5973b314d794aab0dbc9424d5748f80e4873561f7584707461f55d03877bcd05",
+      "size": 1278752
+    },
+    {
+      "name": "libssl.so",
+      "role": "packaged-native-library",
+      "sha256": "123743cc94922308a44a5a7d98854ca51fc708529d73f48ac1a380d7b7f04a2f",
+      "size": 955984
     },
     {
       "name": "libtalloc.so",
@@ -71,10 +113,28 @@
       "size": 42288
     },
     {
-      "name": "libandroid-shmem.so",
-      "role": "android-shmem-runtime",
-      "sha256": "f48dd4d2196f331b1054e41cbafb544f09d0aa148b846562b65fb5b439ac633f",
-      "size": 18536
+      "name": "libtalloc_2.so",
+      "role": "packaged-native-library",
+      "sha256": "3c9b207c0a6ea2896b7523e03f55d9ab0d9e88baa115d4c32b84058ff4246fbb",
+      "size": 31440
+    },
+    {
+      "name": "libtalloc_v2.so",
+      "role": "packaged-native-library",
+      "sha256": "3c9b207c0a6ea2896b7523e03f55d9ab0d9e88baa115d4c32b84058ff4246fbb",
+      "size": 31440
+    },
+    {
+      "name": "libyaegi_exec.so",
+      "role": "yaegi-go",
+      "sha256": "6900c6ec0694f5cb8c17591cedf2b0af1d6522041afd25fd6a678e37f9fa36cc",
+      "size": 20220584
+    },
+    {
+      "name": "libz.so",
+      "role": "packaged-native-library",
+      "sha256": "c47748ed4b6ca6a2ecd664bab04795f3493956ab1f5cddc4ba0efa737ef3b711",
+      "size": 72880
     }
   ]
 }

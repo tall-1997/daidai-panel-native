@@ -66,6 +66,7 @@ class AndroidUpdateManifest {
   final String releaseNotes;
   final AndroidUpdateAsset full;
   final List<AndroidUpdatePatch> patches;
+  final Map<String, AndroidUpdatePackage> packages;
 
   const AndroidUpdateManifest({
     required this.schemaVersion,
@@ -75,18 +76,75 @@ class AndroidUpdateManifest {
     required this.releaseNotes,
     required this.full,
     required this.patches,
+    this.packages = const {},
   });
 
-  factory AndroidUpdateManifest.fromJson(Map<String, dynamic> json) {
-    final full = json['full'];
-    if (full is! Map) throw const FormatException('Missing full APK metadata');
+  factory AndroidUpdateManifest.fromJson(
+    Map<String, dynamic> json, {
+    String? abi,
+  }) {
+    final schemaVersion = _toInt(json['schemaVersion']);
+    final rawPackages = json['packages'];
+    final packages = <String, AndroidUpdatePackage>{};
+    if (rawPackages is Map) {
+      for (final entry in rawPackages.entries) {
+        if (entry.value is! Map) {
+          throw const FormatException('Invalid ABI package metadata');
+        }
+        packages[entry.key.toString()] = AndroidUpdatePackage.fromJson(
+          Map<String, dynamic>.from(entry.value as Map),
+        );
+      }
+    }
+    final selectedPackage = abi == null ? null : packages[abi];
+    if (schemaVersion == 2 && selectedPackage == null) {
+      throw const FormatException('Missing APK metadata for current ABI');
+    }
+    final full = selectedPackage?.full ??
+        (json['full'] is Map
+            ? AndroidUpdateAsset.fromJson(
+                Map<String, dynamic>.from(json['full'] as Map),
+              )
+            : null);
+    if (full == null) throw const FormatException('Missing full APK metadata');
     final patches = json['patches'];
     return AndroidUpdateManifest(
-      schemaVersion: _toInt(json['schemaVersion']),
+      schemaVersion: schemaVersion,
       packageName: json['packageName']?.toString() ?? '',
       version: json['version']?.toString() ?? '',
       versionCode: _toInt(json['versionCode']),
       releaseNotes: json['releaseNotes']?.toString() ?? '',
+      full: full,
+      patches:
+          selectedPackage?.patches ??
+          (patches is List
+              ? patches
+                    .whereType<Map>()
+                    .map(
+                      (item) => AndroidUpdatePatch.fromJson(
+                        Map<String, dynamic>.from(item),
+                      ),
+                    )
+                    .toList()
+              : const []),
+      packages: packages,
+    );
+  }
+}
+
+class AndroidUpdatePackage {
+  final AndroidUpdateAsset full;
+  final List<AndroidUpdatePatch> patches;
+
+  const AndroidUpdatePackage({required this.full, required this.patches});
+
+  factory AndroidUpdatePackage.fromJson(Map<String, dynamic> json) {
+    final full = json['full'];
+    if (full is! Map) {
+      throw const FormatException('Missing ABI full APK metadata');
+    }
+    final patches = json['patches'];
+    return AndroidUpdatePackage(
       full: AndroidUpdateAsset.fromJson(Map<String, dynamic>.from(full)),
       patches: patches is List
           ? patches

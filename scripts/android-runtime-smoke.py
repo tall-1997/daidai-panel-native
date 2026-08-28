@@ -371,7 +371,7 @@ def run(args):
     page_size = int(device_value(args.adb, args.serial, "getconf", "PAGESIZE"))
     fingerprint = device_value(args.adb, args.serial, "getprop", "ro.build.fingerprint")
     device = {"serial": args.serial or "default", "abi": abi, "api": api, "page_size_bytes": page_size, "fingerprint": fingerprint}
-    if abi not in {"arm64-v8a", "arm64-v8a,armeabi-v7a"}:
+    if abi not in {"arm64-v8a", "arm64-v8a,armeabi-v7a", "x86_64"}:
         return fail_device_run(args, device, f"unsupported-abi:{abi}")
     if args.expected_abi and abi != args.expected_abi:
         return fail_device_run(args, device, f"abi-mismatch:expected={args.expected_abi}:actual={abi}")

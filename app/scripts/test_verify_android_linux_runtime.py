@@ -39,6 +39,41 @@ class ElfVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "truncated"):
                 runtime_verifier.elf_metadata(path)
 
+    def test_native_manifest_is_closed_over_all_elf_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native_dir = pathlib.Path(directory) / "x86_64"
+            native_dir.mkdir()
+            loader = native_dir / "libproot_loader.so"
+            loader.write_bytes(elf64(machine=62))
+            extra = native_dir / "libextra.so"
+            extra.write_bytes(elf64(machine=62))
+            manifest = native_dir / "manifest.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 1,
+                "abi": "x86_64",
+                "minimum_load_alignment": 16384,
+                "provenance": {
+                    "strategy": "self-contained-source-build",
+                    "source_build": True,
+                    "source_patch_applied": False,
+                    "patches_applied": [],
+                    "runtime_overrides": {"PROOT_LOADER": "libproot_loader.so"},
+                    "toolchain": {"load_alignment": 16384},
+                    "upstream_source": [
+                        {"name": name, "version": "1", "url": "https://example.com", "sha256": "a" * 64}
+                        for name in ("proot", "talloc", "busybox")
+                    ],
+                },
+                "artifacts": [{
+                    "name": loader.name,
+                    "role": "loader",
+                    "sha256": hashlib.sha256(loader.read_bytes()).hexdigest(),
+                    "size": loader.stat().st_size,
+                }],
+            }))
+            with self.assertRaisesRegex(AssertionError, "ELF set mismatch"):
+                runtime_verifier.verify_native(native_dir, manifest)
+
 
 class RootfsVerificationTest(unittest.TestCase):
     def test_accepts_complete_rootfs_contract(self):
@@ -67,6 +102,7 @@ class RootfsVerificationTest(unittest.TestCase):
             manifest = root / "runtime-manifest.json"
             manifest.write_text(json.dumps({
                 "schema_version": 2,
+                "abi": "arm64-v8a",
                 "distribution": "ubuntu",
                 "ubuntu_version": "24.04.4",
                 "ubuntu_arch": "arm64",
@@ -83,6 +119,7 @@ class RootfsVerificationTest(unittest.TestCase):
             unsupported["crypto"] = ["Crypto"]
             manifest.write_text(json.dumps({
                 "schema_version": 2,
+                "abi": "arm64-v8a",
                 "distribution": "ubuntu",
                 "ubuntu_version": "24.04.4",
                 "ubuntu_arch": "arm64",
@@ -119,7 +156,7 @@ class RootfsVerificationTest(unittest.TestCase):
             checksum.write_text(digest)
             manifest = root / "runtime-manifest.json"
             manifest.write_text(json.dumps({
-                "schema_version": 2, "distribution": "ubuntu", "ubuntu_version": "24.04.4", "ubuntu_arch": "arm64",
+                "schema_version": 2, "abi": "arm64-v8a", "distribution": "ubuntu", "ubuntu_version": "24.04.4", "ubuntu_arch": "arm64",
                 "sha256": digest, "size": archive.stat().st_size,
                 "apt_packages": sorted(runtime_verifier.DISTRO_PACKAGES["ubuntu"]),
                 "global_tools": {"pnpm": {"version": "9.0.0", "install_source": "npm-global"}},

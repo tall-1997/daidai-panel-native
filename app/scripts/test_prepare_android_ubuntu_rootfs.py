@@ -31,6 +31,15 @@ class UbuntuRootfsSupplyChainContractTest(unittest.TestCase):
         self.assertIn('trusted_sources="$script_dir/rootfs-trusted-sources.json"', script)
         self.assertNotIn("UBUNTU_BASE_ARM64_SHA256", script)
 
+    def test_builder_consumes_shared_abi_matrix(self):
+        script = SCRIPT.read_text(encoding="utf-8")
+        trusted = json.loads(TRUSTED_SOURCES.read_text(encoding="utf-8"))["ubuntu"]["24.04.4"]
+        self.assertIn('matrix_tool="$repo_root/scripts/android-abi-matrix.py"', script)
+        self.assertIn('get "$abi" ubuntu_arch', script)
+        self.assertIn('get "$abi" qemu_static', script)
+        self.assertIn("amd64", trusted)
+        self.assertEqual(64, len(trusted["amd64"]["sha256"]))
+
     def test_builder_packages_managed_dns_placeholder(self):
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('cp /etc/resolv.conf', script)

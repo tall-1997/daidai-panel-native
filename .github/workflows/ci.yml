@@ -272,22 +272,26 @@ jobs:
       - name: Verify Android Linux runtime rootfs
         working-directory: app
         run: |
-          python3 scripts/verify-android-linux-runtime.py \
-            --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
-            --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
-            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json \
-            --trusted-sources scripts/rootfs-trusted-sources.json
+          for ABI in $(python3 ../scripts/android-abi-matrix.py list package); do
+            python3 scripts/verify-android-linux-runtime.py \
+              --rootfs "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/rootfs.tar.gz.bin" \
+              --rootfs-sha "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/rootfs.tar.gz.bin.sha256" \
+              --rootfs-manifest "android/app/src/main/assets/android-runtime/${ABI}/ubuntu/runtime-manifest.json" \
+              --native-dir "android/app/src/main/jniLibs/${ABI}" \
+              --native-manifest "android/app/src/main/assets/android-runtime/${ABI}/native-runtime-manifest.json" \
+              --trusted-sources scripts/rootfs-trusted-sources.json
+          done
 
       - name: Prepare Android Yaegi runtime
         working-directory: app
-        run: ANDROID_RUNTIME_ABIS='arm64-v8a' bash scripts/prepare-android-yaegi-runtime.sh
+        run: ANDROID_RUNTIME_ABIS="$(python3 ../scripts/android-abi-matrix.py list yaegi)" bash scripts/prepare-android-yaegi-runtime.sh
 
       - name: Run Kotlin tests
         working-directory: app
         run: gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
 
       - name: Test Android Linux runtime verifier
-        run: python3 -m unittest app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
+        run: python3 -m unittest scripts/test_android_abi_matrix.py scripts/test_verify_android_update_manifest.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
 
       - name: Upload Kotlin test reports
         if: always()

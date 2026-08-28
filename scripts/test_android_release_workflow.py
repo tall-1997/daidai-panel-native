@@ -21,7 +21,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertNotIn(":app:testDebugUnitTest", self.workflow)
         self.assertIn(":app:assembleReleaseAndroidTest", self.workflow)
         self.assertIn(
-            'cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../${TEST_APK_NAME}"',
+            'cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"',
             self.workflow,
         )
 
@@ -46,10 +46,19 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn('test "${TEST_CERT_SHA256}" = "${APK_CERT_SHA256}"', self.workflow)
 
     def test_version_file_is_the_only_release_tag_policy_source(self):
-        self.assertEqual(self.version, "1.0.19")
+        self.assertEqual(self.version, "1.0.20")
         self.assertIn('RELEASE_TAG="v${VERSION}"', self.workflow)
         self.assertNotRegex(self.workflow, r'RELEASE_TAG=.*-rc[.$]')
         self.assertNotIn('RELEASE_TAG="v1.0.19"', self.workflow)
+
+    def test_release_builds_all_abis_from_shared_matrix(self):
+        matrix = json.loads((ROOT / "runtime/android-abi-matrix.json").read_text(encoding="utf-8"))
+        self.assertEqual({"arm64-v8a", "x86_64"}, {abi for abi, config in matrix["abis"].items() if config["release"]})
+        self.assertIn("android-abi-matrix.py list release", self.workflow)
+        self.assertIn('get "${ABI}" flutter_target', self.workflow)
+        self.assertIn('get "${ABI}" release_suffix', self.workflow)
+        self.assertIn("schemaVersion: 2", self.workflow)
+        self.assertIn('"x86_64": {full:', self.workflow)
 
     def test_prerelease_fixed_tag_can_be_safely_reused(self):
         self.assertIn("EXISTING_TAG=", self.workflow)
@@ -173,7 +182,8 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_evidence_and_release_retain_test_apk_and_audit_metadata(self):
         self.assertIn("release/apk-metadata/**", self.workflow)
-        self.assertIn('cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" release/artifacts/', self.workflow)
+        self.assertIn('cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" \\', self.workflow)
+        self.assertIn('"candidate/${X64_TEST_APK_NAME}" "candidate/${X64_TEST_APK_NAME}.sha256" release/artifacts/', self.workflow)
         self.assertGreaterEqual(self.workflow.count('"${TEST_APK}.sha256"'), 2)
 
     def test_gradle_web_jobs_pin_node_and_npm_contract(self):

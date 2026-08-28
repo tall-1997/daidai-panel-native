@@ -133,7 +133,26 @@ object AndroidLinuxRuntime {
         val capabilities: List<String>,
     )
 
-    fun currentAbi(): String = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty().ifBlank { "unknown" }
+    internal fun selectRuntimeAbi(deviceAbis: List<String>, packagedAbis: List<String>): String =
+        deviceAbis.firstOrNull { it in packagedAbis }
+            ?: packagedAbis.singleOrNull()
+            ?: "unknown"
+
+    private fun buildConfigMap(value: String): Map<String, String> = value.split(',')
+        .mapNotNull { entry ->
+            val separator = entry.indexOf('=')
+            if (separator <= 0) null else entry.substring(0, separator) to entry.substring(separator + 1)
+        }
+        .toMap()
+
+    internal fun ubuntuArch(abi: String): String =
+        buildConfigMap(BuildConfig.RUNTIME_UBUNTU_ARCHES)[abi]
+            ?: throw IOException("不支持的架构：$abi")
+
+    fun currentAbi(): String = selectRuntimeAbi(
+        android.os.Build.SUPPORTED_ABIS.toList(),
+        BuildConfig.PACKAGED_RUNTIME_ABIS.split(',').filter(String::isNotBlank),
+    )
 
     fun nativeLibraryDir(context: Context): File = File(context.applicationInfo.nativeLibraryDir.orEmpty())
 
@@ -223,7 +242,7 @@ object AndroidLinuxRuntime {
             ?: DEFAULT_DISTRIBUTION
 
     internal fun defaultLinuxMirror(distribution: String, abi: String = currentAbi()): String =
-        if (abi == "arm64-v8a") UBUNTU_PORTS_APT_DEFAULT_MIRROR else UBUNTU_APT_DEFAULT_MIRROR
+        buildConfigMap(BuildConfig.RUNTIME_LINUX_MIRRORS)[abi] ?: UBUNTU_APT_DEFAULT_MIRROR
 
     fun distributionPackageManager(distribution: String): String = "apt"
 

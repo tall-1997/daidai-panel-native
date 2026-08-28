@@ -31,14 +31,20 @@ Entries discovered by the Agent during task execution should follow this format:
 
 ## Entries
 
+[构建执行位置偏好]
+- Date: 2026-08-28
+- Context: 用户确认清理本地构建缓存并指定后续构建执行方式
+- Instructions:
+  - 后续编译、构建和打包默认在云端 CI 执行。
+  - 本地仅执行任务必需且云端无法替代的构建。
+
 [Android 测试版与正式版发布策略]
 - Date: 2026-08-28
-- Context: 用户明确指定 Android 测试包长期版本号与正式版基线
+- Context: 用户明确指定 Android 测试包长期版本号，并将 `v1.0.19` 转为正式版
 - Instructions:
-  - Android 测试包固定使用版本号 `1.0.19`，后续测试发布持续覆盖该版本的测试资产。
+  - Android `v1.0.19` 已转为正式版并设为 GitHub Latest。
+  - Android `v1.0.20` 用于 x86_64 多架构功能的 prerelease 测试发布。
   - 只有用户明确要求使用新版本号发布时，才提升测试包版本号。
-  - Android 当前正式版为 `1.0.18`，GitHub Release 应将 `v1.0.18` 标记为正式版和 latest。
-  - 不保留 `1.0.20` 测试 Release、标签或项目版本声明。
 
 [全量审查与优化执行方式]
 - Date: 2026-08-27

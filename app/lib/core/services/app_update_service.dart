@@ -252,10 +252,15 @@ class AppUpdateService {
       String assetName = '';
       int assetSize = 0;
       String assetDigest = '';
+      final runtimeAbi = !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? await _platform.invokeMethod<String>('getRuntimeAbi')
+          : null;
+      final releaseSuffix = runtimeAbi == 'x86_64' ? 'x86_64' : 'arm64';
       if (assets is List) {
         for (final asset in assets) {
           final name = asset['name']?.toString() ?? '';
-          if (name.endsWith('.apk')) {
+          if (name.endsWith('-$releaseSuffix.apk') &&
+              !name.contains('-androidTest.apk')) {
             final rawUrl = asset['browser_download_url']?.toString() ?? '';
             if (_isTrustedDownloadUrl(rawUrl)) {
               final digest = asset['digest']?.toString() ?? '';
@@ -302,13 +307,14 @@ class AppUpdateService {
       );
       final raw = response.data;
       if (raw is! Map) return null;
+      final runtimeAbi = await _platform.invokeMethod<String>('getRuntimeAbi');
       final manifest = AndroidUpdateManifest.fromJson(
         Map<String, dynamic>.from(raw),
+        abi: runtimeAbi,
       );
-      if (manifest.schemaVersion != 1 ||
+      if ((manifest.schemaVersion != 1 && manifest.schemaVersion != 2) ||
           manifest.packageName != 'com.daidai.daidai_app' ||
           !_isTrustedDownloadUrl(manifest.full.url) ||
-          manifest.full.md5.isEmpty ||
           manifest.full.sha256.isEmpty) {
         return null;
       }
