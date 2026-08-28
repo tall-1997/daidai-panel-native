@@ -181,6 +181,7 @@ object AndroidLinuxRuntime {
             "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
+            if (currentAbi() == "x86_64") put("PROOT_NO_SECCOMP", "1")
             putAll(mirrorEnvironment(mirrors))
         }
     }

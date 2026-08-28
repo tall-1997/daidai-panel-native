@@ -74,7 +74,6 @@ class AndroidRuntimeSmokeTest {
                 )) { "Packaged rootfs runner is unavailable" }
                 val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
                 builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
-                builder.environment()["PROOT_VERBOSE"] = "9"
                 AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
                 val process = builder.start()
                 process.outputStream.close()
