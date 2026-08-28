@@ -408,7 +408,6 @@ object AndroidLinuxRuntime {
             "-b", "${hostWorkingDir.absolutePath}:$guestWorkingDir",
             "-b", "${context.filesDir.absolutePath}:/host-files",
             "-b", "${context.cacheDir.absolutePath}:/tmp/host-cache",
-            "-L",
             "-0",
         )
         binds.enabled.forEach { bind ->
@@ -421,7 +420,6 @@ object AndroidLinuxRuntime {
     internal fun prootCompatibilityFlags(): List<String> = listOf(
         "--kill-on-exit",
         "-k", "4.14.0",
-        "-L",
         "-0",
     )
 
