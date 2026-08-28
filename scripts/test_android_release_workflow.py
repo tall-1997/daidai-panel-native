@@ -17,6 +17,8 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_release_android_test_targets_and_uses_release_candidate(self):
         self.assertRegex(self.gradle, r'(?m)^\s*testBuildType\s*=\s*"release"\s*$')
+        self.assertIn(":app:testReleaseUnitTest", self.workflow)
+        self.assertNotIn(":app:testDebugUnitTest", self.workflow)
         self.assertIn(":app:assembleReleaseAndroidTest", self.workflow)
         self.assertIn(
             'cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../${TEST_APK_NAME}"',

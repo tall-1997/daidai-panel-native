@@ -183,7 +183,7 @@ bash scripts/prepare-android-yaegi-runtime.sh
 ### 5. 运行 Kotlin 单元测试
 
 ```bash
-gradle -p app/android :app:testDebugUnitTest --no-daemon --stacktrace
+gradle -p app/android :app:testReleaseUnitTest --no-daemon --stacktrace
 ```
 
 ### 6. 构建 ARM64 release APK

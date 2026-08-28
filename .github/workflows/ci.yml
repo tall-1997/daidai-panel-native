@@ -284,7 +284,7 @@ jobs:
 
       - name: Run Kotlin tests
         working-directory: app
-        run: gradle -p android :app:testDebugUnitTest --no-daemon --stacktrace
+        run: gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
 
       - name: Test Android Linux runtime verifier
         run: python3 -m unittest app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
@@ -295,8 +295,8 @@ jobs:
         with:
           name: kotlin-test-reports
           path: |
-            app/build/app/reports/tests/testDebugUnitTest/
-            app/build/app/test-results/testDebugUnitTest/
+            app/build/app/reports/tests/testReleaseUnitTest/
+            app/build/app/test-results/testReleaseUnitTest/
           if-no-files-found: warn
           retention-days: 7
 
