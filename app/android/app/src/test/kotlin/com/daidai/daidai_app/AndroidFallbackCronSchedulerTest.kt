@@ -29,7 +29,7 @@ class AndroidFallbackCronSchedulerTest {
         assertFalse(CronExpression.matches(expression, time.withSecond(16)))
     }
 
-    @Test fun direct fiveFieldMatchingUsesMinuteBoundary() {
+    @Test fun directFiveFieldMatchingUsesMinuteBoundary() {
         val expression = "34 12 * * *"
 
         assertTrue(CronExpression.matches(expression, time.withSecond(0)))
@@ -47,7 +47,7 @@ class AndroidFallbackCronSchedulerTest {
         assertEquals(LongRange.EMPTY, gate.claimUnprocessedMinutes(firstMinute + 3))
     }
 
-    @Test fun delayed fiveFieldTickMatchesMissedMinuteWhileSixFieldKeepsExactSecond() {
+    @Test fun delayedFiveFieldTickMatchesMissedMinuteWhileSixFieldKeepsExactSecond() {
         val delayed = time.plusMinutes(1).withSecond(7)
         val missedMinute = time.toEpochSecond() / 60
 
