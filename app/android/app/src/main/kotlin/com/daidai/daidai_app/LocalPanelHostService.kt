@@ -17,6 +17,9 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONObject
 
 class LocalPanelHostService : Service() {
@@ -53,6 +56,12 @@ class LocalPanelHostService : Service() {
     @Volatile
     private var destroyed = false
     private val cronIdleWatcher = Handler(Looper.getMainLooper())
+    private val runtimeExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "local-panel-runtime").apply { isDaemon = true }
+    }
+    private val boundClients = AtomicInteger(0)
+    private val pendingCronTicks = AtomicInteger(0)
+    private var cronIdleWatcherScheduled = false
     private val binder = object : ILocalPanelService.Stub() {
         override fun ensureStarted(): String = encodeWithState(
             recordCoreResult(LocalPanelRuntime.tryEnsureStarted(applicationContext, localToken)),
@@ -93,7 +102,7 @@ class LocalPanelHostService : Service() {
             // Start the fallback server immediately, then preload the rootfs runner.
             // Retry on startup failure so a transient race (e.g. port/token rebuild)
             // does not leave the core permanently down with no signal to the UI.
-            Thread {
+            runtimeExecutor.execute {
                 var attempt = 0
                 while (attempt < STARTUP_MAX_ATTEMPTS && !destroyed) {
                     attempt++
@@ -101,7 +110,7 @@ class LocalPanelHostService : Service() {
                         LocalPanelRuntime.ensureStarted(applicationContext, localToken)
                         AndroidLinuxRuntime.preload(applicationContext)
                         recoveryFailure = null
-                        return@Thread
+                        return@execute
                     } catch (error: Exception) {
                         recoveryFailure = mapOf(
                             "recovery_phase" to "failed",
@@ -109,11 +118,11 @@ class LocalPanelHostService : Service() {
                             "recovery_message" to (error.message ?: error.javaClass.simpleName),
                         )
                         if (attempt < STARTUP_MAX_ATTEMPTS && !destroyed) {
-                            try { Thread.sleep(STARTUP_RETRY_DELAY_MS * attempt) } catch (_: InterruptedException) { return@Thread }
+                            try { Thread.sleep(STARTUP_RETRY_DELAY_MS * attempt) } catch (_: InterruptedException) { return@execute }
                         }
                     }
                 }
-            }.start()
+            }
             recoveryCoordinator = PersistentCoreRecoveryCoordinator(
                 runner = ExecutorCoreRecoveryTaskRunner(),
                 runtime = { LocalPanelRuntime.ensureStarted(applicationContext, localToken) },
@@ -176,19 +185,47 @@ class LocalPanelHostService : Service() {
             if (!persistentPolicy.foregroundActive) {
                 startForeground(NOTIFICATION_ID, buildNotification(starting = true))
             }
-            LocalPanelRuntime.triggerCronTick()
-            if (!persistentPolicy.foregroundActive) {
-                waitForCronIdleThenStop()
+            pendingCronTicks.incrementAndGet()
+            try {
+                runtimeExecutor.execute {
+                    try {
+                        runCatching { LocalPanelRuntime.triggerCronTick(applicationContext, localToken) }
+                            .onFailure { error ->
+                                recoveryFailure = mapOf(
+                                    "recovery_phase" to "failed",
+                                    "recovery_failure_stage" to "cron_startup",
+                                    "recovery_message" to (error.message ?: error.javaClass.simpleName),
+                                )
+                            }
+                    } finally {
+                        pendingCronTicks.decrementAndGet()
+                        if (!persistentPolicy.foregroundActive) cronIdleWatcher.post(::waitForCronIdleThenStop)
+                    }
+                }
+            } catch (error: RuntimeException) {
+                pendingCronTicks.decrementAndGet()
+                throw error
             }
             return START_NOT_STICKY
         }
         return START_NOT_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    override fun onBind(intent: Intent?): IBinder {
+        boundClients.incrementAndGet()
+        return binder
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        boundClients.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
+        waitForCronIdleThenStop()
+        return super.onUnbind(intent)
+    }
 
     override fun onDestroy() {
         destroyed = true
+        cronIdleWatcher.removeCallbacksAndMessages(null)
+        runtimeExecutor.shutdownNow()
         networkRecovery.stop()
         recoveryCoordinator.close()
         // The Core belongs to the :panel process, not this Service instance.
@@ -247,7 +284,7 @@ class LocalPanelHostService : Service() {
                     PanelCoreLifecyclePolicy.onPersistentDisabled() ==
                         PanelCoreLifecyclePolicy.Action.KEEP_RUNNING
                 )
-                stopSelf()
+                waitForCronIdleThenStop()
             }
             PersistentForegroundPolicy.Action.NONE -> Unit
         }
@@ -302,14 +339,30 @@ class LocalPanelHostService : Service() {
     }
 
     private fun waitForCronIdleThenStop() {
+        if (destroyed || cronIdleWatcherScheduled) return
+        cronIdleWatcherScheduled = true
         cronIdleWatcher.postDelayed(object : Runnable {
             override fun run() {
-                if (destroyed) return
-                if (LocalPanelRuntime.isCronIdle()) {
+                if (destroyed) {
+                    cronIdleWatcherScheduled = false
+                    return
+                }
+                val cronIdle = LocalPanelRuntime.isCronIdle()
+                val pendingTicks = pendingCronTicks.get()
+                if (canStopIdleService(
+                        boundClients = boundClients.get(),
+                        cronIdle = cronIdle,
+                        pendingCronTicks = pendingTicks,
+                        persistentForeground = persistentPolicy.foregroundActive,
+                        browserSession = transientPanelSession,
+                    )) {
+                    cronIdleWatcherScheduled = false
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
-                } else {
+                } else if (pendingTicks > 0 || !cronIdle) {
                     cronIdleWatcher.postDelayed(this, 1000L)
+                } else {
+                    cronIdleWatcherScheduled = false
                 }
             }
         }, 1000L)
@@ -354,6 +407,14 @@ class LocalPanelHostService : Service() {
         )
         .build()
 }
+
+internal fun canStopIdleService(
+    boundClients: Int,
+    cronIdle: Boolean,
+    pendingCronTicks: Int = 0,
+    persistentForeground: Boolean = false,
+    browserSession: Boolean = false,
+): Boolean = boundClients == 0 && pendingCronTicks == 0 && cronIdle && !persistentForeground && !browserSession
 
 internal fun mergeLocalPanelHostStatus(
     coreStatus: Map<String, Any>,

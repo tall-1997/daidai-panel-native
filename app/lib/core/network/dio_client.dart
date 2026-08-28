@@ -4,6 +4,7 @@ import 'package:logger/logger.dart';
 import 'app_user_agent.dart';
 import 'managed_local_session.dart';
 import 'panel_capability_registry.dart';
+import 'request_readiness_barrier.dart';
 
 final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
 
@@ -48,7 +49,26 @@ class DioClient {
 
     dio.interceptors.add(
       InterceptorsWrapper(
-        onRequest: (options, handler) {
+        onRequest: (options, handler) async {
+          if (options.extra[requestReadinessPreparedKey] != true) {
+            try {
+              await RequestReadinessBarrier.ensureReady();
+            } catch (error, stackTrace) {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  error: error,
+                  stackTrace: stackTrace,
+                  message: error.toString(),
+                ),
+              );
+              return;
+            }
+          }
+          if (!options.path.startsWith('http://') &&
+              !options.path.startsWith('https://')) {
+            options.baseUrl = _baseUrl;
+          }
           applyManagedLocalHeaders(options);
           handler.next(options);
         },

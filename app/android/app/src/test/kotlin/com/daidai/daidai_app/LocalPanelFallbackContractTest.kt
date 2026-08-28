@@ -11,6 +11,25 @@ import org.json.JSONObject
 
 class LocalPanelFallbackContractTest {
     @Test
+    fun `dead NanoHTTPD listener fails health even with a successful stale response`() {
+        assertFalse(LocalPanelRuntime.isListenerHealthy(false, 200))
+        assertFalse(LocalPanelRuntime.isListenerHealthy(true, null))
+        assertFalse(LocalPanelRuntime.isListenerHealthy(true, 503))
+        assertTrue(LocalPanelRuntime.isListenerHealthy(true, 200))
+        assertEquals(ListenerRecoveryAction.REBUILD, listenerRecoveryAction(healthy = false))
+        assertEquals(ListenerRecoveryAction.REUSE, listenerRecoveryAction(healthy = true))
+    }
+
+    @Test
+    fun `dead listener status is failed and carries no endpoint`() {
+        val status = LocalPanelRuntime.failedStatus("token", "health_check", "listener unavailable")
+
+        assertEquals("failed", status["phase"])
+        assertEquals("", status["base_url"])
+        assertEquals("health_check", status["failure_stage"])
+    }
+
+    @Test
     fun `full Kotlin fallback exposes a ready local endpoint`() {
         val status = LocalPanelRuntime.fallbackStatus(
             endpoint = "http://127.0.0.1:5700",

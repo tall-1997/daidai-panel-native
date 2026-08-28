@@ -94,7 +94,7 @@ void main() async {
     container.read(authProvider.notifier).setUnauthenticated(authEpoch: epoch);
   };
   DioClient.instance.dio.interceptors.insert(
-    0,
+    1,
     AuthInterceptor(),
   );
 

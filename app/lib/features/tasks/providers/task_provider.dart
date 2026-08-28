@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/network/request_readiness_barrier.dart';
 import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/services/task_completion_observer.dart';
 import '../../../shared/models/task.dart';
@@ -10,6 +11,10 @@ import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 
 const _unset = Object();
+
+Options get _readySideEffectOptions => Options(
+  extra: const {requestReadinessPreparedKey: true},
+);
 
 class TaskListState {
   final List<Task> tasks;
@@ -167,7 +172,11 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> runTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
+    await RequestReadinessBarrier.ensureReady();
+    await DioClient.instance.dio.put(
+      ApiEndpoints.taskRun(id),
+      options: _readySideEffectOptions,
+    );
     TaskCompletionObserver.instance.markRunning(id);
     // Do not block navigation to live logs on an additional list refresh.
     // The run endpoint acknowledges immediately; refresh can happen in background.
@@ -175,17 +184,29 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> stopTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskStop(id));
+    await RequestReadinessBarrier.ensureReady();
+    await DioClient.instance.dio.put(
+      ApiEndpoints.taskStop(id),
+      options: _readySideEffectOptions,
+    );
     await load(refresh: true);
   }
 
   Future<void> enableTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskEnable(id));
+    await RequestReadinessBarrier.ensureReady();
+    await DioClient.instance.dio.put(
+      ApiEndpoints.taskEnable(id),
+      options: _readySideEffectOptions,
+    );
     await load(refresh: true);
   }
 
   Future<void> disableTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskDisable(id));
+    await RequestReadinessBarrier.ensureReady();
+    await DioClient.instance.dio.put(
+      ApiEndpoints.taskDisable(id),
+      options: _readySideEffectOptions,
+    );
     await load(refresh: true);
   }
 
@@ -195,10 +216,12 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> batchRun(List<int> ids) async {
+    await RequestReadinessBarrier.ensureReady();
     await DioClient.instance.dio.post(
       ApiEndpoints.tasksBatchRun,
       // 面板批量任务接口使用 task_ids 字段，不能复用环境变量的 ids 字段。
       data: {'task_ids': ids},
+      options: _readySideEffectOptions,
     );
     for (final id in ids) {
       TaskCompletionObserver.instance.markRunning(id);
@@ -207,19 +230,23 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> batchEnable(List<int> ids) async {
+    await RequestReadinessBarrier.ensureReady();
     await DioClient.instance.dio.put(
       ApiEndpoints.tasksBatchEnable,
       // 面板批量任务接口使用 task_ids 字段，保证与 Web 端请求保持一致。
       data: {'task_ids': ids},
+      options: _readySideEffectOptions,
     );
     await load(refresh: true);
   }
 
   Future<void> batchDisable(List<int> ids) async {
+    await RequestReadinessBarrier.ensureReady();
     await DioClient.instance.dio.put(
       ApiEndpoints.tasksBatchDisable,
       // 面板批量任务接口使用 task_ids 字段，避免后端提示“请求参数错误”。
       data: {'task_ids': ids},
+      options: _readySideEffectOptions,
     );
     await load(refresh: true);
   }

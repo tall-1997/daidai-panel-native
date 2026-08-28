@@ -1,6 +1,8 @@
 package com.daidai.daidai_app
 
 import android.content.Context
+import java.net.HttpURLConnection
+import java.net.URL
 
 object LocalPanelRuntime {
     private var fallbackServer: LocalPanelHttpServer? = null
@@ -13,7 +15,7 @@ object LocalPanelRuntime {
 
     fun tryEnsureStarted(context: Context, localToken: String): Map<String, Any> {
         val current = status(localToken)
-        if (fallbackServer != null) return current
+        if (current["phase"] == "ready") return current
         return ensureStarted(context, localToken)
     }
 
@@ -51,9 +53,14 @@ object LocalPanelRuntime {
     @Synchronized
     fun status(localToken: String): Map<String, Any> {
         return fallbackServer?.let { server ->
+            if (!isHealthy(server)) {
+                stopFallback()
+                cachedResult = null
+                return failedStatus(localToken, "health_check", "Kotlin fallback listener is unavailable")
+            }
             server.updateBoundary(kotlinFallbackReason, localToken)
             fallbackStatus(server, localToken, kotlinFallbackReason)
-        } ?: (cachedResult ?: fallbackStatus("", localToken, "not_started"))
+        } ?: (cachedResult ?: stoppedStatus(localToken))
     }
 
     fun createBrowserUrl(context: Context, localToken: String): String {
@@ -61,11 +68,13 @@ object LocalPanelRuntime {
         return if (fallback != null) fallback.createBrowserUrl() else ""
     }
 
-    fun triggerCronTick() {
+    @Synchronized
+    fun triggerCronTick(context: Context, localToken: String) {
+        tryEnsureStarted(context, localToken)
         fallbackServer?.triggerCronTick()
     }
 
-    fun isCronIdle(): Boolean = fallbackServer?.isCronIdle() ?: true
+    fun isCronIdle(): Boolean = cronCanStop(initializing, fallbackServer?.isCronIdle())
 
     private fun stopFallback() {
         fallbackServer?.shutdown()
@@ -75,8 +84,11 @@ object LocalPanelRuntime {
     private fun ensureFallbackStarted(context: Context, localToken: String): Map<String, Any> {
         val existing = fallbackServer
         if (existing != null) {
-            existing.updateBoundary(kotlinFallbackReason, localToken)
-            return fallbackStatus(existing, localToken, kotlinFallbackReason)
+            if (listenerRecoveryAction(isHealthy(existing)) == ListenerRecoveryAction.REUSE) {
+                existing.updateBoundary(kotlinFallbackReason, localToken)
+                return fallbackStatus(existing, localToken, kotlinFallbackReason)
+            }
+            stopFallback()
         }
         val server = LocalPanelHttpServer(context, kotlinFallbackReason, localToken)
         try {
@@ -91,6 +103,60 @@ object LocalPanelRuntime {
         fallbackServer = server
         return fallbackStatus(server, localToken, kotlinFallbackReason)
     }
+
+    private fun isHealthy(server: LocalPanelHttpServer): Boolean {
+        if (!server.isAlive) return false
+        if (probeHealth(server)) return true
+        try {
+            Thread.sleep(100)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+        return server.isAlive && probeHealth(server)
+    }
+
+    private fun probeHealth(server: LocalPanelHttpServer): Boolean {
+        val connection = runCatching {
+            (URL("${server.endpoint}/api/health").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 750
+                readTimeout = 750
+                useCaches = false
+            }
+        }.getOrNull() ?: return false
+        return try {
+            isListenerHealthy(server.isAlive, connection.responseCode)
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    internal fun isListenerHealthy(nanoHttpdAlive: Boolean, healthResponseCode: Int?): Boolean =
+        nanoHttpdAlive && healthResponseCode != null && healthResponseCode in 200..299
+
+    internal fun failedStatus(localToken: String, stage: String, message: String): Map<String, Any> = mapOf(
+        "phase" to "failed",
+        "base_url" to "",
+        "instance_id" to "kotlin-local-fallback",
+        "core_version" to "kotlin-local-fallback",
+        "schema_version" to LocalPanelStore.SCHEMA_VERSION,
+        "failure_stage" to stage,
+        "message" to message,
+        "local_token" to localToken,
+    )
+
+    private fun stoppedStatus(localToken: String): Map<String, Any> = mapOf(
+        "phase" to "stopped",
+        "base_url" to "",
+        "instance_id" to "kotlin-local-fallback",
+        "core_version" to "kotlin-local-fallback",
+        "schema_version" to LocalPanelStore.SCHEMA_VERSION,
+        "message" to "Kotlin fallback is not running",
+        "local_token" to localToken,
+    )
 
     private fun fallbackStatus(server: LocalPanelHttpServer, localToken: String, reason: String): Map<String, Any> =
         fallbackStatus(server.endpoint, localToken, reason)
@@ -113,3 +179,11 @@ object LocalPanelRuntime {
         "local_token" to localToken,
     )
 }
+
+internal fun cronCanStop(initializing: Boolean, cronIdle: Boolean?): Boolean =
+    !initializing && cronIdle != false
+
+internal enum class ListenerRecoveryAction { REUSE, REBUILD }
+
+internal fun listenerRecoveryAction(healthy: Boolean): ListenerRecoveryAction =
+    if (healthy) ListenerRecoveryAction.REUSE else ListenerRecoveryAction.REBUILD

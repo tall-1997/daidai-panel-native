@@ -4,36 +4,45 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.RemoteException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LocalPanelServiceClient(context: Context) {
     private val appContext = context.applicationContext
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private var service: ILocalPanelService? = null
+    private data class ConnectedService(
+        val service: ILocalPanelService,
+        val binder: IBinder,
+        val generation: Long,
+    )
+
+    private var service: ConnectedService? = null
     private val connectionState = ConnectionGenerationState()
     private var activeConnection: ServiceConnection? = null
     private var activeBinder: IBinder? = null
     private var activeDeathRecipient: IBinder.DeathRecipient? = null
     @Volatile
     private var closed = false
-    private val pending = PendingCallQueue<ILocalPanelService>()
+    private val pending = PendingCallQueue<ConnectedService>()
 
-    fun ensureStarted(callback: (Result<String>) -> Unit) = call({ it.ensureStarted() }, callback)
+    fun ensureStarted(callback: (Result<String>) -> Unit) = call(retrySafe = true, { it.ensureStarted() }, callback)
 
-    fun status(callback: (Result<String>) -> Unit) = call({ it.status() }, callback)
+    fun status(callback: (Result<String>) -> Unit) = call(retrySafe = true, { it.status() }, callback)
 
-    fun restart(callback: (Result<String>) -> Unit) = call({ it.restart() }, callback)
+    fun restart(callback: (Result<String>) -> Unit) = call(retrySafe = false, { it.restart() }, callback)
 
-    fun stop(callback: (Result<String>) -> Unit) = call({ it.stop() }, callback)
+    fun stop(callback: (Result<String>) -> Unit) = call(retrySafe = false, { it.stop() }, callback)
 
     fun setPersistentSchedulingEnabled(enabled: Boolean, callback: (Result<String>) -> Unit) =
-        call({ it.setPersistentSchedulingEnabled(enabled) }, callback)
+        call(retrySafe = false, { it.setPersistentSchedulingEnabled(enabled) }, callback)
 
-    fun createBrowserUrl(callback: (Result<String>) -> Unit) = call({ it.createBrowserUrl() }, callback)
+    fun createBrowserUrl(callback: (Result<String>) -> Unit) =
+        call(retrySafe = false, { it.createBrowserUrl() }, callback)
 
     @Synchronized
     fun close() {
@@ -46,28 +55,53 @@ class LocalPanelServiceClient(context: Context) {
         executor.shutdown()
     }
 
-    private fun call(operation: (ILocalPanelService) -> String, callback: (Result<String>) -> Unit) {
-        withService(
-            success = { connected ->
-                try {
-                    executor.execute {
-                        if (closed) {
-                            callback(Result.failure(IllegalStateException("Local panel client is closed")))
-                        } else {
-                            callback(runCatching { operation(connected) })
+    private fun call(
+        retrySafe: Boolean,
+        operation: (ILocalPanelService) -> String,
+        callback: (Result<String>) -> Unit,
+    ) {
+        val completion = OnceResultCallback(callback)
+
+        fun dispatch(attempt: Int) {
+            withService(
+                success = { connected ->
+                    try {
+                        executor.execute {
+                            if (closed) {
+                                completion.complete(Result.failure(IllegalStateException("Local panel client is closed")))
+                            } else {
+                                val binderAlive = connected.binder.isBinderAlive && connected.binder.pingBinder()
+                                val result = if (binderAlive) {
+                                    runCatching { operation(connected.service) }
+                                } else {
+                                    Result.failure(DeadObjectException())
+                                }
+                                val error = result.exceptionOrNull()
+                                if (isDeadRemoteCall(binderAlive, error)) {
+                                    invalidateConnectedGeneration(connected)
+                                    if (shouldRetryRemoteCall(retrySafe, attempt, binderAlive, error)) {
+                                        dispatch(attempt + 1)
+                                    } else {
+                                        completion.complete(result)
+                                    }
+                                } else {
+                                    completion.complete(result)
+                                }
+                            }
                         }
+                    } catch (error: RejectedExecutionException) {
+                        completion.complete(Result.failure(error))
                     }
-                } catch (error: RejectedExecutionException) {
-                    callback(Result.failure(error))
-                }
-            },
-            failure = { callback(Result.failure(it)) },
-        )
+                },
+                failure = { completion.complete(Result.failure(it)) },
+            )
+        }
+        dispatch(0)
     }
 
     @Synchronized
     private fun withService(
-        success: (ILocalPanelService) -> Unit,
+        success: (ConnectedService) -> Unit,
         failure: (Throwable) -> Unit,
     ) {
         if (closed) {
@@ -119,6 +153,7 @@ class LocalPanelServiceClient(context: Context) {
                 return
             }
             val connected = ILocalPanelService.Stub.asInterface(binder)
+            val connectedService = ConnectedService(connected, binder, generation)
             synchronized(this@LocalPanelServiceClient) {
                 if (closed || !connectionState.connected(generation)) {
                     runCatching { binder.unlinkToDeath(deathRecipient, 0) }
@@ -126,9 +161,9 @@ class LocalPanelServiceClient(context: Context) {
                 }
                 activeBinder = binder
                 activeDeathRecipient = deathRecipient
-                service = connected
+                service = connectedService
             }
-            pending.succeedAll(connected)
+            pending.succeedAll(connectedService)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -152,6 +187,13 @@ class LocalPanelServiceClient(context: Context) {
         pending.failAll(error)
     }
 
+    @Synchronized
+    private fun invalidateConnectedGeneration(connected: ConnectedService) {
+        if (service !== connected || !connectionState.failed(connected.generation)) return
+        releaseActiveConnection()
+        service = null
+    }
+
     private fun releaseActiveConnection() {
         val binder = activeBinder
         val deathRecipient = activeDeathRecipient
@@ -162,5 +204,23 @@ class LocalPanelServiceClient(context: Context) {
         activeDeathRecipient = null
         activeConnection?.let { runCatching { appContext.unbindService(it) } }
         activeConnection = null
+    }
+}
+
+internal fun isDeadRemoteCall(binderAlive: Boolean, error: Throwable?): Boolean =
+    !binderAlive || error is RemoteException
+
+internal fun shouldRetryRemoteCall(
+    retrySafe: Boolean,
+    attempt: Int,
+    binderAlive: Boolean,
+    error: Throwable?,
+): Boolean = retrySafe && attempt == 0 && isDeadRemoteCall(binderAlive, error)
+
+internal class OnceResultCallback<T>(private val callback: (Result<T>) -> Unit) {
+    private val completed = AtomicBoolean(false)
+
+    fun complete(result: Result<T>) {
+        if (completed.compareAndSet(false, true)) callback(result)
     }
 }

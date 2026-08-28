@@ -1,9 +1,22 @@
 package com.daidai.daidai_app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalPanelHostStatusTest {
+    @Test
+    fun `cron waits for startup and bound clients keep the service anchored`() {
+        assertFalse(cronCanStop(initializing = true, cronIdle = null))
+        assertTrue(cronCanStop(initializing = false, cronIdle = null))
+        assertFalse(canStopIdleService(boundClients = 1, cronIdle = true))
+        assertFalse(canStopIdleService(boundClients = 0, cronIdle = true, pendingCronTicks = 1))
+        assertFalse(canStopIdleService(boundClients = 0, cronIdle = true, persistentForeground = true))
+        assertFalse(canStopIdleService(boundClients = 0, cronIdle = true, browserSession = true))
+        assertTrue(canStopIdleService(boundClients = 0, cronIdle = true))
+    }
+
     @Test
     fun `persistent recovery failure preserves core phase and endpoint`() {
         val status = mergeLocalPanelHostStatus(

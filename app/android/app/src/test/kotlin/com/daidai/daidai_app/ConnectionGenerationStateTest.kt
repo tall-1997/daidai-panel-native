@@ -33,4 +33,17 @@ class ConnectionGenerationStateTest {
         assertTrue(state.isCurrent(second))
         assertTrue(state.binding)
     }
+
+    @Test
+    fun `dead connected call invalidates only its own generation`() {
+        val state = ConnectionGenerationState()
+        val dead = state.beginBinding()
+        assertTrue(state.connected(dead))
+        assertTrue(state.failed(dead))
+
+        val replacement = state.beginBinding()
+        assertFalse(state.failed(dead))
+        assertTrue(state.connected(replacement))
+        assertTrue(state.isCurrent(replacement))
+    }
 }

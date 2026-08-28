@@ -79,7 +79,7 @@ void main() {
     expect(clears, 1);
   });
 
-  test('failure keeps healthy session and retries on next scheduled tick', () async {
+  test('failure clears transient session and retries on next scheduled tick', () async {
     final host = FakeLocalPanelHost([
       StateError('temporarily unavailable'),
       ready('http://127.0.0.1:33333', 'recovered-token', 'recovered'),
@@ -101,6 +101,10 @@ void main() {
     await monitor.startManaged(oldPanel);
     expect(dio.baseUrl, oldPanel.url);
     expect(stored, same(oldPanel));
+    expect(
+      session.headersFor(Uri.parse('${oldPanel.url}/api')),
+      isEmpty,
+    );
 
     await scheduler.fire();
 
@@ -160,6 +164,101 @@ void main() {
     await monitor.handleAppResumed();
     expect(host.ensureCalls, 2);
     expect(stored.url, 'http://127.0.0.1:22222');
+  });
+
+  test('resume and request click share one foreground recovery', () async {
+    final pending = Completer<LocalPanelStatus>();
+    final host = PendingLocalPanelHost(pending.future);
+    final monitor = ManagedLocalConnectionMonitor(
+      host: host,
+      scheduler: ManualMonitorScheduler().schedule,
+      loadCurrentPanel: () async => oldPanel,
+      activatePanel: (_) async {},
+      setManagedSession: (_, _) {},
+      clearManagedSession: () {},
+    );
+    await monitor.startManaged(oldPanel, reconcileImmediately: false);
+
+    final resumed = monitor.handleAppResumed();
+    final clicked = monitor.ensureReadyForRequest();
+    expect(host.ensureCalls, 1);
+    pending.complete(ready(oldPanel.url, 'token', oldPanel.instanceId));
+
+    await Future.wait([resumed, clicked]);
+    expect(host.ensureCalls, 1);
+  });
+
+  test('healthy monitor degrades and clears session after Binder failure', () async {
+    final host = FakeLocalPanelHost([
+      ready(oldPanel.url, 'token', oldPanel.instanceId),
+      StateError('binder failed'),
+    ]);
+    final scheduler = ManualMonitorScheduler();
+    var clears = 0;
+    final monitor = ManagedLocalConnectionMonitor(
+      host: host,
+      scheduler: scheduler.schedule,
+      loadCurrentPanel: () async => oldPanel,
+      activatePanel: (_) async {},
+      setManagedSession: (_, _) {},
+      clearManagedSession: () => clears++,
+    );
+    await monitor.startManaged(oldPanel);
+
+    await expectLater(
+      monitor.ensureReadyForRequest(),
+      throwsA(isA<ManagedLocalCoreUnavailable>()),
+    );
+
+    expect(monitor.healthy, isFalse);
+    expect(clears, 1);
+    expect(scheduler.interval, const Duration(seconds: 30));
+  });
+
+  test('concurrent readiness calls use a single host call', () async {
+    final pending = Completer<LocalPanelStatus>();
+    final host = PendingLocalPanelHost(pending.future);
+    final monitor = ManagedLocalConnectionMonitor(
+      host: host,
+      scheduler: ManualMonitorScheduler().schedule,
+      loadCurrentPanel: () async => oldPanel,
+      activatePanel: (_) async {},
+      setManagedSession: (_, _) {},
+      clearManagedSession: () {},
+    );
+    await monitor.startManaged(oldPanel, reconcileImmediately: false);
+
+    final first = monitor.ensureReadyForRequest();
+    final second = monitor.ensureReadyForRequest();
+    pending.complete(ready(oldPanel.url, 'token', oldPanel.instanceId));
+
+    await Future.wait([first, second]);
+    expect(host.ensureCalls, 1);
+  });
+
+  test('readiness applies a new endpoint before completing', () async {
+    final host = FakeLocalPanelHost([
+      ready('http://127.0.0.1:24444', 'new-token', 'new'),
+    ]);
+    var endpoint = oldPanel.url;
+    var token = 'old-token';
+    final monitor = ManagedLocalConnectionMonitor(
+      host: host,
+      scheduler: ManualMonitorScheduler().schedule,
+      loadCurrentPanel: () async => oldPanel,
+      activatePanel: (_) async {},
+      setManagedSession: (value, localToken) {
+        endpoint = value;
+        token = localToken;
+      },
+      clearManagedSession: () {},
+    );
+    await monitor.startManaged(oldPanel, reconcileImmediately: false);
+
+    await monitor.ensureReadyForRequest();
+
+    expect(endpoint, 'http://127.0.0.1:24444');
+    expect(token, 'new-token');
   });
 
   test('late storage read cannot restart local after remote stop', () async {
@@ -272,9 +371,42 @@ class FakeLocalPanelHost implements LocalPanelHost {
   Stream<LocalPanelStatus> watchStatus() => const Stream.empty();
 }
 
+class PendingLocalPanelHost implements LocalPanelHost {
+  PendingLocalPanelHost(this.result);
+
+  final Future<LocalPanelStatus> result;
+  int ensureCalls = 0;
+
+  @override
+  Future<LocalPanelStatus> ensureStarted() {
+    ensureCalls++;
+    return result;
+  }
+
+  @override
+  Future<LocalPanelStatus> getStatus() => ensureStarted();
+
+  @override
+  Future<LocalPanelStatus> restart() => ensureStarted();
+
+  @override
+  Future<LocalPanelStatus> setPersistentSchedulingEnabled(bool enabled) =>
+      ensureStarted();
+
+  @override
+  Future<String> openBrowserPanel() async => '';
+
+  @override
+  Future<LocalPanelStatus> stop() => ensureStarted();
+
+  @override
+  Stream<LocalPanelStatus> watchStatus() => const Stream.empty();
+}
+
 class ManualMonitorScheduler {
   Future<void> Function()? callback;
   bool cancelled = false;
+  Duration? interval;
 
   MonitorScheduleHandle schedule(
     Duration interval,
@@ -282,6 +414,7 @@ class ManualMonitorScheduler {
   ) {
     cancelled = false;
     this.callback = callback;
+    this.interval = interval;
     return CallbackMonitorScheduleHandle(() {
       cancelled = true;
       this.callback = null;
