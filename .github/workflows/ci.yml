@@ -21,7 +21,8 @@ env:
   FLUTTER_VERSION: 3.41.5
   JAVA_VERSION: '17'
   GRADLE_VERSION: 9.1.0
-  NODE_VERSION: '20'
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 jobs:
   changes:
@@ -72,9 +73,14 @@ jobs:
               - 'app/scripts/prepare-android-python-runtime.sh'
               - 'app/scripts/prepare-android-yaegi-runtime.sh'
               - 'app/scripts/prepare-android-ubuntu-rootfs.sh'
+              - 'app/scripts/prepare-android-native-source-build.sh'
+              - 'app/android/app/src/main/jni/**'
               - 'app/scripts/verify-android-linux-runtime.py'
               - 'app/scripts/test_verify_android_linux_runtime.py'
+              - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
+              - 'app/scripts/rootfs-trusted-sources.json'
               - 'app/runtime-tools/yaegi/**'
+              - 'panel/web/**'
               - 'panel/server/go.mod'
               - 'panel/server/go.sum'
               - 'runtime/manifest.json'
@@ -102,6 +108,16 @@ jobs:
               - 'scripts/test_version.py'
               - 'scripts/android-runtime-smoke.py'
               - 'scripts/test_android_runtime_smoke.py'
+              - 'scripts/generate-release-evidence.go'
+              - 'scripts/generate-release-evidence_test.go'
+              - 'scripts/release-runtime-contract.json'
+              - 'scripts/verify-release-runtime-evidence.py'
+              - 'scripts/test_verify_release_runtime_evidence.py'
+              - 'app/scripts/rootfs-trusted-sources.json'
+              - 'app/scripts/verify-android-linux-runtime.py'
+              - 'app/scripts/test_verify_android_linux_runtime.py'
+              - 'app/scripts/prepare-android-ubuntu-rootfs.sh'
+              - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
 
   go-quality:
     name: Go test and vet
@@ -214,6 +230,19 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: panel/server/go.sum
 
+      - name: Set up Node.js for Gradle Web assets
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -236,10 +265,6 @@ jobs:
         working-directory: app
         run: flutter pub get
 
-      - name: Prepare Android Python runtime
-        working-directory: app
-        run: bash scripts/prepare-android-python-runtime.sh
-
       - name: Prepare Android Node runtime
         working-directory: app
         run: echo "Android Node runtime is deprecated; Node.js is installed via apk/apt in the rootfs."
@@ -250,7 +275,8 @@ jobs:
           python3 scripts/verify-android-linux-runtime.py \
             --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
             --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
-            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json
+            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json \
+            --trusted-sources scripts/rootfs-trusted-sources.json
 
       - name: Prepare Android Yaegi runtime
         working-directory: app
@@ -261,7 +287,7 @@ jobs:
         run: gradle -p android :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Test Android Linux runtime verifier
-        run: python3 -m unittest app/scripts/test_verify_android_linux_runtime.py
+        run: python3 -m unittest app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
 
       - name: Upload Kotlin test reports
         if: always()
@@ -294,8 +320,17 @@ jobs:
           cache: npm
           cache-dependency-path: panel/web/package-lock.json
 
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
+
       - name: Install Panel Web dependencies
         run: npm ci
+
+      - name: Test Panel Web
+        run: npm test
 
       - name: Build Panel Web
         run: npm run build
@@ -320,7 +355,8 @@ jobs:
           go test ./scripts/run-runtime-smoke.go ./scripts/run-runtime-smoke_test.go
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_runtime_smoke.py
+          go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
+          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
           python3 scripts/version.py check
           go run ./scripts/verify-runtime-contract.go
 

@@ -21,12 +21,12 @@ export const scriptApi = {
     return request.get('/scripts', { params }) as Promise<{ data: any[] }>
   },
 
-  tree() {
-    return request.get('/scripts/tree') as Promise<{ data: any[] }>
+  tree(signal?: AbortSignal) {
+    return request.get('/scripts/tree', { signal }) as Promise<{ data: any[] }>
   },
 
-  getContent(path: string) {
-    return request.get('/scripts/content', { params: { path } }) as Promise<{ data: { content: string; binary?: boolean; is_binary?: boolean; size: number } }>
+  getContent(path: string, signal?: AbortSignal) {
+    return request.get('/scripts/content', { params: { path }, signal }) as Promise<{ data: { content: string; binary?: boolean; is_binary?: boolean; size: number } }>
   },
 
   download(path: string) {
@@ -36,8 +36,8 @@ export const scriptApi = {
     }) as Promise<Blob>
   },
 
-  saveContent(path: string, content: string, message?: string) {
-    return request.put('/scripts/content', { path, content, message }) as Promise<{ message: string }>
+  saveContent(path: string, content: string, message?: string, signal?: AbortSignal) {
+    return request.put('/scripts/content', { path, content, message }, { signal }) as Promise<{ message: string }>
   },
 
   upload(formData: FormData) {

@@ -25,6 +25,7 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -49,6 +50,7 @@ class LocalPanelStore(
     private val runningTaskIds = ConcurrentHashMap.newKeySet<Long>()
     private val taskProcesses = ConcurrentHashMap<Long, Process>()
     private val taskAbortRequested = ConcurrentHashMap.newKeySet<Long>()
+    private val taskRetrySignals = ConcurrentHashMap<Long, CountDownLatch>()
     private val taskRunLogIds = ConcurrentHashMap<Long, Long>()
     private val taskRunCursors = ConcurrentHashMap<Long, Long>()
     private val taskRunLocks = ConcurrentHashMap<Long, Any>()
@@ -57,6 +59,7 @@ class LocalPanelStore(
     private val taskRunLogCharacters = ConcurrentHashMap<Long, Int>()
     private val taskRunPendingPersistence = ConcurrentHashMap<Long, Int>()
     private val taskRunStartedAt = ConcurrentHashMap<Long, Instant>()
+    private val maintenanceGate = MaintenanceGate()
     private val scriptRunExecutor = boundedExecutor("local-script-run")
     private val taskRunExecutor = boundedExecutor("local-task-run")
     private val scriptProcesses = ConcurrentHashMap<String, Process>()
@@ -76,7 +79,22 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 17
+        const val SCHEMA_VERSION = 19
+        internal val LOCAL_USERS_CREATE_SQL = """CREATE TABLE local_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'admin',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            avatar_url TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""".trimIndent()
+        internal val IDENTITY_SESSION_COPY_SQL = """INSERT INTO local_sessions(user_id,access_token,refresh_token,expires_at,refresh_expires_at,updated_at)
+            SELECT security_sessions.user_id,local_sessions_legacy.access_token,local_sessions_legacy.refresh_token,local_sessions_legacy.expires_at,local_sessions_legacy.refresh_expires_at,local_sessions_legacy.updated_at
+            FROM local_sessions_legacy JOIN security_sessions ON security_sessions.access_token=local_sessions_legacy.access_token
+            WHERE security_sessions.user_id>0""".trimIndent()
         private const val CONFIG_SCRIPT_TEMPLATE = """# 呆呆面板高级配置脚本
 # 本文件会在任务运行时被解析，作为环境变量注入到脚本执行环境。
 # 优先级低于「环境变量」页配置的数据库环境变量。
@@ -99,6 +117,7 @@ class LocalPanelStore(
         private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
         private const val OPEN_API_TOKEN_TTL_SECONDS = 24L * 60 * 60
         private const val ACCESS_TOKEN_TTL_SECONDS = 24L * 60 * 60
+        private const val REFRESH_TOKEN_TTL_SECONDS = 30L * 24 * 60 * 60
         private const val OPEN_API_LOG_RETENTION_SECONDS = 30L * 24 * 60 * 60
         private const val SECURITY_LOG_RETENTION_SECONDS = 90L * 24 * 60 * 60
 
@@ -111,6 +130,65 @@ class LocalPanelStore(
             { runnable -> Thread(runnable, threadName).apply { isDaemon = true } },
             ThreadPoolExecutor.AbortPolicy(),
         )
+
+        internal fun taskLogStatusCode(status: String): Int = when (status.trim().lowercase()) {
+            "success" -> 0
+            "running" -> 2
+            "aborted", "stopped" -> 3
+            else -> 1
+        }
+
+        internal fun taskLogRunStatus(status: Int): String = when (status) {
+            0 -> "success"
+            1 -> "failed"
+            2 -> "running"
+            3 -> "aborted"
+            else -> "unknown"
+        }
+
+        internal fun taskLogDone(status: Int): Boolean = status != 2
+
+        internal fun needsInitialization(userCount: Int): Boolean = userCount == 0
+
+        internal fun requiresIdentitySessionMigration(oldVersion: Int): Boolean = oldVersion < 19
+
+        internal fun legacyRefreshExpiry(upgradedAt: Instant): String =
+            upgradedAt.plusSeconds(REFRESH_TOKEN_TTL_SECONDS).toString()
+
+        internal fun needsLegacyRefreshExpiry(refreshExpiresAt: String, accessExpiresAt: String): Boolean =
+            refreshExpiresAt.isBlank() || refreshExpiresAt == accessExpiresAt
+
+        internal fun dashboardSuccessRate(success: Long, failed: Long): Double {
+            val finished = success + failed
+            return if (finished > 0) success.toDouble() * 100 / finished else 0.0
+        }
+
+        internal fun dashboardDailyStat(date: String, success: Long, failed: Long, aborted: Long): JSONObject =
+            JSONObject().put("date", date).put("success", success).put("failed", failed).put("aborted", aborted)
+
+        internal fun isSupportedUserRole(role: String): Boolean = role in setOf("admin", "operator")
+
+        internal fun validatedBatchTaskIds(json: JSONObject, maximum: Int = Int.MAX_VALUE): List<Long>? {
+            val values = json.optJSONArray("task_ids") ?: return null
+            if (values.length() == 0 || values.length() > maximum) return null
+            val ids = ArrayList<Long>(values.length())
+            for (index in 0 until values.length()) {
+                val value = values.opt(index)
+                val id = when (value) {
+                    is Number -> value.toLong().takeIf { value.toDouble() == it.toDouble() }
+                    else -> null
+                } ?: return null
+                if (id <= 0 || id in ids) return null
+                ids += id
+            }
+            return ids
+        }
+
+        internal fun isValidTaskBatchRequest(method: NanoHTTPD.Method, path: String, action: String?): Boolean {
+            if (action !in setOf("enable", "disable", "delete", "run")) return false
+            val expectedMethod = if (action == "run") NanoHTTPD.Method.POST else if (action == "delete") NanoHTTPD.Method.DELETE else NanoHTTPD.Method.PUT
+            return method == expectedMethod && path == "/tasks/batch/$action"
+        }
 
 
         internal fun normalizeScriptPath(rawPath: String, allowRootAlias: Boolean = false): String {
@@ -191,25 +269,52 @@ class LocalPanelStore(
                 else -> false
             }
         }
+
+        internal fun isSelfServiceSecurityRoute(method: NanoHTTPD.Method, uri: String): Boolean {
+            val path = normalizeApiPath(uri)
+            if (method == NanoHTTPD.Method.GET && path == "/api/security/sessions") return true
+            if (method != NanoHTTPD.Method.DELETE) return false
+            if (path == "/api/security/sessions/others") return true
+            return path.removePrefix("/api/security/sessions/").toLongOrNull() != null
+        }
+
+        internal fun openApiResource(uri: String): String {
+            val parts = uri.substringBefore('?').removePrefix("/api/v1").removePrefix("/api").trim('/').split('/').filter(String::isNotEmpty)
+            return when {
+                parts.firstOrNull() == "system" && parts.getOrNull(1) in setOf("backup", "backups", "restore") -> "backup"
+                parts.firstOrNull() != null -> parts.first()
+                else -> "system"
+            }
+        }
+
+        internal fun isOpenApiScopeAllowed(scopes: String, uri: String): Boolean {
+            val granted = scopes.split(',').map(String::trim).filter(String::isNotEmpty).toSet()
+            return openApiResource(uri) in granted
+        }
+
+        internal fun normalizeApiPath(uri: String): String {
+            val path = uri.substringBefore('?').trimEnd('/')
+            return if (path.startsWith("/api/v1/")) "/api/${path.removePrefix("/api/v1/")}" else path
+        }
+
+        internal fun batchMutationPayload(ids: List<Long>, affected: Int): JSONObject = JSONObject()
+            .put("message", "批量操作完成")
+            .put("count", affected)
+            .put("success_count", affected)
+            .put("affected", affected)
+            .put("data", JSONObject().put("ids", JSONArray(ids)).put("count", affected).put("affected", affected))
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """CREATE TABLE local_users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                password_salt TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )""".trimIndent()
-        )
+        db.execSQL(LOCAL_USERS_CREATE_SQL)
         db.execSQL(
             """CREATE TABLE local_sessions (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                access_token TEXT NOT NULL,
-                refresh_token TEXT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                access_token TEXT NOT NULL UNIQUE,
+                refresh_token TEXT NOT NULL UNIQUE,
                 expires_at TEXT NOT NULL DEFAULT '',
+                refresh_expires_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             )""".trimIndent()
         )
@@ -282,11 +387,12 @@ class LocalPanelStore(
         createTaskLogTables(db)
         createConfigTables(db)
         createNotificationTables(db)
-        ensureDefaultAdmin(db)
         ensureSubscriptionsTable(db)
         createFallbackCoreTables(db)
         createManagementTables(db)
         createSecurityTables(db)
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_local_sessions_user_id ON local_sessions(user_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_security_sessions_user_id ON security_sessions(user_id)")
         ensureDefaultDeps(db)
     }
 
@@ -304,7 +410,12 @@ class LocalPanelStore(
         }
         if (oldVersion < 7) createNotificationTables(db)
         if (oldVersion < 8) createFallbackCoreTables(db)
-        if (oldVersion < 9) createManagementTables(db)
+        if (oldVersion < 9) {
+            addColumnIfMissing(db, "local_users", "role", "TEXT NOT NULL DEFAULT 'admin'")
+            addColumnIfMissing(db, "local_users", "enabled", "INTEGER NOT NULL DEFAULT 1")
+            addColumnIfMissing(db, "local_users", "avatar_url", "TEXT NOT NULL DEFAULT ''")
+            createManagementTables(db)
+        }
         if (oldVersion < 10) createSecurityTables(db)
         if (oldVersion < 11) {
             // v0.4.7 wrote task log codes as 1=success, 2=failure, 3=running,
@@ -336,6 +447,18 @@ class LocalPanelStore(
         if (oldVersion < 17) {
             addColumnIfMissing(db, "local_sessions", "expires_at", "TEXT NOT NULL DEFAULT ''")
         }
+        if (oldVersion < 18) {
+            addColumnIfMissing(db, "local_sessions", "refresh_expires_at", "TEXT NOT NULL DEFAULT ''")
+            // Legacy status 2 represented both running and aborted. An end time safely identifies terminal rows.
+            db.execSQL("UPDATE task_logs_local SET status = 3 WHERE status = 2 AND ended_at <> ''")
+        }
+        if (requiresIdentitySessionMigration(oldVersion)) {
+            db.execSQL(
+                "UPDATE local_sessions SET refresh_expires_at = ? WHERE refresh_expires_at = '' OR refresh_expires_at = expires_at",
+                arrayOf(legacyRefreshExpiry(Instant.now())),
+            )
+            migrateIdentitySessions(db)
+        }
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, declaration: String) {
@@ -354,9 +477,6 @@ class LocalPanelStore(
     }
 
     private fun createManagementTables(db: SQLiteDatabase) {
-        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'") }
-        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1") }
-        runCatching { db.execSQL("ALTER TABLE local_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''") }
         db.execSQL("""CREATE TABLE IF NOT EXISTS ssh_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, private_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS platform_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, platform_id INTEGER NOT NULL, name TEXT NOT NULL, token TEXT NOT NULL, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
@@ -371,11 +491,49 @@ class LocalPanelStore(
 
     private fun createSecurityTables(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_login_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL, message TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
-        db.execSQL("""CREATE TABLE IF NOT EXISTS security_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, access_token TEXT NOT NULL UNIQUE, ip TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS security_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT NOT NULL, access_token TEXT NOT NULL UNIQUE, ip TEXT NOT NULL DEFAULT '', client_name TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_ip_whitelist (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL UNIQUE, remarks TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL DEFAULT 0, locked_at TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_login_attempts_identity ON security_login_attempts(ip, username)")
+    }
+
+    private fun migrateIdentitySessions(db: SQLiteDatabase) {
+        addColumnIfMissing(db, "security_sessions", "user_id", "INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE security_sessions SET user_id=COALESCE((SELECT id FROM local_users WHERE local_users.username=security_sessions.username),0) WHERE user_id=0")
+        db.execSQL("DELETE FROM security_sessions WHERE user_id=0")
+        db.execSQL("ALTER TABLE local_sessions RENAME TO local_sessions_legacy")
+        db.execSQL("""CREATE TABLE local_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, access_token TEXT NOT NULL UNIQUE, refresh_token TEXT NOT NULL UNIQUE, expires_at TEXT NOT NULL DEFAULT '', refresh_expires_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)""")
+        db.execSQL(IDENTITY_SESSION_COPY_SQL)
+        db.execSQL("DROP TABLE local_sessions_legacy")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_local_sessions_user_id ON local_sessions(user_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_security_sessions_user_id ON security_sessions(user_id)")
+        migrateLegacyAvatar(db)
+    }
+
+    private fun migrateLegacyAvatar(db: SQLiteDatabase) {
+        val avatarUserIds = mutableListOf<Long>()
+        db.query("local_users", arrayOf("id"), "avatar_url<>''", null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) avatarUserIds += cursor.getLong(0)
+        }
+        if (avatarUserIds.size != 1) {
+            db.execSQL("UPDATE local_users SET avatar_url='' WHERE avatar_url<>''")
+            return
+        }
+        val userId = avatarUserIds.single()
+        val target = File(appContext.filesDir, "avatar-$userId.bin")
+        if (target.isFile) return
+        val currentNames = mutableSetOf<String>()
+        db.query("local_users", arrayOf("id"), null, null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) currentNames += "avatar-${cursor.getLong(0)}.bin"
+        }
+        val legacyFiles = appContext.filesDir.listFiles().orEmpty().filter {
+            it.isFile && it.name.matches(Regex("avatar-\\d+\\.bin")) && it.name !in currentNames
+        }
+        val migrated = legacyFiles.singleOrNull()?.runCatching { copyTo(target, overwrite = false) }?.isSuccess == true
+        if (!migrated) {
+            db.update("local_users", ContentValues().apply { put("avatar_url", "") }, "id=?", arrayOf(userId.toString()))
+        }
     }
 
     private fun createScriptRuntimeTables(db: SQLiteDatabase) {
@@ -454,6 +612,14 @@ class LocalPanelStore(
 
     override fun onOpen(db: SQLiteDatabase) {
         super.onOpen(db)
+        if (localBackupService.hasPendingRestore()) {
+            check(maintenanceGate.beginMaintenance(TimeUnit.SECONDS.toMillis(10))) { "无法进入恢复维护模式" }
+            try {
+                localBackupService.recoverPendingRestore(db)
+            } finally {
+                maintenanceGate.endMaintenance()
+            }
+        }
         createSecurityTables(db)
         synchronized(AndroidLinuxRuntime.mirrorConfigLock) {
             ensureMirrorDefaults(db)
@@ -544,20 +710,6 @@ class LocalPanelStore(
         return ok(JSONObject().put("data", rows).put("total", rows.length()))
     }
 
-    private fun ensureDefaultAdmin(db: SQLiteDatabase) {
-        val salt = ByteArray(16).also(SecureRandom()::nextBytes)
-        val now = Instant.now().toString()
-        val values = ContentValues().apply {
-            put("username", "admin")
-            put("password_hash", hashPassword("admin123", salt))
-            put("password_salt", Base64.encodeToString(salt, Base64.NO_WRAP))
-            put("created_at", now)
-            put("updated_at", now)
-        }
-        db.insertWithOnConflict("local_users", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-    }
-
-
     // App runtime log file for device testing
     private val appLogFile by lazy {
         File(appContext.filesDir, "app-runtime.log").also { f ->
@@ -580,7 +732,7 @@ class LocalPanelStore(
     fun serveAuth(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         return when {
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/check-init" ->
-                ok(JSONObject().put("need_init", count(readableDatabase, "local_users") == 0))
+                ok(JSONObject().put("need_init", needsInitialization(count(readableDatabase, "local_users"))))
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/init" ->
                 initializeAdmin(body(session))
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/login" ->
@@ -588,26 +740,39 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/refresh" ->
                 refresh(session)
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user" ->
-                authenticated(session) { ok(JSONObject().put("user", userJson())) }
+                authenticated(session) { userId -> ok(JSONObject().put("user", userJson(userId))) }
             session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/logout" ->
-                authenticated(session) { revokeAccessToken(bearerToken(session), "logout"); ok(JSONObject().put("message", "ok")) }
+                authenticated(session) { _ -> revokeAccessToken(bearerToken(session), "logout"); ok(JSONObject().put("message", "ok")) }
             session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/captcha-config" ->
                 ok(JSONObject().put("enabled", false).put("configured", true).put("implemented", false).put("required", false).put("captcha_id", "").put("require_after_failures", 0).put("message", ""))
             session.uri.startsWith("/api/auth/users") -> serveUsers(session, "/api/auth/users")
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> listUsers()
-            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/password" -> changeOwnPassword(body(session))
-            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/username" -> changeOwnUsername(body(session))
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/avatar" -> uploadAvatar(session)
-            session.method == NanoHTTPD.Method.DELETE && session.uri == "/api/auth/avatar" -> deleteAvatar()
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> requireAdmin(session) { listUsers() }
+            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/password" -> authenticated(session) { userId -> changeOwnPassword(userId, body(session)) }
+            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/username" -> authenticated(session) { userId -> changeOwnUsername(userId, body(session)) }
+            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/avatar" -> authenticated(session) { userId -> uploadAvatar(session, userId) }
+            session.method == NanoHTTPD.Method.DELETE && session.uri == "/api/auth/avatar" -> authenticated(session) { userId -> deleteAvatar(userId) }
+            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/avatar/file" -> authenticated(session) { userId -> serveAvatar(userId) }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
 
     fun serveSecurity(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        if (!isAuthorized(session)) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
-        val uri = session.uri.trimEnd('/')
+        val uri = normalizeApiPath(session.uri)
         val tail = uri.removePrefix("/api/security/")
         val parts = tail.split('/').filter(String::isNotBlank)
+        if (isSelfServiceSecurityRoute(session.method, uri)) {
+            return authenticated(session) {
+                when {
+                    session.method == NanoHTTPD.Method.GET && uri == "/api/security/sessions" -> listSecuritySessions(session)
+                    session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/sessions/others" -> revokeOtherSessions(session)
+                    else -> revokeSession(session, parts[1].toLong())
+                }
+            }
+        }
+        return requireAdmin(session) { serveAdminSecurity(session, uri, parts) }
+    }
+
+    private fun serveAdminSecurity(session: NanoHTTPD.IHTTPSession, uri: String, parts: List<String>): NanoHTTPD.Response {
         return when {
             session.method == NanoHTTPD.Method.GET && uri == "/api/security/login-logs" -> listSecurityLogs(session, "security_login_logs")
             session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/login-logs" -> {
@@ -650,7 +815,8 @@ class LocalPanelStore(
 
     private fun listSecuritySessions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val current = bearerToken(session)
-        val rows = queryRows("SELECT id,username,access_token,ip,client_name,user_agent,created_at,expires_at FROM security_sessions ORDER BY id DESC") { c ->
+        val userId = currentUser(session)?.id ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val rows = queryRows("SELECT id,username,access_token,ip,client_name,user_agent,created_at,expires_at FROM security_sessions WHERE user_id=? ORDER BY id DESC", arrayOf(userId.toString())) { c ->
             JSONObject().put("id", c.long("id")).put("username", c.string("username")).put("ip", c.string("ip"))
                 .put("client_name", c.string("client_name")).put("user_agent", c.string("user_agent"))
                 .put("created_at", c.string("created_at")).put("expires_at", c.string("expires_at")).put("current", c.string("access_token") == current)
@@ -660,17 +826,36 @@ class LocalPanelStore(
 
     private fun revokeOtherSessions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val token = bearerToken(session).orEmpty()
-        val deleted = writableDatabase.delete("security_sessions", "access_token <> ?", arrayOf(token))
+        val userId = currentUser(session)?.id ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val db = writableDatabase
+        var deleted = 0
+        db.beginTransaction()
+        try {
+            deleted = db.delete("security_sessions", "user_id=? AND access_token<>?", arrayOf(userId.toString(), token))
+            db.delete("local_sessions", "user_id=? AND access_token<>?", arrayOf(userId.toString(), token))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
         audit(session, "sessions.revoke_others", "deleted=$deleted")
         return ok(JSONObject().put("message", "其他会话已撤销").put("deleted", deleted))
     }
 
     private fun revokeSession(session: NanoHTTPD.IHTTPSession, id: Long): NanoHTTPD.Response {
-        val token = readableDatabase.query("security_sessions", arrayOf("access_token"), "id=?", arrayOf(id.toString()), null, null, null).use { if (it.moveToFirst()) it.getString(0) else null }
+        val userId = currentUser(session)?.id ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val token = readableDatabase.query("security_sessions", arrayOf("access_token"), "id=? AND user_id=?", arrayOf(id.toString(), userId.toString()), null, null, null).use { if (it.moveToFirst()) it.getString(0) else null }
             ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "会话不存在")
-        val deleted = writableDatabase.delete("security_sessions", "id=?", arrayOf(id.toString()))
-        writableDatabase.delete("local_sessions", "access_token=?", arrayOf(token))
-        if (deleted == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "会话不存在")
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (db.delete("security_sessions", "id=? AND user_id=?", arrayOf(id.toString(), userId.toString())) != 1) {
+                return error(NanoHTTPD.Response.Status.NOT_FOUND, "会话不存在")
+            }
+            db.delete("local_sessions", "access_token=? AND user_id=?", arrayOf(token, userId.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
         audit(session, "session.revoke", "id=$id")
         return ok(JSONObject().put("message", "会话已撤销").put("id", id))
     }
@@ -730,16 +915,32 @@ class LocalPanelStore(
         writableDatabase.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", action); put("detail", detail); put("created_at", Instant.now().toString()) })
     }
 
-    private fun currentUsername(session: NanoHTTPD.IHTTPSession): String = bearerToken(session)?.let { token -> readableDatabase.rawQuery("SELECT username FROM security_sessions WHERE access_token=?", arrayOf(token)).use { if (it.moveToFirst()) it.getString(0) else "admin" } } ?: "admin"
+    private fun currentUsername(session: NanoHTTPD.IHTTPSession): String = currentUser(session)?.username.orEmpty()
     private fun requestIp(session: NanoHTTPD.IHTTPSession): String = session.headers["x-forwarded-for"]?.substringBefore(',')?.trim().takeUnless { it.isNullOrEmpty() } ?: session.remoteIpAddress.orEmpty()
     private fun clientName(session: NanoHTTPD.IHTTPSession): String = session.headers["x-client-name"]?.takeIf(String::isNotBlank) ?: "Flutter Android"
 
     fun isAuthorized(session: NanoHTTPD.IHTTPSession): Boolean {
-        val token = bearerToken(session) ?: return false
+        return currentUser(session) != null
+    }
+
+    private data class SessionUser(val id: Long, val username: String, val role: String)
+
+    private fun currentUser(session: NanoHTTPD.IHTTPSession): SessionUser? {
+        val token = bearerToken(session) ?: return null
         return readableDatabase.rawQuery(
-            "SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ? AND (expires_at = '' OR expires_at > ?)",
-            arrayOf(token, Instant.now().toString())
-        ).use(Cursor::moveToFirst)
+            """SELECT u.id,u.username,u.role FROM local_sessions s
+                JOIN security_sessions ss ON ss.access_token=s.access_token AND ss.user_id=s.user_id
+                JOIN local_users u ON u.id=s.user_id
+                WHERE s.access_token=? AND (s.expires_at='' OR s.expires_at>?) AND (ss.expires_at='' OR ss.expires_at>?) AND u.enabled=1 LIMIT 1""".trimIndent(),
+            arrayOf(token, Instant.now().toString(), Instant.now().toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else SessionUser(cursor.long("id"), cursor.string("username"), cursor.string("role"))
+        }
+    }
+
+    private fun requireAdmin(session: NanoHTTPD.IHTTPSession, action: () -> NanoHTTPD.Response): NanoHTTPD.Response {
+        val user = currentUser(session) ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        return if (user.role == "admin") action() else error(NanoHTTPD.Response.Status.FORBIDDEN, "需要管理员权限")
     }
 
     fun serveTerminal(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response = authenticated(session) {
@@ -798,30 +999,34 @@ class LocalPanelStore(
         val taskCount = count(db, "tasks")
         val enabledTasks = count(db, "tasks", "status > 0")
         val runningTasks = count(db, "tasks", "status = 2")
+        val successLogs = count(db, "task_logs_local", "status = 0")
+        val failedLogs = count(db, "task_logs_local", "status = 1")
         return JSONObject().put(
             "data",
             JSONObject()
                 .put("task_count", taskCount)
                 .put("enabled_tasks", enabledTasks)
                 .put("running_tasks", runningTasks)
-                .put("success_logs", 0)
-                .put("failed_logs", 0)
-                .put("recent_logs", JSONArray())
+                .put("success_logs", successLogs)
+                .put("failed_logs", failedLogs)
+                .put("recent_logs", queryRows("SELECT * FROM task_logs_local ORDER BY id DESC LIMIT 10") { taskLogJson(it) })
                 .put("daily_stats", JSONArray())
         )
     }
 
     fun serveUsers(session: NanoHTTPD.IHTTPSession, prefix: String = "/api/users"): NanoHTTPD.Response {
-        val tail = session.uri.removePrefix(prefix).trim('/')
-        val parts = if (tail.isBlank()) emptyList() else tail.split('/')
-        val id = parts.firstOrNull()?.toLongOrNull()
-        return when {
-            session.method == NanoHTTPD.Method.GET && id == null -> listUsers()
-            session.method == NanoHTTPD.Method.POST && id == null -> createUser(body(session))
-            session.method == NanoHTTPD.Method.PUT && id != null && parts.getOrNull(1) == "reset-password" -> resetUserPassword(id, body(session).optString("password"))
-            session.method == NanoHTTPD.Method.PUT && id != null -> updateUser(id, body(session))
-            session.method == NanoHTTPD.Method.DELETE && id != null -> if (writableDatabase.delete("local_users", "id=?", arrayOf(id.toString())) > 0) ok(JSONObject().put("message", "删除成功")) else error(NanoHTTPD.Response.Status.NOT_FOUND, "用户不存在")
-            else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "用户接口不存在")
+        return requireAdmin(session) {
+            val tail = session.uri.removePrefix(prefix).trim('/')
+            val parts = if (tail.isBlank()) emptyList() else tail.split('/')
+            val id = parts.firstOrNull()?.toLongOrNull()
+            when {
+                session.method == NanoHTTPD.Method.GET && id == null -> listUsers()
+                session.method == NanoHTTPD.Method.POST && id == null -> createUser(body(session))
+                session.method == NanoHTTPD.Method.PUT && id != null && parts.getOrNull(1) == "reset-password" -> resetUserPassword(id, body(session).optString("password"))
+                session.method == NanoHTTPD.Method.PUT && id != null -> updateUser(id, body(session))
+                session.method == NanoHTTPD.Method.DELETE && id != null -> deleteUser(id)
+                else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "用户接口不存在")
+            }
         }
     }
 
@@ -829,24 +1034,106 @@ class LocalPanelStore(
         val username=json.optString("username").trim(); val password=json.optString("password")
         if (username.isBlank() || password.length !in 6..128) return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空且密码需为 6-128 位")
         val salt=ByteArray(16).also(SecureRandom()::nextBytes); val now=Instant.now().toString()
-        val id=try { writableDatabase.insertOrThrow("local_users",null,ContentValues().apply { put("username",username);put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("role",json.optString("role","operator"));put("enabled",1);put("created_at",now);put("updated_at",now) }) } catch (_: Exception) { return error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在") }
+        val role = json.optString("role", "operator")
+        if (!isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin 或 operator")
+        val id=try { writableDatabase.insertOrThrow("local_users",null,ContentValues().apply { put("username",username);put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("role",role);put("enabled",1);put("created_at",now);put("updated_at",now) }) } catch (_: Exception) { return error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在") }
         return ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",id).put("username",username)))
     }
-    private fun updateUser(id:Long,json:JSONObject):NanoHTTPD.Response { val v=ContentValues().apply { if(json.has("role"))put("role",json.optString("role"));if(json.has("enabled"))put("enabled",if(json.optBoolean("enabled"))1 else 0);put("updated_at",Instant.now().toString()) };return if(writableDatabase.update("local_users",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在") }
-    private fun resetUserPassword(id:Long,password:String):NanoHTTPD.Response { if(password.length !in 6..128)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"密码需为 6-128 位");val salt=ByteArray(16).also(SecureRandom()::nextBytes);val v=ContentValues().apply{put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("updated_at",Instant.now().toString())};return if(writableDatabase.update("local_users",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","密码重置成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在") }
-    private fun changeOwnPassword(json:JSONObject):NanoHTTPD.Response { val user=readableDatabase.rawQuery("SELECT id,password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->if(!c.moveToFirst())null else Triple(c.long("id"),c.string("password_hash"),c.string("password_salt"))}?:return error(NanoHTTPD.Response.Status.NOT_FOUND,"管理员不存在");val salt=Base64.decode(user.third,Base64.NO_WRAP);if(hashPassword(json.optString("old_password"),salt)!=user.second)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"原密码错误");return resetUserPassword(user.first,json.optString("new_password")) }
-    private fun changeOwnUsername(json:JSONObject):NanoHTTPD.Response { val name=json.optString("username").trim();if(name.isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空");return try{writableDatabase.update("local_users",ContentValues().apply{put("username",name);put("updated_at",Instant.now().toString())},"id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",null);ok(JSONObject().put("message","用户名已修改").put("user",userJson()))}catch(_:Exception){error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在")} }
-    private fun deleteAvatar():NanoHTTPD.Response { writableDatabase.execSQL("UPDATE local_users SET avatar_url='' WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)");return ok(JSONObject().put("message","头像已删除")) }
-    private fun uploadAvatar(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { if(!session.headers["content-type"].orEmpty().contains("multipart/form-data",true))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像上传仅支持 multipart/form-data，字段名 avatar");val files=HashMap<String,String>();session.parseBody(files);val temp=files["avatar"]?:return error(NanoHTTPD.Response.Status.BAD_REQUEST,"multipart 缺少 avatar 文件");val source=File(temp);if(!source.isFile)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件无效");if(source.length()>MAX_AVATAR_BYTES)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件过大，最大 5MB");val ext=source.name.substringAfterLast('.',"").lowercase();if(ext!in setOf("jpg","jpeg","png","gif","webp"))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像仅支持 jpg/png/gif/webp 图片");val target=File(appContext.filesDir,"avatar-${System.currentTimeMillis()}.bin");source.copyTo(target,true);val url="/api/auth/avatar/file";writableDatabase.execSQL("UPDATE local_users SET avatar_url=? WHERE id=(SELECT id FROM local_users ORDER BY id LIMIT 1)",arrayOf(url));return ok(JSONObject().put("message","头像已上传").put("avatar_url",url)) }
+    private fun updateUser(id: Long, json: JSONObject): NanoHTTPD.Response {
+        val role = json.optString("role").takeIf { json.has("role") }
+        if (role != null && !isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin 或 operator")
+        val enabled = json.optBoolean("enabled").takeIf { json.has("enabled") }
+        val values = ContentValues().apply {
+            if (role != null) put("role", role)
+            if (enabled != null) put("enabled", if (enabled) 1 else 0)
+            put("updated_at", Instant.now().toString())
+        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (((role != null && role != "admin") || enabled == false) && isLastEnabledAdmin(db, id)) {
+                return error(NanoHTTPD.Response.Status.CONFLICT, "必须保留至少一个启用的管理员")
+            }
+            if (db.update("local_users", values, "id=?", arrayOf(id.toString())) == 0) {
+                return error(NanoHTTPD.Response.Status.NOT_FOUND, "用户不存在")
+            }
+            if (role != null || enabled != null) revokeUserSessions(db, id)
+            db.setTransactionSuccessful()
+            return ok(JSONObject().put("message", "更新成功"))
+        } finally {
+            db.endTransaction()
+        }
+    }
+    private fun deleteUser(id: Long): NanoHTTPD.Response {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (isLastEnabledAdmin(db, id)) return error(NanoHTTPD.Response.Status.CONFLICT, "必须保留至少一个启用的管理员")
+            if (db.delete("local_users", "id=?", arrayOf(id.toString())) == 0) {
+                return error(NanoHTTPD.Response.Status.NOT_FOUND, "用户不存在")
+            }
+            revokeUserSessions(db, id)
+            db.setTransactionSuccessful()
+            return ok(JSONObject().put("message", "删除成功"))
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun isLastEnabledAdmin(db: SQLiteDatabase, id: Long): Boolean = db.rawQuery(
+        "SELECT EXISTS(SELECT 1 FROM local_users WHERE id=? AND role='admin' AND enabled=1) AND (SELECT COUNT(*) FROM local_users WHERE role='admin' AND enabled=1)=1",
+        arrayOf(id.toString()),
+    ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) != 0 }
+    private fun resetUserPassword(id:Long,password:String):NanoHTTPD.Response { if(password.length !in 6..128)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"密码需为 6-128 位");val salt=ByteArray(16).also(SecureRandom()::nextBytes);val v=ContentValues().apply{put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("updated_at",Instant.now().toString())};val db=writableDatabase;db.beginTransaction();try{if(db.update("local_users",v,"id=?",arrayOf(id.toString()))==0)return error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在");revokeUserSessions(db,id);db.setTransactionSuccessful();return ok(JSONObject().put("message","密码重置成功"))}finally{db.endTransaction()} }
+    private fun changeOwnPassword(userId: Long, json:JSONObject):NanoHTTPD.Response { val user=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users WHERE id=?",arrayOf(userId.toString())).use{c->if(!c.moveToFirst())null else c.string("password_hash") to c.string("password_salt")}?:return error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在");val salt=Base64.decode(user.second,Base64.NO_WRAP);if(hashPassword(json.optString("old_password"),salt)!=user.first)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"原密码错误");return resetUserPassword(userId,json.optString("new_password")) }
+    private fun changeOwnUsername(userId: Long, json: JSONObject): NanoHTTPD.Response {
+        val name = json.optString("username").trim()
+        if (name.isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "用户名不能为空")
+        val db = writableDatabase
+        return try {
+            db.beginTransaction()
+            try {
+                if (db.update("local_users", ContentValues().apply { put("username", name); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(userId.toString())) != 1) {
+                    return error(NanoHTTPD.Response.Status.NOT_FOUND, "用户不存在")
+                }
+                db.update("security_sessions", ContentValues().apply { put("username", name) }, "user_id=?", arrayOf(userId.toString()))
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            ok(JSONObject().put("message", "用户名已修改").put("user", userJson(userId)))
+        } catch (_: Exception) {
+            error(NanoHTTPD.Response.Status.CONFLICT, "用户名已存在")
+        }
+    }
+    private fun deleteAvatar(userId: Long):NanoHTTPD.Response { if(writableDatabase.update("local_users",ContentValues().apply{put("avatar_url","")},"id=?",arrayOf(userId.toString()))!=1)return error(NanoHTTPD.Response.Status.NOT_FOUND,"用户不存在");File(appContext.filesDir,"avatar-$userId.bin").delete();return ok(JSONObject().put("message","头像已删除")) }
+    private fun uploadAvatar(session:NanoHTTPD.IHTTPSession,userId:Long):NanoHTTPD.Response { if(!session.headers["content-type"].orEmpty().contains("multipart/form-data",true))return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像上传仅支持 multipart/form-data，字段名 avatar");val files=HashMap<String,String>();session.parseBody(files);val temp=files["avatar"]?:return error(NanoHTTPD.Response.Status.BAD_REQUEST,"multipart 缺少 avatar 文件");val source=File(temp);if(!source.isFile)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件无效");if(source.length()>MAX_AVATAR_BYTES)return error(NanoHTTPD.Response.Status.BAD_REQUEST,"头像文件过大，最大 5MB");val target=File(appContext.filesDir,"avatar-$userId.bin");source.copyTo(target,true);val url="/api/auth/avatar/file";writableDatabase.update("local_users",ContentValues().apply{put("avatar_url",url)},"id=?",arrayOf(userId.toString()));return ok(JSONObject().put("message","头像已上传").put("avatar_url",url)) }
+
+    private fun serveAvatar(userId: Long): NanoHTTPD.Response {
+        val path = readableDatabase.query("local_users", arrayOf("avatar_url"), "id=?", arrayOf(userId.toString()), null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.string("avatar_url") else ""
+        }
+        if (path.isBlank()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "头像不存在")
+        val file = File(appContext.filesDir, "avatar-$userId.bin")
+        if (!file.isFile) return error(NanoHTTPD.Response.Status.NOT_FOUND, "头像文件不存在")
+        return NanoHTTPD.newChunkedResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", file.inputStream())
+    }
+
+    private fun revokeUserSessions(db: SQLiteDatabase, userId: Long) {
+        db.delete("security_sessions", "user_id=?", arrayOf(userId.toString()))
+        db.delete("local_sessions", "user_id=?", arrayOf(userId.toString()))
+    }
 
     fun serveManagement(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response {
-        val uri=session.uri.removePrefix("/api/v1").removePrefix("/api")
-        return when {
-            uri.startsWith("/ssh-keys") -> serveSimpleSecretCrud(session,uri,"/ssh-keys","ssh_keys","private_key")
-            uri.startsWith("/platform-tokens") -> servePlatformTokens(session,uri)
-            uri.startsWith("/open-api/apps") -> serveOpenApiSecretContract(session, uri) ?: serveOpenApi(session,uri)
-            uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> ok(JSONObject().put("data",JSONObject().put("sponsors",JSONArray()).put("count",0).put("total_amount",0).put("updated_at",JSONObject.NULL)))
-            else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
+        return requireAdmin(session) {
+            val uri=session.uri.removePrefix("/api/v1").removePrefix("/api")
+            when {
+                uri.startsWith("/ssh-keys") -> serveSimpleSecretCrud(session,uri,"/ssh-keys","ssh_keys","private_key")
+                uri.startsWith("/platform-tokens") -> servePlatformTokens(session,uri)
+                uri.startsWith("/open-api/apps") -> serveOpenApiSecretContract(session, uri) ?: serveOpenApi(session,uri)
+                uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> ok(JSONObject().put("data",JSONObject().put("sponsors",JSONArray()).put("count",0).put("total_amount",0).put("updated_at",JSONObject.NULL)))
+                else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
+            }
         }
     }
 
@@ -871,7 +1158,7 @@ class LocalPanelStore(
     fun authorizeBusinessRequest(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response? {
         val token = bearerToken(session)
         if (token == null) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
-        if (readableDatabase.rawQuery("SELECT 1 FROM local_sessions WHERE id = 1 AND access_token = ? AND (expires_at = '' OR expires_at > ?)", arrayOf(token, Instant.now().toString())).use(Cursor::moveToFirst)) return null
+        if (currentUser(session) != null) return null
         val row = readableDatabase.rawQuery(
             "SELECT t.app_id, t.expires_at, a.enabled, a.scopes, a.rate_limit FROM open_api_tokens t JOIN open_api_apps a ON a.id = t.app_id WHERE t.access_token = ?",
             arrayOf(token),
@@ -889,15 +1176,7 @@ class LocalPanelStore(
     }
 
     private fun openApiScopeAllowed(scopes: String, uri: String): Boolean {
-        val normalized = uri.removePrefix("/api/v1").removePrefix("/api").trim('/')
-        val parts = normalized.split('/').filter(String::isNotEmpty)
-        val resource = when {
-            parts.firstOrNull() == "system" && parts.getOrNull(1) == "backup" -> "backup"
-            parts.firstOrNull() != null -> parts.first()
-            else -> "system"
-        }
-        val granted = scopes.split(',').map(String::trim).filter(String::isNotEmpty).toSet()
-        return resource in granted
+        return isOpenApiScopeAllowed(scopes, uri)
     }
 
     private fun recordOpenApiCall(appId: Long, rateLimit: Int, session: NanoHTTPD.IHTTPSession): Boolean {
@@ -948,25 +1227,85 @@ class LocalPanelStore(
     private fun serveTokenCrud(s:NanoHTTPD.IHTTPSession,id:Long?):NanoHTTPD.Response { return when {s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();val q="SELECT t.*,p.name platform_name,p.label platform_label FROM platform_tokens t LEFT JOIN platforms p ON p.id=t.platform_id";readableDatabase.rawQuery(q,null).use{c->while(c.moveToNext())a.put(JSONObject().put("id",c.long("id")).put("platform_id",c.long("platform_id")).put("platform",JSONObject().put("name",c.string("platform_name")).put("label",c.string("platform_label"))).put("name",c.string("name")).put("token","********").put("remarks",c.string("remarks")).put("enabled",c.int("enabled")!=0))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);val now=Instant.now().toString();val x=writableDatabase.insert("platform_tokens",null,ContentValues().apply{put("platform_id",j.optLong("platform_id"));put("name",j.optString("name"));put("token",j.optString("token"));put("remarks",j.optString("remarks"));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("data",JSONObject().put("id",x)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.optString("token").isNotBlank()&&j.optString("token")!="********")put("token",j.optString("token"));if(j.has("remarks"))put("remarks",j.optString("remarks"));put("updated_at",Instant.now().toString())};writableDatabase.update("platform_tokens",v,"id=?",arrayOf(id.toString()));ok(JSONObject().put("message","更新成功"))};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("platform_tokens","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"平台令牌接口不存在")} }
 
     private fun serveOpenApiSecretContract(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response? {
-        val parts = uri.removePrefix("/open-api/apps").trim('/').split('/')
-        val id = parts.firstOrNull()?.toLongOrNull() ?: return null
+        val tail = uri.removePrefix("/open-api/apps").trim('/')
+        if (tail.isBlank()) return null
+        val parts = tail.split('/')
+        val id = parts.first().toLongOrNull()
+            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "应用 ID 必须是正整数")
+        val action = parts.getOrNull(1)
         return when {
-            parts.getOrNull(1) == "reset-secret" && session.method == NanoHTTPD.Method.PUT -> {
-                val secret = randomToken()
-                val changed = writableDatabase.update("open_api_apps", ContentValues().apply { put("secret", secret); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
-                if (changed == 0) return error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
-                val appKey = readableDatabase.query("open_api_apps", arrayOf("app_key"), "id=?", arrayOf(id.toString()), null, null, null).use { c -> if (c.moveToFirst()) c.string("app_key") else "" }
-                ok(JSONObject().put("message", "密钥已重置").put("data", JSONObject().put("app_key", appKey).put("app_secret", secret)))
-            }
-            parts.getOrNull(1) in setOf("view-secret", "show-secret") && session.method == NanoHTTPD.Method.POST -> viewOpenApiSecret(session, id)
+            parts.size > 2 || id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "应用 ID 或操作无效")
+            action !in setOf(null, "logs", "enable", "disable", "reset-secret", "view-secret", "show-secret") -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "Open API 操作无效")
+            action == "reset-secret" && session.method == NanoHTTPD.Method.PUT -> mutateOpenApiCredentials(id, "reset-secret")
+            action == "disable" && session.method == NanoHTTPD.Method.PUT -> mutateOpenApiCredentials(id, "disable")
+            action == "enable" && session.method == NanoHTTPD.Method.PUT -> setOpenApiEnabled(id)
+            action == null && session.method == NanoHTTPD.Method.PUT -> updateOpenApiApp(id, body(session))
+            parts.size == 1 && session.method == NanoHTTPD.Method.DELETE -> mutateOpenApiCredentials(id, "delete")
+            action in setOf("view-secret", "show-secret") && session.method == NanoHTTPD.Method.POST -> viewOpenApiSecret(session, id)
+            action == "logs" && session.method == NanoHTTPD.Method.GET -> null
+            action != null || (parts.size == 1 && session.method !in setOf(NanoHTTPD.Method.GET, NanoHTTPD.Method.PUT)) -> error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "Open API 操作方法无效")
             else -> null
+        }
+    }
+
+    private fun mutateOpenApiCredentials(id: Long, action: String): NanoHTTPD.Response {
+        val db = writableDatabase
+        val secret = if (action == "reset-secret") randomToken() else ""
+        var appKey = ""
+        db.beginTransaction()
+        try {
+            appKey = db.query("open_api_apps", arrayOf("app_key"), "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
+                if (!cursor.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+                cursor.string("app_key")
+            }
+            if (action == "delete") db.delete("open_api_tokens", "app_id=?", arrayOf(id.toString()))
+            val affected = when (action) {
+                "reset-secret" -> db.update("open_api_apps", ContentValues().apply { put("secret", secret); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+                "disable" -> db.update("open_api_apps", ContentValues().apply { put("enabled", 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+                "delete" -> db.delete("open_api_apps", "id=?", arrayOf(id.toString()))
+                else -> 0
+            }
+            if (affected != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+            if (action != "delete") db.delete("open_api_tokens", "app_id=?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        val data = JSONObject().put("id", id).put("tokens_revoked", true)
+        if (action == "reset-secret") data.put("app_key", appKey).put("app_secret", secret)
+        return ok(JSONObject().put("message", when (action) { "delete" -> "应用已删除"; "disable" -> "应用已禁用"; else -> "密钥已重置" }).put("data", data))
+    }
+
+    private fun setOpenApiEnabled(id: Long): NanoHTTPD.Response {
+        val changed = writableDatabase.update("open_api_apps", ContentValues().apply {
+            put("enabled", 1)
+            put("updated_at", Instant.now().toString())
+        }, "id=?", arrayOf(id.toString()))
+        return if (changed == 1) ok(JSONObject().put("message", "应用已启用").put("data", JSONObject().put("id", id)))
+        else error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+    }
+
+    private fun updateOpenApiApp(id: Long, json: JSONObject): NanoHTTPD.Response {
+        val values = ContentValues().apply {
+            if (json.has("name")) put("name", json.optString("name").trim())
+            if (json.has("scopes")) put("scopes", json.optJSONArray("scopes")?.let { array -> (0 until array.length()).joinToString(",") { array.optString(it) } } ?: json.optString("scopes"))
+            if (json.has("rate_limit")) put("rate_limit", json.optInt("rate_limit").coerceAtLeast(0))
+            if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
+            put("updated_at", Instant.now().toString())
+        }
+        if (json.has("name") && json.optString("name").trim().isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "应用名称不能为空")
+        return try {
+            if (writableDatabase.update("open_api_apps", values, "id=?", arrayOf(id.toString())) != 1) error(NanoHTTPD.Response.Status.NOT_FOUND, "应用不存在")
+            else ok(JSONObject().put("message", "更新成功").put("data", JSONObject().put("id", id)))
+        } catch (_: Exception) {
+            error(NanoHTTPD.Response.Status.BAD_REQUEST, "Open API 应用参数无效")
         }
     }
 
     private fun viewOpenApiSecret(session: NanoHTTPD.IHTTPSession, id: Long): NanoHTTPD.Response {
         val token = bearerToken(session) ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
         val user = readableDatabase.rawQuery(
-            "SELECT u.password_hash,u.password_salt,u.role FROM security_sessions s JOIN local_users u ON u.username=s.username WHERE s.access_token=? AND s.expires_at>? LIMIT 1",
+            "SELECT u.password_hash,u.password_salt,u.role FROM security_sessions s JOIN local_users u ON u.id=s.user_id WHERE s.access_token=? AND s.expires_at>? AND u.enabled=1 LIMIT 1",
             arrayOf(token, Instant.now().toString()),
         ).use { cursor -> if (!cursor.moveToFirst()) null else Triple(cursor.string("password_hash"), cursor.string("password_salt"), cursor.string("role")) }
             ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
@@ -1225,12 +1564,22 @@ class LocalPanelStore(
     }
 
     fun purgeExpiredRecords() {
+        if (maintenanceGate.isMaintenanceActive()) return
         val now = Instant.now()
-        writableDatabase.delete("open_api_logs", "created_at < ?", arrayOf(now.minusSeconds(OPEN_API_LOG_RETENTION_SECONDS).toString()))
-        writableDatabase.delete("open_api_tokens", "expires_at < ?", arrayOf(now.toString()))
-        writableDatabase.delete("security_login_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
-        writableDatabase.delete("security_audit_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
-        writableDatabase.delete("security_sessions", "expires_at < ? AND expires_at != ''", arrayOf(now.toString()))
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("open_api_logs", "created_at < ?", arrayOf(now.minusSeconds(OPEN_API_LOG_RETENTION_SECONDS).toString()))
+            db.delete("open_api_tokens", "expires_at < ?", arrayOf(now.toString()))
+            db.delete("security_login_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
+            db.delete("security_audit_logs", "created_at < ?", arrayOf(now.minusSeconds(SECURITY_LOG_RETENTION_SECONDS).toString()))
+            db.delete("local_sessions", "refresh_expires_at < ? AND refresh_expires_at != ''", arrayOf(now.toString()))
+            db.delete("local_sessions", "NOT EXISTS (SELECT 1 FROM local_users WHERE local_users.id=local_sessions.user_id)", null)
+            db.delete("security_sessions", "NOT EXISTS (SELECT 1 FROM local_sessions WHERE local_sessions.access_token=security_sessions.access_token)", null)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
@@ -1238,7 +1587,10 @@ class LocalPanelStore(
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
+        val reserved = setOf("views", "cron", "notification-channels", "export", "import", "batch")
         return when {
+            segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务 ID 必须是正整数")
+            id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务 ID 必须是正整数")
             normalizedUri == "/tasks/views" || normalizedUri == "/tasks/views/reorder" || normalizedUri.startsWith("/tasks/views/") -> serveTaskViews(session, normalizedUri)
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/cron/templates" ->
                 cronTemplates()
@@ -1252,7 +1604,7 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, try { body(session) } catch (_: Exception) { JSONObject() })
-            id != null && session.method == NanoHTTPD.Method.DELETE -> delete("tasks", id)
+            id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("tasks", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable", "run", "stop", "pin", "unpin") ->
                 updateTaskStatus(id, action!!)
             id != null && session.method == NanoHTTPD.Method.GET && (action == "latest-log" || action == "log") -> latestTaskLogResponse(id)
@@ -1261,6 +1613,8 @@ class LocalPanelStore(
             id != null && session.method == NanoHTTPD.Method.GET && action == "log-files" -> taskLogFiles(id)
             id != null && session.method == NanoHTTPD.Method.POST && action == "copy" -> copyTask(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == null -> taskDetail(id)
+            id != null && action != null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务操作无效")
+            id != null -> error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "任务操作方法无效")
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "任务接口尚未实现")
         }
     }
@@ -1302,7 +1656,10 @@ class LocalPanelStore(
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
+        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort")
         return when {
+            segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
+            id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
             session.method == NanoHTTPD.Method.GET && normalizedUri.endsWith("/groups") -> envGroups()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export" -> exportEnvs(asObject = true)
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export-all" -> exportEnvs(asObject = false)
@@ -1313,10 +1670,12 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateEnv(id, try { body(session) } catch (_: Exception) { JSONObject() })
-            id != null && session.method == NanoHTTPD.Method.DELETE -> delete("envs", id)
+            id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("envs", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") ->
                 updateEnvEnabled(id, action == "enable")
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("move-top", "cancel-top") -> moveEnvTop(id, action == "move-top")
+            id != null && action != null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量操作无效")
+            id != null -> error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "环境变量操作方法无效")
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量接口尚未实现")
         }
     }
@@ -1406,7 +1765,7 @@ class LocalPanelStore(
         return when {
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtimes" -> pythonRuntimes()
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/deps/python-runtime-default" -> setPythonDefault(body(session))
-            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtime-default" -> ok(JSONObject().put("data", JSONObject().put("version", configValue("python_runtime_default", "3.14"))))
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/python-runtime-default" -> ok(JSONObject().put("data", JSONObject().put("version", configValue("python_runtime_default", DependencyStorage.PYTHON_VERSION))))
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/pip" -> installedPipResponse()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/npm" -> installedNpmResponse()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/deps/mirrors" -> persistedMirrors()
@@ -1580,8 +1939,7 @@ class LocalPanelStore(
                         addHeader("Cache-Control", "no-store")
                     }
                 }
-                session.method == NanoHTTPD.Method.POST && uri == "/api/system/restore" ->
-                    ok(JSONObject().put("data", localBackupService.restore(body(session))))
+                session.method == NanoHTTPD.Method.POST && uri == "/api/system/restore" -> restoreWithMaintenance(body(session))
                 session.method == NanoHTTPD.Method.GET && uri == "/api/system/restore/progress" -> restoreProgress()
                 session.method == NanoHTTPD.Method.DELETE && uri == "/api/system/backup" ->
                     ok(JSONObject().put("data", localBackupService.delete(session.parms["filename"].orEmpty())))
@@ -1591,6 +1949,21 @@ class LocalPanelStore(
             error(NanoHTTPD.Response.Status.NOT_FOUND, error.message ?: "备份文件不存在")
         } catch (error: IllegalArgumentException) {
             error(NanoHTTPD.Response.Status.BAD_REQUEST, error.message ?: "备份请求无效")
+        }
+    }
+
+    private fun restoreWithMaintenance(json: JSONObject): NanoHTTPD.Response {
+        if (!maintenanceGate.beginMaintenance(TimeUnit.SECONDS.toMillis(10))) {
+            return NanoHTTPD.newFixedLengthResponse(
+                NanoHTTPD.Response.Status.CONFLICT,
+                "application/json; charset=utf-8",
+                JSONObject().put("error", "仍有活跃任务，恢复操作暂未开始").put("active_task_ids", JSONArray(activeTaskIds())).toString(),
+            )
+        }
+        return try {
+            ok(JSONObject().put("data", localBackupService.restore(json)))
+        } finally {
+            maintenanceGate.endMaintenance()
         }
     }
 
@@ -1604,12 +1977,39 @@ class LocalPanelStore(
         val envCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM envs", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val depCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM dependencies", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
         val subCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM local_subscriptions", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+        val rangeDays = session.parms["range"]?.toIntOrNull()?.takeIf { it in 1..90 } ?: 7
         val enabledTasks = readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks WHERE status > 0", null).use { it.moveToFirst(); it.getLong(0) }
         val runningTasks = runningTaskIds.size
-        val successLogs = readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status=1", null).use { it.moveToFirst(); it.getLong(0) }
-        val failedLogs = readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status=2", null).use { it.moveToFirst(); it.getLong(0) }
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.LocalDate.now(zone)
+        val todayStart = today.atStartOfDay(zone).toInstant()
+        val tomorrowStart = today.plusDays(1).atStartOfDay(zone).toInstant()
+        val yesterdayStart = today.minusDays(1).atStartOfDay(zone).toInstant()
+        val previousTasks = readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM tasks WHERE created_at<?",
+            arrayOf(todayStart.toString()),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
+        val todayLogs = countTaskLogs(todayStart, tomorrowStart)
+        val successLogs = countTaskLogs(todayStart, tomorrowStart, 0)
+        val failedLogs = countTaskLogs(todayStart, tomorrowStart, 1)
+        val abortedLogs = countTaskLogs(todayStart, tomorrowStart, 3)
+        val yesterdayLogs = countTaskLogs(yesterdayStart, todayStart)
+        val yesterdaySuccess = countTaskLogs(yesterdayStart, todayStart, 0)
+        val yesterdayFailed = countTaskLogs(yesterdayStart, todayStart, 1)
+        val yesterdayAborted = countTaskLogs(yesterdayStart, todayStart, 3)
         val recentLogs = queryRows("SELECT * FROM task_logs_local ORDER BY id DESC LIMIT 10") { taskLogJson(it) }
-        val dailyStats = queryRows("SELECT substr(created_at,1,10) day, SUM(CASE WHEN status=1 THEN 1 ELSE 0 END) success, SUM(CASE WHEN status=2 THEN 1 ELSE 0 END) failed FROM task_logs_local GROUP BY substr(created_at,1,10) ORDER BY day DESC LIMIT 7") { c -> JSONObject().put("date", c.string("day")).put("success", c.long("success")).put("failed", c.long("failed")) }
+        val dailyStats = JSONArray()
+        for (daysAgo in rangeDays - 1 downTo 0) {
+            val day = today.minusDays(daysAgo.toLong())
+            val start = day.atStartOfDay(zone).toInstant()
+            val end = day.plusDays(1).atStartOfDay(zone).toInstant()
+            dailyStats.put(dashboardDailyStat(
+                day.format(DateTimeFormatter.ofPattern("MM-dd")),
+                countTaskLogs(start, end, 0),
+                countTaskLogs(start, end, 1),
+                countTaskLogs(start, end, 3),
+            ))
+        }
         val data = JSONObject().apply {
             put("mode", "android_local")
             put("version", "0.3.15")
@@ -1618,13 +2018,23 @@ class LocalPanelStore(
             put("envs", envCount)
             put("deps", depCount)
             put("subscriptions", subCount)
+            put("env_count", envCount)
+            put("sub_count", subCount)
             put("task_count", taskCount)
             put("enabled_tasks", enabledTasks)
             put("running_tasks", runningTasks)
+            put("today_logs", todayLogs)
             put("success_logs", successLogs)
             put("failed_logs", failedLogs)
+            put("aborted_logs", abortedLogs)
+            put("prev_task_count", previousTasks)
+            put("yesterday_logs", yesterdayLogs)
+            put("yesterday_success", yesterdaySuccess)
+            put("yesterday_failed", yesterdayFailed)
+            put("yesterday_aborted", yesterdayAborted)
             put("recent_logs", recentLogs)
             put("daily_stats", dailyStats)
+            put("range_days", rangeDays)
         }
         return ok(JSONObject().put("data", data))
     }
@@ -1641,18 +2051,24 @@ fun serveDashboardStats(): JSONObject {
     val scriptCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM scripts", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
     
     val logCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+
+    val enabledCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks WHERE status > 0", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+
+    val disabledCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM tasks WHERE status = 0", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
     
-    val successCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 1", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    val successCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 0", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
     
-    val failedCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 2", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+    val failedCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 1", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
+
+    val abortedCount = try { readableDatabase.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE status = 3", null).use { it.moveToFirst(); it.getLong(0) } } catch (_: Exception) { 0L }
     
-    val successRate = if (logCount > 0) (successCount * 100 / logCount) else 0
+    val successRate = dashboardSuccessRate(successCount, failedCount)
     
     return JSONObject()
     
-        .put("tasks", JSONObject().put("total", taskCount).put("enabled", taskCount).put("disabled", 0).put("running", 0))
+        .put("tasks", JSONObject().put("total", taskCount).put("enabled", enabledCount).put("disabled", disabledCount).put("running", runningTaskIds.size))
     
-        .put("logs", JSONObject().put("total", logCount).put("success", successCount).put("failed", failedCount).put("aborted", 0).put("success_rate", successRate))
+        .put("logs", JSONObject().put("total", logCount).put("success", successCount).put("failed", failedCount).put("aborted", abortedCount).put("success_rate", successRate))
     
         .put("scripts", JSONObject().put("total", scriptCount))
     
@@ -1668,7 +2084,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun ensureDefaultDeps(db: SQLiteDatabase) {
         val defaults = arrayOf(
-            arrayOf("python", "python", "3.14", "installed"),
+            arrayOf("python", "python", DependencyStorage.PYTHON_VERSION, "installed"),
             arrayOf("shell", "shell", "android-16", "installed"),
             arrayOf("node", "node", "lts", "installed"),
             arrayOf("git", "git", "android", "installed"),
@@ -1818,13 +2234,17 @@ fun serveDashboardStats(): JSONObject {
 
     private fun deleteSubscription(uri: String): NanoHTTPD.Response {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
-        writableDatabase.delete("local_subscriptions", "id = ?", arrayOf(id.toString()))
+        if (id <= 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
+        if (writableDatabase.delete("local_subscriptions", "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
         return ok(JSONObject().put("data", JSONObject().put("deleted", id)))
     }
 
     private fun refreshSubscription(uri: String): NanoHTTPD.Response {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
-        writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync = datetime('now'), updated_at = datetime('now') WHERE id = ?", arrayOf(id.toString()))
+        if (id <= 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
+        if (writableDatabase.update("local_subscriptions", ContentValues().apply { put("last_sync", Instant.now().toString()); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString())) != 1) {
+            return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        }
         return ok(JSONObject().put("data", JSONObject().put("refreshed", id).put("last_sync", System.currentTimeMillis().toString())))
     }
 
@@ -1990,7 +2410,7 @@ fun serveDashboardStats(): JSONObject {
             .put("linux_mirror_label", if (manager == "apt") "Ubuntu APT（阿里云默认）" else "Linux")
             .put("linux_mirror_message", if (manager == "apt") "默认使用阿里云，支持任意合法 HTTP(S) 镜像源" else "当前包管理器暂不支持镜像设置")
     }
-    private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version","3.14");upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
+    private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version",DependencyStorage.PYTHON_VERSION);upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
     private fun exportDependencies(type: String): NanoHTTPD.Response { val lines=mutableListOf<String>();readableDatabase.query("dependencies",arrayOf("name","version"),if(type.isBlank())null else "type=?",if(type.isBlank())null else arrayOf(normalizeDependencyType(type)?:type),null,null,"name").use{c->while(c.moveToNext())lines += c.string("name") + if(c.string("version").isBlank()) "" else if(type=="npm"||type=="nodejs") "@${c.string("version")}" else "==${c.string("version")}"};return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"text/plain; charset=utf-8",lines.joinToString("\n")) }
 
     private fun taskRows(): JSONArray = queryRows(
@@ -2174,14 +2594,18 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun restoreProgress(): NanoHTTPD.Response = ok(
-        JSONObject()
-            .put("active", false)
-            .put("status", "idle")
-            .put("stage", "idle")
-            .put("percent", 100)
-            .put("source", "android_portable_envelope"),
-    )
+    private fun restoreProgress(): NanoHTTPD.Response {
+        val active = maintenanceGate.isMaintenanceActive()
+        return ok(
+            JSONObject()
+                .put("active", active)
+                .put("status", if (active) "running" else "idle")
+                .put("stage", if (active) "waiting_or_restoring" else "idle")
+                .put("percent", if (active) 0 else 100)
+                .put("active_task_ids", JSONArray(activeTaskIds()))
+                .put("source", "android_portable_envelope"),
+        )
+    }
 
     private fun backupFile(filename: String): File? {
         val clean = filename.substringAfterLast('/').substringAfterLast('\\')
@@ -3260,7 +3684,9 @@ fun serveDashboardStats(): JSONObject {
             if (json.has("labels")) put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
+        if (writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString())) != 1) {
+            return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+        }
         return taskDetail(id)
     }
 
@@ -3274,7 +3700,9 @@ fun serveDashboardStats(): JSONObject {
 
     private fun updateTaskStatus(id: Long, action: String): NanoHTTPD.Response {
         if (action == "pin" || action == "unpin") {
-            writableDatabase.execSQL("UPDATE tasks SET pinned=?, updated_at=? WHERE id=?", arrayOf<Any?>(if (action == "pin") 1 else 0, Instant.now().toString(), id))
+            if (writableDatabase.update("tasks", ContentValues().apply { put("pinned", if (action == "pin") 1 else 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString())) != 1) {
+                return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+            }
             return ok(JSONObject().put("data", JSONObject().put("id", id).put("pinned", action == "pin")))
         }
         if (action == "stop") {
@@ -3284,6 +3712,7 @@ fun serveDashboardStats(): JSONObject {
                     return ok(JSONObject().put("data", JSONObject().put("id", id).put("run_status", "finished")))
                 }
                 taskAbortRequested.add(id)
+                taskRetrySignals[id]?.countDown()
                 taskProcesses[id]?.let(::terminateTaskProcess)
             }
             return ok(JSONObject().put("data", JSONObject().put("id", id).put("run_status", "aborting")))
@@ -3297,10 +3726,13 @@ fun serveDashboardStats(): JSONObject {
             put("status", status)
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
         if (action == "run") {
-            if (!enqueueTask(id)) {
-                return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
+            when (enqueueTask(id)) {
+                EnqueueTaskResult.ALREADY_RUNNING -> return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
+                EnqueueTaskResult.QUEUE_FULL -> return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "任务执行队列已满，请稍后重试")
+                EnqueueTaskResult.MAINTENANCE -> return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "维护期间暂停提交任务")
+                EnqueueTaskResult.NOT_FOUND -> return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+                EnqueueTaskResult.ACCEPTED -> Unit
             }
             return NanoHTTPD.newFixedLengthResponse(
                 NanoHTTPD.Response.Status.ACCEPTED,
@@ -3311,17 +3743,15 @@ fun serveDashboardStats(): JSONObject {
                     .toString(),
             )
         }
+        if (writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString())) != 1) {
+            return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+        }
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("status", status)))
     }
 
     private fun insertTaskLog(taskId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant): Long {
         val content = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-        val statusCode = when (result.status) {
-            "success" -> 0
-            "failed" -> 1
-            "running" -> 2
-            else -> 1
-        }
+        val statusCode = taskLogStatusCode(result.status)
         val values = ContentValues().apply {
             put("task_id", taskId)
             put("content", content)
@@ -3349,7 +3779,7 @@ fun serveDashboardStats(): JSONObject {
     private fun finishTaskLog(taskId: Long, logId: Long, result: LocalScriptResult, startedAt: Instant, endedAt: Instant) {
         val values = ContentValues().apply {
             put("content", (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) })
-            put("logs_json", result.logs.toString()); put("status", when (result.status) { "success" -> 0; "aborted", "stopped" -> 2; else -> 1 })
+            put("logs_json", result.logs.toString()); put("status", taskLogStatusCode(result.status))
             if (result.exitCode == null) putNull("exit_code") else put("exit_code", result.exitCode)
             put("duration", (endedAt.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0)
             put("ended_at", endedAt.toString())
@@ -3378,36 +3808,83 @@ fun serveDashboardStats(): JSONObject {
     }
 
     internal fun stopScheduledTask(id: Long) {
+        if (!runningTaskIds.contains(id)) return
         taskAbortRequested.add(id)
+        taskRetrySignals[id]?.countDown()
         taskProcesses[id]?.let(::terminateTaskProcess)
     }
 
-    internal fun runScheduledBackupIfDue(now: java.time.ZonedDateTime) {
-        if (!configBool("backup_schedule_enabled", false)) return
+    @Synchronized
+    internal fun runScheduledBackupIfDue(now: java.time.ZonedDateTime): Boolean {
+        if (!maintenanceGate.tryEnterTask()) return true
+        return try {
+            runScheduledBackupIfDueInsideGate(now)
+        } finally {
+            maintenanceGate.leaveTask()
+        }
+    }
+
+    private fun runScheduledBackupIfDueInsideGate(now: java.time.ZonedDateTime): Boolean {
+        if (!configBool("backup_schedule_enabled", false)) return true
         val clock = configValue("backup_schedule_time", "03:00").split(':')
-        val hour = clock.getOrNull(0)?.toIntOrNull() ?: return
-        val minute = clock.getOrNull(1)?.toIntOrNull() ?: return
-        if (now.hour != hour || now.minute != minute) return
+        val hour = clock.getOrNull(0)?.toIntOrNull() ?: return true
+        val minute = clock.getOrNull(1)?.toIntOrNull() ?: return true
+        if (now.hour != hour || now.minute != minute) return true
         val frequency = configValue("backup_schedule_frequency", "daily")
         val matches = when (frequency) {
             "weekly" -> now.dayOfWeek.value % 7 == configValue("backup_schedule_weekday", "0").toIntOrNull()
             "monthly" -> now.dayOfMonth == configValue("backup_schedule_monthday", "1").toIntOrNull()
             else -> frequency == "daily"
         }
-        if (!matches) return
+        if (!matches) return true
         val key = "$frequency:${now.toLocalDate()}:$hour:$minute"
-        if (key == lastScheduledBackupKey) return
-        lastScheduledBackupKey = key
-        runCatching {
+        if (key == lastScheduledBackupKey) return true
+        return runCatching {
             localBackupService.create(JSONObject().put("password", configValue("backup_schedule_password", "")))
-        }.onSuccess { appLog("Backup", "Scheduled backup completed: ${it.optString("filename")}") }
+        }.onSuccess {
+            lastScheduledBackupKey = key
+            appLog("Backup", "Scheduled backup completed: ${it.optString("filename")}")
+        }
             .onFailure { appLog("Backup", "Scheduled backup failed: ${it.message ?: it.javaClass.simpleName}") }
+            .isSuccess
     }
 
-    private fun enqueueTask(id: Long): Boolean {
-        if (!runningTaskIds.add(id)) return false
+    internal enum class EnqueueTaskResult { ACCEPTED, ALREADY_RUNNING, QUEUE_FULL, MAINTENANCE, NOT_FOUND }
+
+    internal fun enqueueScheduledTask(id: Long): EnqueueTaskResult = enqueueTask(id)
+
+    internal fun activeTaskIds(): List<Long> = runningTaskIds.toList().sorted()
+
+    private fun enqueueTask(id: Long): EnqueueTaskResult {
+        if (!maintenanceGate.tryEnterTask()) return EnqueueTaskResult.MAINTENANCE
+        if (!runningTaskIds.add(id)) {
+            maintenanceGate.leaveTask()
+            return EnqueueTaskResult.ALREADY_RUNNING
+        }
+        val exists = readableDatabase.query("tasks", arrayOf("id"), "id=?", arrayOf(id.toString()), null, null, null).use(Cursor::moveToFirst)
+        if (!exists) {
+            runningTaskIds.remove(id)
+            maintenanceGate.leaveTask()
+            return EnqueueTaskResult.NOT_FOUND
+        }
+        if (writableDatabase.update("tasks", ContentValues().apply {
+                put("status", 2.0)
+                put("updated_at", Instant.now().toString())
+            }, "id=?", arrayOf(id.toString())) != 1
+        ) {
+            runningTaskIds.remove(id)
+            maintenanceGate.leaveTask()
+            return EnqueueTaskResult.NOT_FOUND
+        }
         val startedAt = Instant.now()
-        initializeTaskRun(id, startedAt, "任务已入队，正在启动...")
+        try {
+            initializeTaskRun(id, startedAt, "任务已入队，正在启动...")
+        } catch (error: Throwable) {
+            writableDatabase.update("tasks", ContentValues().apply { put("status", 1.0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
+            runningTaskIds.remove(id)
+            maintenanceGate.leaveTask()
+            throw error
+        }
         try {
             taskRunExecutor.execute {
                 try {
@@ -3418,15 +3895,17 @@ fun serveDashboardStats(): JSONObject {
                     appLog("Task", "Task $id crashed: ${error.message ?: error.javaClass.simpleName}")
                 } finally {
                     clearTaskRun(id)
+                    maintenanceGate.leaveTask()
                 }
             }
         } catch (_: RejectedExecutionException) {
             appendTaskRunLog(id, "任务执行队列已满，请稍后重试")
             finishCrashedTask(id, startedAt)
             clearTaskRun(id)
-            return false
+            maintenanceGate.leaveTask()
+            return EnqueueTaskResult.QUEUE_FULL
         }
-        return true
+        return EnqueueTaskResult.ACCEPTED
     }
 
     private fun initializeTaskRun(id: Long, startedAt: Instant, initialLine: String) {
@@ -3441,7 +3920,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun clearTaskRun(id: Long) {
-        runningTaskIds.remove(id); taskProcesses.remove(id); taskAbortRequested.remove(id); taskFinalizedIds.remove(id)
+        runningTaskIds.remove(id); taskProcesses.remove(id); taskAbortRequested.remove(id); taskRetrySignals.remove(id); taskFinalizedIds.remove(id)
         taskRunLogIds.remove(id); taskRunCursors.remove(id); taskRunStartedAt.remove(id); taskRunLogsMemory.remove(id)
         taskRunLogCharacters.remove(id); taskRunPendingPersistence.remove(id)
         taskRunLocks.remove(id)
@@ -3643,7 +4122,19 @@ fun serveDashboardStats(): JSONObject {
             while (main.status == "failed" && retry < maxRetries && !taskAbortRequested.contains(id)) {
                 retry++
                 logs.put("[第 $retry 次重试，等待 $retryInterval 秒]")
-                if (retryInterval > 0) Thread.sleep(retryInterval * 1000L)
+                if (retryInterval > 0) {
+                    val signal = CountDownLatch(1)
+                    taskRetrySignals[id] = signal
+                    try {
+                        if (taskAbortRequested.contains(id)) signal.countDown()
+                        signal.await(retryInterval.toLong(), TimeUnit.SECONDS)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        taskAbortRequested.add(id)
+                    } finally {
+                        taskRetrySignals.remove(id, signal)
+                    }
+                }
                 if (!taskAbortRequested.contains(id)) main = runMain()
             }
             for (i in 0 until main.logs.length()) logs.put(main.logs.optString(i))
@@ -3661,8 +4152,31 @@ fun serveDashboardStats(): JSONObject {
         session: NanoHTTPD.IHTTPSession,
         action: String?
     ): NanoHTTPD.Response {
+        val normalizedPath = session.uri.removePrefix("/api/v1").removePrefix("/api").trimEnd('/')
+        if (action !in setOf("enable", "disable", "delete", "run")) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "批量任务操作无效")
+        if (!isValidTaskBatchRequest(session.method, normalizedPath, action)) return error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "批量任务操作方法或路径无效")
         val json = body(session)
-        val ids = json.optJSONArray("task_ids") ?: JSONArray()
+        val taskIds = validatedBatchTaskIds(json, if (action == "run") 10 else Int.MAX_VALUE)
+            ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "task_ids 必须是非空、无重复的正整数数组${if (action == "run") "，且最多 10 项" else ""}")
+        val ids = JSONArray(taskIds)
+        if (action == "run") {
+            val results = JSONArray()
+            taskIds.forEach { taskId ->
+                val result = enqueueTask(taskId)
+                results.put(JSONObject().put("id", taskId).put("status", when (result) {
+                    EnqueueTaskResult.ACCEPTED -> "accepted"
+                    EnqueueTaskResult.ALREADY_RUNNING -> "already_running"
+                    EnqueueTaskResult.QUEUE_FULL -> "queue_full"
+                    EnqueueTaskResult.MAINTENANCE -> "maintenance"
+                    EnqueueTaskResult.NOT_FOUND -> "not_found"
+                }))
+            }
+            return NanoHTTPD.newFixedLengthResponse(
+                NanoHTTPD.Response.Status.ACCEPTED,
+                "application/json; charset=utf-8",
+                JSONObject().put("message", "批量任务已处理").put("data", JSONObject().put("ids", ids).put("results", results)).toString(),
+            )
+        }
         val values = ContentValues().apply {
             when (action) {
                 "enable" -> put("status", 1.0)
@@ -3671,30 +4185,29 @@ fun serveDashboardStats(): JSONObject {
             }
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.beginTransaction()
+        val db = writableDatabase
+        var affected = 0
+        db.beginTransaction()
         try {
-            for (index in 0 until ids.length()) {
-                val id = ids.optLong(index)
+            for (id in taskIds) {
                 if (action == "delete") {
-                    writableDatabase.delete("tasks", "id = ?", arrayOf(id.toString()))
+                    db.delete(
+                        "task_logs_local",
+                        "task_id IN (SELECT id FROM tasks WHERE id = ?)",
+                        arrayOf(id.toString()),
+                    )
+                    if (db.delete("tasks", "id = ?", arrayOf(id.toString())) == 1) {
+                        affected++
+                    }
                 } else {
-                    writableDatabase.update("tasks", values, "id = ?", arrayOf(id.toString()))
+                    affected += db.update("tasks", values, "id = ?", arrayOf(id.toString()))
                 }
             }
-            writableDatabase.setTransactionSuccessful()
+            db.setTransactionSuccessful()
         } finally {
-            writableDatabase.endTransaction()
+            db.endTransaction()
         }
-        if (action == "run") {
-            val results = JSONArray()
-            for (index in 0 until ids.length()) {
-                val taskId = ids.optLong(index)
-                val execution = executeTaskAndSave(taskId)
-                results.put(JSONObject().put("id", taskId).put("status", execution?.first?.status ?: "conflict").put("log_id", execution?.second ?: JSONObject.NULL))
-            }
-            return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("results", results)))
-        }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
+        return ok(batchMutationPayload(taskIds, affected))
     }
 
     private fun latestTaskLogResponse(id: Long): NanoHTTPD.Response {
@@ -3770,8 +4283,8 @@ fun serveDashboardStats(): JSONObject {
             .put("content", cursor.string("content"))
             .put("logs", logs)
             .put("status", cursor.int("status"))
-            .put("run_status", when (cursor.int("status")) { 0 -> "success"; 1 -> "failed"; 2 -> "running"; else -> "unknown" })
-            .put("done", cursor.int("status") != 2)
+            .put("run_status", taskLogRunStatus(cursor.int("status")))
+            .put("done", taskLogDone(cursor.int("status")))
             .put("exit_code", if (cursor.isNull(cursor.getColumnIndexOrThrow("exit_code"))) JSONObject.NULL else cursor.int("exit_code"))
             .put("duration", cursor.double("duration"))
             .put("started_at", cursor.string("started_at"))
@@ -3840,7 +4353,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun cronParse(json: JSONObject): NanoHTTPD.Response {
         val expression = json.optString("expression", json.optString("cron_expression")).trim()
-        val valid = expression.split(Regex("\\s+")).size in 5..6
+        val valid = CronExpression.isValid(expression)
         if (!valid) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Cron 表达式格式无效")
         return ok(JSONObject().put("data", JSONObject().put("valid", true).put("expression", expression)))
     }
@@ -3993,7 +4506,7 @@ fun serveDashboardStats(): JSONObject {
             if (json.has("group") || json.has("groups")) put("groups_json", normalizeGroups(json).toString())
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.update("envs", values, "id = ?", arrayOf(id.toString()))
+        if (writableDatabase.update("envs", values, "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量不存在")
         return ok(JSONObject().put("data", JSONObject().put("id", id)))
     }
 
@@ -4002,7 +4515,7 @@ fun serveDashboardStats(): JSONObject {
             put("enabled", if (enabled) 1 else 0)
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.update("envs", values, "id = ?", arrayOf(id.toString()))
+        if (writableDatabase.update("envs", values, "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量不存在")
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("enabled", enabled)))
     }
 
@@ -4082,7 +4595,7 @@ fun serveDashboardStats(): JSONObject {
             for (triple in results) {
                 val ver = installedPkgs[DependencyStorage.normalizedName(triple.second, triple.first)] ?: ""
                 val normalizedName = DependencyStorage.normalizedName(triple.second, triple.first)
-                val runtimeVersion = if (triple.second == "python") "3.14" else ""
+                val runtimeVersion = if (triple.second == "python") DependencyStorage.PYTHON_VERSION else ""
                 val values = ContentValues().apply {
                     put("name", normalizedName)
                     put("type", triple.second)
@@ -4108,14 +4621,14 @@ fun serveDashboardStats(): JSONObject {
                 val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
                 for ((pkgName, pkgVer) in installedPkgs) {
                     if (pkgName in existingNames || pkgName in skipNames) continue
-                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf("python", pkgName, "3.14"), null, null, null)
+                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf("python", pkgName, DependencyStorage.PYTHON_VERSION), null, null, null)
                     val exists = cursor.count > 0
                     cursor.close()
                     if (!exists) {
                         val values = ContentValues().apply {
                             put("name", pkgName)
                             put("type", "python")
-                            put("python_version", "3.14")
+                            put("python_version", DependencyStorage.PYTHON_VERSION)
                             put("version", pkgVer)
                             put("status", "installed")
                             put("log", "Auto-installed as sub-dependency")
@@ -4486,13 +4999,13 @@ fun serveDashboardStats(): JSONObject {
 
     private fun pythonRuntimes(): NanoHTTPD.Response = ok(
         JSONObject()
-            .put("default_version", "3.14")
+            .put("default_version", DependencyStorage.PYTHON_VERSION)
             .put(
                 "data",
                 JSONArray().put(
                     JSONObject()
-                        .put("version", "3.14")
-                        .put("label", "Python 3.14")
+                        .put("version", DependencyStorage.PYTHON_VERSION)
+                        .put("label", "Python ${DependencyStorage.PYTHON_VERSION}")
                         .put("default", true)
                         .put("available", true)
                         .put("venv_healthy", true)
@@ -4523,7 +5036,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun delete(table: String, id: Long): NanoHTTPD.Response {
-        writableDatabase.delete(table, "id = ?", arrayOf(id.toString()))
+        if (writableDatabase.delete(table, "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "记录不存在")
         return ok(JSONObject().put("data", JSONObject().put("id", id)))
     }
 
@@ -4583,9 +5096,6 @@ fun serveDashboardStats(): JSONObject {
         )
 
     private fun initializeAdmin(json: JSONObject): NanoHTTPD.Response {
-        if (count(readableDatabase, "local_users") > 0) {
-            return error(NanoHTTPD.Response.Status.CONFLICT, "本地管理员已经初始化")
-        }
         val username = json.optString("username").trim()
         val password = json.optString("password")
         if (username.length < 2 || password.length < 6) {
@@ -4600,7 +5110,17 @@ fun serveDashboardStats(): JSONObject {
             put("created_at", now)
             put("updated_at", now)
         }
-        writableDatabase.insertOrThrow("local_users", null, values)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (count(db, "local_users") > 0) return error(NanoHTTPD.Response.Status.CONFLICT, "本地管理员已经初始化")
+            values.put("role", "admin")
+            values.put("enabled", 1)
+            db.insertOrThrow("local_users", null, values)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
         return ok(JSONObject().put("message", "initialized"))
     }
 
@@ -4623,35 +5143,27 @@ fun serveDashboardStats(): JSONObject {
 
     private fun recordFailedLogin(ip: String, username: String): Int {
         val now = Instant.now()
-        val existing = readableDatabase.query(
-            "security_login_attempts",
-            arrayOf("id", "count"),
-            "ip = ? AND username = ?",
-            arrayOf(ip, username),
-            null, null, null
-        ).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getLong(0) to cursor.getInt(1) else null
-        }
-        if (existing == null) {
-            writableDatabase.insert("security_login_attempts", null, ContentValues().apply {
-                put("ip", ip); put("username", username); put("count", 1)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertWithOnConflict("security_login_attempts", null, ContentValues().apply {
+                put("ip", ip); put("username", username); put("count", 0); put("locked_at", "")
                 put("expires_at", now.plusSeconds(LOGIN_LOCK_DURATION_SECONDS).toString())
                 put("created_at", now.toString()); put("updated_at", now.toString())
-            })
-            return 1
-        }
-        val (id, count) = existing
-        val newCount = count + 1
-        val values = ContentValues().apply {
-            put("count", newCount)
-            put("updated_at", now.toString())
-            if (newCount >= MAX_LOGIN_ATTEMPTS) {
-                put("locked_at", now.toString())
-                put("expires_at", now.plusSeconds(LOGIN_LOCK_DURATION_SECONDS * (newCount - MAX_LOGIN_ATTEMPTS + 1)).toString())
+            }, SQLiteDatabase.CONFLICT_IGNORE)
+            db.execSQL("UPDATE security_login_attempts SET count=count+1,updated_at=? WHERE ip=? AND username=?", arrayOf(now.toString(), ip, username))
+            val count = db.query("security_login_attempts", arrayOf("count"), "ip=? AND username=?", arrayOf(ip, username), null, null, null).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
+            if (count >= MAX_LOGIN_ATTEMPTS) {
+                db.update("security_login_attempts", ContentValues().apply {
+                    put("locked_at", now.toString())
+                    put("expires_at", now.plusSeconds(LOGIN_LOCK_DURATION_SECONDS * (count - MAX_LOGIN_ATTEMPTS + 1)).toString())
+                }, "ip=? AND username=?", arrayOf(ip, username))
             }
+            db.setTransactionSuccessful()
+            return count
+        } finally {
+            db.endTransaction()
         }
-        writableDatabase.update("security_login_attempts", values, "id = ?", arrayOf(id.toString()))
-        return newCount
     }
 
     private fun clearLoginAttempts(ip: String, username: String) {
@@ -4667,20 +5179,21 @@ fun serveDashboardStats(): JSONObject {
         }
         val cursor = readableDatabase.query(
             "local_users",
-            arrayOf("password_hash", "password_salt"),
+            arrayOf("id", "password_hash", "password_salt", "enabled"),
             "username = ?",
             arrayOf(username),
             null,
             null,
             null
         )
-        val valid = cursor.use {
-            if (!it.moveToFirst()) false
+        val user = cursor.use {
+            if (!it.moveToFirst()) null
             else {
                 val salt = Base64.decode(it.string("password_salt"), Base64.NO_WRAP)
-                hashPassword(password, salt) == it.string("password_hash")
+                Pair(it.long("id"), it.int("enabled") != 0 && hashPassword(password, salt) == it.string("password_hash"))
             }
         }
+        val valid = user?.second == true
         val now = Instant.now().toString()
         writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", if (valid) 0 else 1); put("message", if (valid) "登录成功" else "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
         if (!valid) {
@@ -4691,37 +5204,42 @@ fun serveDashboardStats(): JSONObject {
         val accessToken = randomToken()
         val refreshToken = randomToken()
         val values = ContentValues().apply {
-            put("id", 1)
+            put("user_id", user!!.first)
             put("access_token", accessToken)
             put("refresh_token", refreshToken)
             put("expires_at", Instant.now().plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString())
+            put("refresh_expires_at", Instant.now().plusSeconds(REFRESH_TOKEN_TTL_SECONDS).toString())
             put("updated_at", Instant.now().toString())
         }
-        writableDatabase.insertWithOnConflict(
-            "local_sessions",
-            null,
-            values,
-            SQLiteDatabase.CONFLICT_REPLACE
-        )
-        writableDatabase.insert("security_sessions", null, ContentValues().apply { put("username", username); put("access_token", accessToken); put("ip", requestIp(session)); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now); put("expires_at", Instant.now().plusSeconds(30L * 24 * 60 * 60).toString()) })
-        writableDatabase.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", "auth.login"); put("detail", "登录成功"); put("created_at", now) })
-        return ok(JSONObject().put("message", "登录成功").put("access_token", accessToken).put("refresh_token", refreshToken).put("user", userJson()))
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("local_sessions", null, values)
+            db.insertOrThrow("security_sessions", null, ContentValues().apply { put("user_id", user.first); put("username", username); put("access_token", accessToken); put("ip", requestIp(session)); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now); put("expires_at", Instant.now().plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString()) })
+            db.insert("security_audit_logs", null, ContentValues().apply { put("username", username); put("ip", requestIp(session)); put("action", "auth.login"); put("detail", "登录成功"); put("created_at", now) })
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return ok(JSONObject().put("message", "登录成功").put("access_token", accessToken).put("refresh_token", refreshToken).put("user", userJson(user.first)))
     }
 
     private fun revokeAccessToken(token: String?, action: String) {
         if (token == null) return
-        writableDatabase.delete("security_sessions", "access_token=?", arrayOf(token))
-        writableDatabase.delete("local_sessions", "access_token=?", arrayOf(token))
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("security_sessions", "access_token=?", arrayOf(token))
+            db.delete("local_sessions", "access_token=?", arrayOf(token))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     private fun refresh(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         val refreshToken = bearerToken(session)
             ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "缺少刷新凭据")
-        val valid = readableDatabase.rawQuery(
-            "SELECT 1 FROM local_sessions WHERE id = 1 AND refresh_token = ?",
-            arrayOf(refreshToken)
-        ).use(Cursor::moveToFirst)
-        if (!valid) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "刷新凭据已失效")
         val now = Instant.now()
         val accessToken = randomToken()
         val newRefreshToken = randomToken()
@@ -4729,18 +5247,43 @@ fun serveDashboardStats(): JSONObject {
             put("access_token", accessToken)
             put("refresh_token", newRefreshToken)
             put("expires_at", now.plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString())
+            put("refresh_expires_at", now.plusSeconds(REFRESH_TOKEN_TTL_SECONDS).toString())
             put("updated_at", now.toString())
         }
-        val oldAccessToken = readableDatabase.rawQuery("SELECT access_token FROM local_sessions WHERE id=1", null).use { if (it.moveToFirst()) it.getString(0) else "" }
-        writableDatabase.update("local_sessions", values, "id = 1", null)
-        writableDatabase.update("security_sessions", ContentValues().apply { put("access_token", accessToken); put("expires_at", now.plusSeconds(30L * 24 * 60 * 60).toString()) }, "access_token=?", arrayOf(oldAccessToken))
+        val db = writableDatabase
+        var rotated = false
+        db.beginTransaction()
+        try {
+            val oldAccessToken = db.rawQuery(
+                "SELECT s.access_token FROM local_sessions s JOIN local_users u ON u.id=s.user_id WHERE s.refresh_token=? AND s.refresh_expires_at>? AND u.enabled=1",
+                arrayOf(refreshToken, now.toString()),
+            ).use { if (it.moveToFirst()) it.getString(0) else null }
+            if (oldAccessToken != null && db.update(
+                    "local_sessions", values,
+                    "refresh_token=? AND refresh_expires_at>?",
+                    arrayOf(refreshToken, now.toString()),
+                ) == 1
+            ) {
+                val securityChanged = db.update("security_sessions", ContentValues().apply {
+                    put("access_token", accessToken)
+                    put("expires_at", now.plusSeconds(ACCESS_TOKEN_TTL_SECONDS).toString())
+                }, "access_token=?", arrayOf(oldAccessToken))
+                if (securityChanged == 1) {
+                    db.setTransactionSuccessful()
+                    rotated = true
+                }
+            }
+        } finally {
+            db.endTransaction()
+        }
+        if (!rotated) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "刷新凭据已失效或已过期")
         return ok(JSONObject().put("access_token", accessToken).put("refresh_token", newRefreshToken))
     }
 
-    private fun userJson(): JSONObject {
+    private fun userJson(userId: Long): JSONObject {
         return readableDatabase.rawQuery(
-            "SELECT id, username, role, enabled, created_at, updated_at FROM local_users ORDER BY id LIMIT 1",
-            null
+            "SELECT id, username, role, enabled, avatar_url, created_at, updated_at FROM local_users WHERE id=?",
+            arrayOf(userId.toString())
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use JSONObject()
             JSONObject()
@@ -4748,6 +5291,7 @@ fun serveDashboardStats(): JSONObject {
                 .put("username", cursor.string("username"))
                 .put("role", cursor.string("role"))
                 .put("enabled", cursor.getInt(cursor.getColumnIndexOrThrow("enabled")) != 0)
+                .put("avatar_url", cursor.string("avatar_url"))
                 .put("created_at", cursor.string("created_at"))
                 .put("updated_at", cursor.string("updated_at"))
         }
@@ -4755,12 +5299,9 @@ fun serveDashboardStats(): JSONObject {
 
     private fun authenticated(
         session: NanoHTTPD.IHTTPSession,
-        action: () -> NanoHTTPD.Response
-    ): NanoHTTPD.Response = if (isAuthorized(session)) {
-        action()
-    } else {
-        error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
-    }
+        action: (Long) -> NanoHTTPD.Response
+    ): NanoHTTPD.Response = currentUser(session)?.let { action(it.id) }
+        ?: error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
 
     private fun bearerToken(session: NanoHTTPD.IHTTPSession): String? {
         val value = session.headers["authorization"]?.trim().orEmpty()
@@ -4790,6 +5331,17 @@ fun serveDashboardStats(): JSONObject {
         return db.rawQuery(query, null).use { cursor ->
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
+    }
+
+    private fun countTaskLogs(start: Instant, end: Instant, status: Int? = null): Long {
+        val statusClause = if (status == null) "" else " AND status=?"
+        val args = mutableListOf(start.toString(), end.toString()).apply {
+            if (status != null) add(status.toString())
+        }
+        return readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM task_logs_local WHERE created_at>=? AND created_at<?$statusClause",
+            args.toTypedArray(),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
     }
 
     private fun queryRows(

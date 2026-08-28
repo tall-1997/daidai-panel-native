@@ -10,6 +10,10 @@ on:
 
 permissions: {}
 
+env:
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
+
 jobs:
   quality:
     name: Analyze and Test
@@ -55,6 +59,19 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Setup Node.js for Gradle Web assets
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
       
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

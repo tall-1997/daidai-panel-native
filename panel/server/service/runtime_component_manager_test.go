@@ -28,7 +28,7 @@ func TestRuntimeComponentManagerRejectsPlaceholderHashByDefault(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.14-android-arm64",
+			ID:         "python-launcher-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "libpython_exec.so",
 			SHA256:     "PLACEHOLDER_SHA256_PYTHON",
@@ -37,7 +37,7 @@ func TestRuntimeComponentManagerRejectsPlaceholderHashByDefault(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.14-android-arm64"},
+		RuntimeIDs: []string{"python-launcher-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)
@@ -80,7 +80,7 @@ func TestRuntimeComponentManagerAllowsPlaceholderHashWithDevFlag(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.14-android-arm64",
+			ID:         "python-launcher-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "libpython_exec.so",
 			SHA256:     "PLACEHOLDER_SHA256_PYTHON",
@@ -89,7 +89,7 @@ func TestRuntimeComponentManagerAllowsPlaceholderHashWithDevFlag(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.14-android-arm64"},
+		RuntimeIDs: []string{"python-launcher-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)
@@ -184,7 +184,7 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{
-			{ID: "python-3.14-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: sha256Hex(pythonELF), RuntimeType: "language-runtime", Isolation: "android-app-sandbox"},
+			{ID: "python-launcher-3.14-android-arm64", ABI: "arm64-v8a", Entrypoint: "libpython_exec.so", SHA256: sha256Hex(pythonELF), RuntimeType: "optional-build-asset", Isolation: "android-app-sandbox"},
 			{ID: "node-lts-android-arm64", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
 			{ID: "typescript-stable", ABI: "arm64-v8a", Entrypoint: "libnode_exec.so", SHA256: sha256Hex(nodeELF)},
 		},
@@ -194,7 +194,7 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 		ABI:            "arm64-v8a",
 		ContainerModel: "layered-linux-runtime",
 		RuntimeIDs: []string{
-			"python-3.14-android-arm64",
+			"python-launcher-3.14-android-arm64",
 			"node-lts-android-arm64",
 			"typescript-stable",
 		},
@@ -237,11 +237,11 @@ func TestRuntimeComponentManagerBuildsSmokeSuitesAndPolicies(t *testing.T) {
 	if baseline.ContainerModel != "layered-linux-runtime" {
 		t.Fatalf("container model=%q want=layered-linux-runtime", baseline.ContainerModel)
 	}
-	pythonComponent := findRuntimeComponent(baseline.Components, "python-3.14-android-arm64")
+	pythonComponent := findRuntimeComponent(baseline.Components, "python-launcher-3.14-android-arm64")
 	if pythonComponent == nil || pythonComponent.RuntimeType == "" || pythonComponent.Isolation == "" {
 		t.Fatalf("component runtime metadata missing: %+v", pythonComponent)
 	}
-	pythonSuite := findRuntimeSuite(baseline.SmokeSuites, "python-3.14-android-arm64")
+	pythonSuite := findRuntimeSuite(baseline.SmokeSuites, "python-launcher-3.14-android-arm64")
 	if pythonSuite == nil {
 		t.Fatal("python runtime suite missing")
 	}
@@ -269,7 +269,7 @@ func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
 	manifest := RuntimeManifest{
 		Version: "1",
 		Components: []RuntimeManifestComponent{{
-			ID:         "python-3.14-android-arm64",
+			ID:         "python-launcher-3.14-android-arm64",
 			ABI:        "arm64-v8a",
 			Entrypoint: "../escape.so",
 			SHA256:     strings.Repeat("a", 64),
@@ -278,7 +278,7 @@ func TestRuntimeComponentManagerRejectsEscapedEntrypoint(t *testing.T) {
 	compatibility := RuntimeCompatibility{
 		Version:    "1",
 		ABI:        "arm64-v8a",
-		RuntimeIDs: []string{"python-3.14-android-arm64"},
+		RuntimeIDs: []string{"python-launcher-3.14-android-arm64"},
 	}
 	writeJSON(t, manifestPath, manifest)
 	writeJSON(t, compatibilityPath, compatibility)

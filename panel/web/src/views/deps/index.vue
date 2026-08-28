@@ -117,7 +117,7 @@
       <div v-if="androidInstallLog.length" class="android-runtime-log">
         <div class="android-runtime-log__title">
           安装日志
-          <el-button link size="small" @click="androidInstallLog = []"
+          <el-button link size="small" @click="clearAndroidLog"
             >清空</el-button
           >
         </div>
@@ -794,6 +794,7 @@ import {
   onMounted,
   onBeforeUnmount,
   onActivated,
+  onDeactivated,
   watch,
   computed,
 } from "vue";
@@ -827,14 +828,30 @@ import {
 import { usePageActivity } from "@/composables/usePageActivity";
 import { useResponsive } from "@/composables/useResponsive";
 import { ansiToHtml, normalizeAnsi } from "@/utils/ansi";
+import { TerminalLogBuffer } from "@/utils/terminalLogBuffer.mjs";
 
 // ---------- Android 面具版脚本运行时 ----------
 const androidStatus = ref<AndroidRuntimeStatus | null>(null);
 const androidInstallingName = ref<string>("");
 const androidInstallLog = ref<string[]>([]);
-const androidInstallLogHtml = computed(() =>
-  ansiToHtml(normalizeAnsi(androidInstallLog.value.join("\n"))),
-);
+const androidLogBuffer = new TerminalLogBuffer({ maxChars: 500_000, maxLines: 5_000 });
+const androidLogVersion = ref(0);
+const androidInstallLogHtml = computed(() => {
+  void androidLogVersion.value;
+  return ansiToHtml(normalizeAnsi(androidLogBuffer.text));
+});
+
+function appendAndroidLog(chunk: string) {
+  androidLogBuffer.append(`${chunk}\n`);
+  androidInstallLog.value = androidLogBuffer.text ? [androidLogBuffer.text] : [];
+  androidLogVersion.value++;
+}
+
+function clearAndroidLog() {
+  androidLogBuffer.clear();
+  androidInstallLog.value = [];
+  androidLogVersion.value++;
+}
 let androidInstallAbort: AbortController | null = null;
 
 async function loadAndroidStatus() {
@@ -868,9 +885,9 @@ async function installAndroidRuntime(name: string) {
   }
 
   androidInstallingName.value = name;
-  androidInstallLog.value = [
-    `[${new Date().toLocaleTimeString()}] 准备安装 ${name}...`,
-  ];
+  androidLogBuffer.clear();
+  androidInstallLog.value = [];
+  appendAndroidLog(`[${new Date().toLocaleTimeString()}] 准备安装 ${name}...`);
   androidInstallAbort = new AbortController();
 
   try {
@@ -880,7 +897,7 @@ async function installAndroidRuntime(name: string) {
     );
     if (!resp.ok) {
       const text = await resp.text();
-      androidInstallLog.value.push(`HTTP ${resp.status}: ${text}`);
+      appendAndroidLog(`HTTP ${resp.status}: ${text}`);
       ElMessage.error("安装失败: HTTP " + resp.status);
       return;
     }
@@ -901,14 +918,14 @@ async function installAndroidRuntime(name: string) {
         buf = buf.slice(idx + 2);
         const m = line.match(/^data:\s?(.*)$/);
         if (m && m[1] !== undefined)
-          androidInstallLog.value.push(m[1].replace(/\\n/g, "\n"));
+          appendAndroidLog(m[1].replace(/\\n/g, "\n"));
       }
     }
     ElMessage.success(`${name} 安装完成`);
     await loadAndroidStatus();
   } catch (e: any) {
     if (e?.name !== "AbortError") {
-      androidInstallLog.value.push("异常: " + (e?.message || String(e)));
+      appendAndroidLog("异常: " + (e?.message || String(e)));
       ElMessage.error(e?.message || "安装过程异常");
     }
   } finally {
@@ -951,15 +968,19 @@ const loading = ref(false);
 const showCreateDialog = ref(false);
 const showLogDialog = ref(false);
 const logContent = ref("");
-const logContentHtml = computed(() =>
-  ansiToHtml(normalizeAnsi(logContent.value || "暂无日志")),
-);
+const depsTerminalBuffer = new TerminalLogBuffer({ maxChars: 1_000_000, maxLines: 10_000 });
+const depsLogVersion = ref(0);
+const logContentHtml = computed(() => {
+  void depsLogVersion.value;
+  return ansiToHtml(normalizeAnsi(depsTerminalBuffer.text || "暂无日志"));
+});
 const logDone = ref(true);
 const currentLogRow = ref<any | null>(null);
 let eventSource: EventStreamConnection | null = null;
 const logContainerRef = ref<HTMLElement>();
 let depsLogBuffer: string[] = [];
 let depsLogFlushRaf = 0;
+let detailLoadGeneration = 0;
 const createType = ref("nodejs");
 const createNames = ref("");
 const autoSplit = ref(true);
@@ -976,7 +997,8 @@ const batchReinstallRows = computed(() =>
 const batchReinstallIds = computed(() =>
   batchReinstallRows.value.map((dep) => dep.id),
 );
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let dataLoadGeneration = 0;
 const { isMobile, dialogFullscreen } = useResponsive();
 const { isPageActive } = usePageActivity();
 
@@ -1171,30 +1193,33 @@ const linuxMirrorOptions = computed(() => {
 });
 
 async function loadData() {
+  const generation = ++dataLoadGeneration;
   loading.value = true;
   try {
     const res = await depsApi.list(
       activeTab.value,
       activeTab.value === "python" ? pythonVersion.value : undefined,
     );
+    if (generation !== dataLoadGeneration) return;
     depsList.value = res.data || [];
     selectedIds.value = selectedIds.value.filter((id) =>
       depsList.value.some((dep) => dep.id === id),
     );
     syncPendingRefresh();
   } catch {
+    if (generation !== dataLoadGeneration) return;
     if (!refreshTimer) {
       depsList.value = [];
     }
     syncPendingRefresh();
   } finally {
-    loading.value = false;
+    if (generation === dataLoadGeneration) loading.value = false;
   }
 }
 
 function stopRefreshTimer() {
   if (refreshTimer) {
-    clearInterval(refreshTimer);
+    clearTimeout(refreshTimer);
     refreshTimer = null;
   }
 }
@@ -1202,7 +1227,8 @@ function stopRefreshTimer() {
 function syncPendingRefresh() {
   if (hasPendingDeps.value && isPageActive.value) {
     if (!refreshTimer) {
-      refreshTimer = setInterval(() => {
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
         void loadData();
       }, 3000);
     }
@@ -1487,8 +1513,11 @@ async function handleCancel(row: any) {
 }
 
 function viewLog(row: any) {
+  const generation = ++detailLoadGeneration;
   currentLogRow.value = row;
   logContent.value = "";
+  depsTerminalBuffer.clear();
+  depsLogVersion.value++;
   logDone.value = !(row.status === "installing" || row.status === "removing");
   showLogDialog.value = true;
 
@@ -1498,10 +1527,16 @@ function viewLog(row: any) {
     depsApi
       .getStatus(row.id)
       .then((res) => {
-        logContent.value = res.data?.log || "暂无日志";
+        if (generation !== detailLoadGeneration) return;
+        depsTerminalBuffer.set(res.data?.log || "暂无日志");
+        logContent.value = depsTerminalBuffer.text;
+        depsLogVersion.value++;
       })
       .catch(() => {
-        logContent.value = "获取日志失败";
+        if (generation !== detailLoadGeneration) return;
+        depsTerminalBuffer.set("获取日志失败");
+        logContent.value = depsTerminalBuffer.text;
+        depsLogVersion.value++;
       });
     return;
   }
@@ -1509,10 +1544,13 @@ function viewLog(row: any) {
   const url = `/api/v1/deps/${row.id}/log-stream`;
   eventSource = openAuthorizedEventStream(url, {
     onMessage(data) {
+      if (generation !== detailLoadGeneration) return;
       depsLogBuffer.push(data);
       if (!depsLogFlushRaf) {
         depsLogFlushRaf = requestAnimationFrame(() => {
-          logContent.value += depsLogBuffer.join("\n") + "\n";
+          for (const chunk of depsLogBuffer) depsTerminalBuffer.append(`${chunk}\n`);
+          logContent.value = depsTerminalBuffer.text;
+          depsLogVersion.value++;
           depsLogBuffer = [];
           depsLogFlushRaf = 0;
           if (logContainerRef.value) {
@@ -1523,6 +1561,7 @@ function viewLog(row: any) {
       }
     },
     onEvent(event) {
+      if (generation !== detailLoadGeneration) return;
       if (event.event === "done") {
         logDone.value = true;
         closeSSE();
@@ -1530,6 +1569,7 @@ function viewLog(row: any) {
       }
     },
     onError() {
+      if (generation !== detailLoadGeneration) return;
       logDone.value = true;
       closeSSE();
       loadData();
@@ -1538,6 +1578,11 @@ function viewLog(row: any) {
 }
 
 function closeSSE() {
+  if (depsLogFlushRaf) {
+    cancelAnimationFrame(depsLogFlushRaf);
+    depsLogFlushRaf = 0;
+  }
+  depsLogBuffer = [];
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -1546,6 +1591,7 @@ function closeSSE() {
 
 watch(showLogDialog, (val) => {
   if (!val) {
+    detailLoadGeneration++;
     closeSSE();
     currentLogRow.value = null;
   }
@@ -1635,7 +1681,16 @@ onActivated(() => {
   mounted = false;
 });
 
+onDeactivated(() => {
+  dataLoadGeneration += 1;
+  detailLoadGeneration += 1;
+  closeSSE();
+  stopRefreshTimer();
+  loading.value = false;
+});
+
 onBeforeUnmount(() => {
+  dataLoadGeneration += 1;
   closeSSE();
   stopRefreshTimer();
   if (depsLogFlushRaf) {

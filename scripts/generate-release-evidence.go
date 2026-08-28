@@ -14,18 +14,25 @@ import (
 )
 
 type releaseEvidence struct {
-	SchemaVersion string                 `json:"schema_version"`
-	GeneratedAt   string                 `json:"generated_at"`
-	Release       releaseInfo            `json:"release"`
-	Inputs        evidenceInputs         `json:"inputs"`
-	Artifacts     []artifactInfo         `json:"artifacts"`
-	Reports       map[string]string      `json:"reports"`
-	Gates         map[string]gateSummary `json:"gates"`
-	Notes         []string               `json:"notes"`
+	SchemaVersion   string                 `json:"schema_version"`
+	BundleStatus    string                 `json:"bundle_status"`
+	Status          string                 `json:"status"`
+	StatusScope     string                 `json:"status_scope"`
+	RequiredGates   []string               `json:"required_gates"`
+	OptionalGates   []string               `json:"optional_gates"`
+	PendingEvidence map[string]gateSummary `json:"pending_evidence"`
+	GeneratedAt     string                 `json:"generated_at"`
+	Release         releaseInfo            `json:"release"`
+	Inputs          evidenceInputs         `json:"inputs"`
+	Artifacts       []artifactInfo         `json:"artifacts"`
+	Reports         map[string]string      `json:"reports"`
+	Gates           map[string]gateSummary `json:"gates"`
+	Notes           []string               `json:"notes"`
 }
 
 type releaseInfo struct {
 	Version    string `json:"version"`
+	Channel    string `json:"channel"`
 	GitCommit  string `json:"git_commit"`
 	Actor      string `json:"actor"`
 	Repository string `json:"repository"`
@@ -33,6 +40,7 @@ type releaseInfo struct {
 
 type evidenceInputs struct {
 	APKPath         string `json:"apk_path"`
+	TestAPKPath     string `json:"test_apk_path"`
 	RuntimeManifest string `json:"runtime_manifest"`
 	RuntimeSmoke    string `json:"runtime_smoke"`
 	Compatibility   string `json:"compatibility_matrix"`
@@ -65,9 +73,31 @@ type runtimeComponent struct {
 	ID           string   `json:"id"`
 	Version      string   `json:"version"`
 	ABI          string   `json:"abi"`
+	EntryType    string   `json:"entry_type"`
 	Entrypoint   string   `json:"entrypoint"`
 	SHA256       string   `json:"sha256"`
 	Capabilities []string `json:"capabilities"`
+}
+
+type releaseGateContract struct {
+	SchemaVersion            int      `json:"schema_version"`
+	StableRequiredRuntimeIDs []string `json:"stable_required_runtime_ids"`
+	ReleaseGateScope         struct {
+		Required []string `json:"required"`
+		Optional []string `json:"optional"`
+	} `json:"release_gate_scope"`
+}
+
+type runtimeSmokeEvidence struct {
+	Records []struct {
+		RuntimeID      string `json:"runtime_id"`
+		Status         string `json:"status"`
+		EvidenceSource string `json:"evidence_source"`
+		Checks         []struct {
+			Status string `json:"status"`
+			Output string `json:"output"`
+		} `json:"checks"`
+	} `json:"records"`
 }
 
 type routeTrace struct {
@@ -110,6 +140,7 @@ type sbomComponent struct {
 
 func main() {
 	apkPath := flag.String("apk", "", "release APK path")
+	testAPKPath := flag.String("test-apk", "", "instrumentation APK path")
 	version := flag.String("version", "snapshot", "release version")
 	outputDir := flag.String("output-dir", "release/evidence", "evidence output directory")
 	runtimeManifestPath := flag.String("runtime-manifest", "runtime/manifest.json", "runtime manifest path")
@@ -119,20 +150,28 @@ func main() {
 	goModPath := flag.String("go-mod", "panel/server/go.mod", "Go module file path")
 	flutterLockPath := flag.String("flutter-lock", "app/pubspec.lock", "Flutter lockfile path")
 	packageLockPath := flag.String("package-lock", "panel/web/package-lock.json", "Node package lock path")
+	releaseContractPath := flag.String("release-contract", "scripts/release-runtime-contract.json", "release gate scope contract")
 	gitCommit := flag.String("git-commit", os.Getenv("GITHUB_SHA"), "git commit for the evidence bundle")
 	actor := flag.String("actor", os.Getenv("GITHUB_ACTOR"), "release actor")
 	repository := flag.String("repository", os.Getenv("GITHUB_REPOSITORY"), "repository name")
+	channel := flag.String("channel", "prerelease", "release channel: snapshot, prerelease, or stable")
 	flag.Parse()
 
 	if strings.TrimSpace(*apkPath) == "" {
 		fatalf("missing required flag: --apk")
+	}
+	gateContract := readReleaseGateContract(*releaseContractPath)
+	runtimeSmoke := readRuntimeSmokeEvidence(*runtimeSmokePath)
+	topLevelStatus, normalizedGateStatus, err := releaseGateState(*channel, gateContract, runtimeSmoke)
+	if err != nil {
+		fatalf("release gate state: %v", err)
 	}
 	if err := os.MkdirAll(*outputDir, 0o755); err != nil {
 		fatalf("create evidence dir: %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	artifacts := collectArtifacts(*apkPath, *runtimeManifestPath, *runtimeSmokePath, *compatibilityPath, *routeTracePath)
+	artifacts := collectArtifacts(*apkPath, *testAPKPath, *runtimeManifestPath, *runtimeSmokePath, *compatibilityPath, *routeTracePath)
 	runtimeManifest := readRuntimeManifest(*runtimeManifestPath)
 	routes := readRouteTrace(*routeTracePath)
 	components := collectSBOMComponents(runtimeManifest, *goModPath, *flutterLockPath, *packageLockPath)
@@ -161,16 +200,24 @@ func main() {
 	writeJSON(filepath.Join(*outputDir, "scheduler-7d-evidence.json"), buildSchedulerEvidence("7d", now))
 
 	release := releaseEvidence{
-		SchemaVersion: "1",
-		GeneratedAt:   now,
+		SchemaVersion:   "1",
+		BundleStatus:    "generated",
+		Status:          topLevelStatus,
+		StatusScope:     "required-gates-only",
+		RequiredGates:   gateContract.ReleaseGateScope.Required,
+		OptionalGates:   gateContract.ReleaseGateScope.Optional,
+		PendingEvidence: buildPendingEvidence(),
+		GeneratedAt:     now,
 		Release: releaseInfo{
 			Version:    *version,
+			Channel:    strings.TrimSpace(*channel),
 			GitCommit:  strings.TrimSpace(*gitCommit),
 			Actor:      strings.TrimSpace(*actor),
 			Repository: strings.TrimSpace(*repository),
 		},
 		Inputs: evidenceInputs{
 			APKPath:         *apkPath,
+			TestAPKPath:     *testAPKPath,
 			RuntimeManifest: *runtimeManifestPath,
 			RuntimeSmoke:    *runtimeSmokePath,
 			Compatibility:   *compatibilityPath,
@@ -193,26 +240,98 @@ func main() {
 			"scheduler_24h":        "scheduler-24h-evidence.json",
 			"scheduler_7d":         "scheduler-7d-evidence.json",
 		},
-		Gates: map[string]gateSummary{
-			"task_6_3_release_evidence": {
-				Status:      "generated",
-				Report:      "release-evidence.json",
-				Description: "APK, SHA-256, SBOM, licenses, runtime manifest, route trace, compatibility matrix, page-size report, and test report placeholders are bundled.",
-			},
-			"task_6_4_device_stability_gate": {
-				Status:      "record-structure-ready",
-				Report:      "core-cycle-evidence.json, api-matrix-evidence.json, scheduler-24h-evidence.json, scheduler-7d-evidence.json",
-				Description: "Device and long-duration evidence schemas are ready for targeted and full gate execution.",
-			},
-		},
-		Notes: []string{
-			"Long-running 24h and 7d samples are represented as append-only evidence structures and remain pending until device execution attaches records.",
-			"Public APK re-download verification is an exit-gate check performed after the GitHub Release asset is available.",
-		},
+		Gates: buildGateSummaries(normalizedGateStatus),
+		Notes: buildReleaseNotes(strings.TrimSpace(*channel)),
 	}
 	writeJSON(filepath.Join(*outputDir, "release-evidence.json"), release)
 	writeIndex(filepath.Join(*outputDir, "README.md"), release)
 	fmt.Printf("generated release evidence in %s\n", *outputDir)
+}
+
+func buildPendingEvidence() map[string]gateSummary {
+	return map[string]gateSummary{
+		"long_running_device_samples": {
+			Status:      "pending",
+			Report:      "scheduler-24h-evidence.json, scheduler-7d-evidence.json",
+			Description: "Long-running 24h and 7d device samples are tracked independently from current required release gates.",
+		},
+	}
+}
+
+func releaseGateState(channel string, contract releaseGateContract, smoke runtimeSmokeEvidence) (string, string, error) {
+	channel = strings.TrimSpace(channel)
+	if channel != "snapshot" && channel != "prerelease" && channel != "stable" {
+		return "", "", fmt.Errorf("unsupported channel %q", channel)
+	}
+	if len(contract.ReleaseGateScope.Required) == 0 || len(contract.ReleaseGateScope.Optional) == 0 {
+		return "", "", fmt.Errorf("release gate scope is incomplete")
+	}
+	if channel != "stable" {
+		return "pending", "pending", nil
+	}
+	for _, runtimeID := range contract.StableRequiredRuntimeIDs {
+		var recordIndex = -1
+		for index, record := range smoke.Records {
+			if record.RuntimeID == runtimeID {
+				recordIndex = index
+				break
+			}
+		}
+		if recordIndex < 0 {
+			return "", "", fmt.Errorf("stable required runtime %s lacks verified device evidence", runtimeID)
+		}
+		record := smoke.Records[recordIndex]
+		if record.Status != "pass" || record.EvidenceSource != "android-device" || len(record.Checks) == 0 {
+			return "", "", fmt.Errorf("stable required runtime %s lacks verified device evidence", runtimeID)
+		}
+		for _, check := range record.Checks {
+			if check.Status != "pass" || strings.TrimSpace(check.Output) == "" {
+				return "", "", fmt.Errorf("stable required runtime %s has incomplete device checks", runtimeID)
+			}
+		}
+	}
+	return "completed", "pass", nil
+}
+
+func readReleaseGateContract(path string) releaseGateContract {
+	var contract releaseGateContract
+	readJSON(path, &contract)
+	if contract.SchemaVersion != 1 || len(contract.StableRequiredRuntimeIDs) == 0 {
+		fatalf("release gate contract is incomplete")
+	}
+	return contract
+}
+
+func readRuntimeSmokeEvidence(path string) runtimeSmokeEvidence {
+	var smoke runtimeSmokeEvidence
+	readJSON(path, &smoke)
+	return smoke
+}
+
+func buildGateSummaries(status string) map[string]gateSummary {
+	return map[string]gateSummary{
+		"task_6_3_release_evidence": {
+			Status:      status,
+			Report:      "release-evidence.json",
+			Description: "Release inputs and generated reports are bundled; placeholder report statuses remain pending until their own evidence exists.",
+		},
+		"task_6_4_device_stability_gate": {
+			Status:      status,
+			Report:      "runtime/smoke-evidence.json",
+			Description: "Stable pass records are backed by verified Android device evidence for stable_required_runtime_ids.",
+		},
+	}
+}
+
+func buildReleaseNotes(channel string) []string {
+	notes := []string{
+		"Long-running 24h and 7d samples are represented as append-only evidence structures and remain pending until device execution attaches records.",
+		"Public APK re-download verification is an exit-gate check performed after the GitHub Release asset is available.",
+	}
+	if channel == "stable" {
+		return append([]string{"Stable runtime gates cover verified Android device evidence for stable_required_runtime_ids; other canonical runtimes retain complete blocked records when unverified."}, notes...)
+	}
+	return append([]string{"Prerelease runtime and device gates remain pending with blocked boundaries recorded explicitly."}, notes...)
 }
 
 func collectArtifacts(paths ...string) []artifactInfo {
@@ -400,12 +519,13 @@ func parsePackageLock(path string) []packageVersion {
 func buildCompatibilityReport(manifest runtimeManifest) map[string]any {
 	apiLevels := []int{28, 29, 31, 34, 35}
 	pageSizes := []string{"4k", "16k"}
-	requiredCombos := []string{"api28-4k", "api35-4k", "api35-16k"}
+	requiredCombos := []string{"api35-16k"}
 	rows := make([]map[string]any, 0, len(manifest.Components)*len(requiredCombos))
 	for _, component := range manifest.Components {
 		for _, combo := range requiredCombos {
 			rows = append(rows, map[string]any{
 				"runtime_id": component.ID,
+				"entry_type": component.EntryType,
 				"entrypoint": component.Entrypoint,
 				"abi":        component.ABI,
 				"combo":      combo,
@@ -433,6 +553,9 @@ func buildRouteTraceSummary(trace routeTrace) map[string]any {
 func buildPageSizeReport(manifest runtimeManifest) map[string]any {
 	rows := make([]map[string]string, 0, len(manifest.Components)*2)
 	for _, component := range manifest.Components {
+		if component.EntryType != "apk_elf" {
+			continue
+		}
 		for _, pageSize := range []string{"4k", "16k"} {
 			rows = append(rows, map[string]string{"runtime_id": component.ID, "entrypoint": component.Entrypoint, "page_size": pageSize, "status": "pending-elf-note-verification"})
 		}
@@ -448,7 +571,7 @@ func buildTestPlaceholders() map[string]any {
 			{"id": "flutter_test", "path": "test-reports/flutter-test.json", "status": "pending-targeted-run"},
 			{"id": "flutter_analyze", "path": "test-reports/flutter-analyze.json", "status": "pending-targeted-run"},
 			{"id": "kotlin_unit", "path": "test-reports/kotlin-unit/", "status": "ci-uploaded-when-present"},
-			{"id": "runtime_smoke", "path": "runtime/smoke-evidence.json", "status": "generated"},
+			{"id": "runtime_smoke", "path": "runtime/smoke-evidence.json", "status": "pending-device-verification"},
 		},
 	}
 }

@@ -128,6 +128,18 @@ class LocalTaskFallbackSemanticsTest {
     }
 
     @Test
+    fun `task log status keeps aborted terminal and running distinct`() {
+        assertEquals(0, LocalPanelStore.taskLogStatusCode("success"))
+        assertEquals(1, LocalPanelStore.taskLogStatusCode("failed"))
+        assertEquals(2, LocalPanelStore.taskLogStatusCode("running"))
+        assertEquals(3, LocalPanelStore.taskLogStatusCode("aborted"))
+        assertEquals(3, LocalPanelStore.taskLogStatusCode("stopped"))
+        assertEquals("aborted", LocalPanelStore.taskLogRunStatus(3))
+        assertTrue(LocalPanelStore.taskLogDone(3))
+        assertFalse(LocalPanelStore.taskLogDone(2))
+    }
+
+    @Test
     fun `task tokenizer and parser preserve unicode paths and arguments`() {
         data class Case(val command: String, val path: String, val args: List<String>, val mode: String, val timeout: Long = 300)
         val cases = listOf(

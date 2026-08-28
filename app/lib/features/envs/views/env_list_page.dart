@@ -72,18 +72,45 @@ class EnvListState {
 }
 
 class EnvListNotifier extends StateNotifier<EnvListState> {
-  EnvListNotifier() : super(const EnvListState());
+  EnvListNotifier({EnvListState initialState = const EnvListState()})
+    : _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeScope);
+  }
   int _loadRequestId = 0;
-  String? _scope;
+  String _scope;
+  CancelToken? _loadCancelToken;
+
+  void _synchronizeScope() {
+    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    if (_scope == scope) return;
+    _scope = scope;
+    _loadRequestId++;
+    _loadCancelToken?.cancel('session scope changed');
+    _loadCancelToken = null;
+    state = const EnvListState();
+  }
+
+  bool _isCurrent(int requestId, String scope) =>
+      requestId == _loadRequestId && scope == _scope;
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeScope);
+    _loadRequestId++;
+    _loadCancelToken?.cancel('notifier disposed');
+    super.dispose();
+  }
 
   Future<void> load() async {
-    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
-    if (_scope != scope) {
-      _scope = scope;
-      _loadRequestId++;
-      state = const EnvListState();
-    }
+    _synchronizeScope();
+    final scope = _scope;
     final requestId = ++_loadRequestId;
+    _loadCancelToken?.cancel('superseded env load');
+    final cancelToken = CancelToken();
+    _loadCancelToken = cancelToken;
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
@@ -97,22 +124,37 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
       if (state.keyword.isNotEmpty) {
         params['keyword'] = state.keyword;
       }
+      if (!_isCurrent(requestId, scope)) return;
 
       final firstPageFuture = dio.get(
         ApiEndpoints.envs,
         queryParameters: params,
+        cancelToken: cancelToken,
       );
-      final groupsFuture = dio.get(ApiEndpoints.envsGroups);
+      final groupsFuture = dio.get(
+        ApiEndpoints.envsGroups,
+        cancelToken: cancelToken,
+      );
       final results = await Future.wait([firstPageFuture, groupsFuture]);
+      if (!_isCurrent(requestId, scope)) return;
 
       final paginated = extractPaginated(results[0].data);
       final allItems = <Map<String, dynamic>>[...paginated.items];
       var page = 2;
       while (allItems.length < paginated.total) {
+        if (!_isCurrent(requestId, scope)) {
+          cancelToken.cancel('stale env pagination');
+          return;
+        }
         final nextResponse = await dio.get(
           ApiEndpoints.envs,
           queryParameters: {...params, 'page': page},
+          cancelToken: cancelToken,
         );
+        if (!_isCurrent(requestId, scope)) {
+          cancelToken.cancel('stale env pagination response');
+          return;
+        }
         final nextPage = extractPaginated(nextResponse.data);
         if (nextPage.items.isEmpty) {
           break;
@@ -132,10 +174,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
         groupsList = [];
       }
       final groups = groupsList.map((e) => e.toString()).toList();
-      if (requestId != _loadRequestId ||
-          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
-        return;
-      }
+      if (!_isCurrent(requestId, scope)) return;
       state = state.copyWith(
         envs: items,
         total: paginated.total > items.length ? paginated.total : items.length,
@@ -143,14 +182,13 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
         groups: groups,
       );
     } catch (error) {
-      if (requestId != _loadRequestId ||
-          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
-        return;
-      }
+      if (!_isCurrent(requestId, scope)) return;
       state = state.copyWith(
         loading: false,
         error: extractErrorMessage(error, '加载环境变量失败'),
       );
+    } finally {
+      if (identical(_loadCancelToken, cancelToken)) _loadCancelToken = null;
     }
   }
 

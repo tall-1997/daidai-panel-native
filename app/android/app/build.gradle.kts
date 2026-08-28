@@ -48,6 +48,7 @@ android {
     namespace = "com.daidai.daidai_app"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
+    testBuildType = "release"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -98,12 +99,14 @@ android {
             }
             isMinifyEnabled = false
             isShrinkResources = false
+            isDebuggable = false
         }
     }
 
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            excludes += setOf("**/libpython_exec.so")
             keepDebugSymbols += setOf(
                 "**/libproot_loader.so",
             )
@@ -143,6 +146,12 @@ android {
 
 val panelWebDir = rootProject.file("../../panel/web")
 val generatedLocalWebDir = layout.buildDirectory.dir("generated/localWebAssets/local-web")
+val nodeVersion = providers.exec { commandLine("node", "--version") }.standardOutput.asText.map(String::trim)
+val npmVersion = providers.exec { commandLine("npm", "--version") }.standardOutput.asText.map(String::trim)
+val localWebBuildMode = "true"
+val panelWebBuildInputs = fileTree(panelWebDir) {
+    exclude("node_modules/**", "dist/**", ".git/**")
+}
 
 val installLocalPanelWebDependencies = tasks.register<Exec>("installLocalPanelWebDependencies") {
     group = "build setup"
@@ -150,7 +159,13 @@ val installLocalPanelWebDependencies = tasks.register<Exec>("installLocalPanelWe
     workingDir(panelWebDir)
     commandLine("npm", "ci", "--no-audit", "--no-fund")
     inputs.files(panelWebDir.resolve("package.json"), panelWebDir.resolve("package-lock.json"))
+    inputs.property("nodeVersion", nodeVersion)
+    inputs.property("npmVersion", npmVersion)
     outputs.dir(panelWebDir.resolve("node_modules"))
+    doFirst {
+        check(nodeVersion.get().matches(Regex("v20\\.19\\.\\d+"))) { "Android Panel Web build requires Node 20.19.x." }
+        check(npmVersion.get() == "10.8.2") { "Android Panel Web build requires npm 10.8.2." }
+    }
 }
 
 val buildLocalPanelWeb = tasks.register<Exec>("buildLocalPanelWeb") {
@@ -159,8 +174,11 @@ val buildLocalPanelWeb = tasks.register<Exec>("buildLocalPanelWeb") {
     description = "Builds the loopback-only Panel Web bundle."
     workingDir(panelWebDir)
     commandLine("npm", "run", "build")
-    environment("VITE_LOCAL_WEB_BUILD", "true")
-    inputs.files(fileTree(panelWebDir.resolve("src")), panelWebDir.resolve("package.json"), panelWebDir.resolve("package-lock.json"), panelWebDir.resolve("vite.config.ts"))
+    environment("VITE_LOCAL_WEB_BUILD", localWebBuildMode)
+    inputs.files(panelWebBuildInputs)
+    inputs.property("nodeVersion", nodeVersion)
+    inputs.property("npmVersion", npmVersion)
+    inputs.property("VITE_LOCAL_WEB_BUILD", localWebBuildMode)
     outputs.dir(panelWebDir.resolve("dist"))
 }
 
@@ -220,7 +238,7 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
             "ubuntu" to listOf("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
         )
         val distroPackages = mapOf(
-            "ubuntu" to setOf("bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"),
+            "ubuntu" to setOf("bash", "python3", "python3-pip", "nodejs", "npm", "ca-certificates"),
         )
         val distroCapabilities = mapOf(
             "ubuntu" to mapOf(
@@ -230,6 +248,9 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                 "node" to listOf("node", "npm", "pnpm"),
             ),
         )
+        @Suppress("UNCHECKED_CAST")
+        val trustedRootfsSources = JsonSlurper().parse(rootProject.file("../scripts/rootfs-trusted-sources.json")) as Map<String, Any>
+        check((trustedRootfsSources["schema_version"] as? Number)?.toInt() == 1) { "Trusted rootfs source schema must be version 1." }
         requestedAbis.forEach { abi ->
             val nativeDir = file("src/main/jniLibs/$abi")
             val proot = listOf("libdaidai_proot.so").map { file("$nativeDir/$it") }.firstOrNull { it.isFile }
@@ -264,7 +285,31 @@ val verifyLinuxRootfsRuntime = tasks.register("verifyLinuxRootfsRuntime") {
                 check(rootfsManifest["abi"] == abi && rootfsManifest["distribution"] == distribution && rootfsManifest["sha256"] == actualRootfsSha) { "$distribution rootfs manifest identity or checksum mismatch for $abi." }
                 check((rootfsManifest["size"] as? Number)?.toLong() == rootfs.length()) { "$distribution rootfs manifest size mismatch for $abi." }
                 check((rootfsManifest["required_commands"] as? List<*>) == distroCommands[distribution]) { "$distribution rootfs required_commands mismatch for $abi." }
-                check(distroPackages[distribution]!!.all { it in (rootfsManifest["packages"] as? List<*>).orEmpty() }) { "$distribution rootfs required package list is incomplete for $abi." }
+                val aptPackages = (rootfsManifest["apt_packages"] as? List<*>)?.filterIsInstance<String>()
+                    ?: error("$distribution rootfs apt_packages are missing for $abi.")
+                check(distroPackages[distribution]!!.all { it in aptPackages }) { "$distribution rootfs required apt package list is incomplete for $abi." }
+                @Suppress("UNCHECKED_CAST")
+                val globalTools = rootfsManifest["global_tools"] as? Map<String, Any>
+                    ?: error("$distribution rootfs global_tools are missing for $abi.")
+                @Suppress("UNCHECKED_CAST")
+                val pnpm = globalTools["pnpm"] as? Map<String, Any>
+                    ?: error("$distribution rootfs pnpm metadata is missing for $abi.")
+                check(pnpm["install_source"] == "npm-global") { "$distribution rootfs pnpm install source mismatch for $abi." }
+                check((pnpm["version"] as? String)?.matches(Regex("[0-9]+(?:\\.[0-9]+){2}")) == true) {
+                    "$distribution rootfs pnpm version is invalid for $abi."
+                }
+                check("pnpm" in (rootfsManifest["required_commands"] as? List<*>).orEmpty()) {
+                    "$distribution rootfs pnpm command contract is missing for $abi."
+                }
+                @Suppress("UNCHECKED_CAST")
+                val baseArchive = rootfsManifest["base_archive"] as? Map<String, Any> ?: error("$distribution base archive provenance is missing for $abi.")
+                @Suppress("UNCHECKED_CAST")
+                val distributionSources = trustedRootfsSources[distribution] as? Map<String, Any> ?: error("Trusted source distribution is missing: $distribution.")
+                @Suppress("UNCHECKED_CAST")
+                val versionSources = distributionSources[rootfsManifest["ubuntu_version"]] as? Map<String, Any> ?: error("Trusted source version is missing for $distribution.")
+                @Suppress("UNCHECKED_CAST")
+                val trustedBaseArchive = versionSources[rootfsManifest["ubuntu_arch"]] as? Map<String, Any> ?: error("Trusted source architecture is missing for $distribution.")
+                check(baseArchive == trustedBaseArchive) { "$distribution base archive provenance mismatch for $abi." }
                 @Suppress("UNCHECKED_CAST")
                 val capabilities = rootfsManifest["capabilities"] as? Map<String, Any> ?: error("$distribution rootfs capabilities are missing for $abi.")
                 distroCapabilities[distribution]!!.forEach { (name, commands) -> check(capabilities[name] == commands) { "$distribution rootfs capability $name mismatch for $abi." } }
@@ -379,7 +424,6 @@ tasks.named("preBuild").configure {
     dependsOn(verifyRuntimeMetadata)
     dependsOn(verifyLinuxRootfsRuntime)
     dependsOn(verifyLocalPanelWeb)
-
 }
 
 dependencies {

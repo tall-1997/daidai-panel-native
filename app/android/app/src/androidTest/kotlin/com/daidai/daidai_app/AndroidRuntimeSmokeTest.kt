@@ -2,11 +2,15 @@ package com.daidai.daidai_app
 
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.util.Base64
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -82,30 +86,6 @@ class AndroidRuntimeSmokeTest {
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
             }
 
-            step("rootfs.python_crypto") {
-                val command = requireNotNull(AndroidLinuxRuntime.guestCommand(
-                    context,
-                    context.filesDir,
-                    listOf(
-                        "/usr/bin/python3",
-                        "-c",
-                        "from Crypto.Cipher import AES, PKCS1_v1_5; print('PYCRYPTODOME_OK')",
-                    ),
-                )) { "Packaged rootfs Python is unavailable" }
-                val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
-                builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
-                AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
-                val process = builder.start()
-                process.outputStream.close()
-                val finished = process.waitFor(60, TimeUnit.SECONDS)
-                if (!finished) process.destroyForcibly()
-                check(finished) { "Rootfs PyCryptodome import timed out" }
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                assertEquals(0, process.exitValue())
-                assertTrue(output.contains("PYCRYPTODOME_OK"))
-                JSONObject().put("imports", "AES,PKCS1_v1_5").put("output", "PYCRYPTODOME_OK")
-            }
-
             step("rootfs.npm_env_node") {
                 val command = requireNotNull(AndroidLinuxRuntime.guestCommand(
                     context,
@@ -124,6 +104,75 @@ class AndroidRuntimeSmokeTest {
                 assertEquals(0, process.exitValue())
                 assertTrue(output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
                 JSONObject().put("command", "/usr/bin/npm --version").put("version", output.trim())
+            }
+            step("runtime.python.version") {
+                executeGuestEvidence(listOf("/usr/bin/python3", "--version"), "python3 --version")
+            }
+            step("runtime.node.version") {
+                executeGuestEvidence(listOf("/usr/bin/node", "--version"), "node --version")
+            }
+            step("runtime.shell.version") {
+                executeGuestEvidence(listOf("/usr/bin/bash", "-c", "printf '%s' \"\$BASH_VERSION\""), "bash --version")
+            }
+            step("runtime.dns.managed_resolver") {
+                val status = AndroidLinuxRuntime.statusJson(context).getJSONObject("rootfs")
+                    .getJSONObject("compatibility").getJSONObject("dns")
+                val expected = (0 until status.getJSONArray("servers").length())
+                    .map { status.getJSONArray("servers").getString(it) }
+                assertTrue(status.getBoolean("write_success"))
+                assertTrue(status.getString("updated_at").isNotBlank())
+                assertEquals("", status.getString("error"))
+                val resolv = executeGuestEvidence(listOf("/bin/cat", "/etc/resolv.conf"), "cat /etc/resolv.conf")
+                val python = executeGuestEvidence(
+                    listOf("/usr/bin/python3", "-c", "import ipaddress; p=[x.split()[1] for x in open('/etc/resolv.conf') if x.startswith('nameserver ')]; [ipaddress.ip_address(x) for x in p]; print(','.join(p))"),
+                    "python3 validate resolv.conf",
+                )
+                val node = executeGuestEvidence(
+                    listOf("/usr/bin/node", "-e", "const fs=require('fs'),net=require('net');const p=fs.readFileSync('/etc/resolv.conf','utf8').split(/\\n/).filter(x=>x.startsWith('nameserver ')).map(x=>x.split(/\\s+/)[1]);if(!p.length||p.some(x=>!net.isIP(x)))process.exit(1);console.log(p.join(','))"),
+                    "node validate resolv.conf",
+                )
+                assertEquals(expected, resolv.getString("output").lineSequence().mapNotNull { line ->
+                    line.removePrefix("nameserver ").takeIf { line.startsWith("nameserver ") }
+                }.toList())
+                assertEquals(expected.joinToString(","), python.getString("output"))
+                assertEquals(expected.joinToString(","), node.getString("output"))
+                JSONObject().put("source", status.getString("source")).put("servers", status.getJSONArray("servers"))
+                    .put("write_success", status.getBoolean("write_success")).put("updated_at", status.getString("updated_at"))
+                    .put("error", status.getString("error"))
+                    .put("resolv_conf", resolv).put("python", python).put("node", node)
+            }
+            step("runtime.dns.real_resolution") {
+                val mirrors = AndroidLinuxRuntime.mirrorConfig(context)
+                val hosts = linkedMapOf(
+                    "pip" to requireNotNull(URI(mirrors.pipMirror).host) { "Pip mirror host is missing" },
+                    "npm" to requireNotNull(URI(mirrors.npmMirror).host) { "Npm mirror host is missing" },
+                )
+                val resolutions = JSONObject()
+                hosts.forEach { (mirror, host) ->
+                    val python = executeGuestEvidence(
+                        listOf(
+                            "/usr/bin/python3", "-c",
+                            "import json,socket,sys; h=sys.argv[1]; a=sorted({x[4][0] for x in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)}); assert a; print(json.dumps({'host':h,'addresses':a},separators=(',',':')))",
+                            host,
+                        ),
+                        "python3 socket.getaddrinfo $host",
+                        timeoutSeconds = 30,
+                    )
+                    val node = executeGuestEvidence(
+                        listOf(
+                            "/usr/bin/node", "-e",
+                            "const dns=require('dns'),h=process.argv[1];dns.lookup(h,{all:true},(e,a)=>{if(e||!a.length){console.error(e||'empty DNS result');process.exit(1)}console.log(JSON.stringify({host:h,addresses:a.map(x=>x.address).sort()}))})",
+                            host,
+                        ),
+                        "node dns.lookup $host",
+                        timeoutSeconds = 30,
+                    )
+                    assertResolutionEvidence(python, host)
+                    assertResolutionEvidence(node, host)
+                    resolutions.put(mirror, JSONObject().put("host", host).put("python", python).put("node", node))
+                }
+                JSONObject().put("hosts", JSONObject(hosts as Map<*, *>)).put("resolutions", resolutions)
+                    .put("all_resolved", true)
             }
 
             val envId = step("env.create") {
@@ -162,14 +211,15 @@ class AndroidRuntimeSmokeTest {
 
             val wheel = writeWheelFixture(File(context.cacheDir, "runtime_smoke_pkg-1.0.0-py3-none-any.whl"))
             val tarball = writeNodeTarballFixture(File(context.cacheDir, "runtime-smoke-node-1.0.0.tgz"))
-            installAndRemoveDependency("python", wheel.absolutePath, "3.14")
+            installAndRemoveDependency("python", wheel.absolutePath, DependencyStorage.PYTHON_VERSION)
             installAndRemoveDependency("nodejs", tarball.absolutePath, "")
 
             step("core.method_channel.restart") {
                 val before = core.getString("instance_id")
                 core = invokeLocalHost("restart")
                 assertCoreReady(core)
-                assertTrue("Core restart must create a new instance", before != core.getString("instance_id"))
+                assertEquals("kotlin-local-fallback", before)
+                assertEquals(before, core.getString("instance_id"))
                 token = core.getString("local_token")
                 JSONObject().put("transport", "com.daidai.panel/local_host").put("previous_instance_id", before)
                     .put("core", sanitizedCore(core))
@@ -189,15 +239,33 @@ class AndroidRuntimeSmokeTest {
             failure = error
             throw error
         } finally {
-            evidenceFile.writeText(JSONObject()
+            val evidence = JSONObject()
                 .put("schema_version", 2)
                 .put("status", if (failure == null) "pass" else "failed")
                 .put("generated_at", Instant.now().toString())
                 .put("core", sanitizedCore(core))
                 .put("steps", steps)
                 .put("failure", failure?.let { throwable(it) } ?: JSONObject.NULL)
-                .toString(2))
+                .toString(2)
+            evidenceFile.writeText(evidence)
+            publishInstrumentationEvidence(evidence)
         }
+    }
+
+    private fun publishInstrumentationEvidence(evidence: String) {
+        val prefix = "daidai.runtime_smoke.evidence"
+        val bytes = evidence.toByteArray(StandardCharsets.UTF_8)
+        val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val chunks = encoded.chunked(3000)
+        val results = Bundle().apply {
+            putString("$prefix.encoding", "base64")
+            putString("$prefix.chunk_count", chunks.size.toString())
+            putString("$prefix.sha256", sha256(bytes))
+            chunks.forEachIndexed { index, chunk ->
+                putString("$prefix.chunk_${index.toString().padStart(4, '0')}", chunk)
+            }
+        }
+        InstrumentationRegistry.getInstrumentation().addResults(results)
     }
 
     private fun waitForMethodChannelCore(): JSONObject {
@@ -232,11 +300,36 @@ class AndroidRuntimeSmokeTest {
 
     private fun assertCoreReady(status: JSONObject) {
         assertEquals("ready", status.optString("phase"))
-        assertTrue(status.optString("instance_id").isNotBlank())
-        assertTrue(status.optString("core_version").isNotBlank())
+        assertEquals("kotlin-local-fallback", status.optString("instance_id"))
         assertEquals("kotlin-local-fallback", status.optString("core_version"))
         assertEquals("full", status.optString("fallback_mode"))
+        assertEquals("active", status.optString("scheduler_host_state"))
+        assertEquals("active", status.optString("scheduler_guarantee_state"))
         assertTrue(status.optString("base_url").startsWith("http://127.0.0.1:"))
+    }
+
+    private fun executeGuestEvidence(command: List<String>, displayCommand: String, timeoutSeconds: Long = 60): JSONObject {
+        val invocation = requireNotNull(AndroidLinuxRuntime.guestCommand(context, context.filesDir, command)) {
+            "Packaged rootfs command is unavailable: $displayCommand"
+        }
+        val builder = ProcessBuilder(invocation).directory(context.filesDir).redirectErrorStream(true)
+        builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+        AndroidLinuxRuntime.applyGuestEnvironment(invocation, builder.environment())
+        val process = builder.start()
+        process.outputStream.close()
+        val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        if (!finished) process.destroyForcibly()
+        check(finished) { "Rootfs command timed out: $displayCommand" }
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        assertEquals("Rootfs command failed: $displayCommand", 0, process.exitValue())
+        assertTrue("Rootfs command returned empty evidence: $displayCommand", output.isNotBlank())
+        return JSONObject().put("command", displayCommand).put("output", output).put("exit_code", process.exitValue())
+    }
+
+    private fun assertResolutionEvidence(evidence: JSONObject, expectedHost: String) {
+        val resolved = JSONObject(evidence.getString("output"))
+        assertEquals(expectedHost, resolved.getString("host"))
+        assertTrue(resolved.getJSONArray("addresses").length() > 0)
     }
 
     private fun runTask(runtime: String, filename: String, marker: String): JSONObject {

@@ -22,17 +22,25 @@ class TaskCompletionObserver with WidgetsBindingObserver {
   bool _active = false;
   bool _resumed = true;
   String? _scope;
+  final TaskCompletionRequestGeneration _requests =
+      TaskCompletionRequestGeneration();
 
   void start() {
     if (_active) return;
+    _requests.invalidate();
     _active = true;
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    _resumed =
+        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
+    _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_poll());
+    if (_resumed) unawaited(_poll());
     _timer = Timer.periodic(_pollInterval, (_) => _poll());
   }
 
   void stop() {
     if (!_active) return;
+    _requests.invalidate();
     _active = false;
     _timer?.cancel();
     _timer = null;
@@ -44,6 +52,11 @@ class TaskCompletionObserver with WidgetsBindingObserver {
 
   void markRunning(int id) {
     if (!_active || id <= 0) return;
+    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    if (_scope != scope) {
+      _scope = scope;
+      _observed.clear();
+    }
     _observed[id] = const _ObservedTask(wasRunning: true);
   }
 
@@ -56,6 +69,7 @@ class TaskCompletionObserver with WidgetsBindingObserver {
   Future<void> _poll() async {
     if (!_active || !_resumed || _requestRunning) return;
     _requestRunning = true;
+    final generation = _requests.begin();
     final epoch = AuthSessionEpoch.current;
     final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
     try {
@@ -63,11 +77,7 @@ class TaskCompletionObserver with WidgetsBindingObserver {
         ApiEndpoints.tasks,
         queryParameters: const {'all': 1},
       );
-      if (!_active ||
-          !AuthSessionEpoch.isCurrent(epoch) ||
-          scope != AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope)) {
-        return;
-      }
+      if (!_isCurrentRequest(generation, epoch, scope)) return;
       if (_scope != scope) {
         _scope = scope;
         _observed.clear();
@@ -84,19 +94,32 @@ class TaskCompletionObserver with WidgetsBindingObserver {
           isRunning: task.isRunning,
           isQueued: task.isQueued,
         )) {
-          await _notify(task);
+          await _notify(task, generation, epoch, scope);
+          if (!_isCurrentRequest(generation, epoch, scope)) return;
         }
       }
     } catch (_) {
       // Polling is best effort and retries on the next bounded interval.
     } finally {
-      _requestRunning = false;
+      if (_requests.isCurrent(generation)) _requestRunning = false;
     }
   }
 
-  Future<void> _notify(Task task) async {
+  bool _isCurrentRequest(int generation, int epoch, String scope) =>
+      _active &&
+      _requests.isCurrent(generation) &&
+      AuthSessionEpoch.isCurrent(epoch) &&
+      scope == AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+
+  Future<void> _notify(
+    Task task,
+    int generation,
+    int epoch,
+    String scope,
+  ) async {
     final service = LocalNotificationService();
-    if (!await service.getChannelEnabled(NotificationChannel.task)) return;
+    final enabled = await service.getChannelEnabled(NotificationChannel.task);
+    if (!_isCurrentRequest(generation, epoch, scope) || !enabled) return;
     final title = task.name.trim().isEmpty ? '任务 #${task.id}' : task.name;
     final result = switch (task.lastRunStatus) {
       0 => ('执行完成', '任务已成功执行完毕'),
@@ -110,7 +133,18 @@ class TaskCompletionObserver with WidgetsBindingObserver {
       body: result.$2,
       payload: taskNotificationPayload(task.id),
     );
+    if (!_isCurrentRequest(generation, epoch, scope)) return;
   }
+}
+
+class TaskCompletionRequestGeneration {
+  int _current = 0;
+
+  int begin() => ++_current;
+
+  void invalidate() => _current++;
+
+  bool isCurrent(int generation) => generation == _current;
 }
 
 class _ObservedTask {

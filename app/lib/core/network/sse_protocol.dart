@@ -21,22 +21,46 @@ class SseDecodedEvent {
   });
 }
 
+class SseProtocolException implements Exception {
+  final String message;
+
+  const SseProtocolException(this.message);
+
+  @override
+  String toString() => 'SseProtocolException: $message';
+}
+
 class SseDecoder {
-  SseDecoder({String? lastEventId}) : _lastEventId = lastEventId;
+  SseDecoder({
+    String? lastEventId,
+    this.maxBufferCharacters = 64 * 1024,
+    this.maxEventCharacters = 256 * 1024,
+  }) : _lastEventId = lastEventId;
+
+  final int maxBufferCharacters;
+  final int maxEventCharacters;
 
   String _buffer = '';
   String? _event;
   String? _explicitId;
   String? _lastEventId;
   final List<String> _dataLines = [];
+  int _eventCharacters = 0;
+  int _frameCharacters = 0;
 
   int? retryMilliseconds;
   String? get lastEventId => _lastEventId;
 
   List<SseDecodedEvent> add(String chunk) {
     _buffer += chunk;
+    if (_buffer.length > maxBufferCharacters && !_buffer.contains('\n')) {
+      throw const SseProtocolException('SSE line buffer exceeded its limit');
+    }
     final lines = _buffer.split('\n');
     _buffer = lines.removeLast();
+    if (_buffer.length > maxBufferCharacters) {
+      throw const SseProtocolException('SSE line buffer exceeded its limit');
+    }
     return _processLines(lines);
   }
 
@@ -53,6 +77,13 @@ class SseDecoder {
   List<SseDecodedEvent> _processLines(List<String> lines) {
     final events = <SseDecodedEvent>[];
     for (final rawLine in lines) {
+      if (rawLine.length > maxBufferCharacters) {
+        throw const SseProtocolException('SSE line exceeded its limit');
+      }
+      _frameCharacters += rawLine.length;
+      if (_frameCharacters > maxEventCharacters) {
+        throw const SseProtocolException('SSE frame exceeded its limit');
+      }
       final line = rawLine.endsWith('\r')
           ? rawLine.substring(0, rawLine.length - 1)
           : rawLine;
@@ -68,6 +99,10 @@ class SseDecoder {
           _event = field!.value;
           break;
         case 'data':
+          _eventCharacters += field!.value.length;
+          if (_eventCharacters > maxEventCharacters) {
+            throw const SseProtocolException('SSE event exceeded its limit');
+          }
           _dataLines.add(field!.value);
           break;
         case 'id':
@@ -92,6 +127,8 @@ class SseDecoder {
     if (_dataLines.isEmpty) {
       _event = null;
       _explicitId = null;
+      _eventCharacters = 0;
+      _frameCharacters = 0;
       return null;
     }
     final event = SseDecodedEvent(
@@ -104,6 +141,8 @@ class SseDecoder {
     _event = null;
     _explicitId = null;
     _dataLines.clear();
+    _eventCharacters = 0;
+    _frameCharacters = 0;
     return event;
   }
 }
@@ -165,6 +204,16 @@ Duration sseReconnectDelay({
     milliseconds: milliseconds.clamp(0, maxDelay.inMilliseconds).toInt(),
   );
 }
+
+Duration boundedSseRetryDelay(
+  int milliseconds, {
+  Duration minDelay = const Duration(milliseconds: 500),
+  Duration maxDelay = const Duration(seconds: 30),
+}) => Duration(
+  milliseconds: milliseconds
+      .clamp(minDelay.inMilliseconds, maxDelay.inMilliseconds)
+      .toInt(),
+);
 
 Map<String, String> buildSseHeaders({
   String? token,

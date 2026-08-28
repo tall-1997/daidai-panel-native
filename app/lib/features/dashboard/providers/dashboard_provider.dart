@@ -38,12 +38,14 @@ class DashboardData {
   final Map<String, dynamic> dashboard;
   final bool loading;
   final String? error;
+  final DateTime? lastUpdated;
 
   const DashboardData({
     this.system = const {},
     this.dashboard = const {},
     this.loading = false,
     this.error,
+    this.lastUpdated,
   });
 
   // 系统资源
@@ -82,30 +84,49 @@ class DashboardData {
     Map<String, dynamic>? dashboard,
     bool? loading,
     String? error,
+    DateTime? lastUpdated,
   }) {
     return DashboardData(
       system: system ?? this.system,
       dashboard: dashboard ?? this.dashboard,
       loading: loading ?? this.loading,
       error: error,
+      lastUpdated: lastUpdated ?? this.lastUpdated,
     );
   }
 }
 
 class DashboardNotifier extends StateNotifier<DashboardData> {
-  DashboardNotifier() : super(const DashboardData());
+  DashboardNotifier({DashboardData initialState = const DashboardData()})
+    : _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeScope);
+  }
 
   int _loadId = 0;
-  String? _scope;
+  String _scope;
+
+  void _synchronizeScope() {
+    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    if (_scope == scope) return;
+    _scope = scope;
+    _loadId++;
+    state = const DashboardData();
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeScope);
+    super.dispose();
+  }
 
   Future<void> load() async {
+    _synchronizeScope();
     final loadId = ++_loadId;
     final capabilityScope = PanelCapabilityRegistry.currentScope;
     final sessionScope = AuthSessionEpoch.scoped(capabilityScope);
-    if (_scope != sessionScope) {
-      _scope = sessionScope;
-      state = const DashboardData();
-    }
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
@@ -129,6 +150,7 @@ class DashboardNotifier extends StateNotifier<DashboardData> {
             ? Map<String, dynamic>.from(dashData)
             : const {},
         loading: false,
+        lastUpdated: DateTime.now(),
       );
       unawaited(
         _loadEnhancements(loadId, sessionScope, capabilityScope, sysMap),

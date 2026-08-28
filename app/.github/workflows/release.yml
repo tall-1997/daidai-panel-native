@@ -19,6 +19,8 @@ permissions: {}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 jobs:
   manual-build-android:
@@ -39,6 +41,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - uses: subosito/flutter-action@v2
         with:
@@ -166,6 +180,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - uses: subosito/flutter-action@v2
         with:

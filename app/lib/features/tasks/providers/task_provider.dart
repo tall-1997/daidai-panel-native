@@ -2,6 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/auth/auth_session_epoch.dart';
+import '../../../core/services/task_completion_observer.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -65,11 +68,38 @@ class TaskListState {
 }
 
 class TaskNotifier extends StateNotifier<TaskListState> {
-  TaskNotifier() : super(const TaskListState());
+  TaskNotifier({TaskListState initialState = const TaskListState()})
+    : _sessionScope = AuthSessionEpoch.scoped(
+        PanelCapabilityRegistry.currentScope,
+      ),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeSessionScope);
+  }
   int _loadRequestId = 0;
+  String _sessionScope;
+
+  void _synchronizeSessionScope() {
+    final nextScope = AuthSessionEpoch.scoped(
+      PanelCapabilityRegistry.currentScope,
+    );
+    if (nextScope == _sessionScope) return;
+    _sessionScope = nextScope;
+    _loadRequestId++;
+    state = state.copyWith(tasks: const [], total: 0, loading: false);
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeSessionScope);
+    super.dispose();
+  }
 
   Future<void> load({bool refresh = false}) async {
+    _synchronizeSessionScope();
     final requestId = ++_loadRequestId;
+    final sessionScope = _sessionScope;
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
@@ -96,12 +126,18 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       );
       final paginated = extractPaginated(response.data);
       final items = paginated.items.map((e) => Task.fromJson(e)).toList();
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope != _sessionScope) {
+        return;
+      }
       final total = paginated.total;
 
       state = state.copyWith(tasks: items, total: total, loading: false);
     } catch (e) {
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope != _sessionScope) {
+        return;
+      }
       state = state.copyWith(loading: false, error: '加载失败');
     }
   }
@@ -132,6 +168,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   Future<void> runTask(int id) async {
     await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
+    TaskCompletionObserver.instance.markRunning(id);
     // Do not block navigation to live logs on an additional list refresh.
     // The run endpoint acknowledges immediately; refresh can happen in background.
     Future.microtask(() => load(refresh: true));
@@ -163,6 +200,9 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       // 面板批量任务接口使用 task_ids 字段，不能复用环境变量的 ids 字段。
       data: {'task_ids': ids},
     );
+    for (final id in ids) {
+      TaskCompletionObserver.instance.markRunning(id);
+    }
     await load(refresh: true);
   }
 

@@ -1,4 +1,4 @@
-import { onActivated, onBeforeUnmount, onMounted, watch } from 'vue'
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useScriptWorkspaceActions } from './useScriptWorkspaceActions'
 import { useScriptWorkspaceBrowser } from './useScriptWorkspaceBrowser'
@@ -22,13 +22,27 @@ export function useScriptWorkspace() {
     triggerEditorAutoFocus: browser.triggerEditorAutoFocus
   })
   let skipInitialActivated = true
+  let keydownBound = false
+
+  function bindKeydown() {
+    if (keydownBound) return
+    window.addEventListener('keydown', actions.handleKeyDown)
+    keydownBound = true
+  }
+
+  function unbindKeydown() {
+    if (!keydownBound) return
+    window.removeEventListener('keydown', actions.handleKeyDown)
+    keydownBound = false
+  }
 
   onMounted(() => {
-    window.addEventListener('keydown', actions.handleKeyDown)
+    bindKeydown()
     void browser.loadTree()
   })
 
   onActivated(() => {
+    bindKeydown()
     if (skipInitialActivated) {
       skipInitialActivated = false
       return
@@ -67,7 +81,12 @@ export function useScriptWorkspace() {
   )
 
   onBeforeUnmount(() => {
-    window.removeEventListener('keydown', actions.handleKeyDown)
+    unbindKeydown()
+  })
+
+  onDeactivated(() => {
+    unbindKeydown()
+    browser.dispose()
   })
 
   return {

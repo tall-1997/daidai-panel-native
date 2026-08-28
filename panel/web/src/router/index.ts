@@ -161,7 +161,7 @@ const router = createRouter({
           path: 'terminal',
           name: 'Terminal',
           component: routeComponents.terminal,
-          meta: { title: '交互终端', icon: 'Monitor', minRole: 'operator' }
+          meta: { title: '交互终端', icon: 'Monitor', minRole: 'operator', keepAlive: false }
         },
         {
           path: 'envs',
@@ -287,7 +287,9 @@ router.beforeEach(async (to, _from, next) => {
         next('/login')
         return
       }
-      // 瞬时网络错误：暂不登出，继续导航，避免抖动就把用户踢出登录态
+      // 保留当前页面和登录态，避免缺失用户角色时触发错误的权限重定向。
+      next(false)
+      return
     }
   }
 

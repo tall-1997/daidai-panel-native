@@ -6,19 +6,24 @@
   "ubuntu_version": "24.04.4",
   "sha256": "46b3f223230b7a6b12995b310710c18b6bca3e8abcdaa30aa017c70397afba42",
   "size": 79952596,
-  "packages": [
+  "apt_packages": [
     "bash",
     "python3",
     "python3-pip",
     "nodejs",
     "npm",
-    "pnpm",
     "ca-certificates",
     "curl",
     "git",
     "openssh-client",
     "tzdata"
   ],
+  "global_tools": {
+    "pnpm": {
+      "version": "9.15.9",
+      "install_source": "npm-global"
+    }
+  },
   "required_commands": [
     "apt-get",
     "bash",
@@ -28,6 +33,12 @@
     "npm",
     "pnpm"
   ],
+  "base_archive": {
+    "name": "ubuntu-base-24.04.4-base-arm64.tar.gz",
+    "sha256": "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2",
+    "digest_source": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/SHA256SUMS",
+    "archive_source": "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-arm64.tar.gz"
+  },
   "capabilities": {
     "package_manager": [
       "apt-get"

@@ -18,6 +18,7 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/bounded_log_buffer.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
@@ -3129,17 +3130,22 @@ class TaskDetailSheet extends StatelessWidget {
   }
 }
 
-class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
+class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
+    with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   final _sseClient = SseClient();
   final _lines = <String>[];
   final _historyReplayBuffer = <String>[];
+  late final LogUpdateBatcher<String> _logBatcher;
   bool _loading = true;
   bool _done = false;
   bool _autoScroll = true;
   String _statusText = '连接中...';
   Timer? _pollTimer;
   bool _pollRequestRunning = false;
+  bool _usingSse = false;
+  bool _appResumed = true;
+  int _lifecycleGeneration = 0;
   int _cursor = 0;
   int? _logId;
   Color? _logBackgroundColor;
@@ -3147,32 +3153,56 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _logBatcher = LogUpdateBatcher<String>(onFlush: _flushLogLines);
     _loadAppearance();
     Future.microtask(_init);
   }
 
   @override
   void dispose() {
+    _lifecycleGeneration++;
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _sseClient.close();
+    _logBatcher.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (state == AppLifecycleState.resumed && !_done && !_usingSse) {
+      _lifecycleGeneration++;
+      _startPolling();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _lifecycleGeneration++;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+  }
+
   Future<void> _init() async {
+    final generation = _lifecycleGeneration;
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.taskLiveLogs(widget.taskId),
         queryParameters: {'cursor': _cursor},
       );
       final data = extractData(resp.data);
+      if (!mounted || !_appResumed || generation != _lifecycleGeneration) {
+        return;
+      }
       if (data is Map<String, dynamic>) {
         _applyLiveSnapshot(data, initial: true);
         return;
       }
     } catch (_) {}
 
-    if (!mounted) return;
+    if (!mounted || !_appResumed || generation != _lifecycleGeneration) return;
     setState(() {
       _loading = false;
       _done = false;
@@ -3202,7 +3232,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       if (initial || (_logId != null && snapshot.logId != _logId)) {
         _lines.clear();
       }
-      _lines.addAll(snapshot.logs);
+      appendBoundedLogEntries(_lines, snapshot.logs);
       _cursor = snapshot.cursor;
       _logId = snapshot.logId ?? _logId;
       _done = snapshot.done && !shouldKeepPolling;
@@ -3234,11 +3264,16 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   }
 
   void _startPolling() {
+    _usingSse = false;
     if (_pollTimer != null) {
       return;
     }
+    final pollingGeneration = ++_lifecycleGeneration;
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (_pollRequestRunning) return;
+      if (_pollRequestRunning || !_appResumed ||
+          pollingGeneration != _lifecycleGeneration) {
+        return;
+      }
       _pollRequestRunning = true;
       if (!mounted) {
         _pollTimer?.cancel();
@@ -3252,6 +3287,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
           queryParameters: {'cursor': _cursor},
         );
         final data = extractData(resp.data);
+        if (!mounted || !_appResumed || _usingSse ||
+            pollingGeneration != _lifecycleGeneration) {
+          return;
+        }
         if (data is Map<String, dynamic>) {
           _applyLiveSnapshot(data);
         }
@@ -3264,6 +3303,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   }
 
   void _connectSSE(int taskId) {
+    _lifecycleGeneration++;
+    _usingSse = true;
     _sseClient.close();
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -3276,6 +3317,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       onEvent: (event) {
         if (!mounted) return;
         if (event.event == 'done') {
+          _logBatcher.flush();
           if (event.data == 'reconnect') {
             setState(() {
               _done = false;
@@ -3299,25 +3341,21 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         if (newLines.isEmpty) return;
         final dedupedLines = _consumeReplayLines(newLines);
         if (dedupedLines.isEmpty) return;
-        setState(() {
-          _lines.addAll(dedupedLines);
-          final eventCursor = int.tryParse(event.lastEventId ?? event.id ?? '');
-          if (eventCursor != null && eventCursor > _cursor) {
-            _cursor = eventCursor;
-          }
-          _done = false;
-          _statusText = '运行中';
-        });
-        if (_autoScroll) _scrollToBottom();
+        final eventCursor = int.tryParse(event.lastEventId ?? event.id ?? '');
+        if (eventCursor != null && eventCursor > _cursor) _cursor = eventCursor;
+        _logBatcher.addAll(dedupedLines);
       },
       onDone: () {
+        _logBatcher.flush();
         if (!mounted) return;
         if (_done) return;
         setState(() => _statusText = '连接结束');
       },
       onError: (_) {
+        _logBatcher.flush();
         if (!mounted) return;
         if (!_done) {
+          _usingSse = false;
           setState(() => _statusText = '连接错误');
           _pollTimer?.cancel();
           _pollTimer = null;
@@ -3325,6 +3363,16 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         }
       },
     );
+  }
+
+  void _flushLogLines(List<String> lines) {
+    if (!mounted || lines.isEmpty) return;
+    setState(() {
+      appendBoundedLogEntries(_lines, lines);
+      _done = false;
+      _statusText = '运行中';
+    });
+    if (_autoScroll) _scrollToBottom();
   }
 
   List<String> _consumeReplayLines(List<String> incomingLines) {

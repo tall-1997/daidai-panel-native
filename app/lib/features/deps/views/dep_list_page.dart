@@ -147,11 +147,27 @@ class DepMirrorConfig {
 }
 
 class DepListNotifier extends StateNotifier<DepListState> {
-  String? _scope;
-  DepListNotifier() : super(const DepListState());
+  late String _scope;
+  DepListNotifier({DepListState initialState = const DepListState()})
+    : super(initialState) {
+    _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    AuthSessionEpoch.addListener(_synchronizeScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeScope);
+  }
   int _loadRequestId = 0;
   int _runtimeRequestId = 0;
   int _page = 1;
+
+  void _synchronizeScope() {
+    _ensureScope(AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope));
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeScope);
+    super.dispose();
+  }
 
   Future<({List<Dependency> items, int total})> fetchByType(
     String type, {

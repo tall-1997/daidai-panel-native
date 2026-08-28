@@ -5,6 +5,7 @@ import {
   onMounted,
   onUnmounted,
   onActivated,
+  onDeactivated,
   defineComponent,
   h,
   watch,
@@ -408,6 +409,8 @@ function lastUpdatedText() {
 
 const lastUpdatedTick = ref(0);
 let lastUpdatedTimer: number | null = null;
+let dashboardLoadGeneration = 0;
+let sysInfoLoadGeneration = 0;
 
 const filteredLogs = computed(() => {
   const list = recentLogs.value;
@@ -484,21 +487,25 @@ function donutSegments() {
 }
 
 const loadDashboard = async () => {
+  const generation = ++dashboardLoadGeneration;
   try {
     const res = (await systemApi.dashboard(trendRange.value)) as any;
+    if (generation !== dashboardLoadGeneration) return;
     dashboardData.value = res.data || {};
     refreshTimestamp.value = new Date();
   } catch {
-    ElMessage.error("加载仪表盘数据失败");
+    if (generation === dashboardLoadGeneration) ElMessage.error("加载仪表盘数据失败");
   }
 };
 
 const loadSysInfo = async () => {
+  const generation = ++sysInfoLoadGeneration;
   try {
     const res = (await systemApi.info()) as any;
+    if (generation !== sysInfoLoadGeneration) return;
     sysInfo.value = res.data || {};
   } catch {
-    ElMessage.error("加载系统信息失败");
+    if (generation === sysInfoLoadGeneration) ElMessage.error("加载系统信息失败");
   }
 };
 
@@ -547,6 +554,19 @@ function loadDashboardPage() {
   loadSysInfo();
 }
 
+function startLastUpdatedTimer() {
+  if (lastUpdatedTimer) return;
+  lastUpdatedTimer = window.setInterval(() => {
+    lastUpdatedTick.value++;
+  }, 30 * 1000);
+}
+
+function stopLastUpdatedTimer() {
+  if (!lastUpdatedTimer) return;
+  clearInterval(lastUpdatedTimer);
+  lastUpdatedTimer = null;
+}
+
 function handleRefresh() {
   loadDashboardPage();
 }
@@ -555,9 +575,7 @@ onMounted(() => {
   loadDashboardPage();
   hasLoadedOnce.value = true;
   scheduleTrendChartRender();
-  lastUpdatedTimer = window.setInterval(() => {
-    lastUpdatedTick.value++;
-  }, 30 * 1000);
+  startLastUpdatedTimer();
 });
 
 onActivated(() => {
@@ -567,6 +585,18 @@ onActivated(() => {
     loadDashboardPage();
   }
   scheduleTrendChartRender();
+  startLastUpdatedTimer();
+});
+
+onDeactivated(() => {
+  dashboardLoadGeneration += 1;
+  sysInfoLoadGeneration += 1;
+  stopObservingTrendChart();
+  if (trendChartTimer) {
+    clearTimeout(trendChartTimer);
+    trendChartTimer = null;
+  }
+  stopLastUpdatedTimer();
 });
 
 onUnmounted(() => {
@@ -575,10 +605,7 @@ onUnmounted(() => {
     clearTimeout(trendChartTimer);
     trendChartTimer = null;
   }
-  if (lastUpdatedTimer) {
-    clearInterval(lastUpdatedTimer);
-    lastUpdatedTimer = null;
-  }
+  stopLastUpdatedTimer();
 });
 
 const updatedHint = computed(() => {

@@ -26,6 +26,7 @@ class PanelCapabilityRegistry {
   static const _temporaryFailureTtl = Duration(seconds: 30);
   static DateTime Function() _now = DateTime.now;
   static String _currentScope = '';
+  static final Set<void Function()> _scopeListeners = {};
   static final Map<String, Map<PanelCapability, PanelCapabilityEntry>>
   _profiles = {};
   static final Map<String, PanelProfile> _panelProfiles = {};
@@ -33,8 +34,19 @@ class PanelCapabilityRegistry {
   static String get currentScope => _currentScope;
 
   static void setCurrentScope(String serverUrl) {
-    _currentScope = normalizeServerUrl(serverUrl);
+    final nextScope = normalizeServerUrl(serverUrl);
+    if (nextScope == _currentScope) return;
+    _currentScope = nextScope;
+    for (final listener in List<void Function()>.of(_scopeListeners)) {
+      listener();
+    }
   }
+
+  static void addScopeListener(void Function() listener) =>
+      _scopeListeners.add(listener);
+
+  static void removeScopeListener(void Function() listener) =>
+      _scopeListeners.remove(listener);
 
   static String normalizeServerUrl(String value) {
     final trimmed = value.trim();
@@ -223,7 +235,7 @@ class PanelCapabilityRegistry {
   static void reset() {
     _profiles.clear();
     _panelProfiles.clear();
-    _currentScope = '';
+    setCurrentScope('');
     _now = DateTime.now;
   }
 

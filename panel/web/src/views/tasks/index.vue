@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, onActivated, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { taskApi } from '@/api/task'
 import { depsApi, type PythonRuntimeInfo } from '@/api/deps'
@@ -24,7 +24,8 @@ const router = useRouter()
 const authStore = useAuthStore()
 const { isMobile } = useResponsive()
 const { isPageActive } = usePageActivity()
-let statusTimer: ReturnType<typeof setInterval> | null = null
+let statusTimer: ReturnType<typeof setTimeout> | null = null
+let taskLoadGeneration = 0
 
 const TASK_PAGE_SIZE_STORAGE_KEY = 'dd:tasks:page_size'
 const supportedTaskPageSizes = [10, 20, 50, 100]
@@ -53,6 +54,7 @@ const pageSize = ref(readStoredTaskPageSize())
 const keyword = ref('')
 const statusFilter = ref<string>('')
 const loading = ref(false)
+const formSubmitting = ref(false)
 const selectedIds = ref<number[]>([])
 const selectedIdSet = computed(() => new Set(selectedIds.value))
 const batchLabelVisible = ref(false)
@@ -169,23 +171,19 @@ function buildTaskListParams() {
 
 function startStatusPolling() {
   stopStatusPolling()
-  statusTimer = setInterval(async () => {
+  statusTimer = setTimeout(async () => {
+    statusTimer = null
     if (!canPollTaskStatus.value) {
-      stopStatusPolling()
       return
     }
-    try {
-      const res = await taskApi.list(buildTaskListParams())
-      tasks.value = res.data
-      total.value = res.total
-      syncStatusPolling()
-    } catch {}
+    await loadTasks({ silent: true })
+    syncStatusPolling()
   }, 3000)
 }
 
 function stopStatusPolling() {
   if (statusTimer) {
-    clearInterval(statusTimer)
+    clearTimeout(statusTimer)
     statusTimer = null
   }
 }
@@ -200,17 +198,20 @@ function syncStatusPolling() {
   stopStatusPolling()
 }
 
-async function loadTasks() {
-  loading.value = true
+async function loadTasks(options: { silent?: boolean } | number = {}) {
+  const silent = typeof options === 'object' && !!options.silent
+  const generation = ++taskLoadGeneration
+  if (!silent) loading.value = true
   try {
     const res = await taskApi.list(buildTaskListParams())
+    if (generation !== taskLoadGeneration) return
     tasks.value = res.data
     total.value = res.total
     syncStatusPolling()
   } catch {
-    ElMessage.error('加载任务列表失败')
+    if (generation === taskLoadGeneration && !silent) ElMessage.error('加载任务列表失败')
   } finally {
-    loading.value = false
+    if (generation === taskLoadGeneration && !silent) loading.value = false
   }
 }
 
@@ -300,7 +301,14 @@ onActivated(async () => {
 })
 
 onBeforeUnmount(() => {
+  taskLoadGeneration += 1
   stopStatusPolling()
+})
+
+onDeactivated(() => {
+  taskLoadGeneration += 1
+  stopStatusPolling()
+  loading.value = false
 })
 
 function handleSearch() {
@@ -397,7 +405,8 @@ function openLogFiles(task: any) {
 }
 
 async function handleFormSubmit(data: any) {
-  if (!ensureCanOperate()) return
+  if (!ensureCanOperate() || formSubmitting.value) return
+  formSubmitting.value = true
   try {
     if (editingTask.value) {
       await taskApi.update(editingTask.value.id, data)
@@ -410,6 +419,8 @@ async function handleFormSubmit(data: any) {
     loadTasks()
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.error || '操作失败')
+  } finally {
+    formSubmitting.value = false
   }
 }
 
@@ -533,10 +544,10 @@ async function handleBatchAction(action: string) {
     stop: { title: '批量停止', msg: `确定停止选中的 ${selectedIds.value.length} 个任务？`, type: 'warning' },
   }
   const confirm = confirmMap[action]
-  if (confirm) {
-    await ElMessageBox.confirm(confirm.msg, confirm.title, { type: confirm.type })
-  }
   try {
+    if (confirm) {
+      await ElMessageBox.confirm(confirm.msg, confirm.title, { type: confirm.type })
+    }
     await taskApi.batch(selectedIds.value, action)
     ElMessage.success('操作成功')
     loadTasks()
@@ -626,10 +637,11 @@ function triggerImport() {
 }
 
 async function handleImport(event: Event) {
-  if (!ensureCanOperate('当前账号没有导入任务权限')) return
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file) return
+  const input = event.target as HTMLInputElement
   try {
+    if (!ensureCanOperate('当前账号没有导入任务权限')) return
+    const file = input.files?.[0]
+    if (!file) return
     const text = await file.text()
     let data: any
     try {
@@ -656,8 +668,9 @@ async function handleImport(event: Event) {
     loadTasks()
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.error || '导入失败')
+  } finally {
+    input.value = ''
   }
-  (event.target as HTMLInputElement).value = ''
 }
 </script>
 
@@ -1008,6 +1021,7 @@ async function handleImport(event: Event) {
       :default-python-version="defaultPythonVersion"
       :python-runtimes="pythonRuntimeOptions"
       :notification-channels="notificationChannels"
+      :submitting="formSubmitting"
       @submit="handleFormSubmit"
     />
 

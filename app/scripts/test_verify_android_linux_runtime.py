@@ -56,6 +56,11 @@ class RootfsVerificationTest(unittest.TestCase):
                 ca_member.mode = 0o644
                 ca_member.size = len(ca_data)
                 bundle.addfile(ca_member, io.BytesIO(ca_data))
+                pnpm_data = json.dumps({"name": "pnpm", "version": "9.15.9"}).encode()
+                pnpm_member = tarfile.TarInfo("usr/local/lib/node_modules/pnpm/package.json")
+                pnpm_member.mode = 0o644
+                pnpm_member.size = len(pnpm_data)
+                bundle.addfile(pnpm_member, io.BytesIO(pnpm_data))
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             checksum = root / "rootfs.tar.gz.bin.sha256"
             checksum.write_text(digest + "\n")
@@ -63,13 +68,79 @@ class RootfsVerificationTest(unittest.TestCase):
             manifest.write_text(json.dumps({
                 "schema_version": 2,
                 "distribution": "ubuntu",
+                "ubuntu_version": "24.04.4",
+                "ubuntu_arch": "arm64",
                 "sha256": digest,
                 "size": archive.stat().st_size,
-                "packages": ["bash", "python3", "python3-pip", "nodejs", "npm", "pnpm", "ca-certificates"],
+                "apt_packages": ["bash", "python3", "python3-pip", "nodejs", "npm", "ca-certificates"],
+                "global_tools": {"pnpm": {"version": "9.15.9", "install_source": "npm-global"}},
                 "required_commands": list(runtime_verifier.DISTRO_COMMANDS["ubuntu"]),
                 "capabilities": runtime_verifier.DISTRO_CAPABILITIES["ubuntu"],
+                "base_archive": json.loads(runtime_verifier.TRUSTED_SOURCES.read_text())["ubuntu"]["24.04.4"]["arm64"],
             }))
             runtime_verifier.verify_rootfs(archive, checksum, manifest)
+            unsupported = dict(runtime_verifier.DISTRO_CAPABILITIES["ubuntu"])
+            unsupported["crypto"] = ["Crypto"]
+            manifest.write_text(json.dumps({
+                "schema_version": 2,
+                "distribution": "ubuntu",
+                "ubuntu_version": "24.04.4",
+                "ubuntu_arch": "arm64",
+                "sha256": digest,
+                "size": archive.stat().st_size,
+                "apt_packages": ["bash", "python3", "python3-pip", "nodejs", "npm", "ca-certificates"],
+                "global_tools": {"pnpm": {"version": "9.15.9", "install_source": "npm-global"}},
+                "required_commands": list(runtime_verifier.DISTRO_COMMANDS["ubuntu"]),
+                "capabilities": unsupported,
+                "base_archive": json.loads(runtime_verifier.TRUSTED_SOURCES.read_text())["ubuntu"]["24.04.4"]["arm64"],
+            }))
+            with self.assertRaisesRegex(AssertionError, "capabilities contract mismatch|unpackaged"):
+                runtime_verifier.verify_rootfs(archive, checksum, manifest)
+
+    def test_rejects_pnpm_manifest_version_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            archive = root / "rootfs.tar.gz.bin"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for command in runtime_verifier.DISTRO_COMMANDS["ubuntu"]:
+                    member = tarfile.TarInfo(f"usr/bin/{command}")
+                    member.mode = 0o755
+                    bundle.addfile(member, io.BytesIO())
+                for name, data in (
+                    ("etc/ssl/certs/ca-certificates.crt", b"certificate"),
+                    ("usr/local/lib/node_modules/pnpm/package.json", b'{"version":"9.15.9"}'),
+                ):
+                    member = tarfile.TarInfo(name)
+                    member.mode = 0o644
+                    member.size = len(data)
+                    bundle.addfile(member, io.BytesIO(data))
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / "rootfs.tar.gz.bin.sha256"
+            checksum.write_text(digest)
+            manifest = root / "runtime-manifest.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 2, "distribution": "ubuntu", "ubuntu_version": "24.04.4", "ubuntu_arch": "arm64",
+                "sha256": digest, "size": archive.stat().st_size,
+                "apt_packages": sorted(runtime_verifier.DISTRO_PACKAGES["ubuntu"]),
+                "global_tools": {"pnpm": {"version": "9.0.0", "install_source": "npm-global"}},
+                "required_commands": list(runtime_verifier.DISTRO_COMMANDS["ubuntu"]),
+                "capabilities": runtime_verifier.DISTRO_CAPABILITIES["ubuntu"],
+                "base_archive": json.loads(runtime_verifier.TRUSTED_SOURCES.read_text())["ubuntu"]["24.04.4"]["arm64"],
+            }))
+            with self.assertRaisesRegex(AssertionError, "pnpm version"):
+                runtime_verifier.verify_rootfs(archive, checksum, manifest)
+
+    def test_rejects_base_archive_outside_trusted_contract(self):
+        manifest = {
+            "distribution": "ubuntu",
+            "ubuntu_version": "24.04.4",
+            "ubuntu_arch": "arm64",
+        }
+        trusted = runtime_verifier.trusted_base_archive(manifest)
+        self.assertEqual("ubuntu-base-24.04.4-base-arm64.tar.gz", trusted["name"])
+        manifest["ubuntu_version"] = "untrusted"
+        with self.assertRaisesRegex(AssertionError, "trusted source is missing"):
+            runtime_verifier.trusted_base_archive(manifest)
 
 
 if __name__ == "__main__":

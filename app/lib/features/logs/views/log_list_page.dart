@@ -64,14 +64,28 @@ class LogListState {
 }
 
 class LogListNotifier extends StateNotifier<LogListState> {
-  LogListNotifier() : super(const LogListState());
+  LogListNotifier({LogListState initialState = const LogListState()})
+    : _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeScope);
+  }
   int _page = 1;
   bool _loadInFlight = false;
   bool _refreshInFlight = false;
   bool _refreshQueued = false;
   bool _silentRefreshQueued = false;
   int _queryGeneration = 0;
-  String? _scope;
+  String _scope;
+
+  void _synchronizeScope() => _ensureScope();
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeScope);
+    super.dispose();
+  }
 
   String _ensureScope() {
     final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);

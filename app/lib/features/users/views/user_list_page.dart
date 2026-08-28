@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
+import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/network/panel_capability_registry.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
@@ -87,9 +89,34 @@ class UserListState {
 }
 
 class UserListNotifier extends StateNotifier<UserListState> {
-  UserListNotifier() : super(const UserListState());
+  UserListNotifier({UserListState initialState = const UserListState()})
+    : _scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeScope);
+  }
+  String _scope;
+  int _loadRequestId = 0;
+
+  void _synchronizeScope() {
+    final scope = AuthSessionEpoch.scoped(PanelCapabilityRegistry.currentScope);
+    if (_scope == scope) return;
+    _scope = scope;
+    _loadRequestId++;
+    state = const UserListState();
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeScope);
+    super.dispose();
+  }
 
   Future<void> load() async {
+    _synchronizeScope();
+    final requestId = ++_loadRequestId;
+    final scope = _scope;
     state = state.copyWith(loading: true, clearError: true);
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.users);
@@ -101,8 +128,10 @@ class UserListNotifier extends StateNotifier<UserListState> {
             .map((e) => UserListItem.fromJson(e))
             .toList();
       }
+      if (requestId != _loadRequestId || scope != _scope) return;
       state = state.copyWith(items: items, loading: false, clearError: true);
     } catch (error) {
+      if (requestId != _loadRequestId || scope != _scope) return;
       state = state.copyWith(
         loading: false,
         error: extractErrorMessage(error, '用户列表加载失败'),

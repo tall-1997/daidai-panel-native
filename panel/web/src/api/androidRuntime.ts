@@ -1,6 +1,7 @@
 import request from './request'
 import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
+import { getSessionGeneration, isCurrentSession } from '@/utils/authSession'
 
 export interface AndroidRuntimePreset {
   name: string
@@ -31,6 +32,7 @@ export interface AndroidRuntimeStatus {
 
 async function authorizedFetch(input: string, init?: RequestInit) {
   const authStore = useAuthStore()
+  const requestGeneration = getSessionGeneration()
 
   const doFetch = async (token: string) => {
     const headers = new Headers(init?.headers || {})
@@ -49,6 +51,7 @@ async function authorizedFetch(input: string, init?: RequestInit) {
   }
 
   let response = await doFetch(authStore.accessToken)
+  if (!isCurrentSession(requestGeneration)) throw new DOMException('认证会话已变更', 'AbortError')
   if (response.status !== 401) {
     return response
   }
@@ -59,12 +62,17 @@ async function authorizedFetch(input: string, init?: RequestInit) {
     throw new Error('登录已过期，请重新登录')
   }
 
+  const generation = requestGeneration
   try {
     const nextToken = await authStore.refreshAccessToken()
+    if (!isCurrentSession(generation)) throw new Error('认证会话已变更')
     response = await doFetch(nextToken)
+    if (!isCurrentSession(generation)) throw new DOMException('认证会话已变更', 'AbortError')
   } catch {
-    authStore.clearAuth()
-    void router.push('/login')
+    if (isCurrentSession(generation)) {
+      authStore.clearAuth()
+      void router.push('/login')
+    }
     throw new Error('登录已过期，请重新登录')
   }
 

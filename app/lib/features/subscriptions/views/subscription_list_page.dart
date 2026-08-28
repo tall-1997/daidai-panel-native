@@ -6,11 +6,14 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/sse_client.dart';
+import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/subscription.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/bounded_log_buffer.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 
@@ -73,12 +76,41 @@ class SubscriptionListState {
 }
 
 class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
-  SubscriptionListNotifier() : super(const SubscriptionListState());
+  SubscriptionListNotifier({
+    SubscriptionListState initialState = const SubscriptionListState(),
+  }) : _sessionScope = AuthSessionEpoch.scoped(
+         PanelCapabilityRegistry.currentScope,
+       ),
+       super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeSessionScope);
+  }
   int _loadRequestId = 0;
   int _page = 1;
+  String _sessionScope;
+
+  void _synchronizeSessionScope() {
+    final nextScope = AuthSessionEpoch.scoped(
+      PanelCapabilityRegistry.currentScope,
+    );
+    if (nextScope == _sessionScope) return;
+    _sessionScope = nextScope;
+    _loadRequestId++;
+    _page = 1;
+    state = SubscriptionListState(keyword: state.keyword);
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeSessionScope);
+    super.dispose();
+  }
 
   Future<void> load({bool refresh = true}) async {
+    _synchronizeSessionScope();
     final requestId = ++_loadRequestId;
+    final sessionScope = _sessionScope;
     if (refresh) _page = 1;
     state = state.copyWith(loading: true);
     try {
@@ -93,7 +125,10 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
       final items = paginated.items
           .map((e) => Subscription.fromJson(e))
           .toList();
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope != _sessionScope) {
+        return;
+      }
       state = state.copyWith(
         items: refresh ? items : [...state.items, ...items],
         total: paginated.total,
@@ -101,7 +136,10 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
         error: null,
       );
     } catch (_) {
-      if (requestId != _loadRequestId) return;
+      if (requestId != _loadRequestId ||
+          sessionScope != _sessionScope) {
+        return;
+      }
       if (!refresh && _page > 1) _page--;
       state = state.copyWith(loading: false, error: '加载订阅失败');
     }
@@ -1650,6 +1688,7 @@ class _SubscriptionPullStreamPageState
     extends ConsumerState<SubscriptionPullStreamPage> {
   final _sseClient = SseClient();
   final _logs = <String>[];
+  late final LogUpdateBatcher<String> _logBatcher;
   final _scrollController = ScrollController();
   bool _done = false;
   String? _statusMessage;
@@ -1658,6 +1697,7 @@ class _SubscriptionPullStreamPageState
   @override
   void initState() {
     super.initState();
+    _logBatcher = LogUpdateBatcher<String>(onFlush: _flushLogs);
     Future.microtask(() async {
       final color = await loadPanelLogBackgroundColor();
       if (mounted) {
@@ -1674,30 +1714,26 @@ class _SubscriptionPullStreamPageState
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
-        setState(() {
-          if (event.event == 'done' &&
-              event.data == 'not_running' &&
-              _logs.isEmpty) {
-            _statusMessage = '当前没有正在运行的拉取任务';
-          } else {
-            _logs.add(event.data);
-          }
-          if (event.event == 'done' && event.data != 'reconnect') {
-            _done = true;
-          }
-        });
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
-            );
-          }
-        });
+        final terminal = event.event == 'done' && event.data != 'reconnect';
+        if (terminal) _logBatcher.flush();
+        if (event.event == 'done' &&
+            event.data == 'not_running' &&
+            _logs.isEmpty) {
+          setState(() => _statusMessage = '当前没有正在运行的拉取任务');
+        } else {
+          _logBatcher.add(event.data);
+        }
+        if (terminal) {
+          _logBatcher.flush();
+          setState(() => _done = true);
+        }
       },
       onDone: () {
+        _logBatcher.flush();
         if (mounted) setState(() => _done = true);
       },
       onError: (_) {
+        _logBatcher.flush();
         if (mounted) {
           setState(() {
             _done = true;
@@ -1711,8 +1747,19 @@ class _SubscriptionPullStreamPageState
   @override
   void dispose() {
     _sseClient.close();
+    _logBatcher.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _flushLogs(List<String> entries) {
+    if (!mounted || entries.isEmpty) return;
+    setState(() => appendBoundedLogEntries(_logs, entries));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
   }
 
   @override

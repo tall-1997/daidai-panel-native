@@ -31,6 +31,24 @@ Entries discovered by the Agent during task execution should follow this format:
 
 ## Entries
 
+[Android 测试版与正式版发布策略]
+- Date: 2026-08-28
+- Context: 用户明确指定 Android 测试包长期版本号与正式版基线
+- Instructions:
+  - Android 测试包固定使用版本号 `1.0.19`，后续测试发布持续覆盖该版本的测试资产。
+  - 只有用户明确要求使用新版本号发布时，才提升测试包版本号。
+  - Android 当前正式版为 `1.0.18`，GitHub Release 应将 `v1.0.18` 标记为正式版和 latest。
+  - 不保留 `1.0.20` 测试 Release、标签或项目版本声明。
+
+[全量审查与优化执行方式]
+- Date: 2026-08-27
+- Context: 用户要求后续项目全量审查、Bug 修复和优化任务采用主动执行模式
+- Instructions:
+  - 全量审查项目最新进度时，默认拆分多个子任务并行检查不同模块，由主任务统一汇总、实施和验证。
+  - 发现 Bug、回归风险和明确优化项后直接实现，无需逐项询问用户。
+  - 方案选择以项目整体质量、长期可维护性和端到端效果为目标，不以最小改动量作为优先标准。
+  - 完成前执行覆盖相关模块的测试、静态检查和构建，使用可复核证据闭环。
+
 [Project Knowledge Summary]
 - Date: 2026-08-24
 - Context: Discovered by Agent while cross-compiling proot/busybox/talloc for Android arm64-v8a with NDK r27 (API 24)

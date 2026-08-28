@@ -5,6 +5,7 @@ import '../network/panel_capability_registry.dart';
 import '../storage/secure_storage.dart';
 import 'auth_token_snapshot.dart';
 import 'auth_session_epoch.dart';
+import 'auth_session_invalidation_coordinator.dart';
 import 'token_refresh_coordinator.dart';
 
 class AuthInterceptor extends Interceptor {
@@ -18,12 +19,21 @@ class AuthInterceptor extends Interceptor {
     ApiEndpoints.captchaConfig,
   };
 
-  final Map<int, Future<void>> _authFailureInFlight = {};
-  final Set<int> _failedAuthEpochs = {};
-  final void Function()? onAuthFailed;
-  final Future<void> Function(int epoch)? onAuthFailedForEpoch;
-
-  AuthInterceptor({this.onAuthFailed, this.onAuthFailedForEpoch});
+  final AuthSessionInvalidationCoordinator _sessionInvalidation;
+  AuthInterceptor({
+    void Function()? onAuthFailed,
+    Future<void> Function(int epoch)? onAuthFailedForEpoch,
+    AuthSessionInvalidationCoordinator? sessionInvalidation,
+  }) : _sessionInvalidation =
+           sessionInvalidation ??
+           ((onAuthFailed != null || onAuthFailedForEpoch != null)
+               ? AuthSessionInvalidationCoordinator(
+                   onInvalidated: (epoch) async {
+                     await onAuthFailedForEpoch?.call(epoch);
+                     onAuthFailed?.call();
+                   },
+                 )
+               : AuthSessionInvalidationCoordinator.instance);
 
   static bool isPublicAuthPath(String path) {
     final normalizedPath = Uri.tryParse(path)?.path ?? path;
@@ -125,8 +135,12 @@ class AuthInterceptor extends Interceptor {
       late final String newAccessToken;
       try {
         newAccessToken = await TokenRefreshCoordinator.refresh(epoch: epoch);
-      } catch (_) {
-        await _clearSessionAndRejectPending(epoch: epoch);
+      } catch (error) {
+        if (isRefreshAuthFailure(error)) {
+          await _clearSessionAndRejectPending(epoch: epoch);
+        } else {
+          err.requestOptions.extra['auth_refresh_transient_failure'] = true;
+        }
         handler.next(err);
         currentRequestCompleted = true;
         return;
@@ -152,8 +166,10 @@ class AuthInterceptor extends Interceptor {
         handler.reject(_retryException(err.requestOptions, retryError));
         currentRequestCompleted = true;
       }
-    } catch (_) {
-      await _clearSessionAndRejectPending(epoch: epoch);
+    } catch (error) {
+      if (isProtectedRequestAuthFailure(error)) {
+        await _clearSessionAndRejectPending(epoch: epoch);
+      }
       if (!currentRequestCompleted) {
         handler.next(err);
       }
@@ -170,34 +186,7 @@ class AuthInterceptor extends Interceptor {
   Future<void> _clearSessionAndRejectPending({
     required int epoch,
   }) async {
-    if (!AuthSessionEpoch.isCurrent(epoch)) return;
-    final existing = _authFailureInFlight[epoch];
-    if (existing != null) {
-      await existing;
-      return;
-    }
-    if (!_failedAuthEpochs.add(epoch)) return;
-    _failedAuthEpochs.removeWhere((failedEpoch) => failedEpoch < epoch - 2);
-    final operation = _clearSessionAndRejectPendingOnce(epoch);
-    _authFailureInFlight[epoch] = operation;
-    try {
-      await operation;
-    } finally {
-      if (identical(_authFailureInFlight[epoch], operation)) {
-        _authFailureInFlight.remove(epoch);
-      }
-    }
-  }
-
-  Future<void> _clearSessionAndRejectPendingOnce(int epoch) async {
-    try {
-      await SecureStorage.clearAuthSession(authEpoch: epoch);
-    } catch (_) {}
-    if (!AuthSessionEpoch.isCurrent(epoch)) return;
-    try {
-      await onAuthFailedForEpoch?.call(epoch);
-      onAuthFailed?.call();
-    } catch (_) {}
+    await _sessionInvalidation.invalidate(epoch);
   }
 
   int _requestEpoch(RequestOptions options) =>

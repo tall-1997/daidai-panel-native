@@ -16,6 +16,7 @@ import { taskApi } from '@/api/task'
 import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 import { useResponsive } from '@/composables/useResponsive'
 import { ansiToHtml, normalizeAnsi } from '@/utils/ansi'
+import { TerminalLogBuffer } from '@/utils/terminalLogBuffer.mjs'
 
 const props = defineProps<{
   visible: boolean
@@ -28,8 +29,8 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
 }>()
 
-const logLines = ref<string[]>([])
-const logTail = ref('')
+const terminalBuffer = new TerminalLogBuffer({ maxChars: 1_000_000, maxLines: 10_000 })
+const logVersion = ref(0)
 const done = ref(false)
 const error = ref<string | null>(null)
 const emptyMessage = ref<string | null>(null)
@@ -45,18 +46,18 @@ let logFlushTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let hiddenAt: number | null = null
 let pendingScrollRestore: number | null = null
-let logTailCarriageReturnPending = false
+let requestGeneration = 0
 // reconnect 风暴熔断：连续重连且无新数据时累加，超过上限即按完成处理，避免无限重连+全量重渲染卡顿。
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 5
 
-const hasLogs = computed(() => logLines.value.length > 0 || logTail.value.length > 0)
+const hasLogs = computed(() => {
+  logVersion.value
+  return terminalBuffer.text.length > 0
+})
 const renderedLogText = computed(() => {
-  const lines = [...logLines.value]
-  if (logTail.value !== '' || lines.length === 0) {
-    lines.push(logTail.value)
-  }
-  return lines.join('\n')
+  logVersion.value
+  return terminalBuffer.text
 })
 
 const renderedLogHtml = computed(() => {
@@ -64,8 +65,8 @@ const renderedLogHtml = computed(() => {
 })
 
 const lineCount = computed(() => {
-  if (!renderedLogText.value) return 0
-  return renderedLogText.value.split('\n').length
+  logVersion.value
+  return terminalBuffer.text ? terminalBuffer.lineCount : 0
 })
 
 const byteLabel = computed(() => {
@@ -109,6 +110,7 @@ watch(autoScroll, (enabled) => {
 async function startStream(isReconnect = false) {
   const savedScrollTop = isReconnect ? logContainerRef.value?.scrollTop ?? null : null
   cleanup()
+  const generation = requestGeneration
   resetLogOutput()
   done.value = false
   error.value = null
@@ -130,9 +132,11 @@ async function startStream(isReconnect = false) {
   const url = `/api/v1/logs/${props.taskId}/stream`
   eventSource = openAuthorizedEventStream(url, {
     onOpen() {
+      if (generation !== requestGeneration) return
       loading.value = false
     },
     onMessage(data) {
+      if (generation !== requestGeneration) return
       loading.value = false
       if (!data) {
         return
@@ -143,6 +147,7 @@ async function startStream(isReconnect = false) {
       scheduleBufferFlush()
     },
     onEvent(event) {
+      if (generation !== requestGeneration) return
       if (event.event !== 'done') {
         return
       }
@@ -167,6 +172,7 @@ async function startStream(isReconnect = false) {
       void fetchLatestLog(0, autoScroll.value ? 'bottom' : 'preserve')
     },
     onError() {
+      if (generation !== requestGeneration) return
       flushBufferedLogs()
       loading.value = false
       done.value = true
@@ -178,6 +184,7 @@ async function startStream(isReconnect = false) {
 
 async function loadLatestOnly() {
   cleanup()
+  const generation = requestGeneration
   resetLogOutput()
   done.value = true
   error.value = null
@@ -191,14 +198,15 @@ async function loadLatestOnly() {
     return
   }
 
-  await fetchLatestLog(0, 'top')
-  loading.value = false
+  await fetchLatestLog(0, 'top', generation)
+  if (generation === requestGeneration) loading.value = false
 }
 
-async function fetchLatestLog(retryCount = 0, scrollMode: 'top' | 'bottom' | 'preserve' = 'top') {
+async function fetchLatestLog(retryCount = 0, scrollMode: 'top' | 'bottom' | 'preserve' = 'top', generation = requestGeneration) {
   const previousScrollTop = logContainerRef.value?.scrollTop ?? 0
   try {
     const res = await taskApi.latestLog(props.taskId!) as any
+    if (generation !== requestGeneration) return
     if (!res) {
       emptyMessage.value = '该任务还没有日志记录'
       return
@@ -225,7 +233,7 @@ async function fetchLatestLog(retryCount = 0, scrollMode: 'top' | 'bottom' | 'pr
       if (retryCount < 5 && props.visible) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null
-          void fetchLatestLog(retryCount + 1, scrollMode)
+          void fetchLatestLog(retryCount + 1, scrollMode, generation)
         }, 500)
         return
       }
@@ -237,63 +245,15 @@ async function fetchLatestLog(retryCount = 0, scrollMode: 'top' | 'bottom' | 'pr
 }
 
 function resetLogOutput() {
-  logLines.value = []
-  logTail.value = ''
-  logTailCarriageReturnPending = false
-}
-
-function pushLogLine() {
-  logLines.value.push(logTail.value)
-  logTail.value = ''
-  logTailCarriageReturnPending = false
+  terminalBuffer.clear()
+  logVersion.value++
 }
 
 function appendLogChunk(chunk: string, commitBoundary = false) {
   if (!chunk && !commitBoundary) return
-
-  let endedWithLineBreak = false
-  let sawCarriageReturn = false
-  for (let i = 0; i < chunk.length; i++) {
-    const char = chunk[i]
-    if (char === '\r') {
-      if (chunk[i + 1] === '\n') {
-        pushLogLine()
-        endedWithLineBreak = true
-        sawCarriageReturn = false
-        i++
-        continue
-      }
-      // 裸 \r 表示终端希望“回到当前行开头”，不是换行。
-      // 这里先标记等待下一批字符覆盖，避免 SSE 分片刚好停在 \r 后面时把进度条临时清空。
-      logTailCarriageReturnPending = true
-      endedWithLineBreak = false
-      sawCarriageReturn = true
-      continue
-    }
-
-    if (char === '\n') {
-      pushLogLine()
-      endedWithLineBreak = true
-      sawCarriageReturn = false
-      continue
-    }
-
-    if (logTailCarriageReturnPending) {
-      // 收到裸 \r 后的第一段普通字符，才真正覆盖当前行。
-      // 这样进度条在 Web 面板里会像终端一样留在同一行刷新。
-      logTail.value = ''
-      logTailCarriageReturnPending = false
-    }
-    logTail.value += char
-    endedWithLineBreak = false
-  }
-
-  // 只有真正确定这一批内容已经形成稳定的一行时才落行。
-  // 如果这批内容里出现过裸 \r，说明它更像“正在刷新的终端行”，
-  // 需要继续留在 tail，等待后续覆盖或最终的 \n 收尾。
-  if (commitBoundary && !endedWithLineBreak && !sawCarriageReturn) {
-    pushLogLine()
-  }
+  terminalBuffer.append(chunk)
+  if (commitBoundary) terminalBuffer.append('\n')
+  logVersion.value++
 }
 
 function scheduleBufferFlush() {
@@ -360,6 +320,7 @@ function scrollToTop() {
 }
 
 function cleanup() {
+  requestGeneration++
   if (logFlushTimer !== null) {
     clearTimeout(logFlushTimer)
     logFlushTimer = null

@@ -10,6 +10,7 @@ import {
 } from "@/utils/sse";
 import { useResponsive } from "@/composables/useResponsive";
 import { ansiToHtml, normalizeAnsi } from "@/utils/ansi";
+import { TerminalLogBuffer } from "@/utils/terminalLogBuffer.mjs";
 
 const subList = ref<any[]>([]);
 const loading = ref(false);
@@ -102,17 +103,24 @@ const logDetailContentHtml = computed(() =>
 
 const showPullLog = ref(false);
 const pullLogLines = ref<string[]>([]);
-const pullLogLineHtmlList = computed(() =>
-  pullLogLines.value.map((line) => ansiToHtml(normalizeAnsi(line))),
-);
+const pullLogBuffer = new TerminalLogBuffer({ maxChars: 500_000, maxLines: 5_000 });
+const pullLogVersion = ref(0);
+const pullLogLineHtmlList = computed(() => {
+  pullLogVersion.value;
+  return pullLogBuffer.text ? [ansiToHtml(normalizeAnsi(pullLogBuffer.text))] : [];
+});
 const pullRunning = ref(false);
 const pullingSubId = ref<number | null>(null);
 let pullEventSource: EventStreamConnection | null = null;
 const pullLogRef = ref<HTMLElement>();
 let pullBuffer: string[] = [];
 let pullFlushRaf = 0;
+let dataLoadGeneration = 0;
+let logLoadGeneration = 0;
+let pullStreamGeneration = 0;
 
 async function loadData() {
+  const generation = ++dataLoadGeneration;
   loading.value = true;
   try {
     const res = await subscriptionApi.list({
@@ -125,12 +133,14 @@ async function loadData() {
       page: page.value,
       page_size: pageSize.value,
     });
+    if (generation !== dataLoadGeneration) return;
     subList.value = res.data || [];
     total.value = res.total || 0;
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.error || "加载订阅列表失败");
+    if (generation === dataLoadGeneration)
+      ElMessage.error(err?.response?.data?.error || "加载订阅列表失败");
   } finally {
-    loading.value = false;
+    if (generation === dataLoadGeneration) loading.value = false;
   }
 }
 
@@ -152,6 +162,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  dataLoadGeneration++;
+  logLoadGeneration++;
   closePullStream();
   if (pullFlushRaf) {
     cancelAnimationFrame(pullFlushRaf);
@@ -541,6 +553,7 @@ async function handleToggle(row: any) {
 async function handlePull(row: any) {
   if (pullingSubId.value === row.id && pullRunning.value) {
     showPullLog.value = true;
+    connectPullStream(row.id);
     return;
   }
 
@@ -560,7 +573,9 @@ async function handlePull(row: any) {
 
   try {
     await subscriptionApi.pull(row.id);
+    pullLogBuffer.clear();
     pullLogLines.value = [];
+    pullLogVersion.value++;
     pullRunning.value = true;
     pullingSubId.value = row.id;
     showPullLog.value = true;
@@ -598,14 +613,18 @@ async function handleStopPull() {
 
 function connectPullStream(id: number) {
   closePullStream();
+  const generation = pullStreamGeneration;
   const base = import.meta.env.VITE_API_BASE || "/api/v1";
   const url = `${base}/subscriptions/${id}/pull-stream`;
   pullEventSource = openAuthorizedEventStream(url, {
     onMessage(data) {
+      if (generation !== pullStreamGeneration) return;
       pullBuffer.push(data);
       if (!pullFlushRaf) {
         pullFlushRaf = requestAnimationFrame(() => {
-          pullLogLines.value.push(...pullBuffer);
+          for (const chunk of pullBuffer) pullLogBuffer.append(`${chunk}\n`);
+          pullLogLines.value = pullLogBuffer.text ? [pullLogBuffer.text] : [];
+          pullLogVersion.value++;
           pullBuffer = [];
           pullFlushRaf = 0;
           if (pullLogRef.value)
@@ -614,6 +633,7 @@ function connectPullStream(id: number) {
       }
     },
     onEvent(event) {
+      if (generation !== pullStreamGeneration) return;
       if (event.event === "done") {
         pullRunning.value = false;
         pullingSubId.value = null;
@@ -622,6 +642,7 @@ function connectPullStream(id: number) {
       }
     },
     onError() {
+      if (generation !== pullStreamGeneration) return;
       pullRunning.value = false;
       pullingSubId.value = null;
       closePullStream();
@@ -630,6 +651,12 @@ function connectPullStream(id: number) {
 }
 
 function closePullStream() {
+  pullStreamGeneration++;
+  if (pullFlushRaf) {
+    cancelAnimationFrame(pullFlushRaf);
+    pullFlushRaf = 0;
+  }
+  pullBuffer = [];
   if (pullEventSource) {
     pullEventSource.close();
     pullEventSource = null;
@@ -679,18 +706,21 @@ async function openLogs(subId: number) {
 }
 
 async function loadLogs() {
+  const generation = ++logLoadGeneration;
   logLoading.value = true;
   try {
     const res = await subscriptionApi.logs(logSubId.value, {
       page: logPage.value,
       page_size: 10,
     });
+    if (generation !== logLoadGeneration) return;
     logList.value = res.data || [];
     logTotal.value = res.total || 0;
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.error || "加载日志失败");
+    if (generation === logLoadGeneration)
+      ElMessage.error(err?.response?.data?.error || "加载日志失败");
   } finally {
-    logLoading.value = false;
+    if (generation === logLoadGeneration) logLoading.value = false;
   }
 }
 
@@ -1323,7 +1353,7 @@ function viewLogDetail(log: any) {
         <div
           v-for="(line, i) in pullLogLineHtmlList"
           :key="i"
-          class="pull-log-line"
+          class="pull-log-line pull-log-line--buffer"
           v-html="line"
         ></div>
         <div v-if="pullRunning" class="pull-log-line pull-running">

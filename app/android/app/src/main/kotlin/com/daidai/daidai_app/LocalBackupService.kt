@@ -15,8 +15,12 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -29,9 +33,12 @@ internal class LocalBackupService(
     private val context: Context,
     private val database: () -> SQLiteDatabase,
     private val schemaVersion: Int,
+    private val faultInjector: RestoreFaultInjector = RestoreFaultInjector.NONE,
 ) {
     private val backupDir get() = File(context.filesDir, "backups").apply { mkdirs() }
-    private val scriptsDir get() = File(context.filesDir, "scripts").apply { mkdirs() }
+    private val scriptsPath get() = File(context.filesDir, "scripts")
+    private val scriptsDir get() = scriptsPath.apply { mkdirs() }
+    private val restoreJournalFile get() = File(context.filesDir, RESTORE_JOURNAL_NAME)
 
     data class StoredFile(val file: File)
 
@@ -136,7 +143,18 @@ internal class LocalBackupService(
         return JSONObject().put("filename", file.name).put("deleted", true)
     }
 
-    fun restore(request: JSONObject): JSONObject {
+    fun restore(request: JSONObject): JSONObject = restoreLock.withLock {
+        recoverPendingRestoreLocked()
+        restoreLocked(request)
+    }
+
+    fun hasPendingRestore(): Boolean = restoreJournalFile.isFile
+
+    fun recoverPendingRestore(db: SQLiteDatabase) = restoreLock.withLock {
+        recoverPendingRestoreLocked(db)
+    }
+
+    private fun restoreLocked(request: JSONObject): JSONObject {
         val filename = request.optString("filename")
         val file = resolve(filename) ?: throw NoSuchElementException("备份文件不存在")
         require(file.length() in 1..MAX_BACKUP_BYTES.toLong()) { "备份文件为空或过大" }
@@ -148,9 +166,12 @@ internal class LocalBackupService(
         require(selected.keys().asSequence().any { selected.optBoolean(it) }) { "没有可恢复的选中项" }
 
         // Decode and write every script into an isolated tree before touching live state.
-        val staging = File(context.filesDir, ".scripts-restore-${System.nanoTime()}")
-        val rollback = File(context.filesDir, ".scripts-rollback-${System.nanoTime()}")
-        if (selected.optBoolean("scripts")) {
+        val restoreID = UUID.randomUUID().toString()
+        val staging = File(context.filesDir, ".scripts-restore-$restoreID")
+        val rollback = File(context.filesDir, ".scripts-rollback-$restoreID")
+        val scriptsSelected = selected.optBoolean("scripts")
+        val hadScripts = scriptsSelected && scriptsPath.exists()
+        if (scriptsSelected) {
             staging.mkdirs()
             prepared.scripts.forEach { script ->
                 val target = File(staging, script.first).canonicalFile
@@ -161,57 +182,45 @@ internal class LocalBackupService(
         }
 
         val db = database()
-        var scriptsActivated = false
-        db.beginTransaction()
+        ensureRestoreMarkerTable(db)
+        var journal = RestoreJournal(restoreID, RestoreStage.PREPARED, staging.name, rollback.name, scriptsSelected, hadScripts)
+        writeJournal(journal)
+        faultInjector.afterStage(RestoreCheckpoint.PREPARED)
         try {
-            val notificationIDMap = if (selected.optBoolean("configs")) {
-                replaceWithIDMap(db, "notification_channels", prepared.notifications, notificationColumns, mapOf("name" to "", "type" to ""))
-            } else emptyMap()
-            val sshKeyIDMap = if (selected.optBoolean("subscriptions")) {
-                replaceWithIDMap(db, "ssh_keys", prepared.sshKeys, sshKeyColumns, mapOf("name" to "", "private_key" to ""))
-            } else emptyMap()
-            val taskIDMap = if (selected.optBoolean("tasks")) {
-                restoreTasks(db, prepared.tasks, notificationIDMap)
-            } else emptyMap()
-            if (selected.optBoolean("env_vars")) replace(db, "envs", prepared.envs, envColumns, mapOf("name" to "", "value" to ""))
-            if (selected.optBoolean("configs")) {
-                replace(db, "local_configs", prepared.configs, configColumns, mapOf("key" to "", "value" to ""))
-                replace(db, "open_api_apps", prepared.openApps, openAppColumns, mapOf("name" to "", "app_key" to "", "secret" to ""))
-                replace(db, "security_ip_whitelist", prepared.ipWhitelists, ipWhitelistColumns, mapOf("ip" to ""))
-            }
-            if (selected.optBoolean("subscriptions")) restoreSubscriptions(db, prepared.subscriptions, sshKeyIDMap)
-            if (selected.optBoolean("dependencies")) replace(db, "dependencies", prepared.dependencies, dependencyColumns, mapOf("name" to "", "type" to ""))
-            if (selected.optBoolean("logs")) restoreTaskLogs(db, prepared.taskLogs, taskIDMap)
-            if (selected.optBoolean("task_views")) replace(db, "task_views", prepared.taskViews, taskViewColumns, mapOf("name" to ""))
-            if (selected.optBoolean("scripts")) {
-                if (scriptsDir.exists() && !scriptsDir.renameTo(rollback)) throw IllegalStateException("无法暂存当前脚本")
-                if (!staging.renameTo(scriptsDir)) {
-                    rollback.renameTo(scriptsDir)
-                    throw IllegalStateException("无法启用恢复脚本")
-                }
-                scriptsActivated = true
-            }
-            db.setTransactionSuccessful()
-        } catch (error: Exception) {
-            if (scriptsActivated) {
-                scriptsDir.deleteRecursively()
-                rollback.renameTo(scriptsDir)
-            }
-            throw error
-        } finally {
+            db.beginTransaction()
             try {
-                db.endTransaction()
-            } catch (error: Exception) {
-                if (scriptsActivated) {
-                    scriptsDir.deleteRecursively()
-                    rollback.renameTo(scriptsDir)
+                applyDatabaseRestore(db, prepared, selected)
+                if (scriptsSelected) {
+                    if (scriptsPath.exists() && !scriptsPath.renameTo(rollback)) throw IllegalStateException("无法暂存当前脚本")
+                    if (!staging.renameTo(scriptsPath)) {
+                        rollback.renameTo(scriptsPath)
+                        throw IllegalStateException("无法启用恢复脚本")
+                    }
                 }
-                throw error
+                journal = journal.copy(stage = RestoreStage.SCRIPTS_SWITCHED)
+                writeJournal(journal)
+                faultInjector.afterStage(RestoreCheckpoint.SCRIPTS_SWITCHED)
+                db.delete(RESTORE_MARKER_TABLE, null, null)
+                db.insertOrThrow(RESTORE_MARKER_TABLE, null, ContentValues().apply {
+                    put("restore_id", restoreID)
+                    put("committed_at", Instant.now().toString())
+                })
+                db.setTransactionSuccessful()
             } finally {
-                staging.deleteRecursively()
+                db.endTransaction()
             }
+            check(isRestoreCommitted(db, restoreID)) { "无法验证恢复事务提交状态" }
+            faultInjector.afterStage(RestoreCheckpoint.DATABASE_COMMIT_VERIFIED)
+            journal = journal.copy(stage = RestoreStage.DATABASE_COMMITTED)
+            writeJournal(journal)
+            faultInjector.afterStage(RestoreCheckpoint.DATABASE_COMMITTED)
+            completeRestore(journal)
+        } catch (error: SimulatedRestoreProcessDeath) {
+            throw error
+        } catch (error: Exception) {
+            recoverPendingRestoreLocked()
+            throw error
         }
-        rollback.deleteRecursively()
         val counts = JSONObject()
             .put("tasks", if (selected.optBoolean("tasks")) prepared.tasks.length() else 0)
             .put("env_vars", if (selected.optBoolean("env_vars")) prepared.envs.length() else 0)
@@ -224,6 +233,139 @@ internal class LocalBackupService(
             .put("task_views", if (selected.optBoolean("task_views")) prepared.taskViews.length() else 0)
             .put("scripts", if (selected.optBoolean("scripts")) prepared.scripts.size else 0)
         return JSONObject().put("status", "completed").put("stage", "atomic_restore").put("filename", filename).put("selection", selected).put("counts", counts)
+    }
+
+    private fun applyDatabaseRestore(db: SQLiteDatabase, prepared: Prepared, selected: JSONObject) {
+        val notificationIDMap = if (selected.optBoolean("configs")) {
+            replaceWithIDMap(db, "notification_channels", prepared.notifications, notificationColumns, mapOf("name" to "", "type" to ""))
+        } else emptyMap()
+        val sshKeyIDMap = if (selected.optBoolean("subscriptions")) {
+            replaceWithIDMap(db, "ssh_keys", prepared.sshKeys, sshKeyColumns, mapOf("name" to "", "private_key" to ""))
+        } else emptyMap()
+        val taskIDMap = if (selected.optBoolean("tasks")) restoreTasks(db, prepared.tasks, notificationIDMap) else emptyMap()
+        if (selected.optBoolean("env_vars")) replace(db, "envs", prepared.envs, envColumns, mapOf("name" to "", "value" to ""))
+        if (selected.optBoolean("configs")) {
+            replace(db, "local_configs", prepared.configs, configColumns, mapOf("key" to "", "value" to ""))
+            db.delete("open_api_tokens", null, null)
+            replace(db, "open_api_apps", prepared.openApps, openAppColumns, mapOf("name" to "", "app_key" to "", "secret" to ""))
+            replace(db, "security_ip_whitelist", prepared.ipWhitelists, ipWhitelistColumns, mapOf("ip" to ""))
+        }
+        if (selected.optBoolean("subscriptions")) restoreSubscriptions(db, prepared.subscriptions, sshKeyIDMap)
+        if (selected.optBoolean("dependencies")) replace(db, "dependencies", prepared.dependencies, dependencyColumns, mapOf("name" to "", "type" to ""))
+        if (selected.optBoolean("logs")) restoreTaskLogs(db, prepared.taskLogs, taskIDMap)
+        if (selected.optBoolean("task_views")) replace(db, "task_views", prepared.taskViews, taskViewColumns, mapOf("name" to ""))
+    }
+
+    private fun recoverPendingRestoreLocked(db: SQLiteDatabase = database()) {
+        val journal = readJournal() ?: return
+        ensureRestoreMarkerTable(db)
+        when (RestoreJournalStateMachine.recovery(journal.stage, isRestoreCommitted(db, journal.id))) {
+            RestoreRecovery.ROLL_FORWARD -> completeRestore(rollForwardJournal(journal))
+            RestoreRecovery.ROLL_BACK -> {
+                rollbackScriptSwitch(journal)
+                restoreJournalFile.delete()
+            }
+            RestoreRecovery.CLEAN_UP -> restoreJournalFile.delete()
+        }
+    }
+
+    private fun rollForwardJournal(initial: RestoreJournal): RestoreJournal {
+        finishScriptSwitch(initial)
+        var journal = initial
+        if (journal.stage == RestoreStage.PREPARED) {
+            journal = journal.copy(stage = RestoreStage.SCRIPTS_SWITCHED)
+            writeJournal(journal)
+        }
+        if (journal.stage == RestoreStage.SCRIPTS_SWITCHED) {
+            journal = journal.copy(stage = RestoreStage.DATABASE_COMMITTED)
+            writeJournal(journal)
+        }
+        return journal
+    }
+
+    private fun finishScriptSwitch(journal: RestoreJournal) {
+        if (!journal.scriptsSelected) return
+        check(scriptsPath.isDirectory) { "已提交恢复缺少脚本目录" }
+        journalFile(journal.stagingName).deleteRecursively()
+        journalFile(journal.rollbackName).deleteRecursively()
+    }
+
+    private fun rollbackScriptSwitch(journal: RestoreJournal) {
+        if (!journal.scriptsSelected) return
+        val staging = journalFile(journal.stagingName)
+        val rollback = journalFile(journal.rollbackName)
+        when {
+            rollback.exists() -> {
+                scriptsPath.deleteRecursively()
+                check(rollback.renameTo(scriptsPath)) { "无法回滚脚本目录" }
+            }
+            !staging.exists() && !journal.hadScripts -> scriptsPath.deleteRecursively()
+        }
+        staging.deleteRecursively()
+    }
+
+    private fun completeRestore(journal: RestoreJournal) {
+        journalFile(journal.stagingName).deleteRecursively()
+        journalFile(journal.rollbackName).deleteRecursively()
+        if (journal.stage != RestoreStage.COMPLETED) {
+            writeJournal(journal.copy(stage = RestoreStage.COMPLETED))
+            faultInjector.afterStage(RestoreCheckpoint.COMPLETED)
+        }
+        restoreJournalFile.delete()
+    }
+
+    private fun ensureRestoreMarkerTable(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS $RESTORE_MARKER_TABLE (restore_id TEXT PRIMARY KEY, committed_at TEXT NOT NULL)")
+    }
+
+    private fun isRestoreCommitted(db: SQLiteDatabase, restoreID: String): Boolean = db.query(
+        RESTORE_MARKER_TABLE, arrayOf("restore_id"), "restore_id=?", arrayOf(restoreID), null, null, null, "1",
+    ).use(Cursor::moveToFirst)
+
+    private fun readJournal(): RestoreJournal? {
+        if (!restoreJournalFile.isFile) return null
+        val json = JSONObject(restoreJournalFile.readText())
+        return RestoreJournal(
+            id = json.getString("id"),
+            stage = RestoreStage.fromWireName(json.getString("stage")),
+            stagingName = json.getString("staging_name"),
+            rollbackName = json.getString("rollback_name"),
+            scriptsSelected = json.getBoolean("scripts_selected"),
+            hadScripts = json.getBoolean("had_scripts"),
+        ).also {
+            journalFile(it.stagingName)
+            journalFile(it.rollbackName)
+        }
+    }
+
+    private fun writeJournal(journal: RestoreJournal) {
+        readJournal()?.let { current ->
+            check(current.id == journal.id && RestoreJournalStateMachine.canAdvance(current.stage, journal.stage)) {
+                "非法恢复 journal 阶段迁移: ${current.stage.wireName} -> ${journal.stage.wireName}"
+            }
+        }
+        val target = restoreJournalFile
+        val temporary = File(target.parentFile, "${target.name}.tmp")
+        val json = JSONObject()
+            .put("version", 1)
+            .put("id", journal.id)
+            .put("stage", journal.stage.wireName)
+            .put("staging_name", journal.stagingName)
+            .put("rollback_name", journal.rollbackName)
+            .put("scripts_selected", journal.scriptsSelected)
+            .put("had_scripts", journal.hadScripts)
+        FileOutputStream(temporary).use { output ->
+            output.write(json.toString().toByteArray(Charsets.UTF_8))
+            output.fd.sync()
+        }
+        if (!temporary.renameTo(target)) throw IllegalStateException("无法持久化恢复 journal")
+    }
+
+    private fun journalFile(name: String): File {
+        require(name.startsWith(".scripts-restore-") || name.startsWith(".scripts-rollback-")) { "恢复 journal 路径无效" }
+        val file = File(context.filesDir, name).canonicalFile
+        require(file.parentFile == context.filesDir.canonicalFile) { "恢复 journal 路径越界" }
+        return file
     }
 
     private data class Prepared(
@@ -708,6 +850,9 @@ internal class LocalBackupService(
     }
 
     companion object {
+        private const val RESTORE_JOURNAL_NAME = ".local-restore-journal.json"
+        private const val RESTORE_MARKER_TABLE = "local_restore_commits"
+        private val restoreLock = ReentrantLock()
         private const val MAX_BACKUP_BYTES = 64 * 1024 * 1024
         private const val MAX_EXPANDED_BYTES = 128 * 1024 * 1024
         private const val MAX_ENTRY_BYTES = MAX_EXPANDED_BYTES
@@ -732,3 +877,60 @@ internal class LocalBackupService(
         private val ipWhitelistColumns = setOf("id", "ip", "remarks", "enabled", "created_at", "updated_at")
     }
 }
+
+internal enum class RestoreStage(val wireName: String) {
+    PREPARED("prepared"),
+    SCRIPTS_SWITCHED("scripts_switched"),
+    DATABASE_COMMITTED("database_committed"),
+    COMPLETED("completed");
+
+    companion object {
+        fun fromWireName(value: String): RestoreStage = entries.firstOrNull { it.wireName == value }
+            ?: throw IllegalArgumentException("未知恢复阶段: $value")
+    }
+}
+
+internal enum class RestoreRecovery { ROLL_BACK, ROLL_FORWARD, CLEAN_UP }
+
+internal object RestoreJournalStateMachine {
+    fun canAdvance(from: RestoreStage, to: RestoreStage): Boolean = when (from) {
+        RestoreStage.PREPARED -> to == RestoreStage.SCRIPTS_SWITCHED
+        RestoreStage.SCRIPTS_SWITCHED -> to == RestoreStage.DATABASE_COMMITTED
+        RestoreStage.DATABASE_COMMITTED -> to == RestoreStage.COMPLETED
+        RestoreStage.COMPLETED -> false
+    }
+
+    fun recovery(stage: RestoreStage, databaseCommitMarker: Boolean): RestoreRecovery = when {
+        stage == RestoreStage.COMPLETED -> RestoreRecovery.CLEAN_UP
+        databaseCommitMarker -> RestoreRecovery.ROLL_FORWARD
+        else -> RestoreRecovery.ROLL_BACK
+    }
+}
+
+internal data class RestoreJournal(
+    val id: String,
+    val stage: RestoreStage,
+    val stagingName: String,
+    val rollbackName: String,
+    val scriptsSelected: Boolean,
+    val hadScripts: Boolean,
+)
+
+internal enum class RestoreCheckpoint {
+    PREPARED,
+    SCRIPTS_SWITCHED,
+    DATABASE_COMMIT_VERIFIED,
+    DATABASE_COMMITTED,
+    COMPLETED,
+}
+
+internal fun interface RestoreFaultInjector {
+    fun afterStage(checkpoint: RestoreCheckpoint)
+
+    companion object {
+        val NONE = RestoreFaultInjector { }
+    }
+}
+
+/** Test-only signal that models abrupt process loss without in-process cleanup. */
+internal class SimulatedRestoreProcessDeath(checkpoint: RestoreCheckpoint) : Error(checkpoint.name)

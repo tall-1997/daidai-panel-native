@@ -44,20 +44,39 @@ class LocalPanelHttpServer(
         internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean =
             uri.startsWith("/api/")
 
+        internal fun isOpenApiTokenCapabilityEnabled(): Boolean = true
+
+        internal fun isPublicAuthRoute(method: Method, uri: String): Boolean = when (uri.substringBefore('?').trimEnd('/')) {
+            "/api/auth/check-init" -> method == Method.GET
+            "/api/auth/init", "/api/auth/login", "/api/auth/refresh" -> method == Method.POST
+            "/api/auth/captcha-config" -> method == Method.GET
+            else -> false
+        }
+
+        internal fun isPublicApiRoute(method: Method, uri: String): Boolean = when (uri.substringBefore('?').trimEnd('/')) {
+            "/api/health", "/api/v1/health", "/api/local/capabilities", "/api/system/public-version",
+            "/api/android/recovery-metadata" -> method == Method.GET
+            "/api/system/health-check" -> method == Method.GET || method == Method.POST
+            else -> false
+        }
+
         internal fun isLocalOrLanHost(host: String?): Boolean {
-            if (host == null) return false
-            val hostPart = host.substringBefore(':').trim()
-                .removePrefix("[").removeSuffix("]").lowercase()
-            if (hostPart == "localhost" || hostPart == "::1") return true
-            val parts = hostPart.split('.')
-            if (parts.size != 4) return hostPart == "127.0.0.1"
-            val a = parts[0].toIntOrNull() ?: return false
-            val b = parts[1].toIntOrNull() ?: return false
-            if (a == 127) return true
-            if (a == 10) return true
-            if (a == 192 && b == 168) return true
-            if (a == 172 && b in 16..31) return true
-            return false
+            val value = host?.trim()?.takeIf(String::isNotEmpty) ?: return false
+            val hostPart = when {
+                value.startsWith('[') -> {
+                    val close = value.indexOf(']')
+                    if (close <= 1 || value.substring(close + 1).let { it.isNotEmpty() && !it.matches(Regex(":\\d+")) }) return false
+                    value.substring(1, close)
+                }
+                value.count { it == ':' } > 1 -> value
+                else -> value.substringBefore(':')
+            }.lowercase()
+            if (hostPart == "localhost") return true
+            if (!hostPart.matches(Regex("[0-9a-f:.]+"))) return false
+            val address = runCatching { InetAddress.getByName(hostPart) }.getOrNull() ?: return false
+            val bytes = address.address
+            val uniqueLocalV6 = bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
+            return address.isLoopbackAddress || address.isSiteLocalAddress || address.isLinkLocalAddress || uniqueLocalV6
         }
     }
 
@@ -149,7 +168,11 @@ class LocalPanelHttpServer(
             if (!isFallbackRouteAllowed(session.method, session.uri)) {
                 return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")
             }
+            if (isPublicApiRoute(session.method, session.uri)) return servePublicApi(session)
             if (session.uri.startsWith("/api/auth")) {
+                if (!isPublicAuthRoute(session.method, session.uri) && !store.isAuthorized(session)) {
+                    return jsonError(Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
+                }
                 return store.serveAuth(session)
             }
             if (session.uri == "/api/open-api/token" || session.uri == "/api/v1/open-api/token") {
@@ -162,7 +185,7 @@ class LocalPanelHttpServer(
                     store.authorizeBusinessRequest(session)?.let { return it }
                 }
             }
-            if (session.uri.startsWith("/api/security")) {
+            if (session.uri.startsWith("/api/security") || session.uri.startsWith("/api/v1/security")) {
                 return store.serveSecurity(session)
             }
             // Route dispatch for all store-backed endpoints
@@ -201,24 +224,8 @@ class LocalPanelHttpServer(
                     .put("status", "ok")
             )
             when {
-                session.method == Method.GET &&
-                    (session.uri == "/api/v1/health" || session.uri == "/api/health") ->
-                    jsonResponse(JSONObject().put("status", "ok").put("mode", "android_local"))
-
-                session.method == Method.GET && session.uri == "/api/local/capabilities" ->
-                    jsonResponse(capabilities())
-
                 session.method == Method.GET && session.uri == "/api/system/version" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName()).put("mode", "diagnostic")))
-
-                session.method == Method.GET && session.uri == "/api/system/public-version" ->
-                    jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName())))
-
-                (session.method == Method.GET || session.method == Method.POST) && session.uri == "/api/system/health-check" ->
-                    jsonResponse(systemHealth())
-
-                session.method == Method.GET && session.uri == "/api/android/recovery-metadata" ->
-                    jsonResponse(recoveryMetadata())
 
                 session.method == Method.GET && session.uri == "/api/system/info" ->
                     jsonResponse(systemInfo())
@@ -246,6 +253,15 @@ class LocalPanelHttpServer(
         }
     }
 
+    private fun servePublicApi(session: IHTTPSession): Response = when (session.uri.substringBefore('?').trimEnd('/')) {
+        "/api/health", "/api/v1/health" -> jsonResponse(JSONObject().put("status", "ok").put("mode", "android_local"))
+        "/api/local/capabilities" -> jsonResponse(capabilities())
+        "/api/system/public-version" -> jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName())))
+        "/api/system/health-check" -> jsonResponse(systemHealth())
+        "/api/android/recovery-metadata" -> jsonResponse(recoveryMetadata())
+        else -> jsonError(Response.Status.NOT_FOUND, "公开接口不存在")
+    }
+
     private fun androidRuntime(session:IHTTPSession):Response {
         val parameters = session.parameters
         if(session.uri.endsWith("/status")&&session.method==Method.GET)return jsonResponse(JSONObject().put("data",AndroidLinuxRuntime.statusJson(context)))
@@ -268,9 +284,20 @@ class LocalPanelHttpServer(
         if(session.uri.endsWith("/download")&&session.method==Method.POST){
             val distribution=(parameters["distribution"]?.firstOrNull() ?: "").trim()
             if(distribution !in AndroidLinuxRuntime.SUPPORTED_DISTRIBUTIONS)return jsonError(Response.Status.BAD_REQUEST,"Unsupported distribution: $distribution")
-            if(AndroidRootfsDownloader.downloadRunning)return jsonError(Response.Status.CONFLICT,"A rootfs download is already in progress")
+            if(!AndroidRootfsDownloader.tryStartDownload())return jsonError(Response.Status.CONFLICT,"A rootfs download is already in progress")
             val abi=AndroidLinuxRuntime.currentAbi()
-            Thread{runCatching{AndroidRootfsDownloader.downloadRootfs(context,distribution,abi,AndroidRootfsDownloader.ProgressListener{},java.util.concurrent.atomic.AtomicBoolean(false))}}.start()
+            try {
+                Thread{
+                    try {
+                        runCatching{AndroidRootfsDownloader.downloadRootfsClaimed(context,distribution,abi,AndroidRootfsDownloader.ProgressListener{},java.util.concurrent.atomic.AtomicBoolean(false))}
+                    } finally {
+                        AndroidRootfsDownloader.finishDownload()
+                    }
+                }.start()
+            } catch (error: RuntimeException) {
+                AndroidRootfsDownloader.finishDownload()
+                throw error
+            }
             return jsonResponse(JSONObject().put("status","accepted").put("distribution",distribution).put("source_id",AndroidRootfsDownloader.selectedSourceId(context,distribution)))
         }
         if(session.uri.endsWith("/download-status")&&session.method==Method.GET){
@@ -330,11 +357,11 @@ class LocalPanelHttpServer(
                 .put("subscription_schedule", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
                 .put("notifications", true)
                 .put("open_api_management", true)
-                .put("open_api_token", false)
+                .put("open_api_token", isOpenApiTokenCapabilityEnabled())
                 .put("security", true)
                 .put("ip_whitelist_management", true)
                 .put("two_factor_auth", false)
-                .put("multi_device_sessions", false)
+                .put("multi_device_sessions", true)
                 .put("backup", true)
                 .put("backup_schedule", true)
                 .put("system_monitor", true)

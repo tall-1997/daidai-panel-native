@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, onDeactivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { systemApi, type BackupSelection, type RestoreProgressState } from '@/api/system'
 import { securityApi } from '@/api/security'
@@ -67,7 +67,7 @@ export function useSettingsSecurity() {
   const restoreProgressError = ref('')
   const restoreRestartCountdown = ref(0)
   let restoreProgressPollTimer: ReturnType<typeof setInterval> | null = null
-  let restartProbeTimer: ReturnType<typeof setInterval> | null = null
+  let restartProbeTimer: ReturnType<typeof setTimeout> | null = null
   let restartProbeDelayTimer: ReturnType<typeof setTimeout> | null = null
 
   const oldPassword = ref('')
@@ -228,7 +228,7 @@ export function useSettingsSecurity() {
       restartProbeDelayTimer = null
     }
     if (restartProbeTimer) {
-      clearInterval(restartProbeTimer)
+      clearTimeout(restartProbeTimer)
       restartProbeTimer = null
     }
   }
@@ -382,13 +382,14 @@ export function useSettingsSecurity() {
     let attempts = 0
     restartProbeDelayTimer = setTimeout(() => {
       restartProbeDelayTimer = null
-      restartProbeTimer = setInterval(async () => {
+      const probe = async () => {
         attempts += 1
         try {
           const res = await fetch('/', { method: 'HEAD', cache: 'no-store' })
           if (res.ok) {
             stopRestartProbe()
             window.location.reload()
+            return
           }
         } catch {
           // ignore
@@ -400,8 +401,11 @@ export function useSettingsSecurity() {
           restoreProgressMessage.value = '恢复已经完成，但暂时还没有检测到面板重新上线。'
           restoreProgressError.value = '重启等待超时，请稍后手动刷新页面，或检查容器/反向代理是否仍在重建。'
           ElMessage.warning('重启超时，请稍后手动刷新页面')
+          return
         }
-      }, 2000)
+        restartProbeTimer = setTimeout(probe, 2000)
+      }
+      restartProbeTimer = setTimeout(probe, 0)
     }, 3000)
   }
 
@@ -629,6 +633,12 @@ export function useSettingsSecurity() {
   }
 
   onBeforeUnmount(() => {
+    stopRestoreCountdown()
+    stopRestoreProgressPolling()
+    stopRestartProbe()
+  })
+
+  onDeactivated(() => {
     stopRestoreCountdown()
     stopRestoreProgressPolling()
     stopRestartProbe()

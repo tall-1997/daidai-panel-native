@@ -2,6 +2,26 @@ import 'package:daidai_app/shared/utils/bounded_log_buffer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'log update batcher coalesces entries for 32ms and flushes terminal updates',
+    (tester) async {
+      final flushed = <List<String>>[];
+      final batcher = LogUpdateBatcher<String>(onFlush: flushed.add);
+
+      batcher.addAll(['a', 'b']);
+      await tester.pump(const Duration(milliseconds: 31));
+      expect(flushed, isEmpty);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(flushed, [
+        ['a', 'b'],
+      ]);
+
+      batcher.add('terminal');
+      batcher.flush();
+      expect(flushed.last, ['terminal']);
+      batcher.dispose();
+    },
+  );
   group('bounded log entries', () {
     test('retains the newest lines within the line limit', () {
       final entries = <String>['one'];

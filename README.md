@@ -233,8 +233,10 @@ Quality 根据改动路径执行：
 | 通道 | 用途 | GitHub Release |
 | --- | --- | --- |
 | `snapshot` | main 日常验证 | 仅 Actions artifact |
-| `prerelease` | 可安装预发行 APK | 手动创建或工作流扩展 |
+| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v1.0.19` |
 | `stable` | 正式签名稳定版 | 自动创建 Stable Release |
+
+重复运行 `prerelease` 会更新固定版本标签到本次提交，并仅覆盖本轮同名 APK、校验文件、更新清单和证据包；其他 Release 资产保持原样。未来升版只需先明确更新 `VERSION.json`。
 
 手动触发 snapshot：
 

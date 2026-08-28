@@ -58,7 +58,7 @@ class AndroidPythonRuntimeScriptTest(unittest.TestCase):
             accepted = self.run_helper("--verify-wheelhouse", wheelhouse)
             self.assertEqual(0, accepted.returncode, accepted.stderr)
 
-    def test_metadata_generation_hashes_every_runtime_file(self):
+    def test_metadata_generation_writes_isolated_optional_asset(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             assets = root / "assets"
@@ -71,24 +71,31 @@ class AndroidPythonRuntimeScriptTest(unittest.TestCase):
             launcher = native / "libpython_exec.so"
             launcher.write_bytes(b"launcher")
             (native / "libpython3.14.so").write_bytes(b"python")
-            (runtime / "manifest.json").write_text(json.dumps({"version": "1", "components": []}))
-            (runtime / "compatibility.json").write_text(json.dumps({"version": "1", "runtimes": []}))
-            (runtime / "dependencies.json").write_text(json.dumps({"version": "1"}))
-            (runtime / "smoke-evidence.json").write_text(json.dumps({"version": "1", "records": []}))
+            canonical = {
+                "manifest.json": {"version": "1", "components": [{"id": "python-3.12-android-arm64"}]},
+                "compatibility.json": {"version": "1", "runtimes": [{"id": "python-3.12-android-arm64"}]},
+                "dependencies.json": {"version": "1", "python": {"runtime": "python-3.12-android-arm64"}},
+                "smoke-evidence.json": {"version": "1", "records": [{"runtime_id": "python-3.12-android-arm64"}]},
+            }
+            for name, payload in canonical.items():
+                (runtime / name).write_text(json.dumps(payload))
 
             result = self.run_helper(
                 "--generate-metadata", assets, native, runtime, "3.14.6", "test-revision"
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            manifest = json.loads((runtime / "manifest.json").read_text())
-            python = next(item for item in manifest["components"] if item["id"] == "python-3.14-android-arm64")
+            metadata = json.loads((assets / "runtime-manifest.json").read_text())
+            python = metadata["component"]
+            self.assertEqual("python-launcher-3.14-android-arm64", python["id"])
+            self.assertEqual("3.14.6", python["version"])
+            self.assertEqual("apk_elf", python["entry_type"])
+            self.assertEqual("optional-build-asset", python["runtime_type"])
+            self.assertEqual("android-app-sandbox", python["isolation"])
             self.assertEqual(hashlib.sha256(launcher.read_bytes()).hexdigest(), python["sha256"])
             self.assertEqual(3, python["artifact_count"])
             self.assertEqual("test-revision", python["asset_revision"])
-            smoke = json.loads((runtime / "smoke-evidence.json").read_text())
-            record = next(item for item in smoke["records"] if item["runtime_id"] == python["id"])
-            self.assertEqual("blocked", record["status"])
-            self.assertEqual("device-smoke-required", record["checks"][0]["reason"])
+            for name, payload in canonical.items():
+                self.assertEqual(payload, json.loads((runtime / name).read_text()), name)
 
     def test_runtime_digest_is_stable_and_content_sensitive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -111,6 +118,8 @@ class AndroidPythonRuntimeScriptTest(unittest.TestCase):
 
     def test_prepare_script_bootstraps_missing_ensurepip_bundle(self):
         script = SCRIPT.read_text()
+        self.assertIn('build/optional-runtimes/python-${PYTHON_VERSION}-arm64-v8a', script)
+        self.assertNotIn('PYTHON_JNI_DIR:-$ANDROID_APP_DIR/src/main/jniLibs', script)
         self.assertIn('ENSUREPIP_BUNDLED=', script)
         self.assertIn('--no-deps', script)
         self.assertIn('pip==24.0', script)

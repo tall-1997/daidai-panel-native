@@ -1,3 +1,5 @@
+import 'dart:async';
+
 const int defaultMaxLogLines = 1000;
 const int defaultMaxLogCharacters = 200000;
 
@@ -146,3 +148,40 @@ void _validateLimits(int maxLines, int maxCharacters) {
 }
 
 bool _isLowSurrogate(int codeUnit) => codeUnit >= 0xDC00 && codeUnit <= 0xDFFF;
+
+class LogUpdateBatcher<T> {
+  LogUpdateBatcher({
+    required this.onFlush,
+    this.interval = const Duration(milliseconds: 32),
+  });
+
+  final void Function(List<T> entries) onFlush;
+  final Duration interval;
+  final List<T> _pending = [];
+  Timer? _timer;
+
+  void add(T entry) {
+    _pending.add(entry);
+    _timer ??= Timer(interval, flush);
+  }
+
+  void addAll(Iterable<T> entries) {
+    _pending.addAll(entries);
+    if (_pending.isNotEmpty) _timer ??= Timer(interval, flush);
+  }
+
+  void flush() {
+    _timer?.cancel();
+    _timer = null;
+    if (_pending.isEmpty) return;
+    final entries = List<T>.of(_pending);
+    _pending.clear();
+    onFlush(entries);
+  }
+
+  void dispose() {
+    _timer?.cancel();
+    _timer = null;
+    _pending.clear();
+  }
+}

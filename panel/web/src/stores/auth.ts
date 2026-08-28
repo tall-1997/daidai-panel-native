@@ -3,6 +3,12 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import router from '@/router'
 import type { GeeTestValidateResult } from '@/utils/geetest'
+import {
+  advanceSessionGeneration,
+  getSessionGeneration,
+  isCurrentSession,
+  refreshSessionSingleFlight,
+} from '@/utils/authSession'
 
 interface User {
   id: number
@@ -25,6 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function setTokens(access: string, refresh: string) {
     if (!access || !refresh) throw new Error('认证响应格式无效')
+    advanceSessionGeneration()
     accessToken.value = access
     refreshToken.value = refresh
     localStorage.setItem('access_token', access)
@@ -36,6 +43,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearAuth() {
+    advanceSessionGeneration()
     accessToken.value = ''
     refreshToken.value = ''
     user.value = null
@@ -65,16 +73,19 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(res.user)
   }
 
-  async function refreshAccessToken() {
-    const res = await authApi.refresh()
-    if (!res.access_token) throw new Error('刷新响应格式无效')
-    accessToken.value = res.access_token
-    localStorage.setItem('access_token', res.access_token)
-    if (res.refresh_token) {
-      refreshToken.value = res.refresh_token
-      localStorage.setItem('refresh_token', res.refresh_token)
-    }
-    return res.access_token
+  async function refreshAccessToken(generation = getSessionGeneration()) {
+    return refreshSessionSingleFlight(async () => {
+      const res = await authApi.refresh()
+      if (!res.access_token) throw new Error('刷新响应格式无效')
+      if (!isCurrentSession(generation)) throw new Error('认证会话已变更')
+      accessToken.value = res.access_token
+      localStorage.setItem('access_token', res.access_token)
+      if (res.refresh_token) {
+        refreshToken.value = res.refresh_token
+        localStorage.setItem('refresh_token', res.refresh_token)
+      }
+      return res.access_token
+    }, generation)
   }
 
   return {

@@ -1,5 +1,6 @@
 import router from '@/router'
 import { useAuthStore } from '@/stores/auth'
+import { getSessionGeneration, isCurrentSession, onSessionGenerationChange } from '@/utils/authSession'
 
 export interface EventStreamEvent {
   event: string
@@ -30,6 +31,12 @@ export function openAuthorizedEventStream(
 ): EventStreamConnection {
   const authStore = useAuthStore()
   const controller = new AbortController()
+  const generation = getSessionGeneration()
+  let unsubscribeSession = () => false
+  unsubscribeSession = onSessionGenerationChange(() => {
+    unsubscribeSession()
+    controller.abort()
+  })
   let closed = false
   let retried = false
 
@@ -38,6 +45,7 @@ export function openAuthorizedEventStream(
       return
     }
     closed = true
+    unsubscribeSession()
     controller.abort()
   }
 
@@ -64,20 +72,29 @@ export function openAuthorizedEventStream(
         try {
           await authStore.refreshAccessToken()
         } catch {
-          authStore.clearAuth()
-          router.push('/login')
+          if (isCurrentSession(generation)) {
+            authStore.clearAuth()
+            void router.push('/login')
+          }
           throw new Error('登录已过期，请重新登录')
         }
-        if (!closed) {
+        if (!closed && isCurrentSession(generation)) {
           await connect()
         }
         return
       }
 
       if (response.status === 401) {
-        authStore.clearAuth()
-        router.push('/login')
+        if (isCurrentSession(generation)) {
+          authStore.clearAuth()
+          void router.push('/login')
+        }
         throw new Error('登录已过期，请重新登录')
+      }
+
+      if (!isCurrentSession(generation)) {
+        close()
+        return
       }
 
       if (!response.ok || !response.body) {
@@ -86,11 +103,14 @@ export function openAuthorizedEventStream(
 
       handlers.onOpen?.()
       await consumeEventStream(response.body, handlers, controller.signal)
+      unsubscribeSession()
     } catch (error) {
       if (closed || controller.signal.aborted) {
+        unsubscribeSession()
         return
       }
       handlers.onError?.(toError(error))
+      unsubscribeSession()
     }
   }
 

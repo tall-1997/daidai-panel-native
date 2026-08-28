@@ -1,13 +1,27 @@
 package com.daidai.daidai_app
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.os.Process
+import android.system.Os
+import android.system.OsConstants
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
+import java.io.IOException
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.URI
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.time.Instant
 import java.util.zip.GZIPInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
@@ -39,19 +53,59 @@ object AndroidLinuxRuntime {
 
     private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> = REQUIRED_COMMANDS_UBUNTU
     const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
+    const val UBUNTU_PORTS_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu-ports"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
     const val PIP_MIRROR_KEY = "pip_mirror"
     const val NPM_MIRROR_KEY = "npm_mirror"
     const val LINUX_MIRROR_KEY = "linux_mirror"
+    private val DNS_FALLBACK_SERVERS = listOf("1.1.1.1", "8.8.8.8")
+
+    data class DnsConfig(
+        val source: String,
+        val servers: List<String>,
+        val writeSuccess: Boolean,
+        val updatedAt: String,
+        val error: String,
+    )
+
+    internal data class BindCandidate(val path: String, val core: Boolean = false)
+
+    internal data class BindSelection(
+        val enabled: List<BindCandidate>,
+        val skipped: List<BindCandidate>,
+    )
+
+    private val HOST_BIND_CANDIDATES = listOf(
+        BindCandidate("/proc", core = true),
+        BindCandidate("/dev", core = true),
+        BindCandidate("/sys", core = true),
+        BindCandidate("/sdcard"),
+        BindCandidate("/storage"),
+        BindCandidate("/apex"),
+        BindCandidate("/odm"),
+        BindCandidate("/product"),
+        BindCandidate("/system"),
+        BindCandidate("/system_ext"),
+        BindCandidate("/vendor"),
+        BindCandidate("/linkerconfig"),
+    )
+
+    @Volatile private var lastDnsConfig = DnsConfig(
+        source = "uninitialized",
+        servers = emptyList(),
+        writeSuccess = false,
+        updatedAt = Instant.EPOCH.toString(),
+        error = "rootfs DNS has not been refreshed",
+    )
 
     internal val mirrorConfigLock = Any()
 
     data class MirrorConfig(
         val pipMirror: String = PYTHON_PIP_ALIBABA_INDEX,
         val npmMirror: String = NODE_NPM_NPMMIRROR_REGISTRY,
-        val linuxMirror: String = UBUNTU_APT_DEFAULT_MIRROR,
+        val linuxMirror: String = UBUNTU_PORTS_APT_DEFAULT_MIRROR,
     )
 
     data class RootfsPaths(
@@ -168,7 +222,8 @@ object AndroidLinuxRuntime {
             .getString(DISTRO_KEY, null)?.trim()?.lowercase()?.takeIf { it in SUPPORTED_DISTRIBUTIONS }
             ?: DEFAULT_DISTRIBUTION
 
-    internal fun defaultLinuxMirror(distribution: String): String = UBUNTU_APT_DEFAULT_MIRROR
+    internal fun defaultLinuxMirror(distribution: String, abi: String = currentAbi()): String =
+        if (abi == "arm64-v8a") UBUNTU_PORTS_APT_DEFAULT_MIRROR else UBUNTU_APT_DEFAULT_MIRROR
 
     fun distributionPackageManager(distribution: String): String = "apt"
 
@@ -258,7 +313,7 @@ object AndroidLinuxRuntime {
 
     fun guestRuntimeAvailable(context: Context, executable: String): Boolean {
         val rootfs = ensureRootfsReady(context) ?: return false
-        return File(rootfs.root, executable.trimStart('/')).isFile
+        return File(rootfs.root, executable.trimStart('/')).let { it.isFile && it.canExecute() }
     }
 
     fun rootfsCapabilities(context: Context): Map<String, Boolean> {
@@ -318,8 +373,13 @@ object AndroidLinuxRuntime {
         guestWorkingDir: String,
         guestCommand: List<String>,
     ): List<String> {
+        refreshRootfsDns(context, rootfs.root)
         hostWorkingDir.mkdirs()
         File(rootfs.root, guestWorkingDir.trimStart('/')).mkdirs()
+        File(rootfs.root, "host-files").mkdirs()
+        File(rootfs.root, "tmp/host-cache").mkdirs()
+        val binds = selectHostBinds()
+        binds.enabled.forEach { prepareRootfsBindTarget(rootfs.root, it.path) }
         val command = mutableListOf(
             rootfs.proot.absolutePath,
             "--sysvipc",
@@ -333,12 +393,8 @@ object AndroidLinuxRuntime {
             "-L",
             "-0",
         )
-        listOf(
-            "/proc", "/dev", "/sys", "/sdcard", "/storage",
-            "/apex", "/odm", "/product", "/system", "/system_ext", "/vendor",
-            "/linkerconfig", "/plat_property_contexts", "/property_contexts",
-        ).forEach { path ->
-            if (File(path).exists()) command.addAll(listOf("-b", "$path:$path"))
+        binds.enabled.forEach { bind ->
+            command.addAll(listOf("-b", "${bind.path}:${bind.path}"))
         }
         command += guestCommand
         return command
@@ -399,8 +455,6 @@ object AndroidLinuxRuntime {
         val distribution = selectedDistribution(context)
         val archive = AndroidRootfsDownloader.downloadedArchive(context, abi, distribution) ?: return null
         val expected = AndroidRootfsDownloader.downloadedChecksum(context, abi, distribution) ?: return null
-        val actual = sha256File(archive)
-        if (expected.length != 64 || !expected.equals(actual, true)) return null
         root.deleteRecursively()
         root.mkdirs()
         try {
@@ -499,12 +553,137 @@ object AndroidLinuxRuntime {
             File(root, it).mkdirs()
         }
         configureRootfsMirrors(root, mirrors)
-        val resolvConf = File(root, "etc/resolv.conf")
-        if (!resolvConf.isFile) {
-            resolvConf.parentFile?.mkdirs()
-            resolvConf.writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
-        }
         File(root, "tmp").setWritable(true, false)
+    }
+
+    internal fun normalizeDnsServer(value: String): String? {
+        val candidate = value.trim()
+        if (candidate.isEmpty() || candidate.length > 255 || candidate.any { it.isWhitespace() || it.isISOControl() }) return null
+        if (':' !in candidate) {
+            val octets = candidate.split('.')
+            if (octets.size != 4 || octets.any { it.isEmpty() || it.length > 3 || it.any { character -> !character.isDigit() } }) return null
+            if (octets.any { it.toIntOrNull() !in 0..255 }) return null
+            return candidate
+        }
+
+        val zoneSeparator = candidate.indexOf('%')
+        val address = if (zoneSeparator >= 0) candidate.substring(0, zoneSeparator) else candidate
+        val zone = if (zoneSeparator >= 0) candidate.substring(zoneSeparator + 1) else ""
+        if (candidate.indexOf('%', zoneSeparator + 1) >= 0) return null
+        if (zoneSeparator >= 0 && !zone.matches(Regex("[A-Za-z0-9_.-]{1,64}"))) return null
+        if (runCatching { InetAddress.getByName(address) }.getOrNull() !is Inet6Address) return null
+        return candidate
+    }
+
+    internal fun normalizeDnsServers(servers: List<String>): List<String> =
+        servers.mapNotNull(::normalizeDnsServer).distinct()
+
+    internal fun formatResolvConf(servers: List<String>): String {
+        val unique = LinkedHashSet<String>()
+        normalizeDnsServers(servers).forEach(unique::add)
+        return unique.joinToString(separator = "\n") { "nameserver $it" }.let { if (it.isEmpty()) it else "$it\n" }
+    }
+
+    internal fun atomicWriteResolvConf(
+        root: File,
+        servers: List<String>,
+        syncDirectory: (java.nio.file.Path) -> Unit = { directory ->
+            val descriptor = Os.open(directory.toString(), OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            try {
+                Os.fsync(descriptor)
+            } finally {
+                Os.close(descriptor)
+            }
+        },
+    ) {
+        val normalizedServers = normalizeDnsServers(servers)
+        require(normalizedServers.isNotEmpty()) { "no valid DNS servers" }
+        val rootPath = root.toPath().toRealPath()
+        val etcPath = rootPath.resolve("etc")
+        if (!Files.exists(etcPath, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(etcPath)
+        require(!Files.isSymbolicLink(etcPath)) { "rootfs etc must be a real directory" }
+        val realEtc = etcPath.toRealPath()
+        require(realEtc.startsWith(rootPath) && Files.isDirectory(realEtc)) { "rootfs etc escapes rootfs" }
+
+        val target = realEtc.resolve("resolv.conf")
+        val temp = Files.createTempFile(realEtc, ".resolv.conf.", ".tmp")
+        try {
+            FileChannel.open(temp, StandardOpenOption.WRITE).use { channel ->
+                val bytes = formatResolvConf(normalizedServers).toByteArray(Charsets.UTF_8)
+                val buffer = ByteBuffer.wrap(bytes)
+                while (buffer.hasRemaining()) channel.write(buffer)
+                channel.force(true)
+            }
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: IOException) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+            syncDirectory(realEtc)
+        } finally {
+            Files.deleteIfExists(temp)
+        }
+    }
+
+    internal fun filterBindCandidates(
+        candidates: List<BindCandidate>,
+        accessible: (String) -> Boolean,
+    ): BindSelection {
+        val enabled = candidates.filter { accessible(it.path) }
+        return BindSelection(enabled, candidates - enabled.toSet())
+    }
+
+    private fun prepareRootfsBindTarget(root: File, guestPath: String) {
+        val rootPath = root.toPath().toRealPath()
+        val target = rootPath.resolve(guestPath.trimStart('/'))
+        require(target.parent == rootPath) { "bind target must be a rootfs top-level directory" }
+        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(target)
+        require(!Files.isSymbolicLink(target) && Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            "bind target must be a real rootfs directory: $guestPath"
+        }
+    }
+
+    private fun selectHostBinds(): BindSelection = filterBindCandidates(HOST_BIND_CANDIDATES) { path ->
+        runCatching {
+            val stat = Os.stat(path)
+            OsConstants.S_ISDIR(stat.st_mode) && Os.access(path, OsConstants.R_OK or OsConstants.X_OK)
+        }.getOrDefault(false)
+    }
+
+    internal fun persistDnsConfig(
+        root: File,
+        source: String,
+        servers: List<String>,
+        updatedAt: String = Instant.now().toString(),
+        writer: (File, List<String>) -> Unit = { target, values -> atomicWriteResolvConf(target, values) },
+    ): DnsConfig {
+        val normalizedServers = normalizeDnsServers(servers)
+        val config = try {
+            require(normalizedServers.isNotEmpty()) { "no valid DNS servers" }
+            writer(root, normalizedServers)
+            DnsConfig(source, normalizedServers, true, updatedAt, "")
+        } catch (error: Exception) {
+            val detail = error.message.orEmpty().replace(Regex("[\\r\\n]+"), " ").take(500)
+            DnsConfig(source, normalizedServers, false, updatedAt, "${error.javaClass.simpleName}: $detail".trim())
+        }
+        lastDnsConfig = config
+        return config
+    }
+
+    private fun refreshRootfsDns(context: Context, root: File): DnsConfig {
+        val systemServers = runCatching {
+            val manager = context.getSystemService(ConnectivityManager::class.java)
+            manager.getLinkProperties(manager.activeNetwork)?.dnsServers.orEmpty()
+                .map { it.hostAddress }
+        }.getOrDefault(emptyList())
+        val validSystemServers = normalizeDnsServers(systemServers)
+        return if (validSystemServers.isEmpty()) {
+            persistDnsConfig(root, "fallback", DNS_FALLBACK_SERVERS)
+        } else {
+            persistDnsConfig(root, "active_network", validSystemServers)
+        }
     }
 
     private fun detectPackageManager(root: File): String = when {
@@ -537,7 +716,8 @@ object AndroidLinuxRuntime {
         val distribution = selectedDistribution(context)
         val marker = File(root, ROOTFS_READY_MARKER).readTextOrNull()?.trim().orEmpty()
         val expected = AndroidRootfsDownloader.downloadedChecksum(context, abi, distribution) ?: return false
-        return marker == "downloaded:$abi:$distribution:$expected"
+        return marker == "downloaded:$abi:$distribution:$expected" &&
+            AndroidRootfsDownloader.downloadedArchive(context, abi, distribution) != null
     }
 
     private fun assetChecksum(context: Context, name: String): String =
@@ -554,7 +734,7 @@ object AndroidLinuxRuntime {
         if (File(root, "etc/os-release").readTextOrNull()?.contains("Ubuntu", ignoreCase = true) == true || File(root, "usr/bin/apt-get").isFile) {
             val release = File(root, "etc/lsb-release").readTextOrNull()
                 ?.lineSequence()?.firstOrNull { it.startsWith("DISTRIB_CODENAME=") }?.substringAfter("=")?.trim().orEmpty()
-            if (release.isNotEmpty() && File(root, "etc/apt/sources.list").let { !it.isFile || !it.readTextOrNull().orEmpty().contains("mirror") }) {
+            if (release.isNotEmpty()) {
                 File(root, "etc/apt/sources.list").apply {
                     parentFile?.mkdirs()
                     writeText("deb ${mirrors.linuxMirror}/ $release main restricted universe multiverse\n" +
@@ -598,6 +778,8 @@ object AndroidLinuxRuntime {
         val pythonAvailable = guestRuntimeAvailable(context, "/usr/bin/python3")
         val nodeAvailable = guestRuntimeAvailable(context, "/usr/bin/node")
         val rootfsHome = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}").absolutePath
+        val rootfsDir = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}")
+        val available = runtimeCapabilities(rootfsDir)
         val runtimes = JSONArray()
             .put(descriptorJson(RuntimeDescriptor(
                 id = "linux-runtime-${currentAbi()}",
@@ -607,7 +789,7 @@ object AndroidLinuxRuntime {
                 executable = rootfs.optJSONObject("runner")?.optString("path").orEmpty(),
                 home = rootfsHome,
                 isolation = "layered-rootfs",
-                capabilities = listOf("shell", "python", "pip", "node", "npm", "typescript", "git", "ssh", "go-build"),
+                capabilities = available,
             )))
             .put(descriptorJson(RuntimeDescriptor(
                 id = "python-rootfs-android-${currentAbi()}",
@@ -617,7 +799,7 @@ object AndroidLinuxRuntime {
                 executable = "/usr/bin/python3",
                 home = rootfsHome,
                 isolation = "layered-rootfs",
-                capabilities = listOf("python", "pip", "venv", "ssl", "sqlite"),
+                capabilities = available.filter { it in setOf("python", "pip", "venv", "ssl", "sqlite", "crypto") },
             )))
             .put(descriptorJson(RuntimeDescriptor(
                 id = "node-rootfs-android-${currentAbi()}",
@@ -627,7 +809,7 @@ object AndroidLinuxRuntime {
                 executable = "/usr/bin/node",
                 home = rootfsHome,
                 isolation = "layered-rootfs",
-                capabilities = listOf("node", "npm", "typescript", "commonjs", "esm"),
+                capabilities = available.filter { it in setOf("node", "npm", "typescript", "commonjs", "esm") },
             )))
             .put(descriptorJson(RuntimeDescriptor(
                 id = "yaegi-go-${currentAbi()}", language = "go", version = "0.16.1",
@@ -644,6 +826,27 @@ object AndroidLinuxRuntime {
             .put("rootfs", rootfs)
             .put("presets", JSONArray())
             .put("runtimes", runtimes)
+    }
+
+    internal fun runtimeCapabilities(root: File): List<String> = buildList {
+        fun executable(vararg paths: String) = paths.any { File(root, it.trimStart('/')).let { file -> file.isFile && file.canExecute() } }
+        if (executable("/bin/sh", "/bin/bash")) add("shell")
+        if (executable("/usr/bin/python3")) {
+            add("python")
+            if (root.walkTopDown().maxDepth(8).any { it.isDirectory && it.name == "venv" && File(it, "__init__.py").isFile }) add("venv")
+            if (root.walkTopDown().maxDepth(8).any { it.isFile && it.name.startsWith("_ssl.") }) add("ssl")
+            if (root.walkTopDown().maxDepth(8).any { it.isFile && it.name.startsWith("_sqlite3.") }) add("sqlite")
+            if (root.walkTopDown().maxDepth(10).any {
+                    it.isDirectory && it.name == "Cipher" && it.parentFile?.name == "Crypto" && File(it, "AES.py").isFile
+                }) add("crypto")
+        }
+        if (executable("/usr/bin/pip3", "/usr/bin/pip")) add("pip")
+        if (executable("/usr/bin/node")) addAll(listOf("node", "commonjs", "esm"))
+        if (executable("/usr/bin/npm")) add("npm")
+        if (executable("/usr/bin/tsc", "/usr/local/bin/tsc")) add("typescript")
+        if (executable("/usr/bin/git")) add("git")
+        if (executable("/usr/bin/ssh")) add("ssh")
+        if (executable("/usr/bin/go")) add("go-build")
     }
 
     private fun descriptorJson(descriptor: RuntimeDescriptor): JSONObject = JSONObject()
@@ -664,6 +867,22 @@ object AndroidLinuxRuntime {
         val rootfsAsset = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME"
         val checksumAsset = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_SHA256_ASSET_NAME"
         val rootfsDir = File(context.filesDir, "runtimes/linux-rootfs/$abi")
+        val dns = if (rootfsDir.isDirectory) {
+            refreshRootfsDns(context, rootfsDir)
+        } else {
+            DnsConfig("unavailable", emptyList(), false, Instant.now().toString(), "rootfs directory is unavailable")
+        }
+        val binds = selectHostBinds()
+        val builtInBinds = listOf(
+            JSONObject().put("path", "/host-files").put("class", "core"),
+            JSONObject().put("path", "/tmp/host-cache").put("class", "core"),
+        )
+        val enabledBinds = builtInBinds + binds.enabled.map { bind ->
+            JSONObject().put("path", bind.path).put("class", if (bind.core) "core" else "optional")
+        }
+        val skippedBinds = binds.skipped.map { bind ->
+            JSONObject().put("path", bind.path).put("class", if (bind.core) "core" else "optional")
+        }
         val commandPaths = detectCommands(rootfsDir)
         val commandStatus = JSONObject()
         requiredCommandsFor(detectPackageManager(rootfsDir)).keys.forEach { name -> commandStatus.put(name, commandPaths[name] ?: false) }
@@ -695,11 +914,24 @@ object AndroidLinuxRuntime {
             .put("first_class", rootfsFirstClass(commandPaths, detectPackageManager(rootfsDir)))
             .put("commands", commandStatus)
             .put("compatibility", JSONObject()
-                .put("no_seccomp", true)
+                .put("no_seccomp", false)
                 .put("link2symlink", true)
                 .put("kill_on_exit", true)
                 .put("fake_kernel_release", "4.14.0")
-                .put("binds", JSONArray(listOf("/proc", "/dev", "/sys", "/sdcard", "/storage", "/host-files", "/tmp/host-cache"))))
+                .put("host_uid", Process.myUid())
+                .put("guest_uid", 0)
+                .put("privilege_model", "proot-root-id-mapping")
+                .put("binds", JSONArray(enabledBinds.map { it.getString("path") }))
+                .put("enabled_binds", JSONArray(enabledBinds))
+                .put("skipped_binds", JSONArray(skippedBinds))
+                .put("dns_source", dns.source)
+                .put("dns_servers", JSONArray(dns.servers))
+                .put("dns", JSONObject()
+                    .put("source", dns.source)
+                    .put("servers", JSONArray(dns.servers))
+                    .put("write_success", dns.writeSuccess)
+                    .put("updated_at", dns.updatedAt)
+                    .put("error", dns.error)))
             .put("mirrors", JSONObject()
                 .put("linux", mirrors.linuxMirror)
                 .put("pip", mirrors.pipMirror)

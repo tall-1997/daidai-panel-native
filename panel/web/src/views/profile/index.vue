@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CircleCheck,
@@ -420,6 +420,14 @@ watch(activeTab, (tab) => {
     void activateSponsorTab();
     return;
   }
+  stopSponsorRefreshTimer();
+});
+
+onActivated(() => {
+  if (activeTab.value === "sponsors") void activateSponsorTab();
+});
+
+onDeactivated(() => {
   stopSponsorRefreshTimer();
 });
 

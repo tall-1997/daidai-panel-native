@@ -14,6 +14,7 @@ const props = defineProps<{
   defaultPythonVersion?: string
   pythonRuntimes?: PythonRuntimeInfo[]
   notificationChannels?: { id: number; name: string; type: string; enabled: boolean }[]
+  submitting?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -179,6 +180,7 @@ function removeLabel(label: string) {
 }
 
 function handleSubmit() {
+  if (props.submitting) return
   if (!form.value.name || !form.value.command) {
     ElMessage.warning('请填写任务名称和执行命令')
     return
@@ -403,7 +405,7 @@ function handleSubmit() {
 
     <template #footer>
       <el-button @click="emit('update:visible', false)">取消</el-button>
-      <el-button type="primary" @click="handleSubmit">{{ task ? '更新' : '创建' }}</el-button>
+      <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleSubmit">{{ task ? '更新' : '创建' }}</el-button>
     </template>
   </el-dialog>
 </template>

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:daidai_app/core/auth/auth_session_epoch.dart';
 import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/core/network/sse_client.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -21,6 +22,7 @@ http.StreamedResponse _response(int statusCode, [String body = '']) =>
     http.StreamedResponse(
       Stream.value(utf8.encode(body)),
       statusCode,
+      headers: {'content-type': 'text/event-stream; charset=utf-8'},
     );
 
 void main() {
@@ -76,11 +78,16 @@ void main() {
     var doneCalls = 0;
     var reconnectCalls = 0;
     var clientCreations = 0;
+    var wasOpen = false;
     final client = SseClient(
       clientFactory: () {
         clientCreations++;
         return _RequestClient(
-          (_) async => http.StreamedResponse(stream.stream, 200),
+          (_) async => http.StreamedResponse(
+            stream.stream,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          ),
         );
       },
     );
@@ -92,6 +99,7 @@ void main() {
       onDone: () => doneCalls++,
       onReconnecting: () => reconnectCalls++,
     );
+    wasOpen = client.state == SseClientState.open;
     AuthSessionEpoch.advance();
     stream.add(utf8.encode('data: stale\n\n'));
     await stream.close();
@@ -101,6 +109,7 @@ void main() {
     expect(doneCalls, 0);
     expect(reconnectCalls, 0);
     expect(clientCreations, 1);
+    expect(wasOpen, isTrue);
     client.close();
   });
 
@@ -146,7 +155,14 @@ void main() {
     final failedEpochs = <int>[];
     final client = SseClient(
       clientFactory: () => _RequestClient((_) async => _response(401)),
-      refreshToken: (_) async => throw StateError('refresh failed'),
+      refreshToken: (_) async {
+        final options = RequestOptions(path: '/auth/refresh');
+        throw DioException.badResponse(
+          statusCode: 401,
+          requestOptions: options,
+          response: Response(requestOptions: options, statusCode: 401),
+        );
+      },
       clearAuthSession: (capturedEpoch) async {
         clearedEpochs.add(capturedEpoch);
       },
@@ -155,8 +171,27 @@ void main() {
 
     await client.connect(path: '/stream', onEvent: (_) {});
 
-    expect(clearedEpochs, [epoch]);
-    expect(failedEpochs, [epoch]);
+    expect(clearedEpochs, [epoch + 1]);
+    expect(failedEpochs, [epoch + 1]);
+    client.close();
+  });
+
+  test('rejects a successful response with a non-SSE content type', () async {
+    final errors = <dynamic>[];
+    final client = SseClient(
+      clientFactory: () => _RequestClient(
+        (_) async => http.StreamedResponse(
+          Stream.value(utf8.encode('{"ok":true}')),
+          200,
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
+    );
+
+    await client.connect(path: '/stream', onEvent: (_) {}, onError: errors.add);
+
+    expect(errors, ['SSE 响应类型无效']);
+    expect(client.state, SseClientState.completed);
     client.close();
   });
 
@@ -188,7 +223,7 @@ void main() {
         requests.add(request);
         return _response(
           200,
-          'retry: 0\nid: event-1\ndata: first\n\n'
+          'retry: 500\nid: event-1\ndata: first\n\n'
           'event: done\ndata: reconnect\n\n',
         );
       }),
@@ -209,7 +244,7 @@ void main() {
       autoReconnect: true,
       onEvent: events.add,
     );
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>.delayed(const Duration(milliseconds: 600));
 
     expect(requests, hasLength(2));
     expect(requests.last.headers['Last-Event-ID'], 'event-1');

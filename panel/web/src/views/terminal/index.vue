@@ -3,16 +3,18 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { terminalApi, type TerminalSession } from '@/api/terminal'
 import { extractError } from '@/utils/error'
+import { TerminalLogBuffer } from '@/utils/terminalLogBuffer.mjs'
 
 const session = ref<TerminalSession | null>(null)
 const output = ref('')
+const outputBuffer = new TerminalLogBuffer({ maxChars: 1_000_000, maxLines: 10_000 })
 const command = ref('')
 const terminal = ref<HTMLElement>()
 const busy = ref(false)
 const decoder = new TextDecoder()
-const MAX_OUTPUT_CHARS = 1_000_000
 let cursor = 0
 let timer: number | null = null
+let generation = 0
 
 const running = computed(() => session.value?.status === 'running')
 const statusLabel = computed(() => running.value ? '在线' : session.value ? `已结束 (${session.value.exit_code ?? '-'})` : '未连接')
@@ -33,34 +35,47 @@ function decodeBase64(value: string) {
 }
 
 async function start() {
+  const requestGeneration = ++generation
   busy.value = true
   try {
     const size = dimensions()
     const response = await terminalApi.create(size.rows, size.columns)
+    if (requestGeneration !== generation) {
+      void terminalApi.remove(response.data.id).catch(() => undefined)
+      return
+    }
     session.value = response.data
+    outputBuffer.clear()
     output.value = ''
     cursor = 0
     schedulePoll(50)
   } catch (error) {
+    if (requestGeneration !== generation) return
     ElMessage.error(extractError(error, '启动终端失败'))
   } finally {
-    busy.value = false
+    if (requestGeneration === generation) busy.value = false
   }
 }
 
 async function poll() {
   if (!session.value) return
+  const requestGeneration = generation
+  const sessionId = session.value.id
   try {
-    const response = await terminalApi.get(session.value.id, cursor)
+    const response = await terminalApi.get(sessionId, cursor)
+    if (requestGeneration !== generation || session.value?.id !== sessionId) return
     for (const chunk of response.data.output || []) {
-      output.value = (output.value + decodeBase64(chunk.data)).slice(-MAX_OUTPUT_CHARS)
+      outputBuffer.append(decodeBase64(chunk.data))
       cursor = Math.max(cursor, chunk.cursor)
     }
+    output.value = outputBuffer.text
     session.value = response.data
     await nextTick()
+    if (requestGeneration !== generation || session.value?.id !== sessionId) return
     if (terminal.value) terminal.value.scrollTop = terminal.value.scrollHeight
     if (running.value) schedulePoll(180)
   } catch (error) {
+    if (requestGeneration !== generation) return
     ElMessage.error(extractError(error, '终端连接中断'))
   }
 }
@@ -104,6 +119,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  generation++
   if (timer !== null) window.clearTimeout(timer)
   window.removeEventListener('resize', resize)
   if (session.value) void terminalApi.remove(session.value.id).catch(() => undefined)

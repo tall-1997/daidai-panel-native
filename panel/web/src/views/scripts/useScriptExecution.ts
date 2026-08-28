@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { scriptApi } from '@/api/script'
 
@@ -27,8 +27,10 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   const runnerExitCode = ref<number | null>(null)
   const runnerError = ref('')
 
-  let debugTimer: ReturnType<typeof setInterval> | null = null
-  let runnerTimer: ReturnType<typeof setInterval> | null = null
+  let debugTimer: ReturnType<typeof setTimeout> | null = null
+  let runnerTimer: ReturnType<typeof setTimeout> | null = null
+  let debugGeneration = 0
+  let runnerGeneration = 0
 
   function getFileName(path: string) {
     return path.split('/').pop() || path
@@ -36,19 +38,20 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
 
   function clearDebugTimer() {
     if (debugTimer) {
-      clearInterval(debugTimer)
+      clearTimeout(debugTimer)
       debugTimer = null
     }
   }
 
   function clearRunnerTimer() {
     if (runnerTimer) {
-      clearInterval(runnerTimer)
+      clearTimeout(runnerTimer)
       runnerTimer = null
     }
   }
 
   async function stopDebugRun(options?: { keepalive?: boolean; preserveLogs?: boolean }) {
+    debugGeneration += 1
     const runId = debugRunId.value
     clearDebugTimer()
     debugRunning.value = false
@@ -86,6 +89,7 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   }
 
   async function stopRunnerRun(options?: { keepalive?: boolean }) {
+    runnerGeneration += 1
     const runId = runnerRunId.value
     clearRunnerTimer()
     runnerRunning.value = false
@@ -136,6 +140,11 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     void stopRunnerRun()
   })
 
+  onDeactivated(() => {
+    void stopDebugRun()
+    void stopRunnerRun()
+  })
+
   async function handleDebugRun() {
     if (!selectedFile.value) return
     debugCode.value = fileContent.value
@@ -151,6 +160,8 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
 
   async function handleDebugStart(options?: { forceEditorContent?: boolean }) {
     if (!selectedFile.value) return
+    const generation = ++debugGeneration
+    clearDebugTimer()
     debugLogs.value = []
     debugError.value = ''
     debugExitCode.value = null
@@ -164,9 +175,14 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
             language: runnerLanguageForFile(selectedFile.value)
           })
         : await scriptApi.debugRun({ path: selectedFile.value })
+      if (generation !== debugGeneration) {
+        scriptApi.debugStopKeepalive(res.run_id)
+        return
+      }
       debugRunId.value = res.run_id
-      pollDebugLogs()
+      pollDebugLogs(res.run_id, generation)
     } catch (err: any) {
+      if (generation !== debugGeneration) return
       debugError.value = err?.response?.data?.error || err?.message || '调试运行失败'
       ElMessage.error(debugError.value)
       debugRunning.value = false
@@ -194,15 +210,13 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     return 'python'
   }
 
-  function pollDebugLogs() {
+  function pollDebugLogs(runId: string, generation: number) {
     clearDebugTimer()
-    debugTimer = setInterval(async () => {
-      if (!debugRunId.value) {
-        clearDebugTimer()
-        return
-      }
+    debugTimer = setTimeout(async () => {
+      if (generation !== debugGeneration || debugRunId.value !== runId) return
       try {
-        const res = await scriptApi.debugLogs(debugRunId.value)
+        const res = await scriptApi.debugLogs(runId)
+        if (generation !== debugGeneration || debugRunId.value !== runId) return
         debugLogs.value = res.data.logs || []
         if (res.data.done) {
           debugRunning.value = false
@@ -212,8 +226,11 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
             debugExitCode.value = res.data.exit_code ?? null
             debugError.value = 'failed'
           }
+        } else {
+          pollDebugLogs(runId, generation)
         }
       } catch {
+        if (generation !== debugGeneration || debugRunId.value !== runId) return
         debugRunning.value = false
         clearDebugTimer()
       }
@@ -240,15 +257,22 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
       ElMessage.warning('请输入代码')
       return
     }
+    const generation = ++runnerGeneration
+    clearRunnerTimer()
     runnerLogs.value = []
     runnerExitCode.value = null
     runnerError.value = ''
     runnerRunning.value = true
     try {
       const res = await scriptApi.runCode(runnerCode.value, runnerLanguage.value)
+      if (generation !== runnerGeneration) {
+        scriptApi.debugStopKeepalive(res.run_id)
+        return
+      }
       runnerRunId.value = res.run_id
-      pollRunnerLogs()
+      pollRunnerLogs(res.run_id, generation)
     } catch (err: any) {
+      if (generation !== runnerGeneration) return
       const msg = err?.response?.data?.error || err?.message || '运行失败'
       runnerError.value = msg
       ElMessage.error(msg)
@@ -256,15 +280,13 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     }
   }
 
-  function pollRunnerLogs() {
+  function pollRunnerLogs(runId: string, generation: number) {
     clearRunnerTimer()
-    runnerTimer = setInterval(async () => {
-      if (!runnerRunId.value) {
-        clearRunnerTimer()
-        return
-      }
+    runnerTimer = setTimeout(async () => {
+      if (generation !== runnerGeneration || runnerRunId.value !== runId) return
       try {
-        const res = await scriptApi.debugLogs(runnerRunId.value)
+        const res = await scriptApi.debugLogs(runId)
+        if (generation !== runnerGeneration || runnerRunId.value !== runId) return
         runnerLogs.value = res.data.logs || []
         if (res.data.done) {
           runnerRunning.value = false
@@ -274,8 +296,11 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
           }
           clearRunnerTimer()
           runnerRunId.value = ''
+        } else {
+          pollRunnerLogs(runId, generation)
         }
       } catch {
+        if (generation !== runnerGeneration || runnerRunId.value !== runId) return
         runnerRunning.value = false
         runnerError.value = '获取运行日志失败，请检查服务状态'
         clearRunnerTimer()

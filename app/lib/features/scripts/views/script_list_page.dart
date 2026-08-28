@@ -11,11 +11,14 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/network/panel_capability_registry.dart';
+import '../../../core/auth/auth_session_epoch.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/bounded_log_buffer.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../tasks/views/task_form_page.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -162,15 +165,42 @@ class ScriptState {
 }
 
 class ScriptNotifier extends StateNotifier<ScriptState> {
-  ScriptNotifier() : super(const ScriptState());
+  ScriptNotifier({ScriptState initialState = const ScriptState()})
+    : _sessionScope = AuthSessionEpoch.scoped(
+        PanelCapabilityRegistry.currentScope,
+      ),
+      super(initialState) {
+    AuthSessionEpoch.addListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.addScopeListener(_synchronizeSessionScope);
+  }
 
   int _contentRequestId = 0;
+  String _sessionScope;
+
+  void _synchronizeSessionScope() {
+    final nextScope = AuthSessionEpoch.scoped(
+      PanelCapabilityRegistry.currentScope,
+    );
+    if (nextScope == _sessionScope) return;
+    _sessionScope = nextScope;
+    _contentRequestId++;
+    state = ScriptState(keyword: state.keyword);
+  }
+
+  @override
+  void dispose() {
+    AuthSessionEpoch.removeListener(_synchronizeSessionScope);
+    PanelCapabilityRegistry.removeScopeListener(_synchronizeSessionScope);
+    super.dispose();
+  }
 
   void setKeyword(String keyword) {
     state = state.copyWith(keyword: keyword);
   }
 
   Future<void> loadTree() async {
+    _synchronizeSessionScope();
+    final sessionScope = _sessionScope;
     state = state.copyWith(loading: true, clearError: true);
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.scriptsTree);
@@ -184,8 +214,14 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
                 )
                 .toList()
           : <ScriptFile>[];
+      if (sessionScope != _sessionScope) {
+        return;
+      }
       state = state.copyWith(tree: tree, loading: false, clearError: true);
     } catch (error) {
+      if (sessionScope != _sessionScope) {
+        return;
+      }
       state = state.copyWith(
         loading: false,
         error: extractErrorMessage(error, '脚本列表加载失败'),
@@ -194,15 +230,23 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> loadContent(String path) async {
+    _synchronizeSessionScope();
     final requestId = ++_contentRequestId;
-    state = state.copyWith(selectedPath: path, loadingContent: true);
+    final sessionScope = _sessionScope;
+    state = state.copyWith(
+      selectedPath: path,
+      loadingContent: true,
+      clearError: true,
+    );
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.scriptsContent,
         queryParameters: {'path': path},
       );
       final data = extractData(resp.data);
-      if (requestId != _contentRequestId || state.selectedPath != path) {
+      if (requestId != _contentRequestId ||
+          state.selectedPath != path ||
+          sessionScope != _sessionScope) {
         return;
       }
       if (data is Map) {
@@ -212,6 +256,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
           content: isBinary ? '' : (data['content']?.toString() ?? ''),
           isBinary: isBinary,
           loadingContent: false,
+          clearError: true,
         );
         return;
       }
@@ -220,16 +265,20 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
         content: data?.toString() ?? '',
         isBinary: false,
         loadingContent: false,
+        clearError: true,
       );
     } catch (_) {
-      if (requestId != _contentRequestId || state.selectedPath != path) {
+      if (requestId != _contentRequestId ||
+          state.selectedPath != path ||
+          sessionScope != _sessionScope) {
         return;
       }
       state = state.copyWith(
         selectedPath: path,
-        content: '加载失败',
+        content: '',
         isBinary: false,
         loadingContent: false,
+        error: '脚本内容加载失败',
       );
     }
   }
@@ -2809,7 +2858,8 @@ class _ScriptDebugRunSheet extends StatefulWidget {
   State<_ScriptDebugRunSheet> createState() => _ScriptDebugRunSheetState();
 }
 
-class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
+class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
+    with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   final List<String> _logs = [];
   bool _loading = true;
@@ -2819,31 +2869,52 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
   String? _errorSummary;
   Timer? _pollTimer;
   bool _pollRequestRunning = false;
+  bool _appResumed = true;
   int _cursor = 0;
   Color? _logBackgroundColor;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     Future.microtask(() async {
       final color = await loadPanelLogBackgroundColor();
       if (mounted) {
         setState(() => _logBackgroundColor = color);
       }
     });
-    _loadLogs();
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _loadLogs());
+    _startPolling();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
 
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _loadLogs();
+    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _loadLogs());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (_appResumed && !_done) {
+      _startPolling();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+  }
+
   Future<void> _loadLogs() async {
-    if (_pollRequestRunning) return;
+    if (_pollRequestRunning || !_appResumed) return;
     _pollRequestRunning = true;
     try {
       final resp = await DioClient.instance.dio.get(
@@ -2857,12 +2928,12 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
 
       final run = ScriptRunLogData.fromMap(data);
 
-      if (!mounted) {
+      if (!mounted || !_appResumed) {
         return;
       }
 
       setState(() {
-        _logs.addAll(run.logs);
+        appendBoundedLogEntries(_logs, run.logs);
         _cursor = run.cursor;
         _done = run.done;
         _loading = false;
@@ -2878,7 +2949,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
         _pollTimer?.cancel();
       }
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || !_appResumed) {
         return;
       }
       setState(() {

@@ -22,6 +22,11 @@ bool isSupportedBackupFilename(String filename) {
       normalized.endsWith('.tar.gz');
 }
 
+Duration restoreProgressRetryDelay(int failures) {
+  final exponent = failures.clamp(0, 4) as int;
+  return Duration(seconds: 1 << exponent);
+}
+
 class BackupPage extends ConsumerStatefulWidget {
   const BackupPage({super.key});
 
@@ -266,7 +271,8 @@ class _CreateBackupRequest {
   const _CreateBackupRequest({required this.password, required this.selection});
 }
 
-class _BackupPageState extends ConsumerState<BackupPage> {
+class _BackupPageState extends ConsumerState<BackupPage>
+    with WidgetsBindingObserver {
   List<_BackupFileRecord> _backups = const [];
   bool _loading = true;
   String? _loadError;
@@ -279,10 +285,16 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   _RestoreProgressState _restoreProgress = const _RestoreProgressState();
   Timer? _progressTimer;
   bool _progressRequestRunning = false;
+  bool _appResumed = true;
+  int _progressFailures = 0;
+  bool _progressRefreshQueued = false;
 
   @override
   void initState() {
     super.initState();
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    _appResumed = lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
     Future.microtask(() async {
       await _loadBackups();
       await _loadRestoreProgress();
@@ -291,8 +303,24 @@ class _BackupPageState extends ConsumerState<BackupPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _progressTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (_appResumed) {
+      _stopProgressPolling();
+      if (_progressRequestRunning) {
+        _progressRefreshQueued = true;
+      } else {
+        unawaited(_loadRestoreProgress());
+      }
+    } else {
+      _stopProgressPolling();
+    }
   }
 
   Future<void> _loadBackups() async {
@@ -344,10 +372,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   }
 
   void _ensureProgressPolling() {
-    _progressTimer ??= Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _loadRestoreProgress(),
-    );
+    if (!_appResumed || _progressTimer != null) return;
+    _progressTimer = Timer(restoreProgressRetryDelay(_progressFailures), () {
+      _progressTimer = null;
+      unawaited(_loadRestoreProgress());
+    });
   }
 
   void _stopProgressPolling() {
@@ -356,7 +385,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   }
 
   Future<void> _loadRestoreProgress() async {
-    if (_progressRequestRunning) return;
+    if (_progressRequestRunning || !_appResumed) return;
     _progressRequestRunning = true;
     try {
       final resp = await DioClient.instance.dio.get(
@@ -366,7 +395,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       final progress = data is Map
           ? _RestoreProgressState.fromJson(Map<String, dynamic>.from(data))
           : const _RestoreProgressState();
-      if (!mounted) {
+      if (!mounted || !_appResumed) {
         return;
       }
       setState(() {
@@ -375,19 +404,27 @@ class _BackupPageState extends ConsumerState<BackupPage> {
           _hideRestoreProgress = false;
         }
       });
+      _progressFailures = 0;
       if (progress.active) {
         _ensureProgressPolling();
       } else {
         _stopProgressPolling();
       }
-    } catch (_) {
-      if (_restoreRequestRunning) {
+    } catch (error) {
+      final unavailable =
+          error is DioException && error.response?.statusCode == 503;
+      if (unavailable) _progressFailures++;
+      if (_restoreRequestRunning || _restoreProgress.active) {
         _ensureProgressPolling();
       } else {
         _stopProgressPolling();
       }
     } finally {
       _progressRequestRunning = false;
+      if (_progressRefreshQueued && _appResumed) {
+        _progressRefreshQueued = false;
+        unawaited(_loadRestoreProgress());
+      }
     }
   }
 

@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
 import '../auth/auth_session_epoch.dart';
+import '../auth/auth_session_invalidation_coordinator.dart';
 import '../auth/auth_token_snapshot.dart';
 import '../auth/token_refresh_coordinator.dart';
 import '../storage/secure_storage.dart';
@@ -62,28 +63,36 @@ enum SseClientState {
 
 class SseClient with WidgetsBindingObserver {
   static const _defaultRetryDelay = Duration(seconds: 1);
+  static const _stableConnectionThreshold = Duration(seconds: 10);
   static Future<void> Function(int epoch)? defaultOnAuthFailedForEpoch;
 
-  final Future<void> Function(int epoch)? _onAuthFailedForEpoch;
   final http.Client Function() _clientFactory;
   final Future<void> Function(int epoch) _refreshToken;
-  final Future<void> Function(int epoch) _clearAuthSession;
+  final AuthSessionInvalidationCoordinator _sessionInvalidation;
 
   SseClient({
     Future<void> Function(int epoch)? onAuthFailedForEpoch,
     http.Client Function()? clientFactory,
     Future<void> Function(int epoch)? refreshToken,
     Future<void> Function(int epoch)? clearAuthSession,
-  }) : _onAuthFailedForEpoch = onAuthFailedForEpoch,
-       _clientFactory = clientFactory ?? http.Client.new,
+    AuthSessionInvalidationCoordinator? sessionInvalidation,
+  }) : _clientFactory = clientFactory ?? http.Client.new,
        _refreshToken =
            refreshToken ??
            ((epoch) async {
              await TokenRefreshCoordinator.refresh(epoch: epoch);
            }),
-       _clearAuthSession =
-           clearAuthSession ??
-           ((epoch) => SecureStorage.clearAuthSession(authEpoch: epoch));
+       _sessionInvalidation =
+           sessionInvalidation ??
+           ((clearAuthSession != null || onAuthFailedForEpoch != null)
+               ? AuthSessionInvalidationCoordinator(
+                   clearSession:
+                       clearAuthSession ??
+                       ((epoch) =>
+                           SecureStorage.clearAuthSession(authEpoch: epoch)),
+                   onInvalidated: onAuthFailedForEpoch,
+                 )
+               : AuthSessionInvalidationCoordinator.instance);
 
   http.Client? _client;
   StreamSubscription? _subscription;
@@ -219,7 +228,16 @@ class SseClient with WidgetsBindingObserver {
         return;
       }
 
+      final contentType = response.headers['content-type'] ?? '';
+      if (!contentType.toLowerCase().startsWith('text/event-stream')) {
+        _disposeConnection();
+        _state = SseClientState.completed;
+        options.onError?.call('SSE 响应类型无效');
+        return;
+      }
+
       _state = SseClientState.open;
+      final openedAt = DateTime.now();
       final decoder = SseDecoder(lastEventId: _lastEventId);
       var reconnectScheduled = false;
       var terminalEventReceived = false;
@@ -236,6 +254,10 @@ class SseClient with WidgetsBindingObserver {
         options.onReconnecting?.call();
         _disposeConnection();
         _reconnectTimer?.cancel();
+        if (DateTime.now().difference(openedAt) >=
+            _stableConnectionThreshold) {
+          _reconnectAttempt = 0;
+        }
         final delay = sseReconnectDelay(
           attempt: _reconnectAttempt++,
           baseDelay: _retryDelay,
@@ -270,7 +292,6 @@ class SseClient with WidgetsBindingObserver {
                 decoded.id!.isEmpty ||
                 _seenEventIds.add(decoded.id!));
 
-        _reconnectAttempt = 0;
         final event = SseEvent(
           event: decoded.event,
           data: decoded.data,
@@ -292,6 +313,14 @@ class SseClient with WidgetsBindingObserver {
         }
       }
 
+      void failProtocol(Object error) {
+        if (!_isCurrent(options, generation)) return;
+        terminalEventReceived = true;
+        _state = SseClientState.completed;
+        _disposeConnection();
+        options.onError?.call(error);
+      }
+
       final subscription = response.stream
           .transform(utf8.decoder)
           .listen(
@@ -300,26 +329,35 @@ class SseClient with WidgetsBindingObserver {
                 _disposeConnection();
                 return;
               }
-              final events = decoder.add(chunk);
-              final retry = decoder.retryMilliseconds;
-              if (retry != null) {
-                _retryDelay = Duration(milliseconds: retry);
-              }
-              for (final event in events) {
-                emitEvent(event);
-                if (terminalEventReceived) break;
+              try {
+                final events = decoder.add(chunk);
+                final retry = decoder.retryMilliseconds;
+                if (retry != null) {
+                  _retryDelay = boundedSseRetryDelay(retry);
+                }
+                for (final event in events) {
+                  emitEvent(event);
+                  if (terminalEventReceived) break;
+                }
+              } catch (error) {
+                failProtocol(error);
               }
             },
             onDone: () {
               if (!_isCurrent(options, generation)) return;
-              final finalEvents = decoder.close();
-              final retry = decoder.retryMilliseconds;
-              if (retry != null) {
-                _retryDelay = Duration(milliseconds: retry);
-              }
-              for (final event in finalEvents) {
-                emitEvent(event);
-                if (terminalEventReceived) break;
+              try {
+                final finalEvents = decoder.close();
+                final retry = decoder.retryMilliseconds;
+                if (retry != null) {
+                  _retryDelay = boundedSseRetryDelay(retry);
+                }
+                for (final event in finalEvents) {
+                  emitEvent(event);
+                  if (terminalEventReceived) break;
+                }
+              } catch (error) {
+                failProtocol(error);
+                return;
               }
               if (_closed) return;
               if (terminalEventReceived) {
@@ -412,9 +450,12 @@ class SseClient with WidgetsBindingObserver {
     try {
       await _refreshToken(options.epoch);
       return _isCurrent(options, generation);
-    } catch (_) {
-      await _handleAuthFailure(options, generation);
-      return false;
+    } catch (error, stackTrace) {
+      if (isRefreshAuthFailure(error)) {
+        await _handleAuthFailure(options, generation);
+        return false;
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -423,14 +464,19 @@ class SseClient with WidgetsBindingObserver {
     int generation,
   ) async {
     if (!_isCurrent(options, generation)) return;
+    final invalidatedEpoch = await _sessionInvalidation.invalidate(
+      options.epoch,
+    );
+    if (invalidatedEpoch == null) return;
     try {
-      await _clearAuthSession(options.epoch);
-    } catch (_) {}
-    if (!_isCurrent(options, generation)) return;
-    try {
-      await (_onAuthFailedForEpoch ?? defaultOnAuthFailedForEpoch)?.call(
-        options.epoch,
-      );
+      if (identical(
+        _sessionInvalidation,
+        AuthSessionInvalidationCoordinator.instance,
+      )) {
+        await defaultOnAuthFailedForEpoch?.call(
+          invalidatedEpoch,
+        );
+      }
     } catch (_) {}
   }
 

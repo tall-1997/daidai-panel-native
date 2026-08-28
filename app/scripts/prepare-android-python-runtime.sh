@@ -17,10 +17,10 @@ ARCHIVE_PATH="$WORK_DIR/$PYTHON_ARCHIVE"
 EXTRACT_DIR="$WORK_DIR/extracted"
 PREFIX_DIR="$EXTRACT_DIR/prefix"
 STAGE_DIR="$WORK_DIR/stage-prefix"
-ASSET_DIR="${PYTHON_ASSET_DIR:-$ANDROID_APP_DIR/src/main/pythonAssets/python-runtime/${PYTHON_ABI_VERSION}/prefix}"
-JNI_DIR="${PYTHON_JNI_DIR:-$ANDROID_APP_DIR/src/main/jniLibs/arm64-v8a}"
+OPTIONAL_RUNTIME_DIR="${PYTHON_OPTIONAL_RUNTIME_DIR:-$ANDROID_APP_DIR/build/optional-runtimes/python-${PYTHON_VERSION}-arm64-v8a}"
+ASSET_DIR="${PYTHON_ASSET_DIR:-$OPTIONAL_RUNTIME_DIR/assets/python-runtime/${PYTHON_ABI_VERSION}/prefix}"
+JNI_DIR="${PYTHON_JNI_DIR:-$OPTIONAL_RUNTIME_DIR/jniLibs/arm64-v8a}"
 LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/python_exec.c"
-LAUNCHER_OUT="$JNI_DIR/libpython_exec.so"
 RUNTIME_DIR="${PYTHON_METADATA_DIR:-$APP_ROOT/../runtime}"
 
 verify_wheelhouse() {
@@ -65,7 +65,7 @@ import json
 import pathlib
 import sys
 
-assets, native, runtime, version, revision = map(pathlib.Path, sys.argv[1:4]) + [sys.argv[4], sys.argv[5]] if False else (
+assets, native, _runtime, version, revision = map(pathlib.Path, sys.argv[1:4]) + [sys.argv[4], sys.argv[5]] if False else (
     pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4], sys.argv[5]
 )
 
@@ -90,65 +90,32 @@ for item in artifacts:
 
 launcher = native / "libpython_exec.so"
 component = {
-    "id": "python-3.14-android-arm64",
+    "id": "python-launcher-3.14-android-arm64",
     "version": version,
     "abi": "arm64-v8a",
     "python_tag": "cp314",
+    "entry_type": "apk_elf",
     "entrypoint": launcher.name,
     "sha256": sha256(launcher),
     "runtime_sha256": tree.hexdigest(),
     "artifact_count": len(artifacts),
     "asset_revision": revision,
+    "runtime_type": "optional-build-asset",
+    "isolation": "android-app-sandbox",
     "capabilities": ["python", "pip", "venv", "ssl", "sqlite", "ca-certificates"],
     "artifacts": artifacts,
 }
 
-manifest_path = runtime / "manifest.json"
-manifest = json.loads(manifest_path.read_text())
-components = [item for item in manifest.get("components", []) if item.get("id") != component["id"]]
-manifest["components"] = [component] + components
-manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-
-compatibility_path = runtime / "compatibility.json"
-compatibility = json.loads(compatibility_path.read_text())
-compatibility["abi"] = "arm64-v8a"
-compatibility["python_wheel_policy"] = {
+python_wheel_policy = {
     "python_tag": "cp314",
     "offline": ["py3-none-any", "cp314-cp314-android_API_arm64_v8a", "cp314-abi3-android_API_arm64_v8a"],
     "network": "binary-only; package index must publish a CPython 3.14 Android ARM64 wheel",
     "rejected": ["x86_64", "cp312", "sdist", "manylinux", "musllinux"],
 }
-compatibility["runtimes"] = [
-    {"id": component["id"], "version": version, "entry": launcher.name}
-] + [item for item in compatibility.get("runtimes", []) if item.get("id") != component["id"]]
-compatibility_path.write_text(json.dumps(compatibility, indent=2) + "\n")
-
-dependencies_path = runtime / "dependencies.json"
-dependencies = json.loads(dependencies_path.read_text())
-dependencies.setdefault("python", {})["runtime"] = component["id"]
-dependencies["python"]["install_policy"] = compatibility["python_wheel_policy"]
-dependencies_path.write_text(json.dumps(dependencies, indent=2) + "\n")
-
-smoke_path = runtime / "smoke-evidence.json"
-smoke = json.loads(smoke_path.read_text())
-record = {
-    "runtime_id": component["id"],
-    "version": version,
-    "entry": launcher.name,
-    "status": "blocked",
-    "evidence_source": "build-static-verification",
-    "isolation_level": "trusted-runner",
-    "timeout_seconds": 30,
-    "checks": [{"id": "PY_OK_SSL_SQLITE_VENV_PIP_CA", "status": "blocked", "reason": "device-smoke-required"}],
-}
-smoke["records"] = [record] + [item for item in smoke.get("records", []) if item.get("runtime_id") != component["id"]]
-smoke_path.write_text(json.dumps(smoke, indent=2) + "\n")
-
 (assets / "runtime-manifest.json").write_text(json.dumps({
-    "version": version,
-    "asset_revision": revision,
-    "runtime_sha256": component["runtime_sha256"],
-    "artifact_count": component["artifact_count"],
+    "schema_version": 1,
+    "component": component,
+    "python_wheel_policy": python_wheel_policy,
 }, indent=2) + "\n")
 PY
 }

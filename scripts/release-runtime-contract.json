@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "device_smoke": {
+    "matrix": [
+      {
+        "id": "api35-16k",
+        "api": 35,
+        "page_size_bytes": 16384,
+        "abi": "arm64-v8a"
+      }
+    ],
+    "verified_artifact": "android-runtime-smoke-api35-16k-verified",
+    "blocked_artifact": "android-runtime-smoke-api35-16k-blocked"
+  },
+  "runtime_ids": [
+    "python-3.12-android-arm64",
+    "node-lts-android-arm64",
+    "typescript-stable",
+    "shell-android-arm64",
+    "git-android-arm64",
+    "ssh-android-arm64",
+    "yaegi-go",
+    "go-builder-android-arm64"
+  ],
+  "stable_required_runtime_ids": [
+    "python-3.12-android-arm64",
+    "node-lts-android-arm64",
+    "shell-android-arm64"
+  ],
+  "runtime_entries": {
+    "python-3.12-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "python3"},
+    "node-lts-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "node"},
+    "typescript-stable": {"entry_type": "apk_elf", "entrypoint": "libnode_exec.so"},
+    "shell-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "bash"},
+    "git-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libgit_exec.so"},
+    "ssh-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libssh_exec.so"},
+    "yaegi-go": {"entry_type": "apk_elf", "entrypoint": "libyaegi_exec.so"},
+    "go-builder-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libgobuilder_exec.so"}
+  },
+  "runtime_evidence": {
+    "python-3.12-android-arm64": {
+      "step_id": "runtime.python.version",
+      "command": "python3 --version",
+      "expected_version": "3.12.3",
+      "output_pattern": "^Python ([0-9]+\\.[0-9]+\\.[0-9]+)$"
+    },
+    "node-lts-android-arm64": {
+      "step_id": "runtime.node.version",
+      "command": "node --version",
+      "expected_version": "18.19.1",
+      "output_pattern": "^v([0-9]+\\.[0-9]+\\.[0-9]+)$"
+    },
+    "shell-android-arm64": {
+      "step_id": "runtime.shell.version",
+      "command": "bash --version",
+      "expected_version": "5.2.21",
+      "output_pattern": "^([0-9]+\\.[0-9]+\\.[0-9]+)\\([0-9]+\\)-release$"
+    }
+  },
+  "release_gate_scope": {
+    "required": [
+      "task_6_3_release_evidence",
+      "task_6_4_device_stability_gate"
+    ],
+    "optional": [
+      "long_running_device_samples"
+    ]
+  }
+}

@@ -43,7 +43,7 @@ object AndroidRuntimeMetadataBridge {
             }
             "compatibility.json" -> """{"compatibility":"android-16-fallback","container_model":"layered-linux-runtime","python":"limited","shell":"active"}"""
             "smoke-evidence.json" -> """{"status":"fallback","evidence":[]}"""
-            "dependencies.json" -> """{"version":"fallback","python":{"runtime":"python-3.14-android-arm64"},"nodejs":{"runtime":"node-lts-android-arm64"}}"""
+            "dependencies.json" -> """{"version":"fallback","python":{"runtime":"python-3.12-android-arm64"},"nodejs":{"runtime":"node-lts-android-arm64"}}"""
             else -> "{}"
         }
         output.writeText(content)

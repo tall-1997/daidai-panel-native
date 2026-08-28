@@ -6,6 +6,7 @@ import '../network/panel_capability_registry.dart';
 import 'auth_service.dart';
 import 'auth_token_snapshot.dart';
 import 'auth_session_epoch.dart';
+import 'auth_session_invalidation_coordinator.dart';
 
 enum AuthStatus { unknown, unauthenticated, authenticated }
 
@@ -99,6 +100,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> checkAuthStatus({bool verifyRemote = true}) async {
+    final previousState = state;
     await restoreSession();
     if (!verifyRemote) {
       return;
@@ -129,13 +131,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
           authEpoch: epoch,
         );
       }
-    } catch (_) {
-      await SecureStorage.clearAuthSession(authEpoch: epoch);
+    } catch (error) {
       if (!AuthSessionEpoch.isCurrent(epoch)) return;
+      if (isProtectedRequestAuthFailure(error)) {
+        final invalidatedEpoch = await AuthSessionInvalidationCoordinator.instance
+            .invalidate(epoch);
+        if (invalidatedEpoch == null ||
+            !AuthSessionEpoch.isCurrent(invalidatedEpoch)) {
+          return;
+        }
+        state = const AuthState(
+          status: AuthStatus.unauthenticated,
+          error: '登录状态已失效，请重新登录',
+        );
+        return;
+      }
       state = state.copyWith(
-        status: AuthStatus.unauthenticated,
-        user: null,
-        error: '登录状态已失效，请重新登录',
+        status: previousState.status == AuthStatus.authenticated
+            ? AuthStatus.authenticated
+            : AuthStatus.unknown,
+        user: previousState.user,
+        error: '暂时无法验证登录状态，请检查网络连接',
       );
     }
   }

@@ -16,7 +16,7 @@ import (
 )
 
 var canonicalRuntimeIDs = []string{
-	"python-3.14-android-arm64",
+	"python-3.12-android-arm64",
 	"node-lts-android-arm64",
 	"typescript-stable",
 	"shell-android-arm64",
@@ -26,10 +26,72 @@ var canonicalRuntimeIDs = []string{
 	"go-builder-android-arm64",
 }
 
+var excludedDefaultAPKRuntimeEntries = map[string]bool{
+	"lib/arm64-v8a/libpython_exec.so": true,
+}
+
 type runtimeContract struct {
 	Manifest      runtimeManifest
 	Compatibility compatibilityMatrix
 	Smoke         smokeEvidence
+	Release       releaseRuntimeContract
+	Rootfs        rootfsManifest
+}
+
+type releaseRuntimeContract struct {
+	SchemaVersion            int                                   `json:"schema_version"`
+	DeviceSmoke              releaseDeviceSmoke                    `json:"device_smoke"`
+	RuntimeIDs               []string                              `json:"runtime_ids"`
+	StableRequiredRuntimeIDs []string                              `json:"stable_required_runtime_ids"`
+	RuntimeEntries           map[string]runtimeEntryContract       `json:"runtime_entries"`
+	RuntimeEvidence          map[string]runtimeEvidenceRequirement `json:"runtime_evidence"`
+	ReleaseGateScope         releaseGateScope                      `json:"release_gate_scope"`
+}
+
+type runtimeEvidenceRequirement struct {
+	StepID            string `json:"step_id"`
+	Command           string `json:"command"`
+	ExpectedVersion   string `json:"expected_version,omitempty"`
+	OutputPattern     string `json:"output_pattern,omitempty"`
+	VersionConstraint string `json:"version_constraint,omitempty"`
+}
+
+type releaseGateScope struct {
+	Required []string `json:"required"`
+	Optional []string `json:"optional"`
+}
+
+type runtimeEntryContract struct {
+	EntryType  string `json:"entry_type"`
+	Entrypoint string `json:"entrypoint"`
+}
+
+type rootfsManifest struct {
+	SchemaVersion    int            `json:"schema_version"`
+	ABI              string         `json:"abi"`
+	Distribution     string         `json:"distribution"`
+	UbuntuArch       string         `json:"ubuntu_arch"`
+	UbuntuVersion    string         `json:"ubuntu_version"`
+	SHA256           string         `json:"sha256"`
+	Size             int64          `json:"size"`
+	AptPackages      []string       `json:"apt_packages"`
+	GlobalTools      map[string]any `json:"global_tools"`
+	RequiredCommands []string       `json:"required_commands"`
+	BaseArchive      map[string]any `json:"base_archive"`
+	Capabilities     map[string]any `json:"capabilities"`
+}
+
+type releaseDeviceSmoke struct {
+	Matrix           []releaseDeviceMatrix `json:"matrix"`
+	VerifiedArtifact string                `json:"verified_artifact"`
+	BlockedArtifact  string                `json:"blocked_artifact"`
+}
+
+type releaseDeviceMatrix struct {
+	ID            string `json:"id"`
+	API           int    `json:"api"`
+	PageSizeBytes int    `json:"page_size_bytes"`
+	ABI           string `json:"abi"`
 }
 
 type runtimeManifest struct {
@@ -44,6 +106,7 @@ type runtimeComponent struct {
 	ABI           string            `json:"abi"`
 	PythonTag     string            `json:"python_tag,omitempty"`
 	Entrypoint    string            `json:"entrypoint"`
+	EntryType     string            `json:"entry_type"`
 	SHA256        string            `json:"sha256"`
 	RuntimeSHA256 string            `json:"runtime_sha256,omitempty"`
 	RuntimeType   string            `json:"runtime_type,omitempty"`
@@ -108,22 +171,26 @@ func main() {
 	manifestPath := flag.String("manifest", "runtime/manifest.json", "runtime manifest path")
 	compatibilityPath := flag.String("compatibility", "runtime/compatibility.json", "runtime compatibility path")
 	smokePath := flag.String("smoke-evidence", "runtime/smoke-evidence.json", "runtime smoke evidence path")
+	releaseContractPath := flag.String("release-contract", "scripts/release-runtime-contract.json", "shared release runtime contract path")
+	rootfsManifestPath := flag.String("rootfs-manifest", "app/android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json", "packaged rootfs manifest path")
 	nativeLibraryDir := flag.String("native-lib-dir", "", "optional Android native library directory")
 	apkPath := flag.String("apk", "", "optional APK whose entries and embedded metadata are verified")
 	strict := flag.Bool("strict", false, "fail on blocked smoke records or placeholder ELF entries")
+	strictRuntimeIDs := flag.String("strict-runtime-ids", "", "comma-separated runtime IDs that must pass in strict mode; defaults to all")
 	flag.Parse()
+	strictScope := parseRuntimeIDSet(*strictRuntimeIDs)
 
-	contract, err := readContract(*manifestPath, *compatibilityPath, *smokePath)
+	contract, err := readContract(*manifestPath, *compatibilityPath, *smokePath, *releaseContractPath, *rootfsManifestPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	errs := validateContract(contract, *strict)
+	errs := validateContractWithScope(contract, *strict, strictScope)
 	if strings.TrimSpace(*nativeLibraryDir) != "" {
-		errs = append(errs, validateNativeEntries(*nativeLibraryDir, contract, *strict)...)
+		errs = append(errs, validateNativeEntriesWithScope(*nativeLibraryDir, contract, *strict, strictScope)...)
 	}
 	if strings.TrimSpace(*apkPath) != "" {
-		errs = append(errs, validateAPK(*apkPath, contract, *strict)...)
+		errs = append(errs, validateAPKWithScope(*apkPath, contract, *strict, strictScope)...)
 	}
 	if len(errs) > 0 {
 		for _, err := range errs {
@@ -134,7 +201,7 @@ func main() {
 	fmt.Printf("runtime contract ok: %d runtimes\n", len(contract.Manifest.Components))
 }
 
-func readContract(manifestPath, compatibilityPath, smokePath string) (runtimeContract, error) {
+func readContract(manifestPath, compatibilityPath, smokePath, releaseContractPath, rootfsManifestPath string) (runtimeContract, error) {
 	var contract runtimeContract
 	if err := readJSON(manifestPath, &contract.Manifest); err != nil {
 		return runtimeContract{}, err
@@ -143,6 +210,12 @@ func readContract(manifestPath, compatibilityPath, smokePath string) (runtimeCon
 		return runtimeContract{}, err
 	}
 	if err := readJSON(smokePath, &contract.Smoke); err != nil {
+		return runtimeContract{}, err
+	}
+	if err := readJSON(releaseContractPath, &contract.Release); err != nil {
+		return runtimeContract{}, err
+	}
+	if err := readJSON(rootfsManifestPath, &contract.Rootfs); err != nil {
 		return runtimeContract{}, err
 	}
 	return contract, nil
@@ -162,10 +235,25 @@ func readJSON(path string, target any) error {
 }
 
 func validateContract(contract runtimeContract, strict bool) []error {
+	return validateContractWithScope(contract, strict, nil)
+}
+
+func validateContractWithScope(contract runtimeContract, strict bool, strictScope map[string]bool) []error {
 	var errs []error
+	errs = append(errs, validateReleaseRuntimeContract(contract.Release, contract.Smoke, contract.Manifest)...)
+	if contract.Rootfs.SchemaVersion != 2 || contract.Rootfs.ABI != "arm64-v8a" || contract.Rootfs.Distribution != "ubuntu" || len(contract.Rootfs.RequiredCommands) == 0 {
+		errs = append(errs, fmt.Errorf("rootfs manifest command contract is incomplete"))
+	}
+	if strict {
+		for id := range strictScope {
+			if !contains(canonicalRuntimeIDs, id) {
+				errs = append(errs, fmt.Errorf("unknown strict runtime ID %q", id))
+			}
+		}
+	}
 	manifestByID := make(map[string]runtimeComponent, len(contract.Manifest.Components))
 	for _, component := range contract.Manifest.Components {
-		if component.ID == "" || component.Version == "" || component.ABI != "arm64-v8a" || component.Entrypoint == "" {
+		if component.ID == "" || component.Version == "" || component.ABI != "arm64-v8a" || component.Entrypoint == "" || (component.EntryType != "apk_elf" && component.EntryType != "rootfs_command") {
 			errs = append(errs, fmt.Errorf("invalid manifest component %q", component.ID))
 		}
 		if _, exists := manifestByID[component.ID]; exists {
@@ -213,9 +301,102 @@ func validateContract(contract runtimeContract, strict bool) []error {
 		if record.Entry != component.Entrypoint {
 			errs = append(errs, fmt.Errorf("%s smoke entry mismatch: got %q want %q", id, record.Entry, component.Entrypoint))
 		}
-		errs = append(errs, validateSmokeRecord(record, strict)...)
+		if component.EntryType == "rootfs_command" && !contains(contract.Rootfs.RequiredCommands, component.Entrypoint) {
+			errs = append(errs, fmt.Errorf("%s rootfs command %q is absent from packaged rootfs required_commands", id, component.Entrypoint))
+		}
+		if component.EntryType == "rootfs_command" && !strings.EqualFold(component.SHA256, contract.Rootfs.SHA256) {
+			errs = append(errs, fmt.Errorf("%s rootfs command checksum does not bind the packaged rootfs", id))
+		}
+		errs = append(errs, validateSmokeRecord(record, strict && runtimeIsRequired(id, strictScope))...)
 	}
 	return errs
+}
+
+func validateReleaseRuntimeContract(release releaseRuntimeContract, smoke smokeEvidence, manifest runtimeManifest) []error {
+	var errs []error
+	if release.SchemaVersion != 1 || release.DeviceSmoke.VerifiedArtifact == "" || release.DeviceSmoke.BlockedArtifact == "" {
+		errs = append(errs, fmt.Errorf("release runtime contract is incomplete"))
+	}
+	errs = append(errs, validateIDSet("release runtime IDs", append([]string(nil), release.RuntimeIDs...))...)
+	errs = append(errs, validateIDSet("release runtime entry IDs", mapKeys(release.RuntimeEntries))...)
+	manifestByID := make(map[string]runtimeComponent, len(manifest.Components))
+	for _, component := range manifest.Components {
+		manifestByID[component.ID] = component
+	}
+	for id, entry := range release.RuntimeEntries {
+		component, ok := manifestByID[id]
+		if !ok || entry.EntryType != component.EntryType || entry.Entrypoint != component.Entrypoint {
+			errs = append(errs, fmt.Errorf("%s release runtime entry differs from manifest", id))
+		}
+	}
+	for id, requirement := range release.RuntimeEvidence {
+		component, ok := manifestByID[id]
+		if !ok || requirement.StepID == "" || requirement.Command == "" {
+			errs = append(errs, fmt.Errorf("%s release runtime evidence is incomplete", id))
+			continue
+		}
+		if requirement.ExpectedVersion != "" && requirement.ExpectedVersion != component.Version {
+			errs = append(errs, fmt.Errorf("%s release expected version differs from manifest", id))
+		}
+	}
+	seenRequired := map[string]bool{}
+	for _, id := range release.StableRequiredRuntimeIDs {
+		if seenRequired[id] {
+			errs = append(errs, fmt.Errorf("duplicate stable required runtime ID %q", id))
+		}
+		seenRequired[id] = true
+		if !contains(canonicalRuntimeIDs, id) {
+			errs = append(errs, fmt.Errorf("unknown stable required runtime ID %q", id))
+		}
+		if entry, ok := release.RuntimeEntries[id]; !ok || entry.EntryType != "rootfs_command" {
+			errs = append(errs, fmt.Errorf("stable required runtime %q must be a rootfs_command", id))
+		}
+	}
+	if len(release.StableRequiredRuntimeIDs) == 0 {
+		errs = append(errs, fmt.Errorf("stable required runtime IDs are empty"))
+	}
+	matrixIDs := make([]string, 0, len(release.DeviceSmoke.Matrix))
+	seenMatrix := map[string]bool{}
+	for _, matrix := range release.DeviceSmoke.Matrix {
+		matrixIDs = append(matrixIDs, matrix.ID)
+		if matrix.ID == "" || matrix.API <= 0 || matrix.PageSizeBytes <= 0 || matrix.ABI == "" {
+			errs = append(errs, fmt.Errorf("invalid release device matrix %q", matrix.ID))
+		}
+		if seenMatrix[matrix.ID] {
+			errs = append(errs, fmt.Errorf("duplicate release device matrix ID %q", matrix.ID))
+		}
+		seenMatrix[matrix.ID] = true
+	}
+	if !reflect.DeepEqual(smoke.Matrix, matrixIDs) {
+		errs = append(errs, fmt.Errorf("smoke evidence matrix differs from release runtime contract: got %v want %v", smoke.Matrix, matrixIDs))
+	}
+	return errs
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func parseRuntimeIDSet(value string) map[string]bool {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	result := map[string]bool{}
+	for _, id := range strings.Split(value, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			result[id] = true
+		}
+	}
+	return result
+}
+
+func runtimeIsRequired(id string, strictScope map[string]bool) bool {
+	return strictScope == nil || strictScope[id]
 }
 
 func validateSmokeRecord(record smokeRecord, strict bool) []error {
@@ -275,6 +456,10 @@ func recordsByRuntimeID(records []smokeRecord) map[string]smokeRecord {
 }
 
 func validateNativeEntries(nativeDir string, contract runtimeContract, strict bool) []error {
+	return validateNativeEntriesWithScope(nativeDir, contract, strict, nil)
+}
+
+func validateNativeEntriesWithScope(nativeDir string, contract runtimeContract, strict bool, strictScope map[string]bool) []error {
 	var errs []error
 	records := make(map[string]smokeRecord, len(contract.Smoke.Records))
 	for _, record := range contract.Smoke.Records {
@@ -282,6 +467,10 @@ func validateNativeEntries(nativeDir string, contract runtimeContract, strict bo
 	}
 	seenEntries := map[string]bool{}
 	for _, component := range contract.Manifest.Components {
+		if component.EntryType != "apk_elf" {
+			continue
+		}
+		componentStrict := strict && runtimeIsRequired(component.ID, strictScope)
 		if seenEntries[component.Entrypoint] {
 			continue
 		}
@@ -289,7 +478,7 @@ func validateNativeEntries(nativeDir string, contract runtimeContract, strict bo
 		payload, err := os.ReadFile(filepath.Join(nativeDir, component.Entrypoint))
 		if err != nil {
 			record := records[component.ID]
-			if !strict && record.Status == "blocked" {
+			if !componentStrict && record.Status == "blocked" {
 				continue
 			}
 			errs = append(errs, fmt.Errorf("%s missing native entry %s: %w", component.ID, component.Entrypoint, err))
@@ -305,7 +494,7 @@ func validateNativeEntries(nativeDir string, contract runtimeContract, strict bo
 			if record.Status != "blocked" {
 				errs = append(errs, fmt.Errorf("%s placeholder ELF requires blocked smoke evidence", component.ID))
 			}
-			if strict {
+			if componentStrict {
 				errs = append(errs, fmt.Errorf("%s placeholder ELF blocked in strict mode", component.ID))
 			}
 			continue
@@ -332,6 +521,10 @@ func validateRuntimeELF(payload []byte) error {
 }
 
 func validateAPK(path string, contract runtimeContract, strict bool) []error {
+	return validateAPKWithScope(path, contract, strict, nil)
+}
+
+func validateAPKWithScope(path string, contract runtimeContract, strict bool, strictScope map[string]bool) []error {
 	archive, err := zip.OpenReader(path)
 	if err != nil {
 		return []error{fmt.Errorf("open APK %s: %w", path, err)}
@@ -350,6 +543,7 @@ func validateAPK(path string, contract runtimeContract, strict bool) []error {
 		{path: "assets/manifest.json", want: contract.Manifest, got: &runtimeManifest{}},
 		{path: "assets/compatibility.json", want: contract.Compatibility, got: &compatibilityMatrix{}},
 		{path: "assets/smoke-evidence.json", want: contract.Smoke, got: &smokeEvidence{}},
+		{path: "assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json", want: contract.Rootfs, got: &rootfsManifest{}},
 	}
 	var errs []error
 	for _, item := range metadata {
@@ -363,12 +557,35 @@ func validateAPK(path string, contract runtimeContract, strict bool) []error {
 			continue
 		}
 		got := reflect.ValueOf(item.got).Elem().Interface()
+		// Device evidence is produced after the signed APK. Strict release checks bind
+		// the APK digest separately and use the post-install smoke evidence as truth.
+		if strict && item.path == "assets/smoke-evidence.json" {
+			continue
+		}
 		if !reflect.DeepEqual(got, item.want) {
 			errs = append(errs, fmt.Errorf("APK metadata %s differs from source contract", item.path))
 		}
 	}
+	rootfsAsset := "assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin"
+	rootfsFile, ok := entries[rootfsAsset]
+	if !ok {
+		errs = append(errs, fmt.Errorf("missing APK rootfs asset %s", rootfsAsset))
+	} else if int64(rootfsFile.UncompressedSize64) != contract.Rootfs.Size {
+		errs = append(errs, fmt.Errorf("APK rootfs asset size differs from rootfs manifest"))
+	} else if payload, readErr := readZipFile(rootfsFile); readErr != nil {
+		errs = append(errs, readErr)
+	} else {
+		sum := sha256.Sum256(payload)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), contract.Rootfs.SHA256) {
+			errs = append(errs, fmt.Errorf("APK rootfs asset sha256 differs from rootfs manifest"))
+		}
+	}
 	seen := map[string]bool{}
 	for _, component := range contract.Manifest.Components {
+		if component.EntryType != "apk_elf" {
+			continue
+		}
+		componentStrict := strict && runtimeIsRequired(component.ID, strictScope)
 		apkEntry := "lib/arm64-v8a/" + component.Entrypoint
 		if seen[apkEntry] {
 			continue
@@ -377,22 +594,33 @@ func validateAPK(path string, contract runtimeContract, strict bool) []error {
 		file, ok := entries[apkEntry]
 		if !ok {
 			record := recordsByRuntimeID(contract.Smoke.Records)[component.ID]
-			if !strict && record.Status == "blocked" {
+			if !componentStrict && record.Status == "blocked" {
 				continue
 			}
 			errs = append(errs, fmt.Errorf("%s missing APK entry %s", component.ID, apkEntry))
 			continue
 		}
-		if strict {
+		if componentStrict {
 			payload, readErr := readZipFile(file)
 			if readErr != nil {
 				errs = append(errs, readErr)
+			} else if elfErr := validateRuntimeELF(payload); elfErr != nil {
+				errs = append(errs, fmt.Errorf("%s APK entry is invalid ELF: %w", component.ID, elfErr))
 			} else if strings.Contains(string(payload), "RUNTIME_STUB_OK") {
 				errs = append(errs, fmt.Errorf("%s APK entry is placeholder ELF in strict mode", component.ID))
+			} else {
+				sum := sha256.Sum256(payload)
+				if !strings.EqualFold(hex.EncodeToString(sum[:]), component.SHA256) {
+					errs = append(errs, fmt.Errorf("%s APK entry sha256 mismatch", component.ID))
+				}
 			}
 		}
 	}
 	for name := range entries {
+		if excludedDefaultAPKRuntimeEntries[name] {
+			errs = append(errs, fmt.Errorf("optional runtime entry is forbidden in default APK: %s", name))
+			continue
+		}
 		if strings.HasPrefix(name, "lib/arm64-v8a/lib") && strings.HasSuffix(name, "_exec.so") && !seen[name] {
 			// Legacy launcher aliases are retained for migration compatibility and
 			// are not independent runtime contract entries.

@@ -95,6 +95,24 @@ void main() {
       final event = decoder.close().single;
       expect(isTerminalSseEvent(event.event, event.data), isTrue);
     });
+
+    test('rejects an unterminated line beyond the buffer limit', () {
+      final decoder = SseDecoder(maxBufferCharacters: 8);
+
+      expect(
+        () => decoder.add('data: too long'),
+        throwsA(isA<SseProtocolException>()),
+      );
+    });
+
+    test('rejects a frame beyond the event limit', () {
+      final decoder = SseDecoder(maxEventCharacters: 8);
+
+      expect(
+        () => decoder.add('event: message\ndata: value\n\n'),
+        throwsA(isA<SseProtocolException>()),
+      );
+    });
   });
 
   group('SSE reconnection', () {
@@ -116,6 +134,14 @@ void main() {
       );
       expect(
         sseReconnectDelay(attempt: 20, baseDelay: base),
+        const Duration(seconds: 30),
+      );
+    });
+
+    test('clamps server retry values to safe limits', () {
+      expect(boundedSseRetryDelay(0), const Duration(milliseconds: 500));
+      expect(
+        boundedSseRetryDelay(60000),
         const Duration(seconds: 30),
       );
     });

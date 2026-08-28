@@ -18,6 +18,8 @@ permissions:
 
 env:
   FLUTTER_VERSION: 3.41.5
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 jobs:
   build-and-check:
@@ -41,6 +43,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.1.0'
+
+      - name: Set up Node.js for Gradle Web assets
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

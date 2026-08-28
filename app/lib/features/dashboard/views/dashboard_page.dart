@@ -9,6 +9,7 @@ import '../../../core/services/local_notification_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/utils/time_utils.dart';
 import '../providers/dashboard_provider.dart';
 import '../widgets/task_stats_card.dart';
 import '../widgets/trend_chart.dart';
@@ -38,7 +39,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
         await ref.read(authProvider.notifier).refreshUser();
       }
       _silentUpdateCheck();
-      _startRefreshTimer();
+      _startRefreshTimer(refreshNow: false);
     });
   }
 
@@ -54,19 +55,21 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
     if (state == AppLifecycleState.resumed) {
       _startRefreshTimer();
     } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
       _refreshTimer?.cancel();
       _refreshTimer = null;
     }
   }
 
-  void _startRefreshTimer() {
+  void _startRefreshTimer({bool refreshNow = true}) {
     if (!mounted) return;
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _refresh();
     });
-    _refresh();
+    if (refreshNow) _refresh();
   }
 
   Future<void> _refresh() async {
@@ -309,6 +312,35 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
 
                   // Server Info Card
                   _ServerInfoCard(data: data, isLight: isLight),
+                  if (data.error != null || data.lastUpdated != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Icon(
+                          data.error == null
+                              ? Icons.check_circle_outline
+                              : Icons.error_outline,
+                          size: 14,
+                          color: data.error == null
+                              ? AppColors.slate400
+                              : AppColors.red500,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            data.error ??
+                                '更新于 ${formatTimeCn(data.lastUpdated!)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: data.error == null
+                                  ? theme.colorScheme.onSurfaceVariant
+                                  : AppColors.red500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 24),
 
                   // System Stats

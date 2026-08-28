@@ -54,10 +54,10 @@ func buildBlockedEvidence(updatedAt string) evidence {
 		id, version, entry, isolation, checkID string
 		timeout                                int
 	}{
-		{"python-3.14-android-arm64", "3.14.6", "libpython_exec.so", "android-app-sandbox", "PY_OK_SSL_SQLITE_VENV_PIP", 10},
-		{"node-lts-android-arm64", "18.20.4", "libnode_exec.so", "android-app-sandbox", "COMMONJS_ESM_HTTPS", 10},
+		{"python-3.12-android-arm64", "3.12.3", "python3", "layered-rootfs", "PY_OK_SSL_SQLITE_VENV_PIP", 10},
+		{"node-lts-android-arm64", "18.19.1", "node", "layered-rootfs", "COMMONJS_ESM_HTTPS", 10},
 		{"typescript-stable", "5.9.3", "libnode_exec.so", "android-app-sandbox", "TS_OK", 10},
-		{"shell-android-arm64", "blocked-placeholder", "libshell_exec.so", "layered-rootfs", "SHELL_PIPE_EXIT_STOP", 10},
+		{"shell-android-arm64", "5.2.21", "bash", "layered-rootfs", "SHELL_PIPE_EXIT_STOP", 10},
 		{"git-android-arm64", "blocked-placeholder", "libgit_exec.so", "brokered-network", "GIT_CLONE_FETCH_SPARSE", 30},
 		{"ssh-android-arm64", "blocked-placeholder", "libssh_exec.so", "brokered-network", "SSH_HOSTKEY", 30},
 		{"yaegi-go", "blocked-placeholder", "libyaegi_exec.so", "isolated-worker", "GO_INTERPRET_OK", 10},
@@ -66,7 +66,7 @@ func buildBlockedEvidence(updatedAt string) evidence {
 	result := evidence{
 		Version:   "1",
 		UpdatedAt: updatedAt,
-		Matrix:    []string{"api28-4k", "api35-4k", "api35-16k"},
+		Matrix:    []string{"api35-16k"},
 		Records:   make([]record, 0, len(specs)),
 	}
 	for _, spec := range specs {

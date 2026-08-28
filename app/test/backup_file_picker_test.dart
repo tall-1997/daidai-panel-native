@@ -19,4 +19,11 @@ void main() {
       expect(isSupportedBackupFilename(filename), isFalse, reason: filename);
     }
   });
+
+  test('restore progress retry uses bounded exponential backoff', () {
+    expect(restoreProgressRetryDelay(0), const Duration(seconds: 1));
+    expect(restoreProgressRetryDelay(1), const Duration(seconds: 2));
+    expect(restoreProgressRetryDelay(4), const Duration(seconds: 16));
+    expect(restoreProgressRetryDelay(20), const Duration(seconds: 16));
+  });
 }

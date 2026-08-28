@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, onActivated, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { logApi } from '@/api/log'
 import { taskApi } from '@/api/task'
@@ -11,6 +11,7 @@ import { useResponsive } from '@/composables/useResponsive'
 import { extractError } from '@/utils/error'
 import { canOperate } from '@/utils/roles'
 import { ansiToHtml, normalizeAnsi } from '@/utils/ansi'
+import { normalizeTerminalText, TerminalLogBuffer } from '@/utils/terminalLogBuffer.mjs'
 
 const route = useRoute()
 const authStore = useAuthStore()
@@ -23,18 +24,21 @@ const keyword = ref('')
 const loading = ref(false)
 const detailVisible = ref(false)
 const detailContent = ref('')
+const detailBuffer = new TerminalLogBuffer({ maxChars: 1_000_000, maxLines: 10_000 })
+const detailBufferVersion = ref(0)
 const detailLog = ref<any>(null)
 const selectedIds = ref<number[]>([])
 const selectedIdSet = computed(() => new Set(selectedIds.value))
 const autoRefresh = ref(true)
 const { isMobile, dialogFullscreen } = useResponsive()
 const { isPageActive } = usePageActivity()
-let refreshTimer: ReturnType<typeof setInterval> | null = null
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+let logsLoadGeneration = 0
+let detailLoadGeneration = 0
 let logEventSource: EventStreamConnection | null = null
 const logContentRef = ref<HTMLElement>()
 let sseBuffer: string[] = []
 let sseFlushRaf = 0
-let detailContentCarriageReturnPending = false
 
 const showFileBrowser = ref(false)
 const currentTaskId = ref<number>(0)
@@ -51,11 +55,14 @@ const canOperateLogs = computed(() => canOperate(authStore.user?.role))
 const allSelectedOnPage = computed(() => logs.value.length > 0 && logs.value.every(l => selectedIdSet.value.has(l.id)))
 const someSelectedOnPage = computed(() => selectedIds.value.length > 0 && !allSelectedOnPage.value)
 
-const renderedDetailContent = computed(() => renderTerminalText(detailContent.value || '（正在加载日志...）'))
-const renderedFileContent = computed(() => renderTerminalText(fileContentData.value || '(空文件)'))
+const renderedDetailContent = computed(() => {
+  detailBufferVersion.value
+  return detailBuffer.text || '（正在加载日志...）'
+})
+const renderedFileContent = computed(() => normalizeTerminalText(fileContentData.value || '(空文件)', { maxChars: 1_000_000, maxLines: 10_000 }))
 const detailLineCount = computed(() => {
-  if (!renderedDetailContent.value) return 0
-  return renderedDetailContent.value.split('\n').length
+  detailBufferVersion.value
+  return detailBuffer.text ? detailBuffer.lineCount : 0
 })
 const detailByteLabel = computed(() => {
   if (!renderedDetailContent.value) return ''
@@ -69,90 +76,8 @@ const fileContentHtml = computed(() => ansiToHtml(normalizeAnsi(renderedFileCont
 
 let mounted = false
 
-function mergeTerminalText(previous: string, chunk: string) {
-  if (!chunk) {
-    return previous
-  }
-
-  const lines = previous.split('\n')
-  if (lines.length === 0) {
-    lines.push('')
-  }
-
-  for (let i = 0; i < chunk.length; i++) {
-    const char = chunk[i] ?? ''
-
-    if (char === '\r') {
-      if ((chunk[i + 1] ?? '') === '\n') {
-        lines.push('')
-        detailContentCarriageReturnPending = false
-        i++
-        continue
-      }
-      // 裸 \r 表示光标回到当前行开头，下一批普通字符才会覆盖旧内容。
-      // 不能把它当成换行，否则进度条每秒刷新一次就会在 Web 里刷成很多行。
-      detailContentCarriageReturnPending = true
-      continue
-    }
-
-    if (char === '\n') {
-      lines.push('')
-      detailContentCarriageReturnPending = false
-      continue
-    }
-
-    if (detailContentCarriageReturnPending) {
-      lines[lines.length - 1] = ''
-      detailContentCarriageReturnPending = false
-    }
-    lines[lines.length - 1] += char
-  }
-
-  return lines.join('\n')
-}
-
-function renderTerminalText(text: string) {
-  let currentLine = ''
-  let pendingCarriageReturn = false
-  const lines: string[] = []
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i] ?? ''
-    if (char === '\r') {
-      if ((text[i + 1] ?? '') === '\n') {
-        lines.push(currentLine)
-        currentLine = ''
-        pendingCarriageReturn = false
-        i++
-        continue
-      }
-      // 历史日志和日志文件也要按终端语义处理裸 \r，只保留同一行的最终覆盖结果。
-      pendingCarriageReturn = true
-      continue
-    }
-
-    if (char === '\n') {
-      lines.push(currentLine)
-      currentLine = ''
-      pendingCarriageReturn = false
-      continue
-    }
-
-    if (pendingCarriageReturn) {
-      currentLine = ''
-      pendingCarriageReturn = false
-    }
-    currentLine += char
-  }
-
-  if (currentLine !== '' || lines.length === 0) {
-    lines.push(currentLine)
-  }
-
-  return lines.join('\n')
-}
-
 async function loadLogs() {
+  const generation = ++logsLoadGeneration
   loading.value = true
   selectedIds.value = []
   try {
@@ -161,6 +86,7 @@ async function loadLogs() {
     if (statusFilter.value !== '') params.status = statusFilter.value
     if (keyword.value) params.keyword = keyword.value
     const res = await logApi.list(params)
+    if (generation !== logsLoadGeneration) return
     logs.value = res.data
     total.value = res.total
     if (pendingOpenTaskLog.value) {
@@ -170,16 +96,19 @@ async function loadLogs() {
       }
     }
   } catch (err) {
-    ElMessage.error(extractError(err, '加载日志失败'))
+    if (generation === logsLoadGeneration) ElMessage.error(extractError(err, '加载日志失败'))
   } finally {
-    loading.value = false
-    syncAutoRefresh()
+    if (generation === logsLoadGeneration) {
+      loading.value = false
+      syncAutoRefresh()
+    }
   }
 }
 
 function startAutoRefresh() {
   stopAutoRefresh()
-  refreshTimer = setInterval(async () => {
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null
     if (!isPageActive.value || !autoRefresh.value) {
       stopAutoRefresh()
       return
@@ -193,7 +122,7 @@ function startAutoRefresh() {
 
 function stopAutoRefresh() {
   if (refreshTimer) {
-    clearInterval(refreshTimer)
+    clearTimeout(refreshTimer)
     refreshTimer = null
   }
 }
@@ -210,6 +139,13 @@ function syncAutoRefresh() {
 
 watch([autoRefresh, hasRunningLogs, isPageActive], () => {
   syncAutoRefresh()
+})
+
+watch(detailVisible, (visible) => {
+  if (!visible) {
+    detailLoadGeneration++
+    closeLogSSE()
+  }
 })
 
 function syncTaskIdFromRoute(openLatest = false) {
@@ -239,6 +175,14 @@ onActivated(() => {
     void loadLogs()
   }
   mounted = false
+})
+
+onDeactivated(() => {
+  logsLoadGeneration += 1
+  detailLoadGeneration += 1
+  stopAutoRefresh()
+  closeLogSSE()
+  loading.value = false
 })
 
 function handleSearch() {
@@ -275,9 +219,11 @@ function formatTime(t: string | null) {
 }
 
 async function viewDetail(log: any) {
+  const generation = ++detailLoadGeneration
   detailLog.value = log
   detailContent.value = ''
-  detailContentCarriageReturnPending = false
+  detailBuffer.clear()
+  detailBufferVersion.value++
   detailVisible.value = true
   closeLogSSE()
 
@@ -286,12 +232,15 @@ async function viewDetail(log: any) {
     sseBuffer = []
     logEventSource = openAuthorizedEventStream(url, {
       onMessage(data) {
+        if (generation !== detailLoadGeneration) return
         sseBuffer.push(data)
         if (!sseFlushRaf) {
           sseFlushRaf = requestAnimationFrame(() => {
             for (const chunk of sseBuffer) {
-              detailContent.value = mergeTerminalText(detailContent.value, chunk)
+              detailBuffer.append(chunk)
             }
+            detailContent.value = detailBuffer.text
+            detailBufferVersion.value++
             sseBuffer = []
             sseFlushRaf = 0
             if (logContentRef.value) {
@@ -301,27 +250,37 @@ async function viewDetail(log: any) {
         }
       },
       onEvent(event) {
+        if (generation !== detailLoadGeneration) return
         if (event.event === 'done') {
           closeLogSSE()
           loadLogs()
         }
       },
       onError() {
+        if (generation !== detailLoadGeneration) return
         closeLogSSE()
       }
     })
   } else {
     try {
       const res = await logApi.detail(log.id)
+      if (generation !== detailLoadGeneration) return
       detailLog.value = res
-      detailContent.value = res.content || '(无日志内容)'
+      detailBuffer.set(res.content || '(无日志内容)')
+      detailContent.value = detailBuffer.text
+      detailBufferVersion.value++
     } catch (err) {
-      ElMessage.error(extractError(err, '获取日志详情失败'))
+      if (generation === detailLoadGeneration) ElMessage.error(extractError(err, '获取日志详情失败'))
     }
   }
 }
 
 function closeLogSSE() {
+  if (sseFlushRaf) {
+    cancelAnimationFrame(sseFlushRaf)
+    sseFlushRaf = 0
+  }
+  sseBuffer = []
   if (logEventSource) {
     logEventSource.close()
     logEventSource = null
@@ -527,6 +486,8 @@ function formatFileSize(size: number) {
 }
 
 onBeforeUnmount(() => {
+  logsLoadGeneration += 1
+  detailLoadGeneration += 1
   stopAutoRefresh()
   closeLogSSE()
   if (sseFlushRaf) {

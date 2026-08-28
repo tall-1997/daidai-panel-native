@@ -1,4 +1,4 @@
-import { ref, type ComputedRef, type Ref } from 'vue'
+import { onBeforeUnmount, onDeactivated, ref, type ComputedRef, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scriptApi } from '@/api/script'
@@ -34,6 +34,8 @@ export function useScriptWorkspaceActions({
   const router = useRouter()
 
   const saving = ref(false)
+  let saveGeneration = 0
+  let saveController: AbortController | null = null
   const formatting = ref(false)
 
   const showCreateFileDialog = ref(false)
@@ -65,20 +67,23 @@ export function useScriptWorkspaceActions({
     return err === 'cancel' || err === 'close' || String(err) === 'cancel' || String(err) === 'close'
   }
 
-  async function verifyEditableTarget(path: string) {
+  async function verifyEditableTarget(path: string, signal: AbortSignal) {
     const normalizedPath = path.trim()
     if (!normalizedPath) {
       ElMessage.warning('当前没有可保存的脚本')
       return false
     }
 
-    const loaded = await loadFileContent(normalizedPath, { silent: true })
-    if (!loaded) {
+    let remoteFile
+    try {
+      remoteFile = await scriptApi.getContent(normalizedPath, signal)
+    } catch {
+      if (signal.aborted) return false
       ElMessage.error('保存失败：脚本可能已被删除、移动，或当前选中的不是可编辑文件')
       return false
     }
 
-    if (isBinary.value) {
+    if (remoteFile.data.is_binary ?? remoteFile.data.binary ?? false) {
       ElMessage.warning('当前文件为二进制文件，不能在线保存')
       return false
     }
@@ -88,17 +93,18 @@ export function useScriptWorkspaceActions({
 
   async function saveCurrentFile() {
     if (!selectedFile.value || isBinary.value) return
+    const generation = ++saveGeneration
+    saveController?.abort()
+    const controller = new AbortController()
+    saveController = controller
     saving.value = true
     try {
       const currentPath = selectedFile.value
       const snapshotContent = fileContent.value
-      const verified = await verifyEditableTarget(currentPath)
-      if (!verified) {
+      const verified = await verifyEditableTarget(currentPath, controller.signal)
+      if (!verified || generation !== saveGeneration || currentPath !== selectedFile.value) {
         return false
       }
-
-      // 校验会刷新后端最新内容；如果用户本地正有改动，需要把待保存内容覆盖回去。
-      fileContent.value = snapshotContent
 
       let versionMessage = 'V1 初始版本'
       if (originalContent.value !== '') {
@@ -110,21 +116,34 @@ export function useScriptWorkspaceActions({
           versionMessage = 'V2 更新'
         }
       }
-      await scriptApi.saveContent(currentPath, fileContent.value, versionMessage)
-      originalContent.value = fileContent.value
+      if (generation !== saveGeneration || currentPath !== selectedFile.value) return false
+      await scriptApi.saveContent(currentPath, snapshotContent, versionMessage, controller.signal)
+      if (generation !== saveGeneration || currentPath !== selectedFile.value) return false
+      originalContent.value = snapshotContent
       ElMessage.success('保存成功')
       return true
     } catch (err: any) {
+      if (controller.signal.aborted || generation !== saveGeneration) return false
       ElMessage.error(extractScriptErrorMessage(err, '保存失败'))
       return false
     } finally {
-      saving.value = false
+      if (generation === saveGeneration) saving.value = false
     }
   }
 
   async function handleSave() {
     await saveCurrentFile()
   }
+
+  function cancelPendingSave() {
+    saveGeneration += 1
+    saveController?.abort()
+    saveController = null
+    saving.value = false
+  }
+
+  onDeactivated(cancelPendingSave)
+  onBeforeUnmount(cancelPendingSave)
 
   async function handleCreateFile() {
     if (!newFileName.value.trim()) return

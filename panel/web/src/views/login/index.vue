@@ -55,6 +55,8 @@ const captchaResult = ref<GeeTestValidateResult | null>(null);
 const captchaStatusText = ref("");
 let captchaInstance: GeeTestInstance | null = null;
 let captchaInitPromise: Promise<GeeTestInstance> | null = null;
+let captchaInstanceId = "";
+let captchaGeneration = 0;
 let pendingSubmitAfterCaptcha = false;
 
 const lockCountdown = ref(0);
@@ -77,7 +79,7 @@ function startLockCountdown(seconds: number) {
 
 onUnmounted(() => {
   if (lockTimer) clearInterval(lockTimer);
-  resetCaptchaProof();
+  destroyCaptchaInstance();
 });
 
 const form = ref({
@@ -141,12 +143,26 @@ function resetCaptchaProof(keepVisible = false) {
   }
 }
 
+function destroyCaptchaInstance() {
+  captchaGeneration++;
+  captchaInstance?.destroy();
+  captchaInstance = null;
+  captchaInstanceId = "";
+  captchaInitPromise = null;
+  captchaReady.value = false;
+  captchaVerified.value = false;
+  captchaResult.value = null;
+}
+
 async function loadCaptchaConfig(
   username = form.value.username,
   silent = true,
 ) {
   try {
     const res = await authApi.captchaConfig(username || undefined);
+    if ((res.captcha_id || "") !== captchaInstanceId && captchaInstanceId) {
+      destroyCaptchaInstance();
+    }
     captchaConfig.value = {
       enabled: res.enabled,
       captcha_id: res.captcha_id || "",
@@ -178,7 +194,8 @@ async function loadCaptchaConfig(
 }
 
 async function ensureCaptchaInstance() {
-  if (captchaInstance) {
+  const captchaId = captchaConfig.value.captcha_id;
+  if (captchaInstance && captchaInstanceId === captchaId) {
     return captchaInstance;
   }
   if (!captchaConfig.value.enabled || !captchaConfig.value.captcha_id) {
@@ -186,8 +203,9 @@ async function ensureCaptchaInstance() {
   }
 
   if (!captchaInitPromise) {
+    const generation = ++captchaGeneration;
     captchaPreparing.value = true;
-    captchaInitPromise = createGeeTestInstance(
+    const initPromise = createGeeTestInstance(
       {
         captchaId: captchaConfig.value.captcha_id,
         language: "zho",
@@ -227,13 +245,21 @@ async function ensureCaptchaInstance() {
       },
     )
       .then((instance) => {
+        if (generation !== captchaGeneration || captchaId !== captchaConfig.value.captcha_id) {
+          instance.destroy();
+          throw new Error("验证码配置已更新，请重试");
+        }
         captchaInstance = instance;
+        captchaInstanceId = captchaId;
         return instance;
       })
       .finally(() => {
-        captchaPreparing.value = false;
-        captchaInitPromise = null;
+        if (captchaInitPromise === initPromise) {
+          captchaPreparing.value = false;
+          captchaInitPromise = null;
+        }
       });
+    captchaInitPromise = initPromise;
   }
 
   return captchaInitPromise;
@@ -417,6 +443,9 @@ async function handleSubmit() {
       startLockCountdown(data.remaining_seconds);
     }
     if (data?.captcha_id) {
+      if (data.captcha_id !== captchaConfig.value.captcha_id) {
+        destroyCaptchaInstance();
+      }
       captchaConfig.value.captcha_id = data.captcha_id;
     }
     if (typeof data?.require_after_failures === "number") {

@@ -5,8 +5,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 asset_root="$repo_root/app/android/app/src/main/assets/android-runtime"
 cache_root="${ANDROID_UBUNTU_ROOTFS_CACHE:-$HOME/.cache/daidai-android-ubuntu-rootfs}"
-apt_mirror="${UBUNTU_APT_MIRROR:-http://mirrors.aliyun.com/ubuntu-ports}"
+apt_mirror="${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu-ports}"
 release_version="${UBUNTU_RELEASE_VERSION:-24.04.4}"
+ubuntu_base_url="${UBUNTU_BASE_URL:-https://cdimage.ubuntu.com/ubuntu-base/releases}"
+trusted_sources="$script_dir/rootfs-trusted-sources.json"
 release_codename="noble"
 required_packages=(bash python3 python3-pip nodejs npm ca-certificates curl git openssh-client tzdata)
 required_commands=(apt-get bash python3 pip3 node npm pnpm)
@@ -37,7 +39,7 @@ write_rootfs_config() {
   printf 'deb %s %s main restricted universe multiverse\ndeb %s %s-updates main restricted universe multiverse\ndeb %s %s-security main restricted universe multiverse\n' \
     "$apt_mirror" "$release_codename" "$apt_mirror" "$release_codename" "$apt_mirror" "$release_codename" \
     > "$root_dir/etc/apt/sources.list"
-  cp /etc/resolv.conf "$root_dir/etc/resolv.conf"
+  printf '# Managed by the Android application before each proot command.\n' > "$root_dir/etc/resolv.conf"
   printf '[global]\nindex-url = https://mirrors.aliyun.com/pypi/simple/\ntrusted-host = mirrors.aliyun.com\ntimeout = 60\n' > "$root_dir/etc/pip.conf"
   cp "$root_dir/etc/pip.conf" "$root_dir/root/.pip/pip.conf"
   printf 'registry=https://registry.npmmirror.com\nignore-scripts=true\n' > "$root_dir/etc/npmrc"
@@ -76,7 +78,36 @@ build_rootfs_for_abi() {
   local archive_name="ubuntu-base-${release_version}-base-${ubuntu_arch}.tar.gz"
   local downloads="$cache_root/downloads"
   local archive="$downloads/$archive_name"
-  download "http://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases/$release_version/release/$archive_name" "$archive"
+  local sums_url="$ubuntu_base_url/$release_version/release/SHA256SUMS"
+  local archive_url="$ubuntu_base_url/$release_version/release/$archive_name"
+  local trusted_values
+  trusted_values="$(python3 - "$trusted_sources" "$release_version" "$ubuntu_arch" <<'PY'
+import json, pathlib, sys
+contract = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+entry = contract["ubuntu"][sys.argv[2]][sys.argv[3]]
+print(entry["name"])
+print(entry["sha256"])
+print(entry["digest_source"])
+print(entry["archive_source"])
+PY
+)"
+  mapfile -t trusted <<< "$trusted_values"
+  test "${trusted[0]}" = "$archive_name"
+  test "${trusted[2]}" = "$sums_url"
+  test "${trusted[3]}" = "$archive_url"
+  local sums_file="$downloads/SHA256SUMS-$release_version"
+  download "$sums_url" "$sums_file"
+  local published_sha
+  published_sha="$(awk -v name="$archive_name" '$2 == ("*" name) || $2 == name { print $1; exit }' "$sums_file")"
+  test "$published_sha" = "${trusted[1]}" || {
+    printf 'Ubuntu base SHA256SUMS does not match the pinned digest for %s.\n' "$archive_name" >&2
+    exit 1
+  }
+  download "$archive_url" "$archive"
+  printf '%s  %s\n' "$published_sha" "$archive" | sha256sum --check --status || {
+    printf 'Ubuntu base archive SHA-256 verification failed: %s\n' "$archive_name" >&2
+    exit 1
+  }
 
   local work="$cache_root/work/$abi"
   local root_dir="$work/rootfs"
@@ -109,6 +140,9 @@ build_rootfs_for_abi() {
   run_in_rootfs "$root_dir" "export DEBIAN_FRONTEND=noninteractive; apt-get install -y --no-install-recommends ${required_packages[*]} ${extra_packages}"
 
   run_in_rootfs "$root_dir" "export HOME=/root; npm install -g pnpm@${pnpm_major} --registry=https://registry.npmmirror.com"
+  local pnpm_version
+  pnpm_version="$(run_in_rootfs "$root_dir" "/usr/local/bin/pnpm --version" | tr -d '\r\n')"
+  test -n "$pnpm_version"
 
   for command in "${required_commands[@]}"; do
     test -x "$root_dir/usr/bin/$command" || test -x "$root_dir/bin/$command" || test -x "$root_dir/sbin/$command" || test -x "$root_dir/usr/sbin/$command" || test -x "$root_dir/usr/local/bin/$command" || {
@@ -127,15 +161,17 @@ build_rootfs_for_abi() {
 
   tar --numeric-owner --sort=name --mtime='UTC 2026-01-01' -cf - -C "$root_dir" . | xz -6 -T0 > "$output_dir/rootfs.tar.gz.bin"
   sha256sum "$output_dir/rootfs.tar.gz.bin" | awk '{print $1}' > "$output_dir/rootfs.tar.gz.bin.sha256"
-  python3 - "$output_dir/runtime-manifest.json" "$abi" "$ubuntu_arch" "$release_version" "$output_dir/rootfs.tar.gz.bin" "${required_packages[*]} ${extra_packages}" "${required_commands[*]}" <<'PY'
+  python3 - "$output_dir/runtime-manifest.json" "$abi" "$ubuntu_arch" "$release_version" "$output_dir/rootfs.tar.gz.bin" "${required_packages[*]} ${extra_packages}" "${required_commands[*]}" "$pnpm_version" "$archive_name" "$published_sha" "$sums_url" "$archive_url" <<'PY'
 import hashlib, json, pathlib, sys
-target, abi, arch, version, archive, packages, required_commands = sys.argv[1:]
+target, abi, arch, version, archive, apt_packages, required_commands, pnpm_version, base_archive, base_sha256, digest_source, archive_source = sys.argv[1:]
 path = pathlib.Path(archive)
 pathlib.Path(target).write_text(json.dumps({
     "schema_version": 2, "abi": abi, "distribution": "ubuntu", "ubuntu_arch": arch, "ubuntu_version": version,
     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size,
-    "packages": packages.split(),
+    "apt_packages": apt_packages.split(),
+    "global_tools": {"pnpm": {"version": pnpm_version, "install_source": "npm-global"}},
     "required_commands": required_commands.split(),
+    "base_archive": {"name": base_archive, "sha256": base_sha256, "digest_source": digest_source, "archive_source": archive_source},
     "capabilities": {
         "package_manager": ["apt-get"],
         "shell": ["bash"],

@@ -7,7 +7,7 @@
     "node_npm": "https://registry.npmmirror.com"
   },
   "python": {
-    "runtime": "python-3.14-android-arm64",
+    "runtime": "python-3.12-android-arm64",
     "wheelhouse_signature_scope": "apk-signed-asset-sha256",
     "seeded_wheelhouse": [
       { "name": "certifi", "version": "2026.5.20", "status": "bundled" },
@@ -30,7 +30,7 @@
     ]
   },
   "nodejs": {
-    "runtime": "nodejs-mobile-18.20.4-android-arm64",
+    "runtime": "node-lts-android-arm64",
     "bundled": [
       { "name": "corepack", "version": "0.34.6", "status": "covered-by-nodejs-mobile-or-npm" },
       { "name": "npm", "version": "11.12.1", "status": "target-version" }

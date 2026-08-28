@@ -7,6 +7,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 permissions:
   contents: write
@@ -19,7 +21,13 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - uses: actions/setup-go@v6
         with:
@@ -193,9 +201,15 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Build Frontend
         working-directory: web

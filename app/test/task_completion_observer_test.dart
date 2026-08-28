@@ -28,4 +28,15 @@ void main() {
       isFalse,
     );
   });
+
+  test('stop and restart invalidate completion from an older request', () {
+    final requests = TaskCompletionRequestGeneration();
+    final stoppedRequest = requests.begin();
+
+    requests.invalidate();
+    final restartedRequest = requests.begin();
+
+    expect(requests.isCurrent(stoppedRequest), isFalse);
+    expect(requests.isCurrent(restartedRequest), isTrue);
+  });
 }

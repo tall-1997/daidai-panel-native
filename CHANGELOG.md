@@ -1,12 +1,5 @@
 # Changelog
 
-## v1.0.20 - 2026-08-27
-
-### 修复
-
-- SSE 可重试错误（408/425/429/5xx）不再误报为终态「连接错误」，仅触发重连，状态栏不再误导。
-- README 与 runtime 依赖配置的发行版说明由 Alpine 更新为 Ubuntu 24.04。
-
 ## v1.0.19 - 2026-08-27
 
 ### 切换为 Ubuntu 唯一发行版
@@ -16,6 +9,8 @@
 - 恢复 Ubuntu rootfs 制作脚本（qemu + chroot 产物），默认软件源为阿里云镜像。
 - 前端依赖管理镜像预设恢复 Ubuntu apt 源。
 - 删除 Alpine rootfs 资产与制作脚本。
+- SSE 可重试错误（408/425/429/5xx）仅触发重连，状态栏不再误报终态连接错误。
+- README 与 runtime 依赖配置统一使用 Ubuntu 24.04 发行版说明。
 
 注意：Ubuntu 使用 glibc，其 rseq 等新系统调用在 Android 应用域 seccomp 下曾导致 SIGSYS，本轮通过 `GLIBC_TUNABLES=glibc.pthread.rseq=0` 规避，仍需真机验证脚本执行稳定性。
 

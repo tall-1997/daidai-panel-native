@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scriptApi } from '@/api/script'
 import { useResponsive } from '@/composables/useResponsive'
@@ -28,6 +28,12 @@ export function useScriptWorkspaceBrowser() {
   const treeLoading = ref(false)
   const isEditing = ref(false)
   const editorAutoFocusTicket = ref(0)
+  let treeGeneration = 0
+  let contentGeneration = 0
+  let openGeneration = 0
+  let openBaseState: ScriptBrowserState | null = null
+  let treeController: AbortController | null = null
+  let contentController: AbortController | null = null
 
   const editorLanguage = computed(() => {
     if (!selectedFile.value) return 'javascript'
@@ -138,32 +144,44 @@ export function useScriptWorkspaceBrowser() {
   }
 
   async function loadTree() {
+    const generation = ++treeGeneration
+    treeController?.abort()
+    const controller = new AbortController()
+    treeController = controller
     treeLoading.value = true
     try {
-      const res = await scriptApi.tree()
+      const res = await scriptApi.tree(controller.signal)
+      if (generation !== treeGeneration) return
       fileTree.value = normalizeTreeNodes(res.data || [])
     } catch (err: any) {
+      if (controller.signal.aborted || generation !== treeGeneration) return
       ElMessage.error(err?.response?.data?.error || err?.message || '加载文件树失败')
     } finally {
-      treeLoading.value = false
+      if (generation === treeGeneration) treeLoading.value = false
     }
   }
 
   async function loadFileContent(path: string, options: { silent?: boolean } = {}) {
+    const generation = ++contentGeneration
+    contentController?.abort()
+    const controller = new AbortController()
+    contentController = controller
     loading.value = true
     try {
-      const res = await scriptApi.getContent(path)
+      const res = await scriptApi.getContent(path, controller.signal)
+      if (generation !== contentGeneration || path !== selectedFile.value) return false
       isBinary.value = res.data.is_binary ?? res.data.binary ?? false
       fileContent.value = res.data.content
       originalContent.value = res.data.content
       return true
     } catch (err: any) {
+      if (controller.signal.aborted || generation !== contentGeneration) return false
       if (!options.silent) {
         ElMessage.error(extractScriptErrorMessage(err, '加载文件内容失败'))
       }
       return false
     } finally {
-      loading.value = false
+      if (generation === contentGeneration) loading.value = false
     }
   }
 
@@ -185,6 +203,7 @@ export function useScriptWorkspaceBrowser() {
   }
 
   async function openFile(path: string, options: { skipUnsavedCheck?: boolean } = {}) {
+    const generation = ++openGeneration
     const normalizedPath = path.trim()
     if (!normalizedPath) {
       return false
@@ -196,19 +215,25 @@ export function useScriptWorkspaceBrowser() {
     }
 
     const canProceed = await confirmOpenFile(normalizedPath, options.skipUnsavedCheck ?? false)
-    if (!canProceed) {
+    if (!canProceed || generation !== openGeneration) {
       return false
     }
 
-    const previousState = snapshotState()
+    openBaseState ??= snapshotState()
     selectedFile.value = normalizedPath
     isEditing.value = false
     const loaded = await loadFileContent(normalizedPath)
     if (!loaded) {
-      restoreState(previousState)
+      if (generation === openGeneration && openBaseState) {
+        restoreState(openBaseState)
+        openBaseState = null
+      }
       return false
     }
 
+    if (generation !== openGeneration) return false
+
+    openBaseState = null
     mobileShowEditor.value = true
     return true
   }
@@ -257,6 +282,21 @@ export function useScriptWorkspaceBrowser() {
     mobileShowEditor.value = false
   }
 
+  function dispose() {
+    treeGeneration += 1
+    contentGeneration += 1
+    openGeneration += 1
+    openBaseState = null
+    treeController?.abort()
+    contentController?.abort()
+    treeController = null
+    contentController = null
+    treeLoading.value = false
+    loading.value = false
+  }
+
+  onBeforeUnmount(dispose)
+
   return {
     isMobile,
     isCompactLayout,
@@ -282,6 +322,7 @@ export function useScriptWorkspaceBrowser() {
     allowDrag,
     allowDrop,
     handleNodeDrop,
-    handleMobileBack
+    handleMobileBack,
+    dispose
   }
 }

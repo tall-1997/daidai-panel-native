@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, onDeactivated, ref } from 'vue'
 import { configApi, systemApi, type PanelUpdateStatus } from '@/api/system'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -23,7 +23,7 @@ export function useSettingsOverview() {
   let updateAvailabilityDelayTimer: ReturnType<typeof setTimeout> | null = null
   let updateAvailabilityTimer: ReturnType<typeof setTimeout> | null = null
   let restartDelayTimer: ReturnType<typeof setTimeout> | null = null
-  let restartPollTimer: ReturnType<typeof setInterval> | null = null
+  let restartPollTimer: ReturnType<typeof setTimeout> | null = null
 
   function formatBytes(bytes: number): string {
     if (!bytes) return '0 B'
@@ -318,8 +318,9 @@ export function useSettingsOverview() {
       })
       await systemApi.restart()
       waitForRestart()
-    } catch {
-      // cancelled
+    } catch (err: any) {
+      if (err === 'cancel' || err === 'close' || err?.toString?.() === 'cancel' || err?.toString?.() === 'close') return
+      ElMessage.error(err?.response?.data?.error || err?.message || '重启面板失败')
     }
   }
 
@@ -329,7 +330,7 @@ export function useSettingsOverview() {
       restartDelayTimer = null
     }
     if (restartPollTimer) {
-      clearInterval(restartPollTimer)
+      clearTimeout(restartPollTimer)
       restartPollTimer = null
     }
   }
@@ -339,13 +340,14 @@ export function useSettingsOverview() {
     let attempts = 0
     restartDelayTimer = setTimeout(() => {
       restartDelayTimer = null
-      restartPollTimer = setInterval(async () => {
+      const probe = async () => {
         attempts++
         try {
           const res = await fetch('/', { method: 'HEAD' })
           if (res.ok) {
             stopRestartPolling()
             window.location.reload()
+            return
           }
         } catch {
           // ignore
@@ -353,8 +355,11 @@ export function useSettingsOverview() {
         if (attempts >= 60) {
           stopRestartPolling()
           ElMessage.warning('重启超时，请手动刷新页面')
+          return
         }
-      }, 2000)
+        restartPollTimer = setTimeout(probe, 2000)
+      }
+      restartPollTimer = setTimeout(probe, 0)
     }, 3000)
   }
 
@@ -446,6 +451,12 @@ export function useSettingsOverview() {
   }
 
   onBeforeUnmount(() => {
+    stopUpdateStatusPolling()
+    stopUpdateAvailabilityChecks()
+    stopRestartPolling()
+  })
+
+  onDeactivated(() => {
     stopUpdateStatusPolling()
     stopUpdateAvailabilityChecks()
     stopRestartPolling()

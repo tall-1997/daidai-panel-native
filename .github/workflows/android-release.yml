@@ -6,6 +6,16 @@ on:
       - main
     tags:
       - 'v*'
+    paths:
+      - '.github/workflows/android-release.yml'
+      - 'app/**'
+      - 'panel/server/**'
+      - 'panel/web/**'
+      - 'runtime/**'
+      - 'contracts/**'
+      - 'scripts/**'
+      - 'VERSION.json'
+      - 'CHANGELOG.md'
   workflow_dispatch:
     inputs:
       release_channel:
@@ -16,7 +26,6 @@ on:
         options:
           - snapshot
           - prerelease
-          - stable
 
 permissions:
   contents: read
@@ -29,6 +38,8 @@ concurrency:
 env:
   FLUTTER_VERSION: 3.41.5
   GO_VERSION: 1.25.0
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 jobs:
   verify-build:
@@ -38,6 +49,13 @@ jobs:
       artifact_name: ${{ steps.version.outputs.artifact_name }}
       evidence_name: ${{ steps.version.outputs.evidence_name }}
       version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      release_channel: ${{ steps.version.outputs.release_channel }}
+      candidate_artifact_name: ${{ steps.version.outputs.candidate_artifact_name }}
+      kotlin_reports_artifact_name: ${{ steps.version.outputs.kotlin_reports_artifact_name }}
+      stable_device_evidence_artifact_name: ${{ steps.version.outputs.stable_device_evidence_artifact_name }}
+      app_apk_name: ${{ steps.version.outputs.app_apk_name }}
+      test_apk_name: ${{ steps.version.outputs.test_apk_name }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
@@ -47,6 +65,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: panel/server/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -69,8 +100,8 @@ jobs:
       - name: Resolve and validate release version
         id: version
         env:
-          GH_TOKEN: ${{ github.token }}
           REQUESTED_CHANNEL: ${{ inputs.release_channel }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         shell: bash
         run: |
           python3 scripts/version.py check
@@ -83,27 +114,15 @@ jobs:
           STRICT=false
           SIGNING_REQUIRED=false
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            IS_PRERELEASE="$(gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
-              --jq '.prerelease // false' 2>/dev/null || printf 'false')"
-            if [[ "${IS_PRERELEASE}" == "true" ]]; then
-              CHANNEL=prerelease
-            else
-              CHANNEL=release
-              STRICT=true
-              SIGNING_REQUIRED=true
-            fi
+            CHANNEL=stable
+            STRICT=true
+            SIGNING_REQUIRED=true
           elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${REQUESTED_CHANNEL:-snapshot}" in
               snapshot)
                 ;;
               prerelease)
                 CHANNEL=prerelease
-                SIGNING_REQUIRED=true
-                ;;
-              stable)
-                CHANNEL=release
                 SIGNING_REQUIRED=true
                 ;;
               *)
@@ -113,6 +132,12 @@ jobs:
             esac
           fi
           ARTIFACT_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64"
+          RELEASE_TAG="v${VERSION}"
+          CANDIDATE_ARTIFACT_NAME="android-release-candidate-${VERSION}-${GITHUB_RUN_ID}-${RUN_ATTEMPT}"
+          KOTLIN_REPORTS_ARTIFACT_NAME="kotlin-test-reports-${GITHUB_RUN_ID}-${RUN_ATTEMPT}"
+          STABLE_DEVICE_EVIDENCE_ARTIFACT_NAME="stable-device-evidence-${GITHUB_RUN_ID}-${RUN_ATTEMPT}"
+          APP_APK_NAME="${ARTIFACT_NAME}.apk"
+          TEST_APK_NAME="${ARTIFACT_NAME}-androidTest.apk"
           EVIDENCE_NAME="release-evidence-${VERSION}-${CHANNEL}"
           {
             printf 'VERSION=%s\n' "${VERSION}"
@@ -122,13 +147,26 @@ jobs:
             printf 'RELEASE_CHANNEL=%s\n' "${CHANNEL}"
             printf 'STRICT_RUNTIME=%s\n' "${STRICT}"
             printf 'RELEASE_SIGNING_REQUIRED=%s\n' "${SIGNING_REQUIRED}"
+            printf 'RELEASE_TAG=%s\n' "${RELEASE_TAG}"
             printf 'ARTIFACT_NAME=%s\n' "${ARTIFACT_NAME}"
             printf 'EVIDENCE_NAME=%s\n' "${EVIDENCE_NAME}"
+            printf 'CANDIDATE_ARTIFACT_NAME=%s\n' "${CANDIDATE_ARTIFACT_NAME}"
+            printf 'KOTLIN_REPORTS_ARTIFACT_NAME=%s\n' "${KOTLIN_REPORTS_ARTIFACT_NAME}"
+            printf 'STABLE_DEVICE_EVIDENCE_ARTIFACT_NAME=%s\n' "${STABLE_DEVICE_EVIDENCE_ARTIFACT_NAME}"
+            printf 'APP_APK_NAME=%s\n' "${APP_APK_NAME}"
+            printf 'TEST_APK_NAME=%s\n' "${TEST_APK_NAME}"
           } >> "${GITHUB_ENV}"
           {
             printf 'version=%s\n' "${VERSION}"
+            printf 'release_tag=%s\n' "${RELEASE_TAG}"
             printf 'artifact_name=%s\n' "${ARTIFACT_NAME}"
             printf 'evidence_name=%s\n' "${EVIDENCE_NAME}"
+            printf 'release_channel=%s\n' "${CHANNEL}"
+            printf 'candidate_artifact_name=%s\n' "${CANDIDATE_ARTIFACT_NAME}"
+            printf 'kotlin_reports_artifact_name=%s\n' "${KOTLIN_REPORTS_ARTIFACT_NAME}"
+            printf 'stable_device_evidence_artifact_name=%s\n' "${STABLE_DEVICE_EVIDENCE_ARTIFACT_NAME}"
+            printf 'app_apk_name=%s\n' "${APP_APK_NAME}"
+            printf 'test_apk_name=%s\n' "${TEST_APK_NAME}"
             printf 'strict=%s\n' "${STRICT}"
             printf 'signing_required=%s\n' "${SIGNING_REQUIRED}"
           } >> "${GITHUB_OUTPUT}"
@@ -180,91 +218,6 @@ jobs:
             printf 'REQUIRE_RELEASE_SIGNING=true\n'
           } >> "${GITHUB_ENV}"
 
-      - name: Require strict device workflow evidence for tag
-        if: steps.version.outputs.strict == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          DEVICE_RUN_ID="$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/android-device-smoke.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
-          if [[ -z "${DEVICE_RUN_ID}" ]]; then
-            printf 'Tag release requires a successful android-device-smoke.yml run for commit %s\n' "${GITHUB_SHA}" >&2
-            exit 1
-          fi
-          mkdir -p release/device-smoke
-          gh run download "${DEVICE_RUN_ID}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'android-runtime-smoke-api*' \
-            --dir release/device-smoke
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          expected = {"api28-4k", "api35-4k", "api35-16k"}
-          passed = set()
-          strict_evidence = None
-          for path in Path("release/device-smoke").rglob("*.device.json"):
-              evidence = json.loads(path.read_text(encoding="utf-8"))
-              matrix_id = evidence.get("matrix_id")
-              if matrix_id in expected and evidence.get("status") == "verified":
-                  device = evidence.get("device", {})
-                  runtime = evidence.get("runtime", {})
-                  records = runtime.get("records", [])
-                  if device and len(records) == 8 and all(item.get("status") == "pass" for item in records):
-                      passed.add(matrix_id)
-                      if matrix_id == "api35-16k":
-                          strict_evidence = path.with_name(path.name.removesuffix(".device.json") + ".json")
-          missing = expected - passed
-          if missing:
-              raise SystemExit(f"missing strict device pass evidence: {sorted(missing)}")
-          if strict_evidence is None or not strict_evidence.is_file():
-              raise SystemExit("missing api35-16k runtime contract evidence")
-          Path("runtime/smoke-evidence.json").write_bytes(strict_evidence.read_bytes())
-          PY
-
-      - name: Import cloud device evidence for signed release
-        if: steps.version.outputs.signing_required == 'true' && steps.version.outputs.strict != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          DEVICE_RUN_ID="$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/actions/workflows/android-device-smoke.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
-          if [[ -z "${DEVICE_RUN_ID}" ]]; then
-            printf 'Signed release requires a successful android-device-smoke.yml run for commit %s\n' "${GITHUB_SHA}" >&2
-            exit 1
-          fi
-          mkdir -p release/device-smoke
-          gh run download "${DEVICE_RUN_ID}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'android-runtime-smoke-*' \
-            --dir release/device-smoke
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          expected_matrix = {"api28-4k", "api35-4k", "api35-16k"}
-          candidates = list(Path("release/device-smoke").rglob("api28-4k.json"))
-          if len(candidates) != 1:
-              raise SystemExit("expected one ARM64 blocked evidence file")
-          evidence = json.loads(candidates[0].read_text(encoding="utf-8"))
-          if set(evidence.get("matrix", [])) != expected_matrix:
-              raise SystemExit("ARM64 blocked evidence matrix is incomplete")
-          records = evidence.get("records", [])
-          if len(records) != 8 or any(record.get("status") != "blocked" for record in records):
-              raise SystemExit("ARM64 blocked evidence must contain eight blocked runtime records")
-          Path("runtime/smoke-evidence.json").write_bytes(candidates[0].read_bytes())
-          PY
-
-      - name: Prepare Android Python runtime
-        working-directory: app
-        run: bash scripts/prepare-android-python-runtime.sh
-
       - name: Prepare Android Node runtime
         working-directory: app
         run: echo "Android Node runtime is deprecated; Node.js is installed via apk/apt in the rootfs."
@@ -275,7 +228,8 @@ jobs:
           python3 scripts/verify-android-linux-runtime.py \
             --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
             --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
-            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json
+            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json \
+            --trusted-sources scripts/rootfs-trusted-sources.json
           bash scripts/prepare-android-yaegi-runtime.sh
 
       - name: Test embedded Go core
@@ -287,7 +241,8 @@ jobs:
           go test ./scripts/run-runtime-smoke.go ./scripts/run-runtime-smoke_test.go
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_runtime_smoke.py app/scripts/test_verify_android_linux_runtime.py
+          go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
+          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
 
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check
@@ -312,42 +267,38 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kotlin-test-reports
+          name: ${{ steps.version.outputs.kotlin_reports_artifact_name }}
           path: |
             app/build/app/reports/tests/testDebugUnitTest/
             app/build/app/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Generate snapshot smoke evidence before APK build
-        if: steps.version.outputs.strict != 'true'
+      - name: Generate pending smoke evidence before APK build
         run: go run ./scripts/run-runtime-smoke.go --output ./runtime/smoke-evidence.json
 
       - name: Verify runtime contract before APK build
         shell: bash
         run: |
-          STRICT_ARGS=()
-          if [[ "${STRICT_RUNTIME}" == "true" ]]; then
-            STRICT_ARGS+=(--strict)
-          fi
           go run ./scripts/verify-runtime-contract.go \
             --manifest ./runtime/manifest.json \
             --compatibility ./runtime/compatibility.json \
             --smoke-evidence ./runtime/smoke-evidence.json \
-            --native-lib-dir ./app/android/app/src/main/jniLibs/arm64-v8a \
-            "${STRICT_ARGS[@]}"
+            --native-lib-dir ./app/android/app/src/main/jniLibs/arm64-v8a
 
       - name: Build installable release APK
         working-directory: app
         run: |
           flutter build apk --release --target-platform android-arm64 \
             --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
-          cp build/app/outputs/flutter-apk/app-release.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk"
+          gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
+          cp build/app/outputs/flutter-apk/app-release.apk "../${APP_APK_NAME}"
+          cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../${TEST_APK_NAME}"
 
       - name: Extract and verify APK runtime metadata
         shell: bash
         run: |
-          APK_SOURCE="daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk"
+          APK_SOURCE="${APP_APK_NAME}"
           test -s "${APK_SOURCE}"
           mkdir -p release/apk-metadata
           unzip -p "${APK_SOURCE}" assets/manifest.json > release/apk-metadata/manifest.json
@@ -356,17 +307,12 @@ jobs:
           cmp runtime/manifest.json release/apk-metadata/manifest.json
           cmp runtime/compatibility.json release/apk-metadata/compatibility.json
           cmp runtime/smoke-evidence.json release/apk-metadata/smoke-evidence.json
-          STRICT_ARGS=()
-          if [[ "${STRICT_RUNTIME}" == "true" ]]; then
-            STRICT_ARGS+=(--strict)
-          fi
           go run ./scripts/verify-runtime-contract.go \
             --manifest ./runtime/manifest.json \
             --compatibility ./runtime/compatibility.json \
             --smoke-evidence ./runtime/smoke-evidence.json \
-            --apk "${APK_SOURCE}" \
-            "${STRICT_ARGS[@]}"
-          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk; do
+            --apk "${APK_SOURCE}"
+          for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}"; do
             sha256sum "${APK}" > "${APK}.sha256"
           done
 
@@ -379,8 +325,8 @@ jobs:
             printf 'Android SDK apksigner was not found\n' >&2
             exit 1
           fi
-          for APK in daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk; do "${APKSIGNER}" verify "${APK}"; done
-          APK_CERT_SHA256="$("${APKSIGNER}" verify --print-certs "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
+          for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}"; do "${APKSIGNER}" verify "${APK}"; done
+          APK_CERT_SHA256="$("${APKSIGNER}" verify --print-certs "${APP_APK_NAME}" \
             | sed -n 's/.*certificate SHA-256 digest: *//p' \
             | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' \
             | grep -Eo '^[0-9a-f]{64}$' | head -n 1)"
@@ -393,6 +339,11 @@ jobs:
             printf 'APK signing certificate SHA-256 mismatch\n' >&2
             exit 1
           fi
+          TEST_CERT_SHA256="$("${APKSIGNER}" verify --print-certs "${TEST_APK_NAME}" \
+            | sed -n 's/.*certificate SHA-256 digest: *//p' \
+            | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' \
+            | grep -Eo '^[0-9a-f]{64}$' | head -n 1)"
+          test "${TEST_CERT_SHA256}" = "${APK_CERT_SHA256}"
 
       - name: Generate and validate Android update manifest
         shell: bash
@@ -401,53 +352,88 @@ jobs:
             --arg packageName com.daidai.daidai_app \
             --arg version "${VERSION}" \
             --argjson versionCode "${ANDROID_VERSION_CODE}" \
-            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
-            --arg name "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
-            --arg sha256 "$(sha256sum "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" | cut -d ' ' -f1)" \
-            --argjson size "$(stat -c '%s' "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk")" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
+            --arg name "${APP_APK_NAME}" \
+            --arg sha256 "$(sha256sum "${APP_APK_NAME}" | cut -d ' ' -f1)" \
+            --argjson size "$(stat -c '%s' "${APP_APK_NAME}")" \
             '{schemaVersion: 1, packageName: $packageName, version: $version, versionCode: $versionCode, releaseNotes: "", full: {url: $url, name: $name, size: $size, sha256: $sha256}, patches: []}' \
             > android-update.json
           python3 scripts/version.py check --manifest android-update.json
 
-      - name: Generate release evidence bundle
-        run: |
-          go run ./scripts/generate-release-evidence.go \
-            --apk "daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-arm64.apk" \
-            --version "${VERSION}" \
-            --output-dir ./release/evidence \
-            --git-commit "${GITHUB_SHA}" \
-            --actor "${GITHUB_ACTOR}" \
-            --repository "${GITHUB_REPOSITORY}"
-
-      - name: Upload APK artifact
+      - name: Upload signed candidate APKs
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.version.outputs.artifact_name }}
+          name: ${{ steps.version.outputs.candidate_artifact_name }}
           path: |
-            daidai-panel-native-${{ steps.version.outputs.version }}-${{ env.RELEASE_CHANNEL }}-*.apk
-            daidai-panel-native-${{ steps.version.outputs.version }}-${{ env.RELEASE_CHANNEL }}-*.apk.sha256
+            ${{ env.APP_APK_NAME }}
+            ${{ env.APP_APK_NAME }}.sha256
+            ${{ env.TEST_APK_NAME }}
+            ${{ env.TEST_APK_NAME }}.sha256
             android-update.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload release evidence artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.version.outputs.evidence_name }}
-          path: |
-            release/evidence/**
-            release/apk-metadata/**
-            release/device-smoke/**
             runtime/manifest.json
             runtime/smoke-evidence.json
             runtime/compatibility.json
             contracts/backend-api-mobile.json
+            release/apk-metadata/**
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
+
+  stable-device:
+    if: needs.verify-build.outputs.release_channel == 'stable'
+    needs: verify-build
+    runs-on: [self-hosted, android-device]
+    timeout-minutes: 90
+    outputs:
+      evidence_artifact_name: ${{ needs.verify-build.outputs.stable_device_evidence_artifact_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.verify-build.outputs.candidate_artifact_name }}
+          path: candidate
+      - name: Run stable candidate on trusted physical device
+        env:
+          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
+          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
+        shell: bash
+        run: |
+          MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+          mkdir -p evidence
+          python3 scripts/android-runtime-smoke.py run \
+            --apk "${APP_APK}" \
+            --test-apk "${TEST_APK}" \
+            --matrix-id "${MATRIX_ID}" \
+            --expected-api "$(jq -er '.device_smoke.matrix[0].api' scripts/release-runtime-contract.json)" \
+            --expected-page-size "$(jq -er '.device_smoke.matrix[0].page_size_bytes' scripts/release-runtime-contract.json)" \
+            --expected-abi "$(jq -er '.device_smoke.matrix[0].abi' scripts/release-runtime-contract.json)" \
+            --output "evidence/${MATRIX_ID}.json"
+          python3 scripts/verify-release-runtime-evidence.py \
+            --contract scripts/release-runtime-contract.json \
+            --channel stable \
+            --evidence-dir evidence \
+            --app-apk "${APP_APK}" \
+            --test-apk "${TEST_APK}"
+          go run ./scripts/verify-runtime-contract.go \
+            --manifest candidate/runtime/manifest.json \
+            --compatibility candidate/runtime/compatibility.json \
+            --smoke-evidence "evidence/${MATRIX_ID}.json" \
+            --apk "${APP_APK}" \
+            --strict \
+            --strict-runtime-ids="$(jq -er '.stable_required_runtime_ids | join(",")' scripts/release-runtime-contract.json)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.verify-build.outputs.stable_device_evidence_artifact_name }}
+          path: evidence/**
+          if-no-files-found: error
+          retention-days: 90
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_channel == 'stable' || inputs.release_channel == 'prerelease'))
-    needs: verify-build
+    if: always() && needs.verify-build.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_channel == 'prerelease'))
+    needs: [verify-build, stable-device]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -455,52 +441,244 @@ jobs:
       - name: Checkout for release notes
         uses: actions/checkout@v5
 
-      - name: Download APK artifact
+      - name: Set up Go for evidence generation
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Require channel-appropriate device result
+        env:
+          CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
+          DEVICE_RESULT: ${{ needs.stable-device.result }}
+        shell: bash
+        run: |
+          if [[ "${CHANNEL}" == "stable" ]]; then
+            test "${DEVICE_RESULT}" = success
+          else
+            test "${CHANNEL}" = prerelease
+            test "${DEVICE_RESULT}" = skipped
+          fi
+
+      - name: Download signed candidate artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: 'daidai-panel-native-${{ needs.verify-build.outputs.version }}-*'
-          merge-multiple: true
+          name: ${{ needs.verify-build.outputs.candidate_artifact_name }}
+          path: candidate
 
-      - name: Download release evidence artifact
+      - name: Download stable device evidence
+        if: needs.verify-build.outputs.release_channel == 'stable'
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.verify-build.outputs.evidence_name }}
-          path: release-evidence
+          name: ${{ needs.stable-device.outputs.evidence_artifact_name }}
+          path: device-evidence
 
-      - name: Create GitHub Release
+      - name: Verify tested APK is the release candidate
+        if: needs.verify-build.outputs.release_channel == 'stable'
+        env:
+          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
+          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
+        shell: bash
+        run: |
+          python3 scripts/verify-release-runtime-evidence.py \
+            --contract scripts/release-runtime-contract.json \
+            --channel stable \
+            --evidence-dir device-evidence \
+            --app-apk "${APP_APK}" \
+            --test-apk "${TEST_APK}"
+          MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+          EVIDENCE_FILE="$(find device-evidence -type f -name "${MATRIX_ID}.json" -print -quit)"
+          test -n "${EVIDENCE_FILE}"
+          cp "${EVIDENCE_FILE}" candidate/runtime/smoke-evidence.json
+          mkdir -p release/device-smoke
+          cp -R device-evidence/. release/device-smoke/
+
+      - name: Generate final release evidence
+        env:
+          VERSION: ${{ needs.verify-build.outputs.version }}
+          CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
+          APP_APK: candidate/${{ needs.verify-build.outputs.app_apk_name }}
+          TEST_APK: candidate/${{ needs.verify-build.outputs.test_apk_name }}
+        shell: bash
+        run: |
+          go run ./scripts/generate-release-evidence.go \
+            --apk "${APP_APK}" \
+            --test-apk "${TEST_APK}" \
+            --version "${VERSION}" \
+            --channel "${CHANNEL}" \
+            --runtime-manifest candidate/runtime/manifest.json \
+            --runtime-smoke candidate/runtime/smoke-evidence.json \
+            --compatibility candidate/runtime/compatibility.json \
+            --route-trace candidate/contracts/backend-api-mobile.json \
+            --output-dir release/evidence \
+            --git-commit "${GITHUB_SHA}" \
+            --actor "${GITHUB_ACTOR}" \
+            --repository "${GITHUB_REPOSITORY}"
+
+      - name: Verify final release evidence gates
+        env:
+          CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
+        shell: bash
+        run: |
+          EVIDENCE=release/evidence/release-evidence.json
+          test "$(jq -er '.bundle_status' "${EVIDENCE}")" = generated
+          APK_SHA="$(sha256sum "candidate/${{ needs.verify-build.outputs.app_apk_name }}" | cut -d ' ' -f1)"
+          test "$(jq -er --arg name '${{ needs.verify-build.outputs.app_apk_name }}' '.artifacts[] | select(.name == $name) | .sha256' "${EVIDENCE}")" = "${APK_SHA}"
+          if [[ "${CHANNEL}" == "stable" ]]; then
+            test "$(jq -er '.release.channel' "${EVIDENCE}")" = stable
+            test "$(jq -er '.status' "${EVIDENCE}")" = completed
+            test "$(jq -er '.status_scope' "${EVIDENCE}")" = required-gates-only
+            jq -e '.required_gates == ["task_6_3_release_evidence", "task_6_4_device_stability_gate"]' "${EVIDENCE}"
+            jq -e '.optional_gates == ["long_running_device_samples"]' "${EVIDENCE}"
+            jq -e '.pending_evidence.long_running_device_samples.status == "pending"' "${EVIDENCE}"
+            jq -e '.gates.task_6_3_release_evidence.status == "pass" and .gates.task_6_4_device_stability_gate.status == "pass"' "${EVIDENCE}"
+          else
+            test "$(jq -er '.release.channel' "${EVIDENCE}")" = prerelease
+            test "$(jq -er '.status' "${EVIDENCE}")" = pending
+            jq -e '.gates.task_6_3_release_evidence.status == "pending" and .gates.task_6_4_device_stability_gate.status == "pending"' "${EVIDENCE}"
+          fi
+
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ needs.verify-build.outputs.version }}"
-          python3 - "$VERSION" > release-notes.md <<'PYEOF'
+          CHANNEL="${{ needs.verify-build.outputs.release_channel }}"
+          RELEASE_TAG="${{ needs.verify-build.outputs.release_tag }}"
+          python3 - "$VERSION" "$CHANNEL" > release-notes.md <<'PYEOF'
           import re, sys
-          version = sys.argv[1]
+          version, channel = sys.argv[1:]
           text = open('CHANGELOG.md', encoding='utf-8').read()
           pattern = re.compile(r'^## v' + re.escape(version) + r'.*?(?=^## v|\Z)', re.MULTILINE | re.DOTALL)
           match = pattern.search(text)
           body = match.group(0).strip() if match else f'# 呆呆面板本机版 v{version}'
           print(body)
           print()
-          print('本 Release 已通过版本、正式签名、证书指纹、运行时契约与 CI 构建门禁。')
-          print('GitHub 云 runner 不支持 ARM64 Android 模拟器，附件证据将对应 ARM64 设备矩阵记录为 blocked，等待真机补充验证。')
+          if channel == 'stable':
+              print('Stable Release 已通过正式签名、真机运行时验证与发布 APK 摘要一致性门禁。')
+              print('附件证据记录了真机实际安装的 app APK 与 androidTest APK SHA256。')
+          else:
+              print('Prerelease 已通过版本、正式签名、证书指纹与 CI 构建门禁。')
+              print('ARM64 Android 真机验证仍为 blocked 边界，release evidence 与 runtime gates 保持 pending。')
           PYEOF
-          CHANNEL="${{ inputs.release_channel == 'prerelease' && 'prerelease' || 'release' }}"
-          APK_PATH="$(find . -maxdepth 1 -type f -name "*-${VERSION}-${CHANNEL}-arm64.apk" -print -quit)"
-          if [[ -z "${APK_PATH}" ]]; then
-            printf 'Signed release APK was not downloaded\n' >&2
+          APP_APK="candidate/${{ needs.verify-build.outputs.app_apk_name }}"
+          test -s "${APP_APK}"
+          EXPECTED_APK_SHA="$(cut -d ' ' -f1 "${APP_APK}.sha256")"
+          test "$(sha256sum "${APP_APK}" | cut -d ' ' -f1)" = "${EXPECTED_APK_SHA}"
+          TEST_APK="candidate/${{ needs.verify-build.outputs.test_apk_name }}"
+          mkdir -p release/artifacts release/apk-metadata
+          cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" release/artifacts/
+          cp -R candidate/release/apk-metadata/. release/apk-metadata/
+          tar -czf "release-evidence-${VERSION}.tar.gz" release
+
+          RELEASE_LOOKUP="$(mktemp)"
+          RELEASE_LOOKUP_ERROR="$(mktemp)"
+          set +e
+          gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "${RELEASE_LOOKUP}" 2> "${RELEASE_LOOKUP_ERROR}"
+          LOOKUP_STATUS=$?
+          set -e
+
+          if [[ "${CHANNEL}" == "stable" ]]; then
+            if [[ "${LOOKUP_STATUS}" -eq 0 ]]; then
+              printf 'Refusing to overwrite existing stable GitHub Release for tag %s\n' "${RELEASE_TAG}" >&2
+              exit 1
+            fi
+            if ! grep -Eq 'HTTP 404' "${RELEASE_LOOKUP_ERROR}"; then
+              printf 'Could not prove stable GitHub Release tag %s is unused; failing closed\n' "${RELEASE_TAG}" >&2
+              exit 1
+            fi
+            TAG_COMMIT="$(git rev-list -n 1 "${RELEASE_TAG}" 2>/dev/null || true)"
+            if [[ "${TAG_COMMIT}" != "${GITHUB_SHA}" ]]; then
+              printf 'Stable tag %s resolves to %s, expected workflow commit %s\n' "${RELEASE_TAG}" "${TAG_COMMIT:-<missing>}" "${GITHUB_SHA}" >&2
+              exit 1
+            fi
+            gh release create "${RELEASE_TAG}" \
+              "${APP_APK}" \
+              "${APP_APK}.sha256" \
+              "${TEST_APK}" \
+              "${TEST_APK}.sha256" \
+              candidate/android-update.json \
+              "release-evidence-${VERSION}.tar.gz" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "呆呆面板本机版 ${RELEASE_TAG}" \
+              --notes-file release-notes.md \
+              --verify-tag
+            exit 0
+          fi
+
+          test "${CHANNEL}" = prerelease
+          if [[ "${LOOKUP_STATUS}" -eq 0 ]]; then
+            EXISTING_TAG="$(jq -er '.tag_name' "${RELEASE_LOOKUP}")"
+            EXISTING_PRERELEASE="$(jq -er '.prerelease' "${RELEASE_LOOKUP}")"
+            EXISTING_TARGET="$(jq -er '.target_commitish' "${RELEASE_LOOKUP}")"
+            if [[ "${EXISTING_TAG}" != "${RELEASE_TAG}" || "${EXISTING_PRERELEASE}" != "true" ]]; then
+              printf 'Refusing to update release: expected prerelease tag %s, got tag %s prerelease=%s\n' \
+                "${RELEASE_TAG}" "${EXISTING_TAG}" "${EXISTING_PRERELEASE}" >&2
+              exit 1
+            fi
+            TAG_LOOKUP="$(mktemp)"
+            gh api "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > "${TAG_LOOKUP}"
+            TAG_TYPE="$(jq -er '.object.type' "${TAG_LOOKUP}")"
+            TAG_COMMIT="$(jq -er '.object.sha' "${TAG_LOOKUP}")"
+            if [[ "${TAG_TYPE}" != "commit" ]]; then
+              printf 'Refusing to move prerelease tag %s: tag ref does not point directly to a commit\n' "${RELEASE_TAG}" >&2
+              exit 1
+            fi
+            if [[ "${EXISTING_TARGET}" != "main" && "${EXISTING_TARGET}" != "${TAG_COMMIT}" ]]; then
+              printf 'Refusing to move prerelease tag %s: release target %s is neither main nor old tag commit %s\n' \
+                "${RELEASE_TAG}" "${EXISTING_TARGET}" "${TAG_COMMIT}" >&2
+              exit 1
+            fi
+
+            UPDATED_TAG="$(mktemp)"
+            gh api --method PATCH "/repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" -F force=true > "${UPDATED_TAG}"
+            test "$(jq -er '.object.type' "${UPDATED_TAG}")" = commit
+            test "$(jq -er '.object.sha' "${UPDATED_TAG}")" = "${GITHUB_SHA}"
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "呆呆面板本机版 ${RELEASE_TAG}" \
+              --notes-file release-notes.md
+            gh release upload "${RELEASE_TAG}" \
+              "${APP_APK}" \
+              "${APP_APK}.sha256" \
+              "${TEST_APK}" \
+              "${TEST_APK}.sha256" \
+              candidate/android-update.json \
+              "release-evidence-${VERSION}.tar.gz" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            exit 0
+          fi
+
+          if ! grep -Eq 'HTTP 404' "${RELEASE_LOOKUP_ERROR}"; then
+            printf 'Could not determine prerelease state for tag %s; failing closed\n' "${RELEASE_TAG}" >&2
             exit 1
           fi
-          ARTIFACT_NAME="${APK_PATH#./}"
-          ARTIFACT_NAME="${ARTIFACT_NAME%.apk}"
-          tar -czf "release-evidence-${VERSION}.tar.gz" release-evidence
-          RELEASE_ARGS=()
-          if [[ "${CHANNEL}" == "prerelease" ]]; then RELEASE_ARGS+=(--prerelease); fi
-          gh release create "v${VERSION}" \
-            daidai-panel-native-${VERSION}-${CHANNEL}-*.apk \
-            daidai-panel-native-${VERSION}-${CHANNEL}-*.apk.sha256 \
-            android-update.json \
+          TAG_LOOKUP_ERROR="$(mktemp)"
+          set +e
+          gh api "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > /dev/null 2> "${TAG_LOOKUP_ERROR}"
+          TAG_LOOKUP_STATUS=$?
+          set -e
+          if [[ "${TAG_LOOKUP_STATUS}" -eq 0 ]]; then
+            printf 'Refusing to create prerelease: tag %s already exists without a matching release\n' "${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if ! grep -Eq 'HTTP 404' "${TAG_LOOKUP_ERROR}"; then
+            printf 'Could not prove prerelease tag %s is unused; failing closed\n' "${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          gh release create "${RELEASE_TAG}" \
+            "${APP_APK}" \
+            "${APP_APK}.sha256" \
+            "${TEST_APK}" \
+            "${TEST_APK}.sha256" \
+            candidate/android-update.json \
             "release-evidence-${VERSION}.tar.gz" \
-            --repo "${{ github.repository }}" \
-            --title "呆呆面板本机版 v${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "呆呆面板本机版 ${RELEASE_TAG}" \
             --notes-file release-notes.md \
-            "${RELEASE_ARGS[@]}"
+            --prerelease \
+            --target "${GITHUB_SHA}"

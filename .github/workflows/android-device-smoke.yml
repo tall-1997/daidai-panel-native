@@ -21,40 +21,42 @@ on:
         description: Optional adb serial on the self-hosted Android runner
         required: false
         type: string
-      physical_expected_api:
-        description: Expected API level for the connected physical device
-        required: false
-        default: '35'
-        type: string
-      physical_expected_page_size:
-        description: Expected page size in bytes for the connected physical device
-        required: false
-        default: '16384'
-        type: choice
-        options:
-          - '4096'
-          - '16384'
-      physical_expected_abi:
-        description: Expected ABI for the connected physical device
-        required: false
-        default: 'arm64-v8a'
-        type: choice
-        options:
-          - 'arm64-v8a'
   pull_request:
     paths:
       - 'app/android/**'
       - 'app/scripts/prepare-android-*-runtime.sh'
       - 'app/scripts/prepare-android-ubuntu-rootfs.sh'
+      - 'app/scripts/prepare-android-native-source-build.sh'
+      - 'app/android/app/src/main/jni/**'
       - 'app/scripts/verify-android-linux-runtime.py'
       - 'app/scripts/test_verify_android_linux_runtime.py'
+      - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
+      - 'app/scripts/rootfs-trusted-sources.json'
       - 'panel/server/**'
+      - 'panel/web/**'
       - 'runtime/**'
       - 'scripts/android-runtime-smoke.py'
+      - 'scripts/test_android_runtime_smoke.py'
+      - 'scripts/release-runtime-contract.json'
+      - 'scripts/verify-release-runtime-evidence.py'
+      - 'scripts/test_verify_release_runtime_evidence.py'
       - '.github/workflows/android-device-smoke.yml'
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/android-device-smoke.yml'
+      - 'app/android/**'
+      - 'app/scripts/**android*runtime*'
+      - 'app/runtime-tools/yaegi/**'
+      - 'panel/server/**'
+      - 'panel/web/**'
+      - 'runtime/**'
+      - 'scripts/android-runtime-smoke.py'
+      - 'scripts/test_android_runtime_smoke.py'
+      - 'scripts/release-runtime-contract.json'
+      - 'scripts/verify-release-runtime-evidence.py'
+      - 'scripts/test_verify_release_runtime_evidence.py'
 
 permissions:
   contents: read
@@ -62,6 +64,8 @@ permissions:
 env:
   FLUTTER_VERSION: 3.41.5
   GO_VERSION: 1.25.0
+  NODE_VERSION: '20.19.x'
+  NPM_VERSION: '10.8.2'
 
 jobs:
   build:
@@ -73,6 +77,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: panel/server/go.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: panel/web/package-lock.json
+      - name: Enforce Node package manager contract
+        run: |
+          npm install -g "npm@${NPM_VERSION}"
+          node --version | grep -Eq '^v20\.19\.'
+          test "$(npm --version)" = "${NPM_VERSION}"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -85,35 +99,51 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+      - name: Load release runtime contract
+        shell: bash
+        run: |
+          MATRIX_COUNT="$(jq -er '.device_smoke.matrix | length' scripts/release-runtime-contract.json)"
+          test "${MATRIX_COUNT}" = "1"
+          {
+            printf 'DEVICE_MATRIX_ID=%s\n' "$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_API=%s\n' "$(jq -er '.device_smoke.matrix[0].api' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_PAGE_SIZE=%s\n' "$(jq -er '.device_smoke.matrix[0].page_size_bytes' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_ABI=%s\n' "$(jq -er '.device_smoke.matrix[0].abi' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_VERIFIED_ARTIFACT=%s\n' "$(jq -er '.device_smoke.verified_artifact' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_BLOCKED_ARTIFACT=%s\n' "$(jq -er '.device_smoke.blocked_artifact' scripts/release-runtime-contract.json)"
+          } >> "${GITHUB_ENV}"
       - name: Prepare embedded runtimes and Go Core
         working-directory: app
         env:
           PANEL_SOURCE_DIR: ${{ github.workspace }}/panel
         run: |
-          bash scripts/prepare-android-python-runtime.sh
           python3 scripts/verify-android-linux-runtime.py \
             --rootfs android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin \
             --rootfs-sha android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/rootfs.tar.gz.bin.sha256 \
-            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json
+            --rootfs-manifest android/app/src/main/assets/android-runtime/arm64-v8a/ubuntu/runtime-manifest.json \
+            --trusted-sources scripts/rootfs-trusted-sources.json
           bash scripts/prepare-android-yaegi-runtime.sh
           flutter pub get
-      - name: Build debug application and instrumentation APKs
+      - name: Build release application and instrumentation APKs
         working-directory: app
-        run: flutter build apk --debug --target-platform android-arm64 && gradle -p android :app:assembleDebugAndroidTest --no-daemon --stacktrace
+        run: flutter build apk --release --target-platform android-arm64 && gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
       - name: Verify smoke driver dry-run
         run: |
           python3 scripts/android-runtime-smoke.py dry-run \
-            --apk app/build/app/outputs/flutter-apk/app-debug.apk \
-            --test-apk app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            --matrix-id api35-4k --expected-api 35 --expected-page-size 4096
+            --apk app/build/app/outputs/flutter-apk/app-release.apk \
+            --test-apk app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk \
+            --matrix-id "${DEVICE_MATRIX_ID}" \
+            --expected-api "${DEVICE_EXPECTED_API}" \
+            --expected-page-size "${DEVICE_EXPECTED_PAGE_SIZE}" \
+            --expected-abi "${DEVICE_EXPECTED_ABI}"
       - name: Test smoke driver
-        run: python3 -m unittest scripts/test_android_runtime_smoke.py app/scripts/test_verify_android_linux_runtime.py
+        run: python3 -m unittest scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
       - uses: actions/upload-artifact@v4
         with:
           name: android-runtime-smoke-apks
           path: |
-            app/build/app/outputs/flutter-apk/app-debug.apk
-            app/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            app/build/app/outputs/flutter-apk/app-release.apk
+            app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -124,6 +154,18 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+      - name: Load release runtime contract
+        shell: bash
+        run: |
+          MATRIX_COUNT="$(jq -er '.device_smoke.matrix | length' scripts/release-runtime-contract.json)"
+          test "${MATRIX_COUNT}" = "1"
+          {
+            printf 'DEVICE_MATRIX_ID=%s\n' "$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_API=%s\n' "$(jq -er '.device_smoke.matrix[0].api' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_PAGE_SIZE=%s\n' "$(jq -er '.device_smoke.matrix[0].page_size_bytes' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_EXPECTED_ABI=%s\n' "$(jq -er '.device_smoke.matrix[0].abi' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_VERIFIED_ARTIFACT=%s\n' "$(jq -er '.device_smoke.verified_artifact' scripts/release-runtime-contract.json)"
+          } >> "${GITHUB_ENV}"
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -135,18 +177,17 @@ jobs:
         env:
           ANDROID_SERIAL: ${{ inputs.physical_device_serial }}
         run: |
-          MATRIX_ID="physical-${{ inputs.physical_expected_abi }}-api${{ inputs.physical_expected_api }}-${{ inputs.physical_expected_page_size }}"
           python3 scripts/android-runtime-smoke.py run \
-            --apk smoke-apks/flutter-apk/app-debug.apk \
-            --test-apk smoke-apks/apk/androidTest/debug/app-debug-androidTest.apk \
-            --matrix-id "${MATRIX_ID}" \
-            --expected-api "${{ inputs.physical_expected_api }}" \
-            --expected-page-size "${{ inputs.physical_expected_page_size }}" \
-            --expected-abi "${{ inputs.physical_expected_abi }}" \
-            --output "evidence/${MATRIX_ID}.json"
+            --apk smoke-apks/flutter-apk/app-release.apk \
+            --test-apk smoke-apks/apk/androidTest/release/app-release-androidTest.apk \
+            --matrix-id "${DEVICE_MATRIX_ID}" \
+            --expected-api "${DEVICE_EXPECTED_API}" \
+            --expected-page-size "${DEVICE_EXPECTED_PAGE_SIZE}" \
+            --expected-abi "${DEVICE_EXPECTED_ABI}" \
+            --output "evidence/${DEVICE_MATRIX_ID}.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: android-runtime-smoke-physical-${{ inputs.physical_expected_abi }}-verified
+          name: ${{ env.DEVICE_VERIFIED_ARTIFACT }}
           path: evidence/**
           if-no-files-found: error
           retention-days: 90
@@ -157,17 +198,24 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+      - name: Load release runtime contract
+        shell: bash
+        run: |
+          MATRIX_COUNT="$(jq -er '.device_smoke.matrix | length' scripts/release-runtime-contract.json)"
+          test "${MATRIX_COUNT}" = "1"
+          {
+            printf 'DEVICE_MATRIX_ID=%s\n' "$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+            printf 'DEVICE_BLOCKED_ARTIFACT=%s\n' "$(jq -er '.device_smoke.blocked_artifact' scripts/release-runtime-contract.json)"
+          } >> "${GITHUB_ENV}"
       - name: Record ARM64 emulator blocked evidence
         run: |
           mkdir -p evidence
-          for matrix_id in api28-4k api35-4k; do
-            python3 scripts/android-runtime-smoke.py blocked \
-              --matrix-id "$matrix_id" \
-              --reason "ARM64 Android emulator unsupported on GitHub cloud runners; see reactivecircus/android-emulator-runner#350" \
-              --output "evidence/${matrix_id}.json"
-          done
+          python3 scripts/android-runtime-smoke.py blocked \
+            --matrix-id "${DEVICE_MATRIX_ID}" \
+            --reason "ARM64 Android emulator unsupported on GitHub cloud runners; see reactivecircus/android-emulator-runner#350" \
+            --output "evidence/${DEVICE_MATRIX_ID}.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: android-runtime-smoke-arm64-blocked
-          path: evidence/api28-4k.json
+          name: ${{ env.DEVICE_BLOCKED_ARTIFACT }}
+          path: evidence/${{ env.DEVICE_MATRIX_ID }}.json
           retention-days: 30

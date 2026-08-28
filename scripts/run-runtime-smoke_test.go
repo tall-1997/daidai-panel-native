@@ -4,8 +4,11 @@ import "testing"
 
 func TestBuildBlockedEvidenceCoversAllRuntimesWithoutFakePasses(t *testing.T) {
 	evidence := buildBlockedEvidence("2026-07-29T00:00:00Z")
+	if len(evidence.Matrix) != 1 || evidence.Matrix[0] != "api35-16k" {
+		t.Fatalf("matrix = %v, want [api35-16k]", evidence.Matrix)
+	}
 	wantIDs := []string{
-		"python-3.14-android-arm64",
+		"python-3.12-android-arm64",
 		"node-lts-android-arm64",
 		"typescript-stable",
 		"shell-android-arm64",

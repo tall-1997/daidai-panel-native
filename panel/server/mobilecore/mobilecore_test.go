@@ -1701,7 +1701,7 @@ func writeRuntimeFixture(t *testing.T, runtimeSHA string) (nativeDir, manifestPa
 	manifest := map[string]any{
 		"version": "1",
 		"components": []map[string]any{{
-			"id":         "python-3.14-android-arm64",
+			"id":         "python-launcher-3.14-android-arm64",
 			"abi":        "arm64-v8a",
 			"entrypoint": "libpython_exec.so",
 			"sha256":     runtimeSHA,
@@ -1711,7 +1711,7 @@ func writeRuntimeFixture(t *testing.T, runtimeSHA string) (nativeDir, manifestPa
 		"version": "1",
 		"abi":     "arm64-v8a",
 		"runtime_ids": []string{
-			"python-3.14-android-arm64",
+			"python-launcher-3.14-android-arm64",
 		},
 	}
 	manifestPath = filepath.Join(root, "manifest.json")
@@ -1729,7 +1729,7 @@ func writeBlockedRuntimeFixture(t *testing.T) (nativeDir, manifestPath, compatib
 		t.Fatalf("mkdir runtime native dir: %v", err)
 	}
 	ids := []string{
-		"python-3.14-android-arm64", "node-lts-android-arm64", "typescript-stable", "shell-android-arm64",
+		"python-3.12-android-arm64", "node-lts-android-arm64", "typescript-stable", "shell-android-arm64",
 		"git-android-arm64", "ssh-android-arm64", "yaegi-go", "go-builder-android-arm64",
 	}
 	components := make([]map[string]any, 0, len(ids))

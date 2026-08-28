@@ -6,10 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'core/auth/auth_interceptor.dart';
 import 'core/auth/auth_provider.dart';
+import 'core/auth/auth_session_invalidation_coordinator.dart';
 import 'core/network/app_user_agent.dart';
 import 'core/network/dio_client.dart';
 import 'core/services/local_notification_service.dart';
 import 'core/services/app_update_service.dart';
+import 'core/services/task_completion_observer.dart';
 import 'core/storage/secure_storage.dart';
 import 'core/router/app_router.dart';
 import 'core/local_panel/managed_local_connection_monitor.dart';
@@ -88,17 +90,23 @@ void main() async {
     DioClient.instance.setBaseUrl(serverUrl);
   }
   // 注入认证拦截器
+  AuthSessionInvalidationCoordinator.instance.onInvalidated = (epoch) async {
+    container.read(authProvider.notifier).setUnauthenticated(authEpoch: epoch);
+  };
   DioClient.instance.dio.interceptors.insert(
     0,
-    AuthInterceptor(
-      onAuthFailed: () {
-        container.read(authProvider.notifier).setUnauthenticated();
-      },
-    ),
+    AuthInterceptor(),
   );
 
   // 启动时先恢复本地可信登录态，7 天内避免重复触发登录接口和登录日志。
   await container.read(authProvider.notifier).restoreTrustedLocalSession();
+  container.listen<AuthState>(authProvider, (_, next) {
+    if (next.status == AuthStatus.authenticated) {
+      TaskCompletionObserver.instance.start();
+    } else {
+      TaskCompletionObserver.instance.stop();
+    }
+  }, fireImmediately: true);
 
   runApp(
     UncontrolledProviderScope(

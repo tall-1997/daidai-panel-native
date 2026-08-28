@@ -108,7 +108,7 @@ func TestRuntimeLocatorRejectsEmptyEntrypoint(t *testing.T) {
 func TestDefaultRuntimeLocatorRejectsBlockedRuntime(t *testing.T) {
 	nativeDir := t.TempDir()
 	runtimeIDs := []string{
-		"python-3.14-android-arm64", "node-lts-android-arm64", "typescript-stable", "shell-android-arm64",
+		"python-3.12-android-arm64", "node-lts-android-arm64", "typescript-stable", "shell-android-arm64",
 		"git-android-arm64", "ssh-android-arm64", RuntimeIDYaegiGo, RuntimeIDGoBuilderAndroidARM,
 	}
 	components := make([]RuntimeComponentStatus, 0, len(runtimeIDs))

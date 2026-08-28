@@ -389,7 +389,8 @@ async function loadVersion() {
         <div class="route-shell">
           <router-view v-slot="{ Component, route: viewRoute }">
             <transition name="page-shell">
-              <keep-alive :max="routeCacheMax">
+              <component v-if="viewRoute.meta.keepAlive === false" :is="Component" :key="viewRoute.name || viewRoute.path" />
+              <keep-alive v-else :max="routeCacheMax">
                 <component :is="Component" :key="viewRoute.name || viewRoute.path" />
               </keep-alive>
             </transition>

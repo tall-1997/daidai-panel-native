@@ -1,6 +1,8 @@
 package com.daidai.daidai_app
 
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -124,7 +126,7 @@ class AndroidLinuxRuntimeTest {
     fun `mirror defaults use Aliyun Ubuntu and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 
-        assertEquals("https://mirrors.aliyun.com/ubuntu", mirrors.linuxMirror)
+        assertEquals("https://mirrors.aliyun.com/ubuntu-ports", mirrors.linuxMirror)
         assertEquals("https://mirrors.aliyun.com/pypi/simple", mirrors.pipMirror)
         assertEquals("https://registry.npmmirror.com", mirrors.npmMirror)
     }
@@ -212,5 +214,127 @@ class AndroidLinuxRuntimeTest {
         )
         assertTrue(root.resolve("etc/pip.conf").readText().contains("index-url = https://pypi.org/simple"))
         assertTrue(root.resolve("etc/npmrc").readText().contains("registry=https://registry.npmjs.org"))
+
+        AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors.copy(linuxMirror = "https://ports.ubuntu.com/ubuntu-ports"))
+        assertTrue(root.resolve("etc/apt/sources.list").readText().contains("https://ports.ubuntu.com/ubuntu-ports/"))
+    }
+
+    @Test
+    fun `arm64 defaults to ubuntu ports while amd64 uses ubuntu archive`() {
+        assertEquals(AndroidLinuxRuntime.UBUNTU_PORTS_APT_DEFAULT_MIRROR, AndroidLinuxRuntime.defaultLinuxMirror("ubuntu", "arm64-v8a"))
+        assertEquals(AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR, AndroidLinuxRuntime.defaultLinuxMirror("ubuntu", "x86_64"))
+    }
+
+    @Test
+    fun `runtime capabilities only report executable artifacts that exist`() {
+        val root = Files.createTempDirectory("linux-runtime-capabilities").toFile()
+        root.resolve("bin/sh").apply { parentFile.mkdirs(); writeText("sh"); setExecutable(true) }
+        root.resolve("usr/bin/python3").apply { parentFile.mkdirs(); writeText("python"); setExecutable(true) }
+        root.resolve("usr/bin/node").apply { writeText("node"); setExecutable(true) }
+
+        val capabilities = AndroidLinuxRuntime.runtimeCapabilities(root)
+
+        assertTrue(capabilities.containsAll(listOf("shell", "python", "node", "commonjs", "esm")))
+        assertFalse(capabilities.contains("crypto"))
+        assertFalse(capabilities.contains("typescript"))
+    }
+
+    @Test
+    fun `DNS formatter validates addresses deduplicates and preserves scoped IPv6`() {
+        assertEquals(
+            "nameserver 10.0.0.2\nnameserver fe80::53%wlan0\n",
+            AndroidLinuxRuntime.formatResolvConf(listOf(
+                " 10.0.0.2 ", "fe80::53%wlan0", "10.0.0.2", "resolver.example", "8.8.8.8\nnameserver 6.6.6.6", "999.1.1.1",
+            )),
+        )
+        assertEquals("", AndroidLinuxRuntime.formatResolvConf(emptyList()))
+        assertEquals("fe80::1%42", AndroidLinuxRuntime.normalizeDnsServer("fe80::1%42"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeDnsServer("fe80::1%bad zone"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeDnsServer("2001:db8::1%zone%other"))
+        assertEquals(null, AndroidLinuxRuntime.normalizeDnsServer("1a.2.3.4"))
+    }
+
+    @Test
+    fun `DNS atomic replacement replaces symlink without touching host target`() {
+        val root = Files.createTempDirectory("linux-runtime-dns-root").toFile()
+        val etc = root.resolve("etc").apply { mkdirs() }
+        val host = Files.createTempFile("linux-runtime-host-resolv", ".conf").toFile().apply { writeText("host-original\n") }
+        listOf(host.toPath(), etc.toPath().relativize(host.toPath())).forEachIndexed { index, linkTarget ->
+            val resolv = etc.resolve("resolv.conf")
+            Files.deleteIfExists(resolv.toPath())
+            Files.createSymbolicLink(resolv.toPath(), linkTarget)
+
+            AndroidLinuxRuntime.atomicWriteResolvConf(root, listOf("10.0.0.${53 + index}")) { }
+
+            assertFalse(Files.isSymbolicLink(resolv.toPath()))
+            assertTrue(Files.isRegularFile(resolv.toPath(), LinkOption.NOFOLLOW_LINKS))
+            assertEquals("nameserver 10.0.0.${53 + index}\n", resolv.readText())
+            assertEquals("host-original\n", host.readText())
+        }
+    }
+
+    @Test
+    fun `DNS status records successful durable write`() {
+        val root = Files.createTempDirectory("linux-runtime-dns-success").toFile()
+
+        val status = AndroidLinuxRuntime.persistDnsConfig(
+            root = root,
+            source = "active_network",
+            servers = listOf("1.1.1.1"),
+            updatedAt = "2026-08-28T00:00:00Z",
+        ) { target, servers -> AndroidLinuxRuntime.atomicWriteResolvConf(target, servers) { } }
+
+        assertTrue(status.writeSuccess)
+        assertEquals("2026-08-28T00:00:00Z", status.updatedAt)
+        assertEquals("", status.error)
+        assertEquals("nameserver 1.1.1.1\n", root.resolve("etc/resolv.conf").readText())
+    }
+
+    @Test
+    fun `DNS status replaces old success when directory fsync fails`() {
+        val root = Files.createTempDirectory("linux-runtime-dns-fsync-failure").toFile()
+        AndroidLinuxRuntime.persistDnsConfig(root, "fallback", listOf("1.1.1.1")) { _, _ -> }
+
+        val status = AndroidLinuxRuntime.persistDnsConfig(
+            root = root,
+            source = "active_network",
+            servers = listOf("fe80::53%wlan0"),
+            updatedAt = "2026-08-28T00:00:01Z",
+        ) { target, servers ->
+            AndroidLinuxRuntime.atomicWriteResolvConf(target, servers) { throw IOException("directory fsync failed") }
+        }
+
+        assertFalse(status.writeSuccess)
+        assertEquals("active_network", status.source)
+        assertEquals(listOf("fe80::53%wlan0"), status.servers)
+        assertEquals("2026-08-28T00:00:01Z", status.updatedAt)
+        assertTrue(status.error.contains("directory fsync failed"))
+    }
+
+    @Test
+    fun `DNS status rejects an all-invalid server refresh`() {
+        val root = Files.createTempDirectory("linux-runtime-dns-invalid").toFile()
+
+        val status = AndroidLinuxRuntime.persistDnsConfig(root, "active_network", listOf("resolver.test", "1.1.1.1\nsearch bad"))
+
+        assertFalse(status.writeSuccess)
+        assertTrue(status.servers.isEmpty())
+        assertTrue(status.error.contains("no valid DNS servers"))
+    }
+
+    @Test
+    fun `bind candidate filtering reports enabled and skipped classes`() {
+        val candidates = listOf(
+            AndroidLinuxRuntime.BindCandidate("/proc", core = true),
+            AndroidLinuxRuntime.BindCandidate("/linkerconfig"),
+            AndroidLinuxRuntime.BindCandidate("/system"),
+        )
+
+        val selection = AndroidLinuxRuntime.filterBindCandidates(candidates) { it != "/linkerconfig" }
+
+        assertEquals(listOf("/proc", "/system"), selection.enabled.map { it.path })
+        assertEquals(listOf("/linkerconfig"), selection.skipped.map { it.path })
+        assertTrue(selection.enabled.first().core)
+        assertFalse(selection.skipped.first().core)
     }
 }
