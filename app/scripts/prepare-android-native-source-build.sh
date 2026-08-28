@@ -102,6 +102,7 @@ build_talloc() {
     -DHAVE_CONSTRUCTOR_ATTRIBUTE=1 -DHAVE_STDBOOL_H=1 -DHAVE_BOOL=1 \
     -DHAVE_INTPTR_T=1 -DHAVE_UINTPTR_T=1 -DHAVE_PTRDIFF_T=1 \
     -DHAVE_DLFCN_H=1 -DHAVE_LIMITS_H=1 -DHAVE_STRING_H=1 \
+    -DHAVE_C99_VSNPRINTF=1 -DHAVE_MEMMOVE=1 -DHAVE_STRNLEN=1 -DHAVE_VSNPRINTF=1 \
     -DHAVE_USLEEP=1 -DHAVE_VA_COPY=1 \
     -O2 -fPIC
   "$prefix/bin/llvm-ar" rcs "$out/lib/libtalloc.a" "$out/talloc.o"
@@ -160,7 +161,7 @@ build_proot() {
   "$tool" -fno-emulated-tls -c "$script_dir/talloc-tls-anchor.c" -o "$anchor"
   # make 命令行变量会覆盖 GNUmakefile 内 "CFLAGS/CPPFLAGS += ..."，
   # 必须补齐默认的 -I. 与 uthash 路径，以及 talloc 的 include/lib。
-  local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -I. -I$root/lib/uthash/include"
+  local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -include string.h -I. -I$root/lib/uthash/include"
   local cflags="-O2 -g -fPIC -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -DARG_MAX=131072 -DWITH_LIBANDROID_SHMEM -DVERSION=\\\"${PROOT_VERSION}\\\" -I$talloc_inc -I$shmem_inc"
   cat > "$talloc_pc" <<EOF
 prefix=$work_dir/$target/talloc
