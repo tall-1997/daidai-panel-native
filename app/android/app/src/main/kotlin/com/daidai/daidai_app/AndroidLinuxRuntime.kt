@@ -401,7 +401,6 @@ object AndroidLinuxRuntime {
         binds.enabled.forEach { prepareRootfsBindTarget(rootfs.root, it.path) }
         val command = mutableListOf(
             rootfs.proot.absolutePath,
-            "--sysvipc",
             "--kill-on-exit",
             "-k", "4.14.0",
             "-r", rootfs.root.absolutePath,
@@ -420,7 +419,6 @@ object AndroidLinuxRuntime {
     }
 
     internal fun prootCompatibilityFlags(): List<String> = listOf(
-        "--sysvipc",
         "--kill-on-exit",
         "-k", "4.14.0",
         "-L",
