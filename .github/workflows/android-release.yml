@@ -296,10 +296,10 @@ jobs:
           for ABI in $(python3 ../scripts/android-abi-matrix.py list release); do
             TARGET="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" flutter_target)"
             SUFFIX="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" release_suffix)"
-            ANDROID_RUNTIME_ABIS="${ABI}" flutter build apk --release --target-platform "${TARGET}" \
+            ANDROID_RUNTIME_ABIS="${ABI}" flutter build apk --release --target-platform "${TARGET}" --split-per-abi \
               --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
             ANDROID_RUNTIME_ABIS="${ABI}" gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
-            cp build/app/outputs/flutter-apk/app-release.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
+            cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
             cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"
           done
 
@@ -428,22 +428,24 @@ jobs:
       - name: Run x86_64 candidate runtime smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -cores 2 -memory 2048
+          disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
             --apk candidate/daidai-panel-native-${{ needs.verify-build.outputs.version }}-${{ needs.verify-build.outputs.release_channel }}-x86_64.apk
             --test-apk candidate/daidai-panel-native-${{ needs.verify-build.outputs.version }}-${{ needs.verify-build.outputs.release_channel }}-x86_64-androidTest.apk
-            --matrix-id api35-x86_64-4k
-            --expected-api 35
+            --matrix-id api30-x86_64-4k
+            --expected-api 30
             --expected-page-size 4096
             --expected-abi x86_64
-            --output evidence/api35-x86_64-4k.json
+            --output evidence/api30-x86_64-4k.json
       - uses: actions/upload-artifact@v4
         with:
           name: x86_64-device-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/api35-x86_64-4k.json
+          path: evidence/api30-x86_64-4k.json
           if-no-files-found: error
           retention-days: 90
 

@@ -57,6 +57,8 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("android-abi-matrix.py list release", self.workflow)
         self.assertIn('get "${ABI}" flutter_target', self.workflow)
         self.assertIn('get "${ABI}" release_suffix', self.workflow)
+        self.assertIn('--split-per-abi', self.workflow)
+        self.assertIn('app-${ABI}-release.apk', self.workflow)
         self.assertIn("schemaVersion: 2", self.workflow)
         self.assertIn('"x86_64": {full:', self.workflow)
 

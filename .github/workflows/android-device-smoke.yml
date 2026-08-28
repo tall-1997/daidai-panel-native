@@ -255,26 +255,28 @@ jobs:
         run: |
           flutter pub get
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-yaegi-runtime.sh
-          ANDROID_RUNTIME_ABIS=x86_64 flutter build apk --release --target-platform android-x64
+          ANDROID_RUNTIME_ABIS=x86_64 flutter build apk --release --target-platform android-x64 --split-per-abi
           ANDROID_RUNTIME_ABIS=x86_64 gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
       - name: Run x86_64 runtime smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -cores 2 -memory 2048
+          disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
-            --apk app/build/app/outputs/flutter-apk/app-release.apk
+            --apk app/build/app/outputs/flutter-apk/app-x86_64-release.apk
             --test-apk app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk
-            --matrix-id api35-x86_64-4k
-            --expected-api 35
+            --matrix-id api30-x86_64-4k
+            --expected-api 30
             --expected-page-size 4096
             --expected-abi x86_64
-            --output evidence/api35-x86_64-4k.json
+            --output evidence/api30-x86_64-4k.json
       - uses: actions/upload-artifact@v4
         with:
-          name: android-runtime-smoke-api35-x86_64-4k
-          path: evidence/api35-x86_64-4k.json
+          name: android-runtime-smoke-api30-x86_64-4k
+          path: evidence/api30-x86_64-4k.json
           if-no-files-found: error
           retention-days: 30
