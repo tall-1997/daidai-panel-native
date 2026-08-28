@@ -350,8 +350,8 @@ def dry_run(args):
             "adb shell getprop ro.product.cpu.abi",
             "adb shell getprop ro.build.version.sdk",
             "adb shell getconf PAGESIZE",
-            f"adb install -r -t {args.apk}",
-            f"adb install -r -t {args.test_apk}",
+            f"adb install --no-streaming -r -t {args.apk}",
+            f"adb install --no-streaming -r -t {args.test_apk}",
             f"adb shell monkey -p {PACKAGE} 1",
             f"adb shell am instrument -w -r -e class {TEST_CLASS} {RUNNER}",
             "parse chunked base64 evidence from am instrument stdout",
@@ -383,8 +383,8 @@ def run(args):
         return fail_device_run(args, device, f"page-size-mismatch:expected={args.expected_page_size}:actual={page_size}")
 
     try:
-        command(args.adb, args.serial, "install", "-r", "-t", str(args.apk), timeout=300)
-        command(args.adb, args.serial, "install", "-r", "-t", str(args.test_apk), timeout=300)
+        command(args.adb, args.serial, "install", "--no-streaming", "-r", "-t", str(args.apk), timeout=300)
+        command(args.adb, args.serial, "install", "--no-streaming", "-r", "-t", str(args.test_apk), timeout=300)
         command(args.adb, args.serial, "shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1", timeout=60)
     except RuntimeError as error:
         return fail_device_run(args, device, f"install-or-launch-failed:{str(error)[:500]}")
