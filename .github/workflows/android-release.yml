@@ -443,9 +443,10 @@ jobs:
             --expected-abi x86_64
             --output evidence/api30-x86_64-4k.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: x86_64-device-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/api30-x86_64-4k.json
+          path: evidence/api30-x86_64-4k*
           if-no-files-found: error
           retention-days: 90
 
