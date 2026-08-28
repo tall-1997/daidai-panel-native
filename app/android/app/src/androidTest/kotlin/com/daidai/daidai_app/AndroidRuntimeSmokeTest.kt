@@ -74,6 +74,7 @@ class AndroidRuntimeSmokeTest {
                 )) { "Packaged rootfs runner is unavailable" }
                 val builder = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true)
                 builder.environment().putAll(AndroidLinuxRuntime.baseEnvironment(context, context.filesDir))
+                builder.environment()["PROOT_VERBOSE"] = "9"
                 AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
                 val process = builder.start()
                 process.outputStream.close()
@@ -81,7 +82,7 @@ class AndroidRuntimeSmokeTest {
                 if (!finished) process.destroyForcibly()
                 check(finished) { "Rootfs /usr/bin/env timed out" }
                 val output = process.inputStream.bufferedReader().use { it.readText() }
-                assertEquals("Rootfs /usr/bin/env failed: $output", 0, process.exitValue())
+                assertEquals("Rootfs /usr/bin/env failed: ${command.joinToString(" ")}\n$output", 0, process.exitValue())
                 assertTrue(output.contains("ROOTFS_ENV_OK"))
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
             }
