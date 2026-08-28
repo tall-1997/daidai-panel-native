@@ -97,7 +97,12 @@ build_talloc() {
   mkdir -p "$out/include" "$out/lib"
   "$tool" -c talloc.c -o "$out/talloc.o" \
     -I. -Ilib/replace -Ibin/default \
-    -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D__STDC_WANT_LIB_EXT1__=1 \
+    -DNO_CONFIG_H -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D__STDC_WANT_LIB_EXT1__=1 \
+    -DTALLOC_BUILD_VERSION_MAJOR=2 -DTALLOC_BUILD_VERSION_MINOR=4 -DTALLOC_BUILD_VERSION_RELEASE=3 \
+    -DHAVE_CONSTRUCTOR_ATTRIBUTE=1 -DHAVE_STDBOOL_H=1 -DHAVE_BOOL=1 \
+    -DHAVE_INTPTR_T=1 -DHAVE_UINTPTR_T=1 -DHAVE_PTRDIFF_T=1 \
+    -DHAVE_DLFCN_H=1 -DHAVE_LIMITS_H=1 -DHAVE_STRING_H=1 \
+    -DHAVE_USLEEP=1 -DHAVE_VA_COPY=1 \
     -O2 -fPIC
   "$prefix/bin/llvm-ar" rcs "$out/lib/libtalloc.a" "$out/talloc.o"
   "$tool" -shared -Wl,-soname,libtalloc.so -Wl,-z,max-page-size=$page_size \
