@@ -53,7 +53,7 @@ object AndroidBsPatch {
                                         val prefix = (readableStart - oldPosition).coerceAtMost(count.toLong()).toInt()
                                         if (prefix < count && readableStart < old.length()) {
                                             old.seek(readableStart)
-                                            val available = minOf(count - prefix, old.length() - readableStart).toInt()
+                                            val available = minOf((count - prefix).toLong(), old.length() - readableStart).toInt()
                                             old.readFully(oldBuffer, prefix, available)
                                         }
                                         repeat(count) { index ->
