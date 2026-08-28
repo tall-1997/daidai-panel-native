@@ -81,7 +81,7 @@ class AndroidRuntimeSmokeTest {
                 if (!finished) process.destroyForcibly()
                 check(finished) { "Rootfs /usr/bin/env timed out" }
                 val output = process.inputStream.bufferedReader().use { it.readText() }
-                assertEquals(0, process.exitValue())
+                assertEquals("Rootfs /usr/bin/env failed: $output", 0, process.exitValue())
                 assertTrue(output.contains("ROOTFS_ENV_OK"))
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
             }
@@ -321,7 +321,7 @@ class AndroidRuntimeSmokeTest {
         if (!finished) process.destroyForcibly()
         check(finished) { "Rootfs command timed out: $displayCommand" }
         val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
-        assertEquals("Rootfs command failed: $displayCommand", 0, process.exitValue())
+        assertEquals("Rootfs command failed: $displayCommand\n$output", 0, process.exitValue())
         assertTrue("Rootfs command returned empty evidence: $displayCommand", output.isNotBlank())
         return JSONObject().put("command", displayCommand).put("output", output).put("exit_code", process.exitValue())
     }
