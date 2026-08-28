@@ -218,6 +218,15 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
         valid, reason = SMOKE.validate_instrumentation(helper)
         self.assertTrue(valid, reason)
 
+    def test_system_compensation_is_an_accepted_scheduler_state(self):
+        helper = self.valid_instrumentation()
+        helper["core"].update({
+            "scheduler_host_state": "system_compensation",
+            "scheduler_guarantee_state": "system_compensation",
+        })
+        valid, reason = SMOKE.validate_instrumentation(helper)
+        self.assertTrue(valid, reason)
+
     def test_wrong_fallback_identity_cannot_validate(self):
         helper = self.valid_instrumentation()
         helper["core"]["core_version"] = "unknown"

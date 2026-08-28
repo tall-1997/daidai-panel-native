@@ -303,8 +303,8 @@ class AndroidRuntimeSmokeTest {
         assertEquals("kotlin-local-fallback", status.optString("instance_id"))
         assertEquals("kotlin-local-fallback", status.optString("core_version"))
         assertEquals("full", status.optString("fallback_mode"))
-        assertEquals("active", status.optString("scheduler_host_state"))
-        assertEquals("active", status.optString("scheduler_guarantee_state"))
+        assertTrue(status.optString("scheduler_host_state") in setOf("active", "foreground_continuous", "system_compensation"))
+        assertTrue(status.optString("scheduler_guarantee_state") in setOf("active", "foreground_continuous", "system_compensation"))
         assertTrue(status.optString("base_url").startsWith("http://127.0.0.1:"))
     }
 

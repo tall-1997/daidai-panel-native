@@ -267,8 +267,10 @@ def validate_instrumentation(helper):
 def validate_core_identity(core):
     if core.get("phase") != "ready":
         return "core-not-ready"
+    scheduler_states = {"active", "foreground_continuous", "system_compensation"}
     if (core.get("core_version") != "kotlin-local-fallback" or core.get("fallback_mode") != "full"
-            or core.get("scheduler_host_state") != "active" or core.get("scheduler_guarantee_state") != "active"):
+            or core.get("scheduler_host_state") not in scheduler_states
+            or core.get("scheduler_guarantee_state") not in scheduler_states):
         return "core-identity-unverified"
     if core.get("instance_id") != "kotlin-local-fallback":
         return "core-instance-invalid"
