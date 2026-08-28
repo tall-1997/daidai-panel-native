@@ -60,6 +60,15 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("schemaVersion: 2", self.workflow)
         self.assertIn('"x86_64": {full:', self.workflow)
 
+    def test_yaegi_build_updates_arm64_runtime_contract_before_verification(self):
+        script = (ROOT / "app/scripts/prepare-android-yaegi-runtime.sh").read_text(encoding="utf-8")
+        self.assertIn('component.get("id") == "yaegi-go"', script)
+        self.assertIn('component.get("abi") == "arm64-v8a"', script)
+        self.assertLess(
+            self.workflow.index('bash scripts/prepare-android-yaegi-runtime.sh'),
+            self.workflow.index('Verify runtime contract before APK build'),
+        )
+
     def test_prerelease_fixed_tag_can_be_safely_reused(self):
         self.assertIn("EXISTING_TAG=", self.workflow)
         self.assertIn("EXISTING_PRERELEASE=", self.workflow)

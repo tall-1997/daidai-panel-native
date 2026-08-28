@@ -74,7 +74,7 @@
       "abi": "arm64-v8a",
       "entry_type": "apk_elf",
       "entrypoint": "libyaegi_exec.so",
-      "sha256": "deb95ee920dffde8238325d17295addbb4d2ff39cd02d7ef2d1b3bd9e325580c",
+      "sha256": "6900c6ec0694f5cb8c17591cedf2b0af1d6522041afd25fd6a678e37f9fa36cc",
       "runtime_type": "toolchain",
       "isolation": "isolated-worker",
       "capabilities": ["go-interpret"]

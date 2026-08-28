@@ -47,4 +47,23 @@ else:
 artifacts.sort(key=lambda item: item["name"])
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
+  if [[ "$abi" == "arm64-v8a" ]]; then
+    python3 - "$repo_root/runtime/manifest.json" "$output" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+worker_path = pathlib.Path(sys.argv[2])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+for component in manifest.get("components", []):
+    if component.get("id") == "yaegi-go" and component.get("abi") == "arm64-v8a":
+        component["sha256"] = hashlib.sha256(worker_path.read_bytes()).hexdigest()
+        break
+else:
+    raise SystemExit("ARM64 yaegi-go component missing from runtime manifest")
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+  fi
 done
