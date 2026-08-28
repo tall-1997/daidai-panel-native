@@ -124,9 +124,8 @@ android {
         jniLibs {
             useLegacyPackaging = true
             excludes += setOf("**/libpython_exec.so")
-            keepDebugSymbols += setOf(
-                "**/libproot_loader.so",
-            )
+            // Runtime manifests pin exact ELF bytes, so APK packaging must not strip them again.
+            keepDebugSymbols += "**/*.so"
         }
     }
 
