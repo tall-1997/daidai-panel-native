@@ -23,7 +23,7 @@ bool isSupportedBackupFilename(String filename) {
 }
 
 Duration restoreProgressRetryDelay(int failures) {
-  final exponent = failures.clamp(0, 4) as int;
+  final exponent = failures.clamp(0, 4);
   return Duration(seconds: 1 << exponent);
 }
 

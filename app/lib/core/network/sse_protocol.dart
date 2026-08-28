@@ -103,7 +103,7 @@ class SseDecoder {
           if (_eventCharacters > maxEventCharacters) {
             throw const SseProtocolException('SSE event exceeded its limit');
           }
-          _dataLines.add(field!.value);
+          _dataLines.add(field.value);
           break;
         case 'id':
           if (!field!.value.contains('\u0000')) {

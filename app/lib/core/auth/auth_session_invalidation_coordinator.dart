@@ -28,11 +28,10 @@ bool isRefreshAuthFailure(Object error) {
 class AuthSessionInvalidationCoordinator {
   AuthSessionInvalidationCoordinator({
     AuthSessionClearer? clearSession,
-    AuthSessionInvalidated? onInvalidated,
+    this.onInvalidated,
   }) : _clearSession =
            clearSession ??
-           ((epoch) => SecureStorage.clearAuthSession(authEpoch: epoch)),
-       onInvalidated = onInvalidated;
+           ((epoch) => SecureStorage.clearAuthSession(authEpoch: epoch));
 
   static final instance = AuthSessionInvalidationCoordinator();
 
