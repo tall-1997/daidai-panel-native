@@ -388,21 +388,24 @@ def run(args):
         command(args.adb, args.serial, "shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1", timeout=60)
     except RuntimeError as error:
         return fail_device_run(args, device, f"install-or-launch-failed:{str(error)[:500]}")
-    instrument = command(
-        args.adb,
-        args.serial,
-        "shell",
-        "am",
-        "instrument",
-        "-w",
-        "-r",
-        "-e",
-        "class",
-        TEST_CLASS,
-        RUNNER,
-        timeout=args.timeout,
-        check=False,
-    )
+    try:
+        instrument = command(
+            args.adb,
+            args.serial,
+            "shell",
+            "am",
+            "instrument",
+            "-w",
+            "-r",
+            "-e",
+            "class",
+            TEST_CLASS,
+            RUNNER,
+            timeout=args.timeout,
+            check=False,
+        )
+    except RuntimeError as error:
+        return fail_device_run(args, device, f"instrumentation-failed:{str(error)[:500]}")
     try:
         helper = parse_instrumentation_evidence(instrument.stdout)
         evidence_transport = "instrumentation-result-bundle"

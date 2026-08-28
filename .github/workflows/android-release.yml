@@ -441,6 +441,7 @@ jobs:
             --expected-api 30
             --expected-page-size 4096
             --expected-abi x86_64
+            --timeout 900
             --output evidence/api30-x86_64-4k.json
       - uses: actions/upload-artifact@v4
         if: always()
