@@ -222,6 +222,7 @@ jobs:
         working-directory: app
         run: |
           RUNTIME_ABIS="$(python3 ../scripts/android-abi-matrix.py list release)"
+          ANDROID_RUNTIME_ABIS="${RUNTIME_ABIS}" FORCE_REBUILD_PROOT=1 bash scripts/prepare-android-native-source-build.sh
           ANDROID_RUNTIME_ABIS="${RUNTIME_ABIS}" bash scripts/prepare-android-yaegi-runtime.sh
           for ABI in ${RUNTIME_ABIS}; do
             python3 scripts/sync-android-native-manifest.py \

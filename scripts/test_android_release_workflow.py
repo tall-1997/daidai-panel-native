@@ -72,6 +72,22 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
             self.workflow.index('Verify runtime contract before APK build'),
         )
 
+    def test_release_and_x86_smoke_rebuild_pinned_native_runtime(self):
+        device_workflow = (ROOT / ".github/workflows/android-device-smoke.yml").read_text(encoding="utf-8")
+        native_build = "FORCE_REBUILD_PROOT=1 bash scripts/prepare-android-native-source-build.sh"
+        self.assertIn(native_build, self.workflow)
+        self.assertIn(native_build, device_workflow)
+        release_native_build = self.workflow.index(native_build)
+        device_native_build = device_workflow.index(native_build)
+        self.assertGreater(
+            self.workflow.index('bash scripts/prepare-android-yaegi-runtime.sh', release_native_build),
+            release_native_build,
+        )
+        self.assertGreater(
+            device_workflow.index('bash scripts/prepare-android-yaegi-runtime.sh', device_native_build),
+            device_native_build,
+        )
+
     def test_prerelease_fixed_tag_can_be_safely_reused(self):
         self.assertIn("EXISTING_TAG=", self.workflow)
         self.assertIn("EXISTING_PRERELEASE=", self.workflow)

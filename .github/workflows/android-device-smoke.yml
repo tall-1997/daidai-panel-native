@@ -254,6 +254,7 @@ jobs:
         working-directory: app
         run: |
           flutter pub get
+          ANDROID_RUNTIME_ABIS=x86_64 FORCE_REBUILD_PROOT=1 bash scripts/prepare-android-native-source-build.sh
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-yaegi-runtime.sh
           ANDROID_RUNTIME_ABIS=x86_64 FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform android-x64 --split-per-abi
           ANDROID_RUNTIME_ABIS=x86_64 gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
