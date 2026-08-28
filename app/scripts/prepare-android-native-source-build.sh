@@ -84,28 +84,15 @@ target_and_toolchain() {
 build_talloc() {
   local target="$1" prefix="$2"
   local tool="$prefix/bin/${target}${api}-clang"
-  local qemu="qemu-${target%%-*}"
   local out="$work_dir/$target/talloc"
   if test -f "$out/lib/libtalloc.a" -a -f "$out/lib/libtalloc.so" -a -f "$out/include/talloc.h"; then return; fi
   local root="$work_dir/$target/talloc-src"
-  local wrapper="$work_dir/$target/cc-wrapper.sh"
   local anchor="$work_dir/$target/tls_anchor.o"
   rm -rf "$root" "$out"
   mkdir -p "$root" "$out"
   tar -xzf "$src_dir/talloc-${TALLOC_VERSION}.tar.gz" -C "$root" --strip-components=1
   "$tool" -fno-emulated-tls -c "$script_dir/talloc-tls-anchor.c" -o "$anchor"
-  cat > "$wrapper" <<EOF
-#!/bin/bash
-exec "$tool" -fno-emulated-tls "\$@"
-EOF
-  chmod +x "$wrapper"
   cd "$root"
-  log "configuring talloc for $target"
-  CC="$wrapper" AR="$prefix/bin/llvm-ar" \
-    ./configure --host="$target" --disable-python --disable-rpath --without-gettext \
-      --cross-compile --cross-execute="$qemu" \
-      --prefix="$out" CFLAGS="-O2 -fPIC" \
-      LDFLAGS="-static -Wl,-Bstatic $anchor -Wl,--undefined=daidai_tls_anchor" >/dev/null
   log "compiling talloc for $target"
   mkdir -p "$out/include" "$out/lib"
   "$tool" -c talloc.c -o "$out/talloc.o" \
