@@ -49,6 +49,7 @@ val defaultAndroidAbi = androidAbiMatrix["default_abi"] as? String
 val requestedAbis = (System.getenv("ANDROID_RUNTIME_ABIS")?.replace(',', ' ')?.split(Regex("\\s+"))?.filter(String::isNotBlank)
     ?: listOf(defaultAndroidAbi)).distinct()
 check(requestedAbis.size == 1) { "Android runtime APK builds must select exactly one ABI." }
+val flutterSplitPerAbi = System.getenv("FLUTTER_SPLIT_PER_ABI") == "true"
 requestedAbis.forEach { abi ->
     val config = androidAbiConfigs[abi] ?: error("Unknown Android runtime ABI: $abi")
     check(config["package"] == true) { "Android runtime ABI is not packageable: $abi" }
@@ -84,7 +85,9 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         ndk {
-            abiFilters += requestedAbis
+            if (!flutterSplitPerAbi) {
+                abiFilters += requestedAbis
+            }
         }
         externalNativeBuild {
             cmake {

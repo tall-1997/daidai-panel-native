@@ -255,7 +255,7 @@ jobs:
         run: |
           flutter pub get
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-yaegi-runtime.sh
-          ANDROID_RUNTIME_ABIS=x86_64 flutter build apk --release --target-platform android-x64 --split-per-abi
+          ANDROID_RUNTIME_ABIS=x86_64 FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform android-x64 --split-per-abi
           ANDROID_RUNTIME_ABIS=x86_64 gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
       - name: Run x86_64 runtime smoke
         uses: reactivecircus/android-emulator-runner@v2

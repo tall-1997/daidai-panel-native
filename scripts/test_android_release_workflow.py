@@ -58,6 +58,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn('get "${ABI}" flutter_target', self.workflow)
         self.assertIn('get "${ABI}" release_suffix', self.workflow)
         self.assertIn('--split-per-abi', self.workflow)
+        self.assertIn('FLUTTER_SPLIT_PER_ABI=true', self.workflow)
         self.assertIn('app-${ABI}-release.apk', self.workflow)
         self.assertIn("schemaVersion: 2", self.workflow)
         self.assertIn('"x86_64": {full:', self.workflow)

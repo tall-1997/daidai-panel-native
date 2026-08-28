@@ -296,7 +296,7 @@ jobs:
           for ABI in $(python3 ../scripts/android-abi-matrix.py list release); do
             TARGET="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" flutter_target)"
             SUFFIX="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" release_suffix)"
-            ANDROID_RUNTIME_ABIS="${ABI}" flutter build apk --release --target-platform "${TARGET}" --split-per-abi \
+            ANDROID_RUNTIME_ABIS="${ABI}" FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform "${TARGET}" --split-per-abi \
               --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
             ANDROID_RUNTIME_ABIS="${ABI}" gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
             cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
