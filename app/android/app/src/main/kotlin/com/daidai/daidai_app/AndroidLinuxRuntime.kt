@@ -588,12 +588,7 @@ object AndroidLinuxRuntime {
         root: File,
         servers: List<String>,
         syncDirectory: (java.nio.file.Path) -> Unit = { directory ->
-            val descriptor = Os.open(directory.toString(), OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
-            try {
-                Os.fsync(descriptor)
-            } finally {
-                Os.close(descriptor)
-            }
+            FileChannel.open(directory, StandardOpenOption.READ).use { it.force(true) }
         },
     ) {
         val normalizedServers = normalizeDnsServers(servers)
