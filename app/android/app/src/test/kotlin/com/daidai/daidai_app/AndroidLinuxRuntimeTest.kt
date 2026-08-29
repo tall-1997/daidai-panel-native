@@ -112,6 +112,18 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `npm commands use real cli path instead of proot symlink entry`() {
+        assertEquals(
+            listOf("/usr/bin/node", "/usr/share/nodejs/npm/bin/npm-cli.js", "--version"),
+            AndroidLinuxRuntime.normalizeGuestCommand(listOf("/usr/bin/npm", "--version")),
+        )
+        assertEquals(
+            listOf("/usr/bin/node", "--version"),
+            AndroidLinuxRuntime.normalizeGuestCommand(listOf("/usr/bin/node", "--version")),
+        )
+    }
+
+    @Test
     fun `base runtime contract uses packaged proot loader name`() {
         assertEquals("libproot_loader.so", AndroidLinuxRuntime.prootLoaderLibraryName())
     }

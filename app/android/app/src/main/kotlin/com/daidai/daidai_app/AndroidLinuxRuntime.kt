@@ -331,8 +331,15 @@ object AndroidLinuxRuntime {
 
     fun guestCommand(context: Context, workingDir: File, command: List<String>): List<String>? {
         val rootfs = ensureRootfsReady(context) ?: return null
-        return prootCommand(context, rootfs, workingDir, "/workspace", command)
+        return prootCommand(context, rootfs, workingDir, "/workspace", normalizeGuestCommand(command))
     }
+
+    internal fun normalizeGuestCommand(command: List<String>): List<String> =
+        if (command.firstOrNull() == "/usr/bin/npm") {
+            listOf("/usr/bin/node", "/usr/share/nodejs/npm/bin/npm-cli.js") + command.drop(1)
+        } else {
+            command
+        }
 
     fun guestRuntimeAvailable(context: Context, executable: String): Boolean {
         val rootfs = ensureRootfsReady(context) ?: return false
