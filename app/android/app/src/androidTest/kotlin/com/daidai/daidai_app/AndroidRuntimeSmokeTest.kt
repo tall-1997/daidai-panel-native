@@ -86,6 +86,32 @@ class AndroidRuntimeSmokeTest {
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
             }
 
+            step("rootfs.node_file_read_diagnostics") {
+                val npmCli = "/usr/share/nodejs/npm/bin/npm-cli.js"
+                val guestStat = executeGuestEvidence(
+                    listOf("/usr/bin/stat", "-c", "%s", npmCli),
+                    "stat -c %s $npmCli",
+                )
+                val nodeScript = """
+                    const fs=require('fs'),path=process.argv[1],result={path};let buffer,bytesRead;
+                    const capture=(name,fn)=>{try{result[name]={ok:true,...fn()}}catch(error){result[name]={ok:false,name:error.name,code:error.code||'',message:error.message}}};
+                    capture('statSync',()=>({size:fs.statSync(path).size}));
+                    capture('alloc',()=>{buffer=Buffer.alloc(fs.statSync(path).size);return{length:buffer.length}});
+                    capture('readSync',()=>{const fd=fs.openSync(path,'r');try{bytesRead=fs.readSync(fd,buffer,0,buffer.length,0);return{bytesRead}}finally{fs.closeSync(fd)}});
+                    capture('decodeReadBuffer',()=>({length:buffer.subarray(0,bytesRead).toString('utf8').length}));
+                    capture('readFileBuffer',()=>({length:fs.readFileSync(path).length}));
+                    capture('readFileUtf8',()=>({length:fs.readFileSync(path,'utf8').length}));
+                    console.log(JSON.stringify(result));
+                """.trimIndent().replace("\n", "")
+                val node = executeGuestEvidence(
+                    listOf("/usr/bin/node", "-e", nodeScript, npmCli),
+                    "node npm CLI file read diagnostics",
+                )
+                JSONObject()
+                    .put("guest_stat_size", guestStat.getString("output").toLong())
+                    .put("node", JSONObject(node.getString("output").lineSequence().last { it.startsWith("{") }))
+            }
+
             step("rootfs.npm_env_node") {
                 val command = requireNotNull(AndroidLinuxRuntime.guestCommand(
                     context,

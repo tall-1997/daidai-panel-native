@@ -57,6 +57,7 @@ RUNTIMES = runtime_contract_records()
 REQUIRED_STEPS = {
     "core.method_channel.ensure_started",
     "auth.initialize_and_login",
+    "rootfs.node_file_read_diagnostics",
     "env.create",
     "env.read_update",
     "runtime.dns.managed_resolver",
