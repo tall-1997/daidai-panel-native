@@ -166,8 +166,12 @@ def verify_native(native_dir: pathlib.Path, manifest_path: pathlib.Path,
 
 def _verify_source_build(provenance: dict) -> None:
     assert provenance.get("source_build") is True, "source-build provenance must claim a source build"
-    assert provenance.get("source_patch_applied") is False, "source-build must not claim applied patches"
-    assert isinstance(provenance.get("patches_applied", []), list), "patches_applied must be a list"
+    patches = provenance.get("patches_applied", [])
+    assert isinstance(patches, list), "patches_applied must be a list"
+    assert provenance.get("source_patch_applied") is bool(patches), "source patch declaration does not match patches_applied"
+    assert len(patches) == len(set(patches)), "patches_applied contains duplicates"
+    approved_patches = {"ashmem-memfd-ftruncate-no-fallthrough"}
+    assert set(patches) <= approved_patches, "source-build contains an unapproved patch"
     upstream = provenance.get("upstream_source", [])
     assert len(upstream) >= 3, "expected proot, talloc and busybox upstream sources to be pinned"
     assert all(len(item.get("sha256", "")) == 64 for item in upstream), "upstream sources are not pinned by SHA-256"

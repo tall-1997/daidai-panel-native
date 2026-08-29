@@ -74,6 +74,39 @@ class ElfVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "ELF set mismatch"):
                 runtime_verifier.verify_native(native_dir, manifest)
 
+    def source_build_provenance(self):
+        return {
+            "source_build": True,
+            "source_patch_applied": False,
+            "patches_applied": [],
+            "runtime_overrides": {"PROOT_LOADER": "libproot_loader.so"},
+            "toolchain": {"load_alignment": 16384},
+            "upstream_source": [
+                {"name": name, "version": "1", "url": "https://example.com", "sha256": "a" * 64}
+                for name in ("proot", "talloc", "busybox")
+            ],
+        }
+
+    def test_source_build_accepts_audited_ashmem_patch(self):
+        provenance = self.source_build_provenance()
+        provenance.update({
+            "source_patch_applied": True,
+            "patches_applied": ["ashmem-memfd-ftruncate-no-fallthrough"],
+        })
+        runtime_verifier._verify_source_build(provenance)
+
+    def test_source_build_rejects_unapproved_patch(self):
+        provenance = self.source_build_provenance()
+        provenance.update({"source_patch_applied": True, "patches_applied": ["unknown-patch"]})
+        with self.assertRaisesRegex(AssertionError, "unapproved patch"):
+            runtime_verifier._verify_source_build(provenance)
+
+    def test_source_build_rejects_patch_declaration_mismatch(self):
+        provenance = self.source_build_provenance()
+        provenance["source_patch_applied"] = True
+        with self.assertRaisesRegex(AssertionError, "declaration does not match"):
+            runtime_verifier._verify_source_build(provenance)
+
 
 class RootfsVerificationTest(unittest.TestCase):
     def test_accepts_complete_rootfs_contract(self):
