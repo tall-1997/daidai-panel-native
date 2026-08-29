@@ -101,7 +101,7 @@ class AndroidRuntimeSmokeTest {
                 if (!finished) process.destroyForcibly()
                 check(finished) { "Rootfs npm env node smoke timed out" }
                 val output = process.inputStream.bufferedReader().use { it.readText() }
-                assertEquals(0, process.exitValue())
+                assertEquals("Rootfs npm env node failed: ${command.joinToString(" ")}\n$output", 0, process.exitValue())
                 assertTrue(output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
                 JSONObject().put("command", "/usr/bin/npm --version").put("version", output.trim())
             }

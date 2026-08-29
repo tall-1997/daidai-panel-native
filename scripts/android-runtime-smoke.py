@@ -192,9 +192,12 @@ def parse_instrumentation_evidence(output):
 
 def validate_instrumentation(helper):
     steps = helper.get("steps")
-    if helper.get("schema_version") != 2 or helper.get("status") != "pass" or not isinstance(steps, list):
+    if helper.get("schema_version") != 2 or not isinstance(steps, list):
         return False, "invalid-instrumentation-envelope"
     by_id = {step.get("id"): step for step in steps if isinstance(step, dict)}
+    if helper.get("status") != "pass":
+        failed = sorted(step_id for step_id, step in by_id.items() if step.get("status") == "failed")
+        return False, "instrumentation-failed:" + (",".join(failed) if failed else "unknown-step")
     missing = sorted(REQUIRED_STEPS - set(by_id))
     if missing:
         return False, "missing-steps:" + ",".join(missing)

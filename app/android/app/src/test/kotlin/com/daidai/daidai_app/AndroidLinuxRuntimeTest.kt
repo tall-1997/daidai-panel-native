@@ -91,13 +91,24 @@ class AndroidLinuxRuntimeTest {
         val environment = mutableMapOf("PATH" to "/system/bin")
         AndroidLinuxRuntime.applyGuestEnvironment(listOf("/native/libdaidai_proot.so", "/usr/bin/npm"), environment)
         assertEquals(AndroidLinuxRuntime.GUEST_PATH, environment["PATH"])
+        assertEquals("/host-files", environment["HOME"])
+        assertEquals("/tmp/host-cache", environment["TMPDIR"])
+        assertEquals("/workspace", environment["PWD"])
     }
 
     @Test
     fun `direct Android command preserves host PATH`() {
-        val environment = mutableMapOf("PATH" to "/system/bin")
+        val environment = mutableMapOf(
+            "PATH" to "/system/bin",
+            "HOME" to "/data/user/0/app/files",
+            "TMPDIR" to "/data/user/0/app/cache",
+            "PWD" to "/data/user/0/app/files/workspace",
+        )
         AndroidLinuxRuntime.applyGuestEnvironment(listOf("/system/bin/sh", "node-wrapper.sh"), environment)
         assertEquals("/system/bin", environment["PATH"])
+        assertEquals("/data/user/0/app/files", environment["HOME"])
+        assertEquals("/data/user/0/app/cache", environment["TMPDIR"])
+        assertEquals("/data/user/0/app/files/workspace", environment["PWD"])
     }
 
     @Test

@@ -187,6 +187,19 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("failed-steps", reason)
 
+    def test_failed_instrumentation_reports_failed_step(self):
+        helper = {
+            "schema_version": 2,
+            "status": "failed",
+            "steps": [
+                {"id": "core.method_channel.ensure_started", "status": "pass"},
+                {"id": "rootfs.npm_env_node", "status": "failed"},
+            ],
+        }
+        valid, reason = SMOKE.validate_instrumentation(helper)
+        self.assertFalse(valid)
+        self.assertEqual("instrumentation-failed:rootfs.npm_env_node", reason)
+
     def test_stable_smoke_rejects_failed_or_stale_dns_evidence(self):
         helper = self.valid_instrumentation()
         by_id = {step["id"]: step for step in helper["steps"]}

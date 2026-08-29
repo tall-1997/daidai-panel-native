@@ -217,6 +217,9 @@ object AndroidLinuxRuntime {
     internal fun applyGuestEnvironment(command: List<String>, environment: MutableMap<String, String>) {
         if (command.firstOrNull()?.substringAfterLast('/') == "libdaidai_proot.so") {
             environment["PATH"] = GUEST_PATH
+            environment["HOME"] = "/host-files"
+            environment["TMPDIR"] = "/tmp/host-cache"
+            environment["PWD"] = "/workspace"
         }
     }
 
