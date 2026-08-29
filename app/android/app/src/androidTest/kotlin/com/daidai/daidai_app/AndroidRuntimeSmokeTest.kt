@@ -107,9 +107,17 @@ class AndroidRuntimeSmokeTest {
                     listOf("/usr/bin/node", "-e", nodeScript, npmCli),
                     "node npm CLI file read diagnostics",
                 )
+                val nodeResult = JSONObject(node.getString("output").lineSequence().last { it.startsWith("{") })
+                val size = guestStat.getString("output").toLong()
+                val stat = nodeResult.getJSONObject("statSync")
+                val decoded = nodeResult.getJSONObject("decodeReadBuffer")
+                val utf8 = nodeResult.getJSONObject("readFileUtf8")
+                assertTrue("guest stat mismatch: ${stat.toString()}", stat.getLong("size") == size)
+                assertTrue("utf8 decode corrupt: ${decoded.toString()}", decoded.getLong("length") == size)
+                assertTrue("readFile utf8 corrupt: ${utf8.toString()}", utf8.getLong("length") == size)
                 JSONObject()
-                    .put("guest_stat_size", guestStat.getString("output").toLong())
-                    .put("node", JSONObject(node.getString("output").lineSequence().last { it.startsWith("{") }))
+                    .put("guest_stat_size", size)
+                    .put("node", nodeResult)
             }
 
             step("rootfs.npm_env_node") {
@@ -128,7 +136,7 @@ class AndroidRuntimeSmokeTest {
                 check(finished) { "Rootfs npm env node smoke timed out" }
                 val output = process.inputStream.bufferedReader().use { it.readText() }
                 assertEquals("Rootfs npm env node failed: ${command.joinToString(" ")}\n$output", 0, process.exitValue())
-                assertTrue(output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
+                assertTrue("Rootfs npm env node output was not a version: ${output.take(512)}", output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
                 JSONObject().put("command", "/usr/bin/npm --version").put("version", output.trim())
             }
             step("runtime.python.version") {

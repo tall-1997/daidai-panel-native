@@ -135,7 +135,8 @@ class AndroidLinuxRuntimeTest {
         assertEquals(AndroidLinuxRuntime.X86_NODE_UTF8_COMPAT, options)
         assertTrue(options!!.startsWith("--import=data:text/javascript,"))
         assertTrue(options.contains("Buffer.prototype.utf8Slice"))
-        assertTrue(options.contains("TextDecoder"))
+        assertFalse(options.contains("TextDecoder"))
+        assertTrue(options.contains("String.fromCharCode"))
         assertEquals(null, AndroidLinuxRuntime.nodeRuntimeOptions("arm64-v8a"))
     }
 
