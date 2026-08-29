@@ -181,9 +181,13 @@ object AndroidLinuxRuntime {
             "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
+            nodeRuntimeOptions(currentAbi())?.let { put("NODE_OPTIONS", it) }
             putAll(mirrorEnvironment(mirrors))
         }
     }
+
+    internal fun nodeRuntimeOptions(abi: String): String? =
+        "--jitless".takeIf { abi == "x86_64" }
 
     internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
         "PROOT_LOADER" to loader.absolutePath,

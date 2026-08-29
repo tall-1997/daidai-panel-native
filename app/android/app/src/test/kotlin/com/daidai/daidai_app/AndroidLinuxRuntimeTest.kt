@@ -130,6 +130,12 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `x86 node runtime disables V8 JIT while arm64 stays native`() {
+        assertEquals("--jitless", AndroidLinuxRuntime.nodeRuntimeOptions("x86_64"))
+        assertEquals(null, AndroidLinuxRuntime.nodeRuntimeOptions("arm64-v8a"))
+    }
+
+    @Test
     fun `mirror defaults use Aliyun Ubuntu and npmmirror`() {
         val mirrors = AndroidLinuxRuntime.MirrorConfig()
 

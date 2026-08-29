@@ -3281,6 +3281,7 @@ fun serveDashboardStats(): JSONObject {
         target["PYTHONPATH"] = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages:/workspace"
         target["NODE_PATH"] = "/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules:/workspace"
         target.remove("NODE_OPTIONS")
+        AndroidLinuxRuntime.nodeRuntimeOptions(AndroidLinuxRuntime.currentAbi())?.let { target["NODE_OPTIONS"] = it }
         target["QL_DIR"] = "/host-files"
         target["QL_DATA_DIR"] = "/host-files"
         target["QL_SCRIPT_DIR"] = "/workspace"
@@ -3295,6 +3296,7 @@ fun serveDashboardStats(): JSONObject {
         remove("PYTHONHOME")
         remove("PYTHONPATH")
         remove("NODE_OPTIONS")
+        AndroidLinuxRuntime.nodeRuntimeOptions(AndroidLinuxRuntime.currentAbi())?.let { put("NODE_OPTIONS", it) }
     }
 
     private val reservedRuntimeEnvironmentNames = setOf(
