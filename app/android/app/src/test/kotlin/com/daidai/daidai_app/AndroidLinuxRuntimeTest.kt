@@ -130,8 +130,12 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
-    fun `x86 node runtime disables V8 JIT while arm64 stays native`() {
-        assertEquals("--jitless", AndroidLinuxRuntime.nodeRuntimeOptions("x86_64"))
+    fun `x86 node runtime patches native UTF-8 slicing while arm64 stays native`() {
+        val options = AndroidLinuxRuntime.nodeRuntimeOptions("x86_64")
+        assertEquals(AndroidLinuxRuntime.X86_NODE_UTF8_COMPAT, options)
+        assertTrue(options!!.startsWith("--import=data:text/javascript,"))
+        assertTrue(options.contains("Buffer.prototype.utf8Slice"))
+        assertTrue(options.contains("TextDecoder"))
         assertEquals(null, AndroidLinuxRuntime.nodeRuntimeOptions("arm64-v8a"))
     }
 

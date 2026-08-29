@@ -56,6 +56,7 @@ object AndroidLinuxRuntime {
     const val UBUNTU_PORTS_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu-ports"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
+    internal const val X86_NODE_UTF8_COMPAT = "--import=data:text/javascript,Buffer.prototype.utf8Slice%3Dfunction(s%3D0%2Ce%3Dthis.length)%7Breturn%20new%20TextDecoder().decode(this.subarray(s%2Ce))%7D"
     const val MIRROR_PREFERENCES = "daidai-local-configs"
     const val PIP_MIRROR_KEY = "pip_mirror"
     const val NPM_MIRROR_KEY = "npm_mirror"
@@ -187,7 +188,7 @@ object AndroidLinuxRuntime {
     }
 
     internal fun nodeRuntimeOptions(abi: String): String? =
-        "--jitless".takeIf { abi == "x86_64" }
+        X86_NODE_UTF8_COMPAT.takeIf { abi == "x86_64" }
 
     internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
         "PROOT_LOADER" to loader.absolutePath,
