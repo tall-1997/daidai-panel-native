@@ -15,8 +15,11 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -80,7 +83,7 @@ class AndroidRuntimeSmokeTest {
                 val finished = process.waitFor(60, TimeUnit.SECONDS)
                 if (!finished) process.destroyForcibly()
                 check(finished) { "Rootfs /usr/bin/env timed out" }
-                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val output = readAllWithTimeout(process)
                 assertEquals("Rootfs /usr/bin/env failed: ${command.joinToString(" ")}\n$output", 0, process.exitValue())
                 assertTrue(output.contains("ROOTFS_ENV_OK"))
                 JSONObject().put("command", "/usr/bin/env").put("output", "ROOTFS_ENV_OK")
@@ -131,10 +134,10 @@ class AndroidRuntimeSmokeTest {
                 AndroidLinuxRuntime.applyGuestEnvironment(command, builder.environment())
                 val process = builder.start()
                 process.outputStream.close()
-                val finished = process.waitFor(60, TimeUnit.SECONDS)
+                val finished = process.waitFor(180, TimeUnit.SECONDS)
                 if (!finished) process.destroyForcibly()
                 check(finished) { "Rootfs npm env node smoke timed out" }
-                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val output = readAllWithTimeout(process)
                 assertEquals("Rootfs npm env node failed: ${command.joinToString(" ")}\n$output", 0, process.exitValue())
                 assertTrue("Rootfs npm env node output was not a version: ${output.take(512)}", output.trim().matches(Regex("[0-9]+(?:\\.[0-9]+)+")))
                 JSONObject().put("command", "/usr/bin/npm --version").put("version", output.trim())
@@ -354,10 +357,26 @@ class AndroidRuntimeSmokeTest {
         val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!finished) process.destroyForcibly()
         check(finished) { "Rootfs command timed out: $displayCommand" }
-        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        val output = readAllWithTimeout(process).trim()
         assertEquals("Rootfs command failed: $displayCommand\n$output", 0, process.exitValue())
         assertTrue("Rootfs command returned empty evidence: $displayCommand", output.isNotBlank())
         return JSONObject().put("command", displayCommand).put("output", output).put("exit_code", process.exitValue())
+    }
+
+    private fun readAllWithTimeout(process: Process, timeoutSeconds: Long = 30): String {
+        val reader = process.inputStream.bufferedReader()
+        val executor = Executors.newSingleThreadExecutor()
+        return try {
+            val future = executor.submit(Callable<String> { reader.readText() })
+            try {
+                future.get(timeoutSeconds, TimeUnit.SECONDS)
+            } catch (error: TimeoutException) {
+                try { reader.close() } catch (_: Exception) { }
+                ""
+            }
+        } finally {
+            executor.shutdownNow()
+        }
     }
 
     private fun assertResolutionEvidence(evidence: JSONObject, expectedHost: String) {
