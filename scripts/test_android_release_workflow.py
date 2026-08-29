@@ -74,6 +74,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_release_and_x86_smoke_rebuild_pinned_native_runtime(self):
         device_workflow = (ROOT / ".github/workflows/android-device-smoke.yml").read_text(encoding="utf-8")
+        native_script = (ROOT / "app/scripts/prepare-android-native-source-build.sh").read_text(encoding="utf-8")
         native_build = "FORCE_REBUILD_PROOT=1 bash scripts/prepare-android-native-source-build.sh"
         self.assertIn(native_build, self.workflow)
         self.assertIn(native_build, device_workflow)
@@ -87,6 +88,9 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
             device_workflow.index('bash scripts/prepare-android-yaegi-runtime.sh', device_native_build),
             device_native_build,
         )
+        self.assertIn("ashmem-memfd-ftruncate-no-fallthrough", native_script)
+        self.assertIn("Pinned PRoot ashmem ftruncate source no longer matches the audited patch", native_script)
+        self.assertIn('source.count(old) != 1', native_script)
 
     def test_prerelease_fixed_tag_can_be_safely_reused(self):
         self.assertIn("EXISTING_TAG=", self.workflow)

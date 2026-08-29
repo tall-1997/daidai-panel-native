@@ -148,6 +148,17 @@ build_proot() {
   mkdir -p "$root" "$out"
   unzip -q "$src_dir/proot-${PROOT_VERSION}.zip" -d "$root"
   root="$root/proot-${PROOT_VERSION}"
+  python3 - "$root/src/extension/ashmem_memfd/ashmem_memfd.c" <<'PY'
+import pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old = """\tcase PR_ftruncate:\n\tcase PR_ftruncate64:\n\t{\n\t\tint fd = peek_reg(tracee, CURRENT, SYSARG_1);\n\t\tif (is_ashmem_fd(tracee, fd)) {\n\t\t\tset_sysnum(tracee, PR_ioctl);\n\t\t\tpoke_reg(tracee, SYSARG_3, peek_reg(tracee, CURRENT, SYSARG_2));\n\t\t\tpoke_reg(tracee, SYSARG_2, ASHMEM_SET_SIZE);\n\t\t}\n\t}\n\tcase PR_fstat:\n"""
+new = old.replace("\t}\n\tcase PR_fstat:\n", "\t\tbreak;\n\t}\n\tcase PR_fstat:\n")
+if source.count(old) != 1:
+    raise SystemExit("Pinned PRoot ashmem ftruncate source no longer matches the audited patch")
+path.write_text(source.replace(old, new), encoding="utf-8")
+PY
   mkdir -p "$root/lib/uthash/include"
   cp "$src_dir/uthash.h" "$root/lib/uthash/include/uthash.h"
   local talloc_pc="$work_dir/$target/talloc.pc"
@@ -298,8 +309,8 @@ manifest = {
     "provenance": {
         "strategy": "self-contained-source-build",
         "source_build": True,
-        "source_patch_applied": False,
-        "patches_applied": [],
+        "source_patch_applied": True,
+        "patches_applied": ["ashmem-memfd-ftruncate-no-fallthrough"],
         "toolchain": {
             "name": "android-ndk-r27",
             "api_level": 24,
