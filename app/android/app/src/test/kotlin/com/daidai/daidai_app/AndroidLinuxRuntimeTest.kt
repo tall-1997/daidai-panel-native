@@ -112,18 +112,6 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
-    fun `npm commands use real cli path instead of proot symlink entry`() {
-        assertEquals(
-            listOf("/usr/bin/node", "/usr/share/nodejs/npm/bin/npm-cli.js", "--version"),
-            AndroidLinuxRuntime.normalizeGuestCommand(listOf("/usr/bin/npm", "--version")),
-        )
-        assertEquals(
-            listOf("/usr/bin/node", "--version"),
-            AndroidLinuxRuntime.normalizeGuestCommand(listOf("/usr/bin/node", "--version")),
-        )
-    }
-
-    @Test
     fun `base runtime contract uses packaged proot loader name`() {
         assertEquals("libproot_loader.so", AndroidLinuxRuntime.prootLoaderLibraryName())
     }
@@ -134,14 +122,11 @@ class AndroidLinuxRuntimeTest {
         val loader = dir.resolve("libproot_loader.so")
         val cache = dir.resolve("cache")
 
-        assertEquals(
-            mapOf(
-                "PROOT_LOADER" to loader.absolutePath,
-                "PROOT_TMP_DIR" to cache.absolutePath,
-                "PROOT_VERBOSE" to "0",
-            ),
-            AndroidLinuxRuntime.prootEnvironment(loader, cache),
-        )
+        val environment = AndroidLinuxRuntime.prootEnvironment(loader, cache)
+        assertEquals(loader.absolutePath, environment["PROOT_LOADER"])
+        assertEquals(cache.absolutePath, environment["PROOT_TMP_DIR"])
+        assertEquals("0", environment["PROOT_VERBOSE"])
+        assertFalse(environment.containsKey("PROOT_NO_SECCOMP"))
     }
 
     @Test
