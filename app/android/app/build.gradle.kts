@@ -172,7 +172,9 @@ val panelWebDir = rootProject.file("../../panel/web")
 val generatedLocalWebDir = layout.buildDirectory.dir("generated/localWebAssets/local-web")
 val generatedRuntimeAssetsDir = layout.buildDirectory.dir("generated/runtimeAssets")
 val nodeVersion = providers.exec { commandLine("node", "--version") }.standardOutput.asText.map(String::trim)
-val npmVersion = providers.exec { commandLine("npm", "--version") }.standardOutput.asText.map(String::trim)
+// Windows ships npm as npm.cmd, which CreateProcess cannot resolve by bare name.
+val npmCommand = if (org.gradle.internal.os.OperatingSystem.current().isWindows) "npm.cmd" else "npm"
+val npmVersion = providers.exec { commandLine(npmCommand, "--version") }.standardOutput.asText.map(String::trim)
 val localWebBuildMode = "true"
 val panelWebBuildInputs = fileTree(panelWebDir) {
     exclude("node_modules/**", "dist/**", ".git/**")
@@ -182,7 +184,7 @@ val installLocalPanelWebDependencies = tasks.register<Exec>("installLocalPanelWe
     group = "build setup"
     description = "Installs locked Panel Web dependencies for the Android asset build."
     workingDir(panelWebDir)
-    commandLine("npm", "ci", "--no-audit", "--no-fund")
+    commandLine(npmCommand, "ci", "--no-audit", "--no-fund")
     inputs.files(panelWebDir.resolve("package.json"), panelWebDir.resolve("package-lock.json"))
     inputs.property("nodeVersion", nodeVersion)
     inputs.property("npmVersion", npmVersion)
@@ -198,7 +200,7 @@ val buildLocalPanelWeb = tasks.register<Exec>("buildLocalPanelWeb") {
     group = "build"
     description = "Builds the loopback-only Panel Web bundle."
     workingDir(panelWebDir)
-    commandLine("npm", "run", "build")
+    commandLine(npmCommand, "run", "build")
     environment("VITE_LOCAL_WEB_BUILD", localWebBuildMode)
     inputs.files(panelWebBuildInputs)
     inputs.property("nodeVersion", nodeVersion)

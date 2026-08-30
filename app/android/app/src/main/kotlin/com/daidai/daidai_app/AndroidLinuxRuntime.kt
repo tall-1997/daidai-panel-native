@@ -37,9 +37,21 @@ object AndroidLinuxRuntime {
     internal const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     private const val DISTRO_PREFERENCES = "daidai-linux-distro"
     private const val DISTRO_KEY = "selected_distribution"
-    private const val DEFAULT_DISTRIBUTION = "ubuntu"
-    internal val SUPPORTED_DISTRIBUTIONS = listOf("ubuntu")
+    internal val SUPPORTED_DISTRIBUTIONS = listOf("ubuntu", "alpine")
+    // x86_64 must default to musl: Ubuntu glibc calls set_robust_list/rseq which the
+    // app-domain seccomp filter kills with SIGSYS, taking down the PRoot tracee.
+    // musl (Alpine) never issues those syscalls. arm64 keeps Ubuntu.
+    private val DEFAULT_DISTRIBUTIONS_BY_ABI = mapOf("x86_64" to "alpine")
+    private const val DEFAULT_DISTRIBUTION_FALLBACK = "ubuntu"
     private val REQUIRED_COMMANDS_UBUNTU = linkedMapOf(
+        "bash" to listOf("/bin/bash", "/usr/bin/bash"),
+        "python3" to listOf("/usr/bin/python3"),
+        "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
+        "node" to listOf("/usr/bin/node"),
+        "npm" to listOf("/usr/bin/npm"),
+        "pnpm" to listOf("/usr/local/bin/pnpm"),
+    )
+    private val REQUIRED_COMMANDS_ALPINE = linkedMapOf(
         "bash" to listOf("/bin/bash", "/usr/bin/bash"),
         "python3" to listOf("/usr/bin/python3"),
         "pip" to listOf("/usr/bin/pip3", "/usr/bin/pip"),
@@ -49,11 +61,17 @@ object AndroidLinuxRuntime {
     )
     private val REQUIRED_PACKAGE_MANAGERS = mapOf(
         "apt" to listOf("/usr/bin/apt-get"),
+        "apk" to listOf("/sbin/apk", "/usr/sbin/apk"),
     )
 
-    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> = REQUIRED_COMMANDS_UBUNTU
+    private fun defaultDistributionFor(abi: String): String =
+        DEFAULT_DISTRIBUTIONS_BY_ABI[abi] ?: DEFAULT_DISTRIBUTION_FALLBACK
+
+    private fun requiredCommandsFor(packageManager: String): Map<String, List<String>> =
+        if (packageManager == "apk") REQUIRED_COMMANDS_ALPINE else REQUIRED_COMMANDS_UBUNTU
     const val UBUNTU_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu"
     const val UBUNTU_PORTS_APT_DEFAULT_MIRROR = "https://mirrors.aliyun.com/ubuntu-ports"
+    const val ALPINE_APK_DEFAULT_MIRROR = "https://mirrors.aliyun.com/alpine"
     const val PYTHON_PIP_ALIBABA_INDEX = "https://mirrors.aliyun.com/pypi/simple"
     const val NODE_NPM_NPMMIRROR_REGISTRY = "https://registry.npmmirror.com"
     internal const val X86_NODE_UTF8_COMPAT = "--import=data:text/javascript,Buffer.prototype.utf8Slice%3Dfunction%28s%2Ce%29%7Bif%28s%3C0%29s%3D0%3Bif%28e%3C0%29e%3D0%3Bif%28e%3Ethis.length%29e%3Dthis.length%3Bif%28s%3Ee%29return%20%27%27%3Bvar%20o%3D%5B%5D%2Cb%2Ci%3Ds%3Bwhile%28i%3Ce%29%7Bb%3Dthis%5Bi%5D%3Bif%28b%3C128%29%7Bo.push%28String.fromCharCode%28b%29%29%3Bi%2B%3D1%7Delse%20if%28b%3C224%26%26i%2B1%3Ce%29%7Bo.push%28String.fromCharCode%28%28b%2631%29%3C%3C6%7Cthis%5Bi%2B1%5D%2663%29%29%3Bi%2B%3D2%7Delse%20if%28b%3C240%26%26i%2B2%3Ce%29%7Bo.push%28String.fromCharCode%28%28b%2615%29%3C%3C12%7C%28this%5Bi%2B1%5D%2663%29%3C%3C6%7Cthis%5Bi%2B2%5D%2663%29%29%3Bi%2B%3D3%7Delse%20if%28b%3C248%26%26i%2B3%3Ce%29%7Bvar%20c%3D%28%28b%267%29%3C%3C18%7C%28this%5Bi%2B1%5D%2663%29%3C%3C12%7C%28this%5Bi%2B2%5D%2663%29%3C%3C6%7Cthis%5Bi%2B3%5D%2663%29-65536%3Bo.push%28String.fromCharCode%2855296%2B%28c%3E%3E10%29%2C56320%2B%28c%261023%29%29%29%3Bi%2B%3D4%7Delse%7Bo.push%28%27%EF%BF%BD%27%29%3Bi%2B%3D1%7D%7Dreturn%20o.join%28%27%27%29%7D"
@@ -238,21 +256,32 @@ object AndroidLinuxRuntime {
 
     // 发行版选择：写入 SharedPreferences，下次启动生效。返回当前选中的发行版 id。
     fun selectDistribution(context: Context, distribution: String): String {
-        val normalized = if (distribution.trim().lowercase() in SUPPORTED_DISTRIBUTIONS) distribution.trim().lowercase() else DEFAULT_DISTRIBUTION
+        val normalized = if (distribution.trim().lowercase() in SUPPORTED_DISTRIBUTIONS) distribution.trim().lowercase() else defaultDistribution()
         context.getSharedPreferences(DISTRO_PREFERENCES, Context.MODE_PRIVATE).edit().putString(DISTRO_KEY, normalized).apply()
         synchronized(mirrorConfigLock) { cachedLinuxRootfs = null }
         return normalized
     }
 
-    fun selectedDistribution(context: Context): String =
-        context.getSharedPreferences(DISTRO_PREFERENCES, Context.MODE_PRIVATE)
+    private fun defaultDistribution(): String = defaultDistributionFor(currentAbi())
+
+    fun selectedDistribution(context: Context): String {
+        val abi = currentAbi()
+        val stored = context.getSharedPreferences(DISTRO_PREFERENCES, Context.MODE_PRIVATE)
             .getString(DISTRO_KEY, null)?.trim()?.lowercase()?.takeIf { it in SUPPORTED_DISTRIBUTIONS }
-            ?: DEFAULT_DISTRIBUTION
+            ?: return defaultDistributionFor(abi)
+        // 升级可能改变资产布局（x86_64 从 Ubuntu glibc 切到 Alpine musl）。存储的发行版资产
+        // 缺失时回退到该 ABI 的默认发行版，避免卡死在缺失资产上；资产存在时严格尊重用户选择
+        // （arm64 默认 ubuntu 且资产始终存在，行为不变）。
+        if (assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$stored/$ROOTFS_ASSET_NAME")) return stored
+        return defaultDistributionFor(abi)
+    }
 
     internal fun defaultLinuxMirror(distribution: String, abi: String = currentAbi()): String =
-        buildConfigMap(BuildConfig.RUNTIME_LINUX_MIRRORS)[abi] ?: UBUNTU_APT_DEFAULT_MIRROR
+        if (distribution == "alpine") ALPINE_APK_DEFAULT_MIRROR
+        else buildConfigMap(BuildConfig.RUNTIME_LINUX_MIRRORS)[abi] ?: UBUNTU_APT_DEFAULT_MIRROR
 
-    fun distributionPackageManager(distribution: String): String = "apt"
+    fun distributionPackageManager(distribution: String): String =
+        if (distribution == "alpine") "apk" else "apt"
 
     private fun rootfsAssetPrefix(context: Context): String {
         val abi = currentAbi()
@@ -453,7 +482,8 @@ object AndroidLinuxRuntime {
             require(expected.length == 64 && expected.equals(actual, true)) { "rootfs checksum mismatch" }
             context.assets.open(assetName).use { raw ->
                 openRootfsTar(raw).use { tar ->
-                    extractTar(root, tar)
+                    val entries = extractTar(root, tar)
+                    require(entries > 0) { "rootfs archive extracted zero entries" }
                 }
             }
             prepareRuntimeDirectories(root, mirrors)
@@ -462,6 +492,7 @@ object AndroidLinuxRuntime {
             require(rootfsFirstClass(commands, packageManager)) {
                 "rootfs missing required commands: ${requiredCommandsFor(packageManager).keys - commands.keys}"
             }
+            require(verifyRootfsLibraries(root)) { "rootfs missing dynamic linker" }
             File(root, ROOTFS_READY_MARKER).writeText("ready:$abi:$distribution:${assetChecksum(context, checksumName)}")
         } catch (_: Exception) {
             root.deleteRecursively()
@@ -483,7 +514,8 @@ object AndroidLinuxRuntime {
         try {
             archive.inputStream().use { raw ->
                 openRootfsTar(raw).use { tar ->
-                    extractTar(root, tar)
+                    val entries = extractTar(root, tar)
+                    require(entries > 0) { "rootfs archive extracted zero entries" }
                 }
             }
             prepareRuntimeDirectories(root, mirrors)
@@ -492,6 +524,7 @@ object AndroidLinuxRuntime {
             require(rootfsFirstClass(commands, packageManager)) {
                 "rootfs missing required commands: ${requiredCommandsFor(packageManager).keys - commands.keys}"
             }
+            require(verifyRootfsLibraries(root)) { "rootfs missing dynamic linker" }
             File(root, ROOTFS_READY_MARKER).writeText("downloaded:$abi:$distribution:$expected")
         } catch (_: Exception) {
             root.deleteRecursively()
@@ -537,7 +570,8 @@ object AndroidLinuxRuntime {
         return TarArchiveInputStream(compressor)
     }
 
-    private fun extractTar(root: File, tar: TarArchiveInputStream) {
+    private fun extractTar(root: File, tar: TarArchiveInputStream): Int {
+        var extractedEntries = 0
         val hardLinks = mutableListOf<Pair<File, String>>()
         while (true) {
             val entry = tar.nextTarEntry ?: break
@@ -547,7 +581,13 @@ object AndroidLinuxRuntime {
                 entry.isDirectory -> output.mkdirs()
                 entry.isSymbolicLink -> {
                     output.parentFile?.mkdirs()
-                    runCatching { Files.createSymbolicLink(output.toPath(), Paths.get(entry.linkName)) }
+                    // Never swallow symlink failures: missing lib symlinks (e.g. libnode.so.109)
+                    // previously produced half-installed rootfs images with a ready marker.
+                    try {
+                        Files.createSymbolicLink(output.toPath(), Paths.get(entry.linkName))
+                    } catch (exception: Exception) {
+                        throw IOException("failed to create rootfs symlink ${entry.name} -> ${entry.linkName}", exception)
+                    }
                 }
                 entry.isLink -> {
                     hardLinks += output to entry.linkName
@@ -560,15 +600,37 @@ object AndroidLinuxRuntime {
                     output.setExecutable(entry.mode and 0b001000000 != 0, false)
                 }
             }
+            extractedEntries++
         }
         hardLinks.forEach { (output, linkName) ->
             val target = File(root, linkName).canonicalFile
             if (target.path.startsWith(root.canonicalPath + File.separator) && target.isFile) {
                 output.parentFile?.mkdirs()
-                runCatching { Files.createLink(output.toPath(), target.toPath()) }
-                    .recoverCatching { target.copyTo(output, overwrite = true) }
+                try {
+                    Files.createLink(output.toPath(), target.toPath())
+                } catch (exception: Exception) {
+                    try {
+                        target.copyTo(output, overwrite = true)
+                    } catch (copyException: Exception) {
+                        throw IOException("failed to materialize rootfs hard link ${output.name}", copyException)
+                    }
+                }
             }
         }
+        return extractedEntries
+    }
+
+    // A rootfs that extracted "successfully" but lost its dynamic linker (or every
+    // interpreter) cannot run any guest binary; installing it would previously mark
+    // the rootfs ready and fail later with a misleading "command not found" (exit 127).
+    // Match loosely across lib/lib64 and glibc/musl naming (ld-linux-*, ld-musl-*, ...).
+    internal fun verifyRootfsLibraries(root: File): Boolean {
+        val libRoots = listOf("lib", "lib64", "usr/lib", "usr/lib64")
+        val linker = libRoots.any { prefix ->
+            val dir = File(root, prefix)
+            dir.isDirectory && dir.list()?.any { name -> name.startsWith("ld-") && name.contains(".so") } == true
+        }
+        return linker
     }
 
     private fun prepareRuntimeDirectories(root: File, mirrors: MirrorConfig) {

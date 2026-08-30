@@ -43,6 +43,7 @@ object AndroidRootfsDownloader {
     private const val SOURCE_PREFERENCES = "daidai-rootfs-sources"
     private const val SOURCE_KEY_PREFIX = "source_"
     const val ROOTFS_DOWNLOAD_VERSION_UBUNTU = "24.04.4"
+    const val ROOTFS_DOWNLOAD_VERSION_ALPINE = "3.24.1"
     private const val MAX_REDIRECTS = 5
     private const val CONNECT_TIMEOUT_MS = 20_000
     private const val READ_TIMEOUT_MS = 60_000
@@ -57,11 +58,20 @@ object AndroidRootfsDownloader {
         RootfsImageSource("ubuntu-aliyun", "阿里云", "ubuntu", "https://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases"),
     )
 
-    fun sourcesFor(distribution: String): List<RootfsImageSource> = UBUNTU_SOURCES
+    private val ALPINE_SOURCES = listOf(
+        RootfsImageSource("alpine-official", "Alpine 官方", "alpine", "https://dl-cdn.alpinelinux.org/alpine"),
+        RootfsImageSource("alpine-tsinghua", "清华 TUNA", "alpine", "https://mirrors.tuna.tsinghua.edu.cn/alpine"),
+        RootfsImageSource("alpine-aliyun", "阿里云", "alpine", "https://mirrors.aliyun.com/alpine"),
+    )
 
-    fun sourceById(id: String): RootfsImageSource? = UBUNTU_SOURCES.firstOrNull { it.id == id }
+    fun sourcesFor(distribution: String): List<RootfsImageSource> =
+        if (distribution == "alpine") ALPINE_SOURCES else UBUNTU_SOURCES
 
-    fun defaultSourceId(distribution: String): String = "ubuntu-official"
+    fun sourceById(id: String): RootfsImageSource? =
+        UBUNTU_SOURCES.firstOrNull { it.id == id } ?: ALPINE_SOURCES.firstOrNull { it.id == id }
+
+    fun defaultSourceId(distribution: String): String =
+        if (distribution == "alpine") "alpine-official" else "ubuntu-official"
 
     fun selectedSourceId(context: Context, distribution: String): String =
         context.getSharedPreferences(SOURCE_PREFERENCES, Context.MODE_PRIVATE)
@@ -171,10 +181,23 @@ object AndroidRootfsDownloader {
     }
 
     private fun resolveImageUrl(source: RootfsImageSource, distribution: String, abi: String): Pair<String, Long> {
-        val arch = ubuntuArch(abi)
-        val version = ROOTFS_DOWNLOAD_VERSION_UBUNTU
-        val fileName = "ubuntu-base-$version-base-$arch.tar.gz"
-        return "${source.baseUrl}/$version/release/$fileName" to -1L
+        return if (distribution == "alpine") {
+            val version = ROOTFS_DOWNLOAD_VERSION_ALPINE
+            val branch = "v" + version.substringBeforeLast(".")
+            val fileName = "alpine-minirootfs-$version-${alpineArch(abi)}.tar.gz"
+            "${source.baseUrl}/$branch/releases/${alpineArch(abi)}/$fileName" to -1L
+        } else {
+            val arch = ubuntuArch(abi)
+            val version = ROOTFS_DOWNLOAD_VERSION_UBUNTU
+            val fileName = "ubuntu-base-$version-base-$arch.tar.gz"
+            "${source.baseUrl}/$version/release/$fileName" to -1L
+        }
+    }
+
+    private fun alpineArch(abi: String): String = when (abi) {
+        "x86_64" -> "x86_64"
+        "arm64-v8a" -> "aarch64"
+        else -> abi
     }
 
     private fun downloadWithResume(

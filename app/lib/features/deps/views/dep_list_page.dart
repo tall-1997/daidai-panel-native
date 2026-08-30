@@ -877,6 +877,13 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         MapEntry('华为云 Ubuntu', 'https://repo.huaweicloud.com/ubuntu'),
       ];
     }
+    if (config.linuxPackageManager == 'apk') {
+      return const [
+        MapEntry('阿里云 Alpine (默认)', 'https://mirrors.aliyun.com/alpine'),
+        MapEntry('清华大学 Alpine', 'https://mirrors.tuna.tsinghua.edu.cn/alpine'),
+        MapEntry('Alpine 官方', 'https://dl-cdn.alpinelinux.org/alpine'),
+      ];
+    }
     return const [];
   }
 

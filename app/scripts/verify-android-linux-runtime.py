@@ -10,6 +10,7 @@ import tarfile
 
 DISTRO_COMMANDS = {
     "ubuntu": ("apt-get", "bash", "python3", "pip3", "node", "npm", "pnpm"),
+    "alpine": ("apk", "bash", "python3", "pip3", "node", "npm", "pnpm"),
 }
 DISTRO_CAPABILITIES = {
     "ubuntu": {
@@ -19,12 +20,20 @@ DISTRO_CAPABILITIES = {
         "node": ["node", "npm", "pnpm"],
         "tls_ca_certificates": True,
     },
+    "alpine": {
+        "package_manager": ["apk"],
+        "shell": ["bash"],
+        "python": ["python3", "pip3"],
+        "node": ["node", "npm", "pnpm"],
+        "tls_ca_certificates": True,
+    },
 }
 UNPACKAGED_CAPABILITIES = {"crypto", "typescript"}
 DISTRO_PACKAGES = {
     "ubuntu": {"bash", "python3", "python3-pip", "nodejs", "npm", "ca-certificates"},
+    "alpine": {"bash", "python3", "py3-pip", "nodejs", "npm", "ca-certificates"},
 }
-DISTRO_GLOBAL_TOOLS = {"ubuntu": {"pnpm": "npm-global"}}
+DISTRO_GLOBAL_TOOLS = {"ubuntu": {"pnpm": "npm-global"}, "alpine": {"pnpm": "npm-global"}}
 TRUSTED_SOURCES = pathlib.Path(__file__).with_name("rootfs-trusted-sources.json")
 ABI_MATRIX = pathlib.Path(__file__).resolve().parents[2] / "runtime" / "android-abi-matrix.json"
 
@@ -40,8 +49,8 @@ def trusted_base_archive(manifest: dict, trusted_sources: pathlib.Path = TRUSTED
     contract = json.loads(trusted_sources.read_text(encoding="utf-8"))
     assert contract.get("schema_version") == 1, "trusted rootfs source schema_version must be 1"
     distribution = manifest.get("distribution")
-    version = manifest.get("ubuntu_version")
-    arch = manifest.get("ubuntu_arch")
+    version = manifest.get(f"{distribution}_version", manifest.get("ubuntu_version"))
+    arch = manifest.get(f"{distribution}_arch", manifest.get("ubuntu_arch"))
     try:
         return contract[distribution][version][arch]
     except (KeyError, TypeError) as error:
@@ -63,8 +72,12 @@ def verify_rootfs(archive: pathlib.Path, checksum: pathlib.Path, manifest_path: 
     abi = manifest.get("abi")
     abi_config = load_abi_matrix(abi_matrix).get("abis", {}).get(abi)
     assert abi_config and abi_config.get("rootfs") is True, f"unsupported rootfs ABI: {abi}"
-    assert manifest.get("ubuntu_arch") == abi_config.get("ubuntu_arch"), "rootfs Ubuntu architecture mismatch"
     distribution = manifest.get("distribution")
+    if distribution == "alpine":
+        expected_arch = "x86_64" if abi == "x86_64" else "aarch64"
+        assert manifest.get("alpine_arch") == expected_arch, "rootfs Alpine architecture mismatch"
+    else:
+        assert manifest.get("ubuntu_arch") == abi_config.get("ubuntu_arch"), "rootfs Ubuntu architecture mismatch"
     commands = DISTRO_COMMANDS.get(distribution)
     assert commands is not None, f"unsupported distribution: {distribution}"
     capabilities = DISTRO_CAPABILITIES[distribution]
@@ -83,7 +96,7 @@ def verify_rootfs(archive: pathlib.Path, checksum: pathlib.Path, manifest_path: 
     assert manifest.get("required_commands") == list(commands), "required_commands contract mismatch"
     assert manifest.get("capabilities") == capabilities, "capabilities contract mismatch"
     assert not (UNPACKAGED_CAPABILITIES & set(manifest.get("capabilities", {}))), "manifest claims unpackaged runtime capabilities"
-    packages = set(manifest.get("apt_packages", []))
+    packages = set(manifest.get(f"{distribution}_packages", manifest.get("apt_packages", [])))
     assert required_packages <= packages, "required packages missing"
     global_tools = manifest.get("global_tools")
     assert isinstance(global_tools, dict), "global_tools contract is missing"

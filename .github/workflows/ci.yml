@@ -73,11 +73,13 @@ jobs:
               - 'app/scripts/prepare-android-python-runtime.sh'
               - 'app/scripts/prepare-android-yaegi-runtime.sh'
               - 'app/scripts/prepare-android-ubuntu-rootfs.sh'
+              - 'app/scripts/prepare-android-alpine-rootfs.sh'
               - 'app/scripts/prepare-android-native-source-build.sh'
               - 'app/android/app/src/main/jni/**'
               - 'app/scripts/verify-android-linux-runtime.py'
               - 'app/scripts/test_verify_android_linux_runtime.py'
               - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
+              - 'app/scripts/test_prepare_android_alpine_rootfs.py'
               - 'app/scripts/rootfs-trusted-sources.json'
               - 'app/runtime-tools/yaegi/**'
               - 'panel/web/**'
@@ -117,7 +119,9 @@ jobs:
               - 'app/scripts/verify-android-linux-runtime.py'
               - 'app/scripts/test_verify_android_linux_runtime.py'
               - 'app/scripts/prepare-android-ubuntu-rootfs.sh'
+              - 'app/scripts/prepare-android-alpine-rootfs.sh'
               - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
+              - 'app/scripts/test_prepare_android_alpine_rootfs.py'
 
   go-quality:
     name: Go test and vet
@@ -280,6 +284,15 @@ jobs:
               --native-dir "android/app/src/main/jniLibs/${ABI}" \
               --native-manifest "android/app/src/main/assets/android-runtime/${ABI}/native-runtime-manifest.json" \
               --trusted-sources scripts/rootfs-trusted-sources.json
+            if test -f "android/app/src/main/assets/android-runtime/${ABI}/alpine/rootfs.tar.gz.bin"; then
+              python3 scripts/verify-android-linux-runtime.py \
+                --rootfs "android/app/src/main/assets/android-runtime/${ABI}/alpine/rootfs.tar.gz.bin" \
+                --rootfs-sha "android/app/src/main/assets/android-runtime/${ABI}/alpine/rootfs.tar.gz.bin.sha256" \
+                --rootfs-manifest "android/app/src/main/assets/android-runtime/${ABI}/alpine/runtime-manifest.json" \
+                --native-dir "android/app/src/main/jniLibs/${ABI}" \
+                --native-manifest "android/app/src/main/assets/android-runtime/${ABI}/native-runtime-manifest.json" \
+                --trusted-sources scripts/rootfs-trusted-sources.json
+            fi
           done
 
       - name: Prepare Android Yaegi runtime
@@ -291,7 +304,7 @@ jobs:
         run: gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
 
       - name: Test Android Linux runtime verifier
-        run: python3 -m unittest scripts/test_android_abi_matrix.py scripts/test_verify_android_update_manifest.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
+        run: python3 -m unittest scripts/test_android_abi_matrix.py scripts/test_verify_android_update_manifest.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
 
       - name: Upload Kotlin test reports
         if: always()
@@ -360,7 +373,7 @@ jobs:
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
           go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py
+          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
           python3 scripts/version.py check
           go run ./scripts/verify-runtime-contract.go
 

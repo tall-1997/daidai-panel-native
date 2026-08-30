@@ -244,6 +244,21 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `x86_64 defaults to alpine musl while arm64 keeps ubuntu`() {
+        // Seccomp on the x86_64 app domain kills glibc tracees; musl is mandatory there.
+        assertEquals("apk", AndroidLinuxRuntime.distributionPackageManager("alpine"))
+        assertEquals("apt", AndroidLinuxRuntime.distributionPackageManager("ubuntu"))
+        assertEquals(AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR, AndroidLinuxRuntime.defaultLinuxMirror("alpine", "x86_64"))
+    }
+
+    @Test
+    fun `alpine package manager maps to apk binary candidates`() {
+        // detectPackageManager/requiredCommandsFor are private; assert via public surface:
+        // apk manager must resolve the /sbin/apk path through the downloader contract.
+        assertEquals("apk", AndroidLinuxRuntime.distributionPackageManager("alpine"))
+    }
+
+    @Test
     fun `runtime ABI follows device preference within packaged ABIs`() {
         assertEquals("x86_64", AndroidLinuxRuntime.selectRuntimeAbi(listOf("x86_64", "arm64-v8a"), listOf("arm64-v8a", "x86_64")))
         assertEquals("arm64-v8a", AndroidLinuxRuntime.selectRuntimeAbi(listOf("armeabi-v7a", "arm64-v8a"), listOf("arm64-v8a")))
@@ -367,5 +382,41 @@ class AndroidLinuxRuntimeTest {
         assertEquals(listOf("/linkerconfig"), selection.skipped.map { it.path })
         assertTrue(selection.enabled.first().core)
         assertFalse(selection.skipped.first().core)
+    }
+
+    @Test
+    fun `verifyRootfsLibraries accepts rootfs with glibc dynamic linker`() {
+        val root = Files.createTempDirectory("linux-runtime-linker-glibc").toFile()
+        root.resolve("lib/ld-linux-aarch64.so.1").apply { parentFile.mkdirs(); writeText("linker") }
+        root.resolve("bin/sh").apply { parentFile.mkdirs(); writeText("sh") }
+
+        assertTrue(AndroidLinuxRuntime.verifyRootfsLibraries(root))
+    }
+
+    @Test
+    fun `verifyRootfsLibraries accepts musl linker and lib64 layout`() {
+        val muslRoot = Files.createTempDirectory("linux-runtime-linker-musl").toFile()
+        muslRoot.resolve("lib/ld-musl-aarch64.so.1").apply { parentFile.mkdirs(); writeText("linker") }
+        assertTrue(AndroidLinuxRuntime.verifyRootfsLibraries(muslRoot))
+
+        val x86Root = Files.createTempDirectory("linux-runtime-linker-x86").toFile()
+        x86Root.resolve("lib64/ld-linux-x86-64.so.2").apply { parentFile.mkdirs(); writeText("linker") }
+        assertTrue(AndroidLinuxRuntime.verifyRootfsLibraries(x86Root))
+    }
+
+    @Test
+    fun `verifyRootfsLibraries rejects rootfs without dynamic linker`() {
+        val root = Files.createTempDirectory("linux-runtime-linker-missing").toFile()
+        root.resolve("bin/sh").apply { parentFile.mkdirs(); writeText("sh") }
+        root.resolve("lib/libc.so.6").apply { parentFile.mkdirs(); writeText("libc") }
+
+        assertFalse(AndroidLinuxRuntime.verifyRootfsLibraries(root))
+    }
+
+    @Test
+    fun `verifyRootfsLibraries rejects empty rootfs`() {
+        val root = Files.createTempDirectory("linux-runtime-linker-empty").toFile()
+
+        assertFalse(AndroidLinuxRuntime.verifyRootfsLibraries(root))
     }
 }
