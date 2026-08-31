@@ -339,5 +339,96 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
             SMOKE.safe_command = original
 
 
+    def test_install_with_retry_succeeds_after_transient_failures(self):
+        calls = []
+        results = iter([
+            RuntimeError("command failed (1): adb install\nerror: broken pipe"),
+            RuntimeError("command failed (1): adb install\nerror: broken pipe"),
+            subprocess.CompletedProcess(["adb"], 0, "Success", ""),
+        ])
+        sleeps = []
+
+        def fake_command(adb, serial, *args, timeout=180, check=True):
+            calls.append((args, check))
+            if args[:1] != ("install",):
+                return subprocess.CompletedProcess(["adb"], 0, "Success", "")
+            outcome = next(results)
+            if isinstance(outcome, RuntimeError):
+                raise outcome
+            return outcome
+
+        original_command = SMOKE.command
+        original_sleep = SMOKE.time.sleep
+        SMOKE.command = fake_command
+        SMOKE.time.sleep = lambda seconds: sleeps.append(seconds)
+        try:
+            result = SMOKE.install_with_retry("adb", "emulator-5554", pathlib.Path("candidate.apk"))
+        finally:
+            SMOKE.command = original_command
+            SMOKE.time.sleep = original_sleep
+        self.assertEqual("Success", result.stdout)
+        self.assertEqual([10, 10], sleeps)
+        installs = [args for args, check in calls if args[:1] == ("install",)]
+        self.assertEqual(3, len(installs))
+        uninstalls = [args for args, check in calls if args[:1] == ("uninstall",)]
+        self.assertEqual(
+            [("uninstall", SMOKE.PACKAGE), ("uninstall", SMOKE.PACKAGE + ".test")] * 2,
+            uninstalls,
+        )
+        self.assertTrue(all(check is False for args, check in calls if args[:1] == ("uninstall",)))
+
+    def test_install_with_retry_raises_after_exhausted_attempts(self):
+        calls = []
+
+        def fake_command(adb, serial, *args, timeout=180, check=True):
+            calls.append(args)
+            if args[:1] == ("install",):
+                raise RuntimeError("command failed (1): adb install")
+            return subprocess.CompletedProcess(["adb"], 0, "Success", "")
+
+        original_command = SMOKE.command
+        original_sleep = SMOKE.time.sleep
+        SMOKE.command = fake_command
+        SMOKE.time.sleep = lambda seconds: None
+        try:
+            with self.assertRaisesRegex(RuntimeError, "install failed after 3 attempts"):
+                SMOKE.install_with_retry("adb", "", pathlib.Path("candidate.apk"))
+        finally:
+            SMOKE.command = original_command
+            SMOKE.time.sleep = original_sleep
+        installs = [args for args in calls if args[:1] == ("install",)]
+        self.assertEqual(3, len(installs))
+
+    def test_fail_device_run_captures_logcat_and_dmesg_tails(self):
+        captured = []
+
+        def fake_safe_command(adb, serial, *args, timeout=30):
+            captured.append(args)
+            if args[:2] == ("shell", "logcat"):
+                return {"return_code": 0, "stdout": "FATAL crash line", "stderr": ""}
+            return {"return_code": 0, "stdout": "Out of memory kill", "stderr": ""}
+
+        original_safe = SMOKE.safe_command
+        original_collect = SMOKE.collect_evidence_files
+        SMOKE.safe_command = fake_safe_command
+        SMOKE.collect_evidence_files = lambda *args, **kwargs: None
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                output = pathlib.Path(directory) / "evidence.json"
+                args = type("Args", (), {"output": output, "matrix_id": "api30-x86_64-4k", "adb": "adb", "serial": ""})()
+                device = {"serial": "default", "abi": "x86_64", "api": 30, "page_size_bytes": 4096, "fingerprint": "fp"}
+                with self.assertRaisesRegex(RuntimeError, "runtime smoke blocked"):
+                    SMOKE.fail_device_run(args, device, "install-or-launch-failed:broken pipe")
+                device_payload = json.loads(output.with_suffix(".device.json").read_text(encoding="utf-8"))
+        finally:
+            SMOKE.safe_command = original_safe
+            SMOKE.collect_evidence_files = original_collect
+        self.assertIn(("shell", "logcat", "-d", "-t", "2000"), captured)
+        self.assertIn(("shell", "dmesg 2>/dev/null | tail -200"), captured)
+        self.assertEqual("FATAL crash line", device_payload["logcat_tail"])
+        self.assertEqual("Out of memory kill", device_payload["dmesg_tail"])
+        self.assertEqual("install-or-launch-failed:broken pipe", device_payload["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

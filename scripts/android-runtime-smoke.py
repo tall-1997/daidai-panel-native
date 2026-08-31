@@ -11,6 +11,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 
 
 PACKAGE = "com.daidai.daidai_app"
@@ -118,6 +119,23 @@ def safe_command(adb, serial, *args, timeout=30):
         return {"command": [adb, *args], "return_code": result.returncode, "stdout": result.stdout[-20000:], "stderr": result.stderr[-10000:]}
     except (OSError, RuntimeError) as error:
         return {"command": [adb, *args], "error": str(error)}
+
+
+def install_with_retry(adb, serial, apk_path, attempts=3):
+    """Install an APK, retrying transient emulator failures (e.g. system_server broken pipe)."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return command(adb, serial, "install", "--no-streaming", "-r", "-t", str(apk_path), timeout=300)
+        except RuntimeError as error:
+            last_error = error
+            print(f"android runtime smoke: install attempt {attempt}/{attempts} failed for {apk_path}: {error}", file=sys.stderr)
+            if attempt >= attempts:
+                break
+            command(adb, serial, "uninstall", PACKAGE, check=False)
+            command(adb, serial, "uninstall", f"{PACKAGE}.test", check=False)
+            time.sleep(10)
+    raise RuntimeError(f"install failed after {attempts} attempts: {apk_path}\n{last_error}")
 
 
 def collect_diagnostics(adb, serial, matrix_id, reason, status="failed"):
@@ -387,8 +405,8 @@ def run(args):
         return fail_device_run(args, device, f"page-size-mismatch:expected={args.expected_page_size}:actual={page_size}")
 
     try:
-        command(args.adb, args.serial, "install", "--no-streaming", "-r", "-t", str(args.apk), timeout=300)
-        command(args.adb, args.serial, "install", "--no-streaming", "-r", "-t", str(args.test_apk), timeout=300)
+        install_with_retry(args.adb, args.serial, args.apk)
+        install_with_retry(args.adb, args.serial, args.test_apk)
         command(args.adb, args.serial, "shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1", timeout=60)
     except RuntimeError as error:
         return fail_device_run(args, device, f"install-or-launch-failed:{str(error)[:500]}")
@@ -461,7 +479,19 @@ def run(args):
     return 0
 
 
+def capture_failure_diagnostics(adb, serial):
+    """Capture device diagnostics immediately after a failure; late logcat capture can come up empty."""
+    logcat = safe_command(adb, serial, "shell", "logcat", "-d", "-t", "2000", timeout=60)
+    dmesg = safe_command(adb, serial, "shell", "dmesg 2>/dev/null | tail -200", timeout=60)
+    return {
+        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "logcat_tail": (logcat.get("stdout", "") + logcat.get("stderr", ""))[-8000:],
+        "dmesg_tail": (dmesg.get("stdout", "") + dmesg.get("stderr", ""))[-8000:],
+    }
+
+
 def fail_device_run(args, device, reason):
+    failure_diagnostics = capture_failure_diagnostics(args.adb, args.serial)
     write_json(args.output, blocked_evidence(args.matrix_id, reason, "android-device"))
     write_json(
         args.output.with_suffix(".device.json"),
@@ -472,6 +502,8 @@ def fail_device_run(args, device, reason):
             "device": device,
             "page_size_source": "adb shell getconf PAGESIZE",
             "reason": reason,
+            "logcat_tail": failure_diagnostics["logcat_tail"],
+            "dmesg_tail": failure_diagnostics["dmesg_tail"],
         },
     )
     collect_evidence_files(args.adb, args.serial, args.output, args.matrix_id, reason)

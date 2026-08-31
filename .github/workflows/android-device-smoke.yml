@@ -274,7 +274,7 @@ jobs:
           api-level: 30
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -cores 2 -memory 2048
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -cores 4 -memory 4096
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
