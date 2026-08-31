@@ -68,7 +68,7 @@ write_rootfs_config() {
     "$root_dir/etc/profile.d" "$root_dir/root/.pip" "$root_dir/usr/local/bin" "$root_dir/etc/ssl/certs" 2>/dev/null || true
   mkdir -p "$root_dir/etc/apk/cache"
   chmod 1777 "$root_dir/tmp"
-  printf '%s/v%s/main\n%s/v%s/community\n' "$mirror" "$alpine_branch" "$mirror" "$alpine_branch" \
+  printf '%s/%s/main\n%s/%s/community\n' "$mirror" "$alpine_branch" "$mirror" "$alpine_branch" \
     > "$root_dir/etc/apk/repositories"
   printf '# Managed by the Android application before each proot command.\n' > "$root_dir/etc/resolv.conf"
   printf '[global]\nindex-url = https://mirrors.aliyun.com/pypi/simple/\ntrusted-host = mirrors.aliyun.com\ntimeout = 60\n' > "$root_dir/etc/pip.conf"

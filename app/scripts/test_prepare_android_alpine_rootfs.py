@@ -31,6 +31,15 @@ class AlpineRootfsSupplyChainContractTest(unittest.TestCase):
         self.assertIn("--rootfs-sha", script)
         self.assertIn("--rootfs-manifest", script)
 
+    def test_apk_repository_path_has_no_doubled_v_prefix(self):
+        script = SCRIPT.read_text(encoding="utf-8")
+        # alpine_branch="v${alpine_version%.*}" already carries the "v" prefix;
+        # the repositories printf must not add another one (CI run 33310794989
+        # hit HTTP 404 on /alpine/vv3.24/main/APKINDEX.tar.gz).
+        self.assertIn('alpine_branch="v${alpine_version%.*}"', script)
+        self.assertIn("printf '%s/%s/main\\n%s/%s/community\\n'", script)
+        self.assertNotIn("printf '%s/v%s/main", script)
+
     def test_builder_consumes_shared_trusted_source_contract(self):
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('trusted_sources="$script_dir/rootfs-trusted-sources.json"', script)
