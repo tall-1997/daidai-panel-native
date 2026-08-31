@@ -76,6 +76,53 @@ class AlpineRootfsSupplyChainContractTest(unittest.TestCase):
         self.assertIn('"x86_64" -> "x86_64"', downloader)
         self.assertIn('"arm64-v8a" -> "aarch64"', downloader)
 
+RELEASE_WORKFLOW = APP_ROOT.parent / ".github" / "workflows" / "android-release.yml"
+SMOKE_WORKFLOW = APP_ROOT.parent / ".github" / "workflows" / "android-device-smoke.yml"
+# proot-me publishes fully static x86_64 binaries on this tag only; v5.4.0 has
+# no release assets. v5.3.0 is the oldest official release that translates
+# statx (verified: the binary contains the statx string, apt 5.1.0 does not).
+PROOT_STATIC_SHA256 = "d1eb20cb201e6df08d707023efb000623ff7c10d6574839d7bb42d0adba6b4da"
+
+
+class HostProotIsStatxCapableTest(unittest.TestCase):
+    """CI run 33416118696: apt proot 5.1.0 (2015) cannot translate statx, so
+    Node 24/libuv stat probes break inside the alpine rootfs and the pnpm
+    probe fails. The host proot used by prepare-android-alpine-rootfs.sh must
+    be the official static release, not Ubuntu's apt package."""
+
+    def test_workflows_install_official_static_proot(self):
+        for workflow in (RELEASE_WORKFLOW, SMOKE_WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                text = workflow.read_text(encoding="utf-8")
+                self.assertIn("proot-v5.3.0-x86_64-static", text)
+                self.assertIn(
+                    "https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-x86_64-static",
+                    text,
+                )
+                self.assertIn(PROOT_STATIC_SHA256, text)
+                self.assertIn("sha256sum -c -", text)
+
+    def test_workflows_no_longer_apt_install_proot(self):
+        for workflow in (RELEASE_WORKFLOW, SMOKE_WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                self.assertNotIn(
+                    "apt-get install -y proot",
+                    workflow.read_text(encoding="utf-8"),
+                )
+
+    def test_alpine_builder_guards_against_pre_5_3_proot(self):
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("require_statx_capable_proot", script)
+        self.assertIn("proot --version", script)
+        # Numeric major/minor comparison so a statx-incapable 5.1.x is rejected.
+        self.assertIn("-lt 5", script)
+        self.assertIn("-lt 3", script)
+        # The guard must run before the first rootfs command.
+        self.assertLess(
+            script.index("require_statx_capable_proot"),
+            script.index('run_in_rootfs "$root_dir" /sbin/apk --no-cache add'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

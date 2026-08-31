@@ -257,7 +257,13 @@ jobs:
         run: |
           flutter pub get
           ANDROID_RUNTIME_ABIS=x86_64 FORCE_REBUILD_PROOT=1 bash scripts/prepare-android-native-source-build.sh
-          sudo apt-get install -y proot
+          # apt proot on ubuntu-24.04 is 5.1.0 (2015) and cannot translate statx,
+          # which breaks Node 24/libuv stat probes inside the alpine rootfs.
+          # Use the official static release (fully static, statx-capable) instead.
+          sudo curl -fsSL --retry 3 --connect-timeout 30 -o /usr/local/bin/proot \
+            https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-x86_64-static
+          echo "d1eb20cb201e6df08d707023efb000623ff7c10d6574839d7bb42d0adba6b4da  /usr/local/bin/proot" | sudo sha256sum -c -
+          sudo chmod 0755 /usr/local/bin/proot
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-alpine-rootfs.sh
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-yaegi-runtime.sh
           ANDROID_RUNTIME_ABIS=x86_64 FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform android-x64 --split-per-abi

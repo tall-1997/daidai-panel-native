@@ -61,6 +61,33 @@ run_in_rootfs() {
     chroot "$root_dir" "$@"
   fi
 }
+# CI installs proot from the official static release (see android-release.yml /
+# android-device-smoke.yml). Ubuntu 24.04's apt proot 5.1.0 (2015) cannot
+# translate statx, so Node 24's libuv stat probes on host-bound paths fail with
+# ENOENT and the pnpm probe inside the rootfs breaks (CI run 33416118696).
+# Fail fast instead of producing a rootfs with a broken Node toolchain.
+require_statx_capable_proot() {
+  command -v proot >/dev/null 2>&1 || {
+    printf 'proot is required to build the alpine rootfs; install the official static release (>= 5.3.0) or point PATH at one\n' >&2
+    return 1
+  }
+  # proot --version prints a logo banner followed by the release, e.g. "5.1.0"
+  # (apt 5.1.0) or "v5.3.0" (official static release). Extract the first
+  # numeric version token and compare numerically instead of matching a
+  # specific prefix.
+  local proot_banner proot_version proot_major proot_minor
+  proot_banner="$(proot --version 2>/dev/null || true)"
+  proot_version="$(printf '%s\n' "$proot_banner" | grep -Eo '[vV]?[0-9]+(\.[0-9]+)+' | head -n 1 || true)"
+  proot_version="${proot_version#[vV]}"
+  proot_major="${proot_version%%.*}"
+  proot_minor="${proot_version#*.}"
+  proot_minor="${proot_minor%%.*}"
+  if [ -z "$proot_version" ] || [ "$proot_major" -lt 5 ] \
+    || { [ "$proot_major" -eq 5 ] && [ "$proot_minor" -lt 3 ]; }; then
+    printf 'unsupported proot for the alpine rootfs build: %s (need >= 5.3.0 with statx translation)\n' "${proot_version:-<unknown>}" >&2
+    return 1
+  fi
+}
 
 write_rootfs_config() {
   local root_dir="$1" mirror="$2"
@@ -123,6 +150,7 @@ PY
   write_rootfs_config "$root_dir" "$(apk_mirror)"
   mkdir -p "$root_dir/dev" "$root_dir/proc" "$root_dir/sys"
 
+  require_statx_capable_proot
   run_in_rootfs "$root_dir" /sbin/apk --no-cache add "${apk_packages[@]}" ${extra_packages}
 
   local pnpm_archive="$downloads/pnpm-${pnpm_version}.tgz"
