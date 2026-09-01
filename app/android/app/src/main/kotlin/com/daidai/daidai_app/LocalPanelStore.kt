@@ -3624,10 +3624,15 @@ fun serveDashboardStats(): JSONObject {
             put("updated_at", now)
         }
         val id = writableDatabase.insertOrThrow("tasks", null, values)
-        return taskDetail(id)
+        return created(JSONObject().put("data", taskDetailData(id) ?: JSONObject()))
     }
 
     private fun taskDetail(id: Long): NanoHTTPD.Response {
+        val data = taskDetailData(id) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "task not found")
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun taskDetailData(id: Long): JSONObject? {
         val cursor = readableDatabase.query("tasks", null, "id = ?", arrayOf(id.toString()), null, null, null)
         return if (cursor.moveToFirst()) {
             val data = JSONObject().apply {
@@ -3657,10 +3662,10 @@ fun serveDashboardStats(): JSONObject {
                 put("updated_at", cursor.string("updated_at"))
             }
             cursor.close()
-            ok(JSONObject().put("data", data))
+            data
         } else {
             cursor.close()
-            error(NanoHTTPD.Response.Status.NOT_FOUND, "task not found")
+            null
         }
     }
 
@@ -4420,7 +4425,7 @@ fun serveDashboardStats(): JSONObject {
             put("updated_at", now)
         }
         val id = writableDatabase.insertOrThrow("envs", null, values)
-        return ok(JSONObject().put("data", JSONObject().put("id", id)))
+        return created(JSONObject().put("data", JSONObject().put("id", id)))
     }
 
     private fun exportEnvs(asObject: Boolean): NanoHTTPD.Response {
@@ -4645,7 +4650,7 @@ fun serveDashboardStats(): JSONObject {
         } finally {
             writableDatabase.endTransaction()
         }
-        return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
+        return created(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
     }
 
     private fun queryPipInstalledPackages(): Map<String, String> {
@@ -5080,6 +5085,12 @@ fun serveDashboardStats(): JSONObject {
 
     private fun ok(json: JSONObject): NanoHTTPD.Response = NanoHTTPD.newFixedLengthResponse(
         NanoHTTPD.Response.Status.OK,
+        "application/json; charset=utf-8",
+        json.toString()
+    )
+
+    private fun created(json: JSONObject): NanoHTTPD.Response = NanoHTTPD.newFixedLengthResponse(
+        NanoHTTPD.Response.Status.CREATED,
         "application/json; charset=utf-8",
         json.toString()
     )
