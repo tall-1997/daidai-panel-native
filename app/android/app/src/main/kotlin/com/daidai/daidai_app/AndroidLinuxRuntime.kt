@@ -606,18 +606,18 @@ object AndroidLinuxRuntime {
             when {
                 entry.isDirectory -> output.mkdirs()
                 entry.isSymbolicLink -> {
-                    output.parentFile?.mkdirs()
                     // GNU tar replaces a pre-existing entry at the same path. The alpine
                     // rootfs tar legitimately ships duplicate bin symlinks (nodejs and npm
                     // packages both provide usr/bin/node-gyp), so drop any existing file,
-                    // symlink, or empty directory before linking.
-                    if (Files.exists(output.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                        output.deleteRecursively()
-                    }
-                    // Never swallow symlink failures: missing lib symlinks (e.g. libnode.so.109)
-                    // previously produced half-installed rootfs images with a ready marker.
+                    // symlink, or empty directory before linking. Operate on the literal
+                    // entry path: Files.deleteIfExists uses unlink semantics and removes
+                    // the entry itself without following it, and avoids the canonicalFile
+                    // path resolving through a previously-created symlink.
+                    val link = File(root, entry.name)
+                    link.parentFile?.mkdirs()
                     try {
-                        Files.createSymbolicLink(output.toPath(), Paths.get(entry.linkName))
+                        Files.deleteIfExists(link.toPath())
+                        Files.createSymbolicLink(link.toPath(), Paths.get(entry.linkName))
                     } catch (exception: Exception) {
                         throw IOException("failed to create rootfs symlink ${entry.name} -> ${entry.linkName}", exception)
                     }
