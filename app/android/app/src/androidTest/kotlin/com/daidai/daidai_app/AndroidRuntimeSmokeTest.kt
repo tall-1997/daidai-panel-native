@@ -156,7 +156,7 @@ class AndroidRuntimeSmokeTest {
                 executeGuestEvidence(listOf("/usr/bin/node", "--version"), "node --version")
             }
             step("runtime.shell.version") {
-                executeGuestEvidence(listOf("/usr/bin/bash", "-c", "printf '%s' \"\$BASH_VERSION\""), "bash --version")
+                executeGuestEvidence(listOf("/bin/bash", "-c", "printf '%s' \"\$BASH_VERSION\""), "bash --version")
             }
             step("runtime.dns.managed_resolver") {
                 val status = AndroidLinuxRuntime.statusJson(context).getJSONObject("rootfs")
