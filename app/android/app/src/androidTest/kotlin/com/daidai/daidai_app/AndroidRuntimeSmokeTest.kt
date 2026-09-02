@@ -90,10 +90,17 @@ class AndroidRuntimeSmokeTest {
             }
 
             step("rootfs.node_file_read_diagnostics") {
-                val npmCli = "/usr/share/nodejs/npm/bin/npm-cli.js"
+                // npm-cli.js 的绝对路径随发行版不同（Ubuntu: /usr/share/nodejs/npm/bin/npm-cli.js;
+                // Alpine: /usr/lib/node_modules/npm/bin/npm-cli.js），但 /usr/bin/npm 在两种
+                // rootfs 中都指向真实的 npm-cli.js。先用 node 解析真实路径，避免硬编码发行版路径。
+                val npmCli = executeGuestEvidence(
+                    listOf("/usr/bin/node", "-e", "console.log(require('fs').realpathSync('/usr/bin/npm'))"),
+                    "node realpath /usr/bin/npm",
+                ).getString("output").trim()
+                // /usr/bin/stat 在 Alpine/busybox 中不存在；python3 在两种 rootfs 中都有，用它做独立 size 校验。
                 val guestStat = executeGuestEvidence(
-                    listOf("/usr/bin/stat", "-c", "%s", npmCli),
-                    "stat -c %s $npmCli",
+                    listOf("/usr/bin/python3", "-c", "import os,sys; print(os.path.getsize(sys.argv[1]))", npmCli),
+                    "python3 -c getsize $npmCli",
                 )
                 val nodeScript = """
                     const fs=require('fs'),path=process.argv[1],result={path};let buffer,bytesRead;
