@@ -329,19 +329,37 @@ object AndroidLinuxRuntime {
         cachedLinuxRootfs?.let { return@synchronized it }
         val abi = currentAbi()
         val root = File(context.filesDir, "runtimes/linux-rootfs/$abi")
-        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so")) ?: return@synchronized null
-        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME)) ?: return@synchronized null
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so"))
+        if (proot == null) {
+            android.util.Log.w("daidai-panel", "ensureRootfsReady: missing packaged proot native tool")
+            return@synchronized null
+        }
+        val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME))
+        if (prootLoader == null) {
+            android.util.Log.w("daidai-panel", "ensureRootfsReady: missing packaged proot loader native tool")
+            return@synchronized null
+        }
         val busybox = resolveNativeTool(context, listOf("libdaidai_busybox.so"))
         if (!rootfsMarkerMatchesAsset(context, root)) {
             if (!rootfsMarkerMatchesDownloaded(context, root)) {
-                val installed = installRootfsAsset(context, root, mirrors) ?: installDownloadedRootfs(context, root, mirrors)
-                if (installed == null) return@synchronized null
+                val installed = installRootfsAsset(context, root, mirrors)
+                if (installed == null) {
+                    android.util.Log.w("daidai-panel", "ensureRootfsReady: packaged rootfs asset install failed for abi=$abi distro=${selectedDistribution(context)}")
+                    val downloaded = installDownloadedRootfs(context, root, mirrors)
+                    if (downloaded == null) {
+                        android.util.Log.w("daidai-panel", "ensureRootfsReady: downloaded rootfs install also failed for abi=$abi distro=${selectedDistribution(context)}")
+                        return@synchronized null
+                    }
+                }
             }
         }
         prepareRuntimeDirectories(root, mirrors)
         val commands = detectCommands(root)
         val packageManager = detectPackageManager(root)
-        if (!rootfsFirstClass(commands, packageManager)) return@synchronized null
+        if (!rootfsFirstClass(commands, packageManager)) {
+            android.util.Log.w("daidai-panel", "ensureRootfsReady: rootfs not first-class for pm=$packageManager required=${requiredCommandsFor(packageManager).keys} found=${commands.keys} root=$root")
+            return@synchronized null
+        }
         cachedLinuxRootfs = RootfsPaths(root = root, proot = proot, prootLoader = prootLoader, busybox = busybox, packageManager = packageManager, commands = commands)
         cachedLinuxRootfs
     }
@@ -467,8 +485,15 @@ object AndroidLinuxRuntime {
         val distribution = selectedDistribution(context)
         val assetName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_ASSET_NAME"
         val checksumName = "$ROOTFS_ASSET_PREFIX/$abi/$distribution/$ROOTFS_SHA256_ASSET_NAME"
-        if (!assetExists(context, assetName)) return null
-        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so")) ?: return null
+        if (!assetExists(context, assetName)) {
+            android.util.Log.w("daidai-panel", "installRootfsAsset: packaged asset missing: $assetName")
+            return null
+        }
+        val proot = resolveNativeTool(context, listOf("libdaidai_proot.so"))
+        if (proot == null) {
+            android.util.Log.w("daidai-panel", "installRootfsAsset: missing packaged proot native tool")
+            return null
+        }
         root.deleteRecursively()
         root.mkdirs()
         try {
@@ -479,7 +504,7 @@ object AndroidLinuxRuntime {
                 while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
             }
             val actual = digest.digest().joinToString("") { "%02x".format(it) }
-            require(expected.length == 64 && expected.equals(actual, true)) { "rootfs checksum mismatch" }
+            require(expected.length == 64 && expected.equals(actual, true)) { "rootfs checksum mismatch: expected=$expected actual=$actual" }
             context.assets.open(assetName).use { raw ->
                 openRootfsTar(raw).use { tar ->
                     val entries = extractTar(root, tar)
@@ -494,7 +519,8 @@ object AndroidLinuxRuntime {
             }
             require(verifyRootfsLibraries(root)) { "rootfs missing dynamic linker" }
             File(root, ROOTFS_READY_MARKER).writeText("ready:$abi:$distribution:${assetChecksum(context, checksumName)}")
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            android.util.Log.e("daidai-panel", "installRootfsAsset: packaged rootfs install failed for abi=$abi distro=$distribution asset=$assetName: ${failure.message}", failure)
             root.deleteRecursively()
             return null
         }

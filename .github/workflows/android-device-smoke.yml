@@ -268,6 +268,25 @@ jobs:
           ANDROID_RUNTIME_ABIS=x86_64 bash scripts/prepare-android-yaegi-runtime.sh
           ANDROID_RUNTIME_ABIS=x86_64 FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform android-x64 --split-per-abi
           ANDROID_RUNTIME_ABIS=x86_64 gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
+      - name: Inspect packaged runtime assets in x86_64 APK
+        working-directory: app
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          apk = "build/app/outputs/flutter-apk/app-x86_64-release.apk"
+          z = zipfile.ZipFile(apk)
+          runtime = [n for n in z.namelist() if n.startswith("assets/android-runtime/")]
+          for n in sorted(runtime):
+              info = z.getinfo(n)
+              print(f"{n}  ({info.file_size} bytes)")
+          libs = [n for n in z.namelist() if n.startswith("lib/x86_64/") and n.endswith(".so")]
+          for n in sorted(libs):
+              print(f"{n}  ({z.getinfo(n).file_size} bytes)")
+          expect = "assets/android-runtime/x86_64/alpine/rootfs.tar.gz.bin"
+          if expect not in set(runtime):
+              raise SystemExit(f"FAIL: {expect} missing from APK")
+          print("PASS: alpine rootfs asset present in x86_64 APK")
+          PY
       - name: Run x86_64 runtime smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
