@@ -607,6 +607,13 @@ object AndroidLinuxRuntime {
                 entry.isDirectory -> output.mkdirs()
                 entry.isSymbolicLink -> {
                     output.parentFile?.mkdirs()
+                    // GNU tar replaces a pre-existing entry at the same path. The alpine
+                    // rootfs tar legitimately ships duplicate bin symlinks (nodejs and npm
+                    // packages both provide usr/bin/node-gyp), so drop any existing file,
+                    // symlink, or empty directory before linking.
+                    if (Files.exists(output.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                        output.deleteRecursively()
+                    }
                     // Never swallow symlink failures: missing lib symlinks (e.g. libnode.so.109)
                     // previously produced half-installed rootfs images with a ready marker.
                     try {
