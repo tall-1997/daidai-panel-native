@@ -526,7 +526,7 @@ class AndroidRuntimeSmokeTest {
                 if (last.optString("state") in terminal) {
                     if ("success" == last.getString("state")) return last
                     val detail = JSONObject().put("operation", last)
-                    val segments = operationId.split("_")
+                    val segments = id.split("_")
                     if (segments.size >= 2 && segments[0] == "task") {
                         runCatching {
                             val databaseFile = findDatabaseFile()
@@ -545,7 +545,7 @@ class AndroidRuntimeSmokeTest {
                             }
                         }
                     }
-                    error("Operation $operationId terminal state ${last.optString("state")}: ${detail.toString()}")
+                    error("Operation $id terminal state ${last.optString("state")}: ${detail.toString()}")
                 }
             }
             Thread.sleep(500)
