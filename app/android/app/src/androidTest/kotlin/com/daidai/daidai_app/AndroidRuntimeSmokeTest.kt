@@ -529,7 +529,7 @@ class AndroidRuntimeSmokeTest {
                     val segments = id.split("_")
                     if (segments.size >= 2 && segments[0] == "task") {
                         val tailError = runCatching {
-                            val mainDatabaseFile = File(context.filesDir, "daidai-local.db")
+                            val mainDatabaseFile = context.getDatabasePath("daidai-local.db")
                             if (mainDatabaseFile.isFile) {
                                 SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
                                     val taskId = segments[1].toLong()
