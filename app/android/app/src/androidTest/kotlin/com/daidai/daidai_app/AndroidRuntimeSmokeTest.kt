@@ -533,12 +533,11 @@ class AndroidRuntimeSmokeTest {
                             if (databaseFile != null) {
                                 SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
                                     val taskId = segments[1].toLong()
-                                    val logId = database.query("tasks", arrayOf("last_log_id"), "id=?", arrayOf(taskId.toString()), null, null, null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
-                                    if (logId != null) database.query("task_logs_local", arrayOf("status", "content", "ended_at"), "id=?", arrayOf(logId.toString()), null, null, null).use { c ->
+                                    database.query("task_logs_local", arrayOf("id", "status", "content", "ended_at"), "task_id = ?", arrayOf(taskId.toString()), null, null, "id DESC", "1").use { c ->
                                         if (c.moveToFirst()) {
-                                            val content = c.getString(1)
-                                            detail.put("log_status", c.getInt(0)).put("log_ended_at", c.getString(2))
-                                                .put("log_tail", content.takeLast(2000))
+                                            detail.put("log_id", c.getLong(0)).put("log_status", c.getInt(1))
+                                                .put("log_ended_at", c.getString(3))
+                                                .put("log_tail", c.getString(2).takeLast(3000))
                                         }
                                     }
                                 }
