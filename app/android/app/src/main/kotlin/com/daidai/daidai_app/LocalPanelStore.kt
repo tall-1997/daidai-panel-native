@@ -2507,7 +2507,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun scriptsRoot(): File = File(appContext.filesDir, "scripts").apply { mkdirs() }
+    private fun scriptsRoot(): File = File(appContext.filesDir, "local-panel/scripts").apply { mkdirs() }
 
     private fun backupsRoot(): File = File(appContext.filesDir, "backups").apply { mkdirs() }
 

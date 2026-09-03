@@ -36,7 +36,7 @@ internal class LocalBackupService(
     private val faultInjector: RestoreFaultInjector = RestoreFaultInjector.NONE,
 ) {
     private val backupDir get() = File(context.filesDir, "backups").apply { mkdirs() }
-    private val scriptsPath get() = File(context.filesDir, "scripts")
+    private val scriptsPath get() = File(context.filesDir, "local-panel/scripts")
     private val scriptsDir get() = scriptsPath.apply { mkdirs() }
     private val restoreJournalFile get() = File(context.filesDir, RESTORE_JOURNAL_NAME)
 
