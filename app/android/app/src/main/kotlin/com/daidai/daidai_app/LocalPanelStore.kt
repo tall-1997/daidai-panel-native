@@ -3749,27 +3749,31 @@ fun serveDashboardStats(): JSONObject {
         }
         if (action == "run") {
             val operationId = newOperationId("task", id)
+            insertOperation(operationId, "task")
             taskRunOperationIds[id] = operationId
             when (enqueueTask(id)) {
                 EnqueueTaskResult.ALREADY_RUNNING -> {
                     taskRunOperationIds.remove(id)
+                    finishOperation(operationId, "failed", 1, "ALREADY_RUNNING")
                     return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
                 }
                 EnqueueTaskResult.QUEUE_FULL -> {
                     taskRunOperationIds.remove(id)
+                    finishOperation(operationId, "failed", 1, "QUEUE_FULL")
                     return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "任务执行队列已满，请稍后重试")
                 }
                 EnqueueTaskResult.MAINTENANCE -> {
                     taskRunOperationIds.remove(id)
+                    finishOperation(operationId, "failed", 1, "MAINTENANCE")
                     return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "维护期间暂停提交任务")
                 }
                 EnqueueTaskResult.NOT_FOUND -> {
                     taskRunOperationIds.remove(id)
+                    finishOperation(operationId, "failed", 1, "NOT_FOUND")
                     return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
                 }
                 EnqueueTaskResult.ACCEPTED -> Unit
             }
-            insertOperation(operationId, "task")
             return NanoHTTPD.newFixedLengthResponse(
                 NanoHTTPD.Response.Status.OK,
                 "application/json; charset=utf-8",
@@ -4615,16 +4619,15 @@ fun serveDashboardStats(): JSONObject {
         val depType = normalizeDependencyType(json.optString("type", "nodejs"))
             ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback supports pip/python, npm/nodejs, and rootfs system packages")
         val now = Instant.now().toString()
-        val ids = JSONArray()
-        val statuses = JSONArray()
+        val items = JSONArray()
         val results = ArrayList<Triple<String, String, Pair<String, String>>>()
         for (index in 0 until names.length()) {
             val name = names.optString(index).trim()
             if (name.isEmpty()) continue
+            val localSpec = localDependencyFileSpec(depType, name)
             val rawResult = installDependencyForFallback(depType, name)
             val installResult = if (rawResult.first == "installed") rawResult else "failed" to rawResult.second
-            results.add(Triple(name, depType, installResult))
-            statuses.put(JSONObject().put("name", name).put("status", installResult.first).put("log", installResult.second.substring(0, Math.min(500, installResult.second.length))))
+            results.add(Triple(localSpec?.canonicalName ?: name, depType, installResult))
         }
         val installedPkgs = if (results.any { it.second == "python" && it.third.first == "installed" }) {
             queryPipInstalledPackages()
@@ -4632,8 +4635,8 @@ fun serveDashboardStats(): JSONObject {
         writableDatabase.beginTransaction()
         try {
             for (triple in results) {
-                val ver = installedPkgs[DependencyStorage.normalizedName(triple.second, triple.first)] ?: ""
                 val normalizedName = DependencyStorage.normalizedName(triple.second, triple.first)
+                val ver = installedPkgs[normalizedName] ?: ""
                 val runtimeVersion = if (triple.second == "python") DependencyStorage.PYTHON_VERSION else ""
                 val values = ContentValues().apply {
                     put("name", normalizedName)
@@ -4647,16 +4650,31 @@ fun serveDashboardStats(): JSONObject {
                 val existingId = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf(triple.second, normalizedName, runtimeVersion), null, null, null).use { cursor ->
                     if (cursor.moveToFirst()) cursor.long("id") else null
                 }
+                val dependencyId: Long
                 if (existingId == null) {
                     values.put("created_at", now)
-                    ids.put(writableDatabase.insertOrThrow("dependencies", null, values))
+                    dependencyId = writableDatabase.insertOrThrow("dependencies", null, values)
                 } else {
                     writableDatabase.update("dependencies", values, "id = ?", arrayOf(existingId.toString()))
-                    ids.put(existingId)
+                    dependencyId = existingId
                 }
+                val operationId = newOperationId("dep", dependencyId)
+                insertOperation(operationId, "dependency")
+                val succeeded = triple.third.first == "installed"
+                finishOperation(operationId, if (succeeded) "success" else "failed", if (succeeded) 0 else 1, if (succeeded) null else "INSTALL_FAILED")
+                items.put(
+                    JSONObject()
+                        .put("id", dependencyId)
+                        .put("name", normalizedName)
+                        .put("type", triple.second)
+                        .put("version", ver)
+                        .put("status", triple.third.first)
+                        .put("log", triple.third.second.substring(0, Math.min(500, triple.third.second.length)))
+                        .put("operation_id", operationId)
+                )
             }
             if (installedPkgs.isNotEmpty()) {
-                val existingNames = results.map { it.first.lowercase() }.toSet()
+                val existingNames = results.map { DependencyStorage.normalizedName(it.second, it.first) }.toSet()
                 val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
                 for ((pkgName, pkgVer) in installedPkgs) {
                     if (pkgName in existingNames || pkgName in skipNames) continue
@@ -4682,7 +4700,7 @@ fun serveDashboardStats(): JSONObject {
         } finally {
             writableDatabase.endTransaction()
         }
-        return created(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
+        return created(JSONObject().put("data", items))
     }
 
     private fun queryPipInstalledPackages(): Map<String, String> {
@@ -4761,6 +4779,120 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("dependencies", dependencies))
     }
 
+    private data class LocalDependencyFileSpec(val canonicalName: String, val version: String?, val guestPath: String)
+
+    private fun localDependencyFileSpec(depType: String, spec: String): LocalDependencyFileSpec? {
+        val raw = spec.trim()
+        if (raw.isEmpty() || raw.startsWith("-")) return null
+        val hostFile = File(raw)
+        val guestPath: String
+        val parsedName: String
+        val parsedVersion: String?
+        if (hostFile.isFile) {
+            guestPath = guestPathForHostFile(hostFile)
+            val parsed = when (depType) {
+                "python" -> pythonWheelMetadata(hostFile) ?: fileSpecFromFileName(hostFile.name)
+                else -> nodeTarballMetadata(hostFile) ?: fileSpecFromFileName(hostFile.name)
+            }
+            parsedName = parsed.first
+            parsedVersion = parsed.second
+        } else if (raw.startsWith("/tmp/host-cache/") || raw.startsWith("/host-files/")) {
+            guestPath = raw
+            val parsed = fileSpecFromFileName(raw.substringAfterLast('/'))
+            parsedName = parsed.first
+            parsedVersion = parsed.second
+        } else {
+            return null
+        }
+        return LocalDependencyFileSpec(DependencyStorage.normalizedName(depType, parsedName), parsedVersion, guestPath)
+    }
+
+    private fun guestPathForHostFile(file: File): String {
+        val cache = appContext.cacheDir.absolutePath
+        val files = appContext.filesDir.absolutePath
+        val absolute = file.absolutePath
+        return when {
+            absolute.startsWith("$cache/") -> "/tmp/host-cache" + absolute.removePrefix(cache)
+            absolute.startsWith("$files/") -> "/host-files" + absolute.removePrefix(files)
+            else -> {
+                val stagedDir = File(appContext.filesDir, "deps/staging").apply { mkdirs() }
+                val staged = File(stagedDir, file.name)
+                if (!staged.isFile || staged.length() != file.length()) file.copyTo(staged, overwrite = true)
+                "/host-files/deps/staging/${staged.name}"
+            }
+        }
+    }
+
+    private fun pythonWheelMetadata(file: File): Pair<String, String?>? = runCatching {
+        if (!file.name.endsWith(".whl", true)) return@runCatching null
+        java.util.zip.ZipFile(file).use { zip ->
+            val metaEntry = zip.entries().asSequence()
+                .filter { it.name.endsWith(".dist-info/METADATA") || it.name.endsWith(".egg-info/PKG-INFO") }
+                .firstOrNull() ?: return@runCatching null
+            val text = zip.getInputStream(metaEntry).bufferedReader().readText()
+            val name = Regex("(?m)^Name:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
+            val version = Regex("(?m)^Version:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
+            if (name.isNullOrBlank()) return@runCatching null
+            name to version
+        }
+    }.getOrNull()
+
+    private fun nodeTarballMetadata(file: File): Pair<String, String?>? = runCatching {
+        if (!file.name.endsWith(".tgz", true) && !file.name.endsWith(".tar.gz", true)) return@runCatching null
+        java.util.zip.GZIPInputStream(file.inputStream()).use { input ->
+            while (true) {
+                val header = ByteArray(512)
+                if (readFullyInto(input, header) < 512) return@runCatching null
+                var end = 0
+                while (end < header.size && header[end] != 0.toByte()) end++
+                val entryName = String(header, 0, end, Charsets.UTF_8)
+                val size = header.copyOfRange(124, 136).toString(Charsets.US_ASCII).trim().toLongOrNull(8) ?: 0L
+                if (entryName == "package/package.json") {
+                    val data = ByteArray(size.toInt())
+                    readFullyInto(input, data)
+                    val json = JSONObject(String(data, Charsets.UTF_8))
+                    val name = json.optString("name")
+                    if (name.isBlank()) return@runCatching null
+                    return@runCatching name to (json.optString("version").ifBlank { null })
+                }
+                skipFrom(input, ((size + 511) / 512) * 512)
+            }
+        }
+    }.getOrNull()
+
+    private fun fileSpecFromFileName(fileName: String): Pair<String, String?> {
+        var base = fileName
+        sequenceOf(".whl", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".zip").forEach { ext ->
+            if (base.endsWith(ext, true)) base = base.dropLast(ext.length)
+        }
+        val segments = base.split('-')
+        val versionIndex = segments.indexOfFirst { it.isNotEmpty() && it.first().isDigit() }
+        if (versionIndex <= 0) return base to null
+        val name = segments.subList(0, versionIndex).joinToString("-")
+        val version = segments.subList(versionIndex, segments.size).joinToString("-")
+        return name to version
+    }
+
+    private fun readFullyInto(input: java.io.InputStream, buffer: ByteArray): Int {
+        var offset = 0
+        while (offset < buffer.size) {
+            val count = input.read(buffer, offset, buffer.size - offset)
+            if (count < 0) break
+            offset += count
+        }
+        return offset
+    }
+
+    private fun skipFrom(input: java.io.InputStream, bytes: Long) {
+        var remaining = bytes
+        val scratch = ByteArray(8192)
+        while (remaining > 0) {
+            val count = input.read(scratch, 0, Math.min(remaining, scratch.size.toLong()).toInt())
+            if (count < 0) return
+            remaining -= count
+        }
+    }
+
     private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val runtimeVersion = when (depType) {
             "python" -> DependencyStorage.PYTHON_VERSION
@@ -4788,14 +4920,18 @@ fun serveDashboardStats(): JSONObject {
 
     private fun installDependencyForFallbackUnlocked(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val mirrors = AndroidLinuxRuntime.mirrorConfig(appContext)
+        val localSpec = localDependencyFileSpec(depType, name)
         if (depType == "python") {
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
                 val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
-                val importName = LocalTaskFallbackSemantics.pythonImportName(name)
+                val importName = LocalTaskFallbackSemantics.pythonImportName(localSpec?.canonicalName ?: name)
                     ?: return "blocked" to "UNSAFE_PYTHON_IMPORT_NAME"
                 val existing = verifyRootfsPythonImport(importName, target, taskId)
-                if (existing.first) return "installed" to "Rootfs import verification confirmed $importName"
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages", "-i", mirrors.pipMirror, name))
+                if (existing.first && localSpec == null) return "installed" to "Rootfs import verification confirmed $importName"
+                val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+                val installArg = localSpec?.guestPath ?: name
+                val sourceArgs = if (localSpec == null) listOf("-i", mirrors.pipMirror) else emptyList()
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", guestTarget) + sourceArgs + listOf(installArg))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
                 var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
@@ -4813,8 +4949,9 @@ fun serveDashboardStats(): JSONObject {
         if (depType == "nodejs") {
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                 val deps = File(appContext.filesDir, "deps/nodejs").apply { mkdirs() }.also(DependencyStorage::ensureNodePackageManifest)
-                val installSpec = DependencyStorage.nodeInstallPackageSpec(name)
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs", "--registry", mirrors.npmMirror, "--", installSpec))
+                val installSpec = localSpec?.guestPath ?: DependencyStorage.nodeInstallPackageSpec(name)
+                val sourceArgs = if (localSpec == null) listOf("--registry", mirrors.npmMirror) else emptyList()
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs") + sourceArgs + listOf("--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
                 var result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
                 if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
@@ -4961,10 +5098,16 @@ fun serveDashboardStats(): JSONObject {
         val result = uninstallDependencyForFallback(record.second, record.first)
         if (!result.first) {
             updateDependencyRecord(id, "failed", result.second, "")
+            val operationId = newOperationId("dep", id)
+            insertOperation(operationId, "dependency")
+            finishOperation(operationId, "failed", 1, "UNINSTALL_FAILED")
             return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, result.second.ifBlank { "物理卸载失败" })
         }
+        val operationId = newOperationId("dep", id)
+        insertOperation(operationId, "dependency")
+        finishOperation(operationId, "success", 0, null)
         writableDatabase.delete("dependencies", "id=?", arrayOf(id.toString()))
-        return ok(JSONObject().put("message", "卸载成功").put("data", JSONObject().put("id", id).put("status", "removed")))
+        return ok(JSONObject().put("message", "卸载成功").put("data", JSONObject().put("id", id).put("status", "removed").put("operation_id", operationId)))
     }
 
     private fun uninstallDependencyForFallback(depType: String, name: String): Pair<Boolean, String> {
@@ -4976,7 +5119,8 @@ fun serveDashboardStats(): JSONObject {
                     if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/pip3")) {
                         return@withInstallLock false to "Packaged rootfs Python runtime is not ready"
                     }
-                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "uninstall", "-y", normalized))
+                    val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/pip3", "uninstall", "-y", normalized))
                         ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
                 }
                 "nodejs" -> {
@@ -5196,14 +5340,19 @@ fun serveDashboardStats(): JSONObject {
         val db = operationsDatabase() ?: return
         synchronized(operationsDatabaseLock) {
             runCatching {
-                db.update("operations", ContentValues().apply {
-                    put("state", state)
-                    put("phase", state)
-                    put("progress", 1.0)
-                    if (exitCode == null) putNull("exit_code") else put("exit_code", exitCode)
-                    if (errorCode == null) putNull("error_code") else put("error_code", errorCode)
-                    put("ended_at", Instant.now().toString())
-                }, "id = ?", arrayOf(id))
+                db.update(
+                    "operations",
+                    ContentValues().apply {
+                        put("state", state)
+                        put("phase", state)
+                        put("progress", 1.0)
+                        if (exitCode == null) putNull("exit_code") else put("exit_code", exitCode)
+                        if (errorCode == null) putNull("error_code") else put("error_code", errorCode)
+                        put("ended_at", Instant.now().toString())
+                    },
+                    "id = ? AND state = ?",
+                    arrayOf(id, "running")
+                )
             }
         }
     }
