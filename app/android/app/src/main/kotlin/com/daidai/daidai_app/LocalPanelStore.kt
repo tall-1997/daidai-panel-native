@@ -29,6 +29,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import javax.crypto.SecretKeyFactory
@@ -59,6 +60,10 @@ class LocalPanelStore(
     private val taskRunLogCharacters = ConcurrentHashMap<Long, Int>()
     private val taskRunPendingPersistence = ConcurrentHashMap<Long, Int>()
     private val taskRunStartedAt = ConcurrentHashMap<Long, Instant>()
+    private val taskRunOperationIds = ConcurrentHashMap<Long, String>()
+    private val operationIdCounter = AtomicLong()
+    private val operationsDatabaseLock = Any()
+    private var operationsDatabaseHandle: SQLiteDatabase? = null
     private val maintenanceGate = MaintenanceGate()
     private val scriptRunExecutor = boundedExecutor("local-script-run")
     private val taskRunExecutor = boundedExecutor("local-task-run")
@@ -3743,17 +3748,33 @@ fun serveDashboardStats(): JSONObject {
             put("updated_at", Instant.now().toString())
         }
         if (action == "run") {
+            val operationId = newOperationId("task", id)
+            taskRunOperationIds[id] = operationId
             when (enqueueTask(id)) {
-                EnqueueTaskResult.ALREADY_RUNNING -> return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
-                EnqueueTaskResult.QUEUE_FULL -> return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "任务执行队列已满，请稍后重试")
-                EnqueueTaskResult.MAINTENANCE -> return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "维护期间暂停提交任务")
-                EnqueueTaskResult.NOT_FOUND -> return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+                EnqueueTaskResult.ALREADY_RUNNING -> {
+                    taskRunOperationIds.remove(id)
+                    return error(NanoHTTPD.Response.Status.CONFLICT, "任务正在运行")
+                }
+                EnqueueTaskResult.QUEUE_FULL -> {
+                    taskRunOperationIds.remove(id)
+                    return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "任务执行队列已满，请稍后重试")
+                }
+                EnqueueTaskResult.MAINTENANCE -> {
+                    taskRunOperationIds.remove(id)
+                    return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "维护期间暂停提交任务")
+                }
+                EnqueueTaskResult.NOT_FOUND -> {
+                    taskRunOperationIds.remove(id)
+                    return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+                }
                 EnqueueTaskResult.ACCEPTED -> Unit
             }
+            insertOperation(operationId, "task")
             return NanoHTTPD.newFixedLengthResponse(
-                NanoHTTPD.Response.Status.ACCEPTED,
+                NanoHTTPD.Response.Status.OK,
                 "application/json; charset=utf-8",
                 JSONObject()
+                    .put("operation_id", operationId)
                     .put("message", "任务已开始")
                     .put("data", JSONObject().put("id", id).put("status", 2.0).put("run_status", "running"))
                     .toString(),
@@ -3954,6 +3975,7 @@ fun serveDashboardStats(): JSONObject {
                 taskRunLogIds[id]?.let { put("last_log_id", it) }; put("updated_at", endedAt.toString())
             }, "id = ?", arrayOf(id.toString()))
             taskFinalizedIds.add(id)
+            finalizeTaskOperation(id, result)
         }
     }
 
@@ -4008,6 +4030,7 @@ fun serveDashboardStats(): JSONObject {
             val logId = final.second
             appLog("Task", "Task $id result: ${result.status} exit=${result.exitCode}")
             dispatchTaskCompletionNotification(id, result)
+            finalizeTaskOperation(id, result)
             return result to logId
         } finally {
             if (ownsLifecycle) clearTaskRun(id)
@@ -4523,7 +4546,7 @@ fun serveDashboardStats(): JSONObject {
             put("updated_at", Instant.now().toString())
         }
         if (writableDatabase.update("envs", values, "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量不存在")
-        return ok(JSONObject().put("data", JSONObject().put("id", id)))
+        return ok(JSONObject().put("data", envRow(id) ?: JSONObject().put("id", id)))
     }
 
     private fun updateEnvEnabled(id: Long, enabled: Boolean): NanoHTTPD.Response {
@@ -5116,6 +5139,84 @@ fun serveDashboardStats(): JSONObject {
             "application/json; charset=utf-8",
             JSONObject().put("error", message).toString()
         )
+
+    private fun newOperationId(kind: String, refId: Long): String =
+        "${kind}_${refId}_${System.currentTimeMillis()}_${operationIdCounter.incrementAndGet()}"
+
+    private fun operationsDatabase(): SQLiteDatabase? {
+        synchronized(operationsDatabaseLock) {
+            operationsDatabaseHandle?.takeIf { it.isOpen }?.let { return it }
+            return runCatching {
+                val file = File(appContext.filesDir, "local-panel/daidai.db")
+                file.parentFile?.mkdirs()
+                SQLiteDatabase.openOrCreateDatabase(file, null).also { db ->
+                    db.execSQL(
+                        """CREATE TABLE IF NOT EXISTS operations (
+                            id TEXT NOT NULL UNIQUE,
+                            kind TEXT NOT NULL,
+                            state TEXT NOT NULL,
+                            phase TEXT,
+                            progress REAL NOT NULL DEFAULT 0,
+                            exit_code INTEGER,
+                            error_code TEXT,
+                            started_at TEXT,
+                            ended_at TEXT,
+                            log_cursor INTEGER NOT NULL DEFAULT 0,
+                            sequence INTEGER PRIMARY KEY AUTOINCREMENT
+                        )"""
+                    )
+                    operationsDatabaseHandle = db
+                }
+            }.getOrNull()
+        }
+    }
+
+    private fun insertOperation(id: String, kind: String) {
+        val db = operationsDatabase() ?: return
+        synchronized(operationsDatabaseLock) {
+            runCatching {
+                val now = Instant.now().toString()
+                db.insertWithOnConflict("operations", null, ContentValues().apply {
+                    put("id", id)
+                    put("kind", kind)
+                    put("state", "running")
+                    put("phase", "running")
+                    put("progress", 0.0)
+                    putNull("exit_code")
+                    putNull("error_code")
+                    put("started_at", now)
+                    putNull("ended_at")
+                    put("log_cursor", 0L)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+        }
+    }
+
+    private fun finishOperation(id: String, state: String, exitCode: Int?, errorCode: String?) {
+        val db = operationsDatabase() ?: return
+        synchronized(operationsDatabaseLock) {
+            runCatching {
+                db.update("operations", ContentValues().apply {
+                    put("state", state)
+                    put("phase", state)
+                    put("progress", 1.0)
+                    if (exitCode == null) putNull("exit_code") else put("exit_code", exitCode)
+                    if (errorCode == null) putNull("error_code") else put("error_code", errorCode)
+                    put("ended_at", Instant.now().toString())
+                }, "id = ?", arrayOf(id))
+            }
+        }
+    }
+
+    private fun finalizeTaskOperation(id: Long, result: LocalScriptResult) {
+        val operationId = taskRunOperationIds.remove(id) ?: return
+        val state = when (result.status.trim().lowercase()) {
+            "success" -> "success"
+            "aborted", "stopped" -> "aborted"
+            else -> "failed"
+        }
+        finishOperation(operationId, state, result.exitCode, if (state == "success") null else result.status)
+    }
 
     private fun initializeAdmin(json: JSONObject): NanoHTTPD.Response {
         val username = json.optString("username").trim()
