@@ -4823,7 +4823,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun pythonWheelMetadata(file: File): Pair<String, String?>? = runCatching {
+    private fun pythonWheelMetadata(file: File): Pair<String, String?>? = runCatching<Pair<String, String?>?> {
         if (!file.name.endsWith(".whl", true)) return@runCatching null
         java.util.zip.ZipFile(file).use { zip ->
             val metaEntry = zip.entries().asSequence()
@@ -4837,7 +4837,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }.getOrNull()
 
-    private fun nodeTarballMetadata(file: File): Pair<String, String?>? = runCatching {
+    private fun nodeTarballMetadata(file: File): Pair<String, String?>? = runCatching<Pair<String, String?>?> {
         if (!file.name.endsWith(".tgz", true) && !file.name.endsWith(".tar.gz", true)) return@runCatching null
         java.util.zip.GZIPInputStream(file.inputStream()).use { input ->
             while (true) {
