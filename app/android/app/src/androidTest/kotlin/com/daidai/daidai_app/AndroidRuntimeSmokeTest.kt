@@ -528,33 +528,7 @@ class AndroidRuntimeSmokeTest {
                     val detail = JSONObject().put("operation", last)
                     val segments = id.split("_")
                     if (segments.size >= 2 && segments[0] == "task") {
-                        val tailError = runCatching {
-                            val mainDatabaseFile = context.getDatabasePath("daidai-local.db")
-                            if (mainDatabaseFile.isFile) {
-                                SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
-                                    val taskId = segments[1].toLong()
-                                    database.query("tasks", arrayOf("last_run_status", "last_run_logs", "last_log_id"), "id = ?", arrayOf(taskId.toString()), null, null, null).use { c ->
-                                        if (c.moveToFirst()) {
-                                            if (!c.isNull(0)) detail.put("last_run_status", c.getString(0))
-                                            if (!c.isNull(1)) {
-                                                val logs = c.getString(1)
-                                                if (logs.isNotBlank()) detail.put("run_logs", logs.takeLast(4000))
-                                            }
-                                            if (!c.isNull(2)) detail.put("last_log_id", c.getLong(2))
-                                        }
-                                    }
-                                    database.query("task_logs_local", arrayOf("id", "status", "content", "ended_at"), "task_id = ?", arrayOf(taskId.toString()), null, null, "id DESC", "1").use { c ->
-                                        if (c.moveToFirst()) {
-                                            val content = if (c.isNull(2)) null else c.getString(2)
-                                            detail.put("log_id", c.getLong(0)).put("log_status", c.getInt(1))
-                                                .put("log_ended_at", if (c.isNull(3)) null else c.getString(3))
-                                            if (content != null) detail.put("log_tail", content.takeLast(4000))
-                                        }
-                                    }
-                                }
-                            }
-                        }.exceptionOrNull()
-                        if (tailError != null) detail.put("diagnostic_error", tailError.toString())
+                        collectTaskDiagnostics(segments[1].toLong(), detail)
                     }
                     error("Operation $id terminal state ${last.optString("state")}: ${detail.toString()}")
                 }
@@ -562,6 +536,61 @@ class AndroidRuntimeSmokeTest {
             Thread.sleep(500)
         }
         error("Operation $id did not reach terminal state: $last")
+    }
+
+    private fun collectTaskDiagnostics(taskId: Long, detail: JSONObject) {
+        val candidates = linkedSetOf<File>()
+        context.getDatabasePath("daidai-local.db").parentFile?.listFiles()?.filter {
+            it.isFile && it.name.endsWith(".db")
+        }?.forEach { candidates.add(it) }
+        File(context.filesDir, "local-panel").listFiles()?.filter {
+            it.isFile && it.name.endsWith(".db")
+        }?.forEach { candidates.add(it) }
+        context.filesDir.listFiles()?.filter {
+            it.isFile && it.name.endsWith(".db")
+        }?.forEach { candidates.add(it) }
+        val summaries = JSONArray()
+        for (file in candidates) {
+            val info = JSONObject().put("path", file.path).put("size", file.length())
+            try {
+                SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
+                    val tables = ArrayList<String>()
+                    database.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", null)
+                        .use { c -> while (c.moveToNext()) tables.add(c.getString(0)) }
+                    info.put("tables", JSONArray(tables))
+                    if (tables.contains("tasks")) {
+                        database.query(
+                            "tasks", arrayOf("last_run_status", "last_run_logs", "last_log_id"),
+                            "id = ?", arrayOf(taskId.toString()), null, null, null,
+                        ).use { c ->
+                            if (c.moveToFirst()) {
+                                if (!c.isNull(0)) info.put("last_run_status", c.getString(0))
+                                if (!c.isNull(1)) {
+                                    val logs = c.getString(1)
+                                    if (logs.isNotBlank()) info.put("run_logs", logs.takeLast(4000))
+                                }
+                                if (!c.isNull(2)) info.put("last_log_id", c.getLong(2))
+                            }
+                        }
+                        database.query(
+                            "task_logs_local", arrayOf("id", "status", "content", "ended_at"),
+                            "task_id = ?", arrayOf(taskId.toString()), null, null, "id DESC", "1",
+                        ).use { c ->
+                            if (c.moveToFirst()) {
+                                val content = if (c.isNull(2)) null else c.getString(2)
+                                info.put("log_id", c.getLong(0)).put("log_status", c.getInt(1))
+                                    .put("log_ended_at", if (c.isNull(3)) null else c.getString(3))
+                                if (content != null) info.put("log_tail", content.takeLast(4000))
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                info.put("open_error", e.toString())
+            }
+            summaries.put(info)
+        }
+        detail.put("databases", summaries)
     }
 
     private fun findDatabaseFile(): File? = File(context.filesDir, "local-panel").walkTopDown()
