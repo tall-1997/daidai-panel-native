@@ -524,8 +524,28 @@ class AndroidRuntimeSmokeTest {
                     }
                 }
                 if (last.optString("state") in terminal) {
-                    assertEquals("success", last.getString("state"))
-                    return last
+                    if ("success" == last.getString("state")) return last
+                    val detail = JSONObject().put("operation", last)
+                    val segments = operationId.split("_")
+                    if (segments.size >= 2 && segments[0] == "task") {
+                        runCatching {
+                            val databaseFile = findDatabaseFile()
+                            if (databaseFile != null) {
+                                SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
+                                    val taskId = segments[1].toLong()
+                                    val logId = database.query("tasks", arrayOf("last_log_id"), "id=?", arrayOf(taskId.toString()), null, null, null).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+                                    if (logId != null) database.query("task_logs_local", arrayOf("status", "content", "ended_at"), "id=?", arrayOf(logId.toString()), null, null, null).use { c ->
+                                        if (c.moveToFirst()) {
+                                            val content = c.getString(1)
+                                            detail.put("log_status", c.getInt(0)).put("log_ended_at", c.getString(2))
+                                                .put("log_tail", content.takeLast(2000))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    error("Operation $operationId terminal state ${last.optString("state")}: ${detail.toString()}")
                 }
             }
             Thread.sleep(500)
