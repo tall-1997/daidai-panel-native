@@ -3931,9 +3931,9 @@ fun serveDashboardStats(): JSONObject {
                 try {
                     executeTaskAndSave(id, alreadyClaimed = true)
                 } catch (error: Throwable) {
-                    appendTaskRunLog(id, "任务执行异常: ${error.message ?: error.javaClass.simpleName}")
+                    appendTaskRunLog(id, "任务执行异常: ${describeCrash(error)}")
                     finishCrashedTask(id, startedAt)
-                    appLog("Task", "Task $id crashed: ${error.message ?: error.javaClass.simpleName}")
+                    appLog("Task", "Task $id crashed: ${describeCrash(error)}")
                 } finally {
                     clearTaskRun(id)
                     maintenanceGate.leaveTask()
@@ -3981,6 +3981,26 @@ fun serveDashboardStats(): JSONObject {
             taskFinalizedIds.add(id)
             finalizeTaskOperation(id, result)
         }
+    }
+
+    private fun describeCrash(error: Throwable): String {
+        val sb = StringBuilder()
+        var e: Throwable? = error
+        var depth = 0
+        while (e != null && depth < 6 && sb.length < MAX_SCRIPT_LOG_LINE_CHARS - 300) {
+            if (sb.isNotEmpty()) sb.append('\n')
+            sb.append("#").append(depth).append(" ").append(e.javaClass.name)
+            if (e.message != null) sb.append(": ").append(e.message)
+            for (frame in e.stackTrace?.take(6).orEmpty()) {
+                if (frame.className.startsWith("java.") || frame.className.startsWith("android.") ||
+                    frame.className.startsWith("kotlin.") || frame.className.startsWith("jdk.")
+                ) continue
+                sb.append('\n').append("  at ").append(frame)
+            }
+            e = e.cause
+            depth++
+        }
+        return sb.toString().take(MAX_SCRIPT_LOG_LINE_CHARS)
     }
 
     private fun appendTaskRunLog(id: Long, line: String) {
