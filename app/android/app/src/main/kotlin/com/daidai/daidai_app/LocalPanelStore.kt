@@ -4823,42 +4823,52 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun pythonWheelMetadata(file: File): Pair<String, String?>? = runCatching<Pair<String, String?>?> {
-        if (!file.name.endsWith(".whl", true)) return@runCatching null
-        java.util.zip.ZipFile(file).use { zip ->
-            val metaEntry = zip.entries().asSequence()
-                .filter { it.name.endsWith(".dist-info/METADATA") || it.name.endsWith(".egg-info/PKG-INFO") }
-                .firstOrNull() ?: return@runCatching null
-            val text = zip.getInputStream(metaEntry).bufferedReader().readText()
-            val name = Regex("(?m)^Name:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
-            val version = Regex("(?m)^Version:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
-            if (name.isNullOrBlank()) return@runCatching null
-            name to version
-        }
-    }.getOrNull()
-
-    private fun nodeTarballMetadata(file: File): Pair<String, String?>? = runCatching<Pair<String, String?>?> {
-        if (!file.name.endsWith(".tgz", true) && !file.name.endsWith(".tar.gz", true)) return@runCatching null
-        java.util.zip.GZIPInputStream(file.inputStream()).use { input ->
-            while (true) {
-                val header = ByteArray(512)
-                if (readFullyInto(input, header) < 512) return@runCatching null
-                var end = 0
-                while (end < header.size && header[end] != 0.toByte()) end++
-                val entryName = String(header, 0, end, Charsets.UTF_8)
-                val size = header.copyOfRange(124, 136).toString(Charsets.US_ASCII).trim().toLongOrNull(8) ?: 0L
-                if (entryName == "package/package.json") {
-                    val data = ByteArray(size.toInt())
-                    readFullyInto(input, data)
-                    val json = JSONObject(String(data, Charsets.UTF_8))
-                    val name = json.optString("name")
-                    if (name.isBlank()) return@runCatching null
-                    return@runCatching name to (json.optString("version").ifBlank { null })
+    private fun pythonWheelMetadata(file: File): Pair<String, String?>? {
+        if (!file.name.endsWith(".whl", true)) return null
+        try {
+            java.util.zip.ZipFile(file).use { zip ->
+                val metaEntry = zip.entries().asSequence()
+                    .filter { it.name.endsWith(".dist-info/METADATA") || it.name.endsWith(".egg-info/PKG-INFO") }
+                    .firstOrNull()
+                if (metaEntry != null) {
+                    val text = zip.getInputStream(metaEntry).bufferedReader().readText()
+                    val name = Regex("(?m)^Name:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
+                    if (!name.isNullOrBlank()) {
+                        val version = Regex("(?m)^Version:\\s*(.+?)\\s*$").find(text)?.groupValues?.get(1)
+                        return name to version
+                    }
                 }
-                skipFrom(input, ((size + 511) / 512) * 512)
             }
+        } catch (_: Throwable) {
         }
-    }.getOrNull()
+        return null
+    }
+
+    private fun nodeTarballMetadata(file: File): Pair<String, String?>? {
+        if (!file.name.endsWith(".tgz", true) && !file.name.endsWith(".tar.gz", true)) return null
+        try {
+            java.util.zip.GZIPInputStream(file.inputStream()).use { input ->
+                while (true) {
+                    val header = ByteArray(512)
+                    if (readFullyInto(input, header) < 512) return null
+                    var end = 0
+                    while (end < header.size && header[end] != 0.toByte()) end++
+                    val entryName = String(header, 0, end, Charsets.UTF_8)
+                    val size = header.copyOfRange(124, 136).toString(Charsets.US_ASCII).trim().toLongOrNull(8) ?: 0L
+                    if (entryName == "package/package.json") {
+                        val data = ByteArray(size.toInt())
+                        readFullyInto(input, data)
+                        val json = JSONObject(String(data, Charsets.UTF_8))
+                        val name = json.optString("name")
+                        if (!name.isBlank()) return name to (json.optString("version").ifBlank { null })
+                    }
+                    skipFrom(input, ((size + 511) / 512) * 512)
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return null
+    }
 
     private fun fileSpecFromFileName(fileName: String): Pair<String, String?> {
         var base = fileName
