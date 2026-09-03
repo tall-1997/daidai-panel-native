@@ -528,21 +528,33 @@ class AndroidRuntimeSmokeTest {
                     val detail = JSONObject().put("operation", last)
                     val segments = id.split("_")
                     if (segments.size >= 2 && segments[0] == "task") {
-                        runCatching {
+                        val tailError = runCatching {
                             val databaseFile = findDatabaseFile()
                             if (databaseFile != null) {
                                 SQLiteDatabase.openDatabase(databaseFile.path, null, SQLiteDatabase.OPEN_READONLY).use { database ->
                                     val taskId = segments[1].toLong()
+                                    database.query("tasks", arrayOf("last_run_status", "last_run_logs", "last_log_id"), "id = ?", arrayOf(taskId.toString()), null, null, null).use { c ->
+                                        if (c.moveToFirst()) {
+                                            if (!c.isNull(0)) detail.put("last_run_status", c.getString(0))
+                                            if (!c.isNull(1)) {
+                                                val logs = c.getString(1)
+                                                if (logs.isNotBlank()) detail.put("run_logs", logs.takeLast(4000))
+                                            }
+                                            if (!c.isNull(2)) detail.put("last_log_id", c.getLong(2))
+                                        }
+                                    }
                                     database.query("task_logs_local", arrayOf("id", "status", "content", "ended_at"), "task_id = ?", arrayOf(taskId.toString()), null, null, "id DESC", "1").use { c ->
                                         if (c.moveToFirst()) {
+                                            val content = if (c.isNull(2)) null else c.getString(2)
                                             detail.put("log_id", c.getLong(0)).put("log_status", c.getInt(1))
-                                                .put("log_ended_at", c.getString(3))
-                                                .put("log_tail", c.getString(2).takeLast(3000))
+                                                .put("log_ended_at", if (c.isNull(3)) null else c.getString(3))
+                                            if (content != null) detail.put("log_tail", content.takeLast(4000))
                                         }
                                     }
                                 }
                             }
-                        }
+                        }.exceptionOrNull()
+                        if (tailError != null) detail.put("diagnostic_error", tailError.toString())
                     }
                     error("Operation $id terminal state ${last.optString("state")}: ${detail.toString()}")
                 }
