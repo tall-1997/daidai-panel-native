@@ -1669,6 +1669,9 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
+            session.method == NanoHTTPD.Method.GET && id != null && action == null ->
+                envRow(id)?.let { ok(JSONObject().put("data", it)) }
+                    ?: error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量不存在")
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateEnv(id, try { body(session) } catch (_: Exception) { JSONObject() })
             id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("envs", id)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") ->
@@ -2439,9 +2442,11 @@ fun serveDashboardStats(): JSONObject {
 
     private fun envRows(): JSONArray = queryRows(
         "SELECT * FROM envs ORDER BY sort_order ASC, id DESC"
-    ) { cursor ->
+    ) { envJson(it) }
+
+    private fun envJson(cursor: Cursor): JSONObject {
         val groups = JSONArray(cursor.string("groups_json"))
-        JSONObject()
+        return JSONObject()
             .put("id", cursor.long("id"))
             .put("name", cursor.string("name"))
             .put("value", cursor.string("value"))
@@ -2453,6 +2458,10 @@ fun serveDashboardStats(): JSONObject {
             .put("created_at", cursor.string("created_at"))
             .put("updated_at", cursor.string("updated_at"))
     }
+
+    private fun envRow(id: Long): JSONObject? =
+        queryRows("SELECT * FROM envs WHERE id = ?", arrayOf(id.toString())) { envJson(it) }
+            .optJSONObject(0)
 
     private fun taskRunStatusCode(value: String): Any = when (value.trim().lowercase()) {
         "success" -> 0
