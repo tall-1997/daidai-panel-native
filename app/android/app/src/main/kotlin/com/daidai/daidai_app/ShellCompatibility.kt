@@ -25,7 +25,7 @@ internal object ShellCompatibility {
         Rule("process-substitution", Regex("<\\(|>\\(")),
         Rule(
             "brace-expansion",
-            Regex("\\{(?:-?[0-9]{1,10}\\.\\.-?[0-9]{1,10}(?:\\.\\.-?[0-9]{1,10})?|[A-Za-z]\\.\\.[A-Za-z]|[^{}\\s,]+(?:,[^{}\\s,]+)+)}"),
+            Regex("\\{(?:-?[0-9]{1,10}\\.\\.-?[0-9]{1,10}(?:\\.\\.-?[0-9]{1,10})?|[A-Za-z]\\.\\.[A-Za-z]|[^{}\\s,]+(?:,[^{}\\s,]+)+)\\}"),
         ),
     )
     private val bashShebang = Regex("^#!.*\\bbash\\b")
