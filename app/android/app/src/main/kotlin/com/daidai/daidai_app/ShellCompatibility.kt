@@ -16,7 +16,7 @@ internal object ShellCompatibility {
         Rule("regex-match", Regex("=~")),
         Rule("array-definition", Regex("\\b[A-Za-z_][A-Za-z0-9_]*=\\(")),
         Rule("array-assignment", Regex("\\b[A-Za-z_][A-Za-z0-9_]*\\[[^\\r\\n\\]]+\\]=")),
-        Rule("array-expansion", Regex("\\$\\{#?[A-Za-z_][A-Za-z0-9_]*\\[[^}]+]}")),
+        Rule("array-expansion", Regex("\\$\\{#?[A-Za-z_][A-Za-z0-9_]*\\[[^}]+?\\]\\}")),
         Rule("bash-source", Regex("(?:\\$\\{?|\\b)BASH_SOURCE(?:\\b|\\[)")),
         Rule("declare-typeset", Regex("$commandPrefix(?:declare|typeset)\\b")),
         Rule("local-array", Regex("${commandPrefix}local\\s+-[A-Za-z]*[aA][A-Za-z]*\\b")),
