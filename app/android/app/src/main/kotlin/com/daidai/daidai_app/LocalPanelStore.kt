@@ -66,6 +66,7 @@ class LocalPanelStore(
     private var operationsDatabaseHandle: SQLiteDatabase? = null
     private val maintenanceGate = MaintenanceGate()
     private val scriptRunExecutor = boundedExecutor("local-script-run")
+    private val dependencyExecutor = boundedExecutor("local-dep-install")
     private val taskRunExecutor = boundedExecutor("local-task-run")
     private val scriptProcesses = ConcurrentHashMap<String, Process>()
     private val scriptRunLogsMemory = ConcurrentHashMap<String, MutableList<String>>()
@@ -4640,87 +4641,121 @@ fun serveDashboardStats(): JSONObject {
             ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback supports pip/python, npm/nodejs, and rootfs system packages")
         val now = Instant.now().toString()
         val items = JSONArray()
-        val results = ArrayList<Triple<String, String, Pair<String, String>>>()
         for (index in 0 until names.length()) {
             val name = names.optString(index).trim()
             if (name.isEmpty()) continue
             val localSpec = localDependencyFileSpec(depType, name)
-            val rawResult = installDependencyForFallback(depType, name)
-            val installResult = if (rawResult.first == "installed") rawResult else "failed" to rawResult.second
-            results.add(Triple(localSpec?.canonicalName ?: name, depType, installResult))
+            val identityName = DependencyStorage.normalizedName(depType, localSpec?.canonicalName ?: name)
+            val runtimeVersion = if (depType == "python") DependencyStorage.PYTHON_VERSION else ""
+            var existingId: Long? = null
+            var existingInstalled = false
+            var existingVersion = ""
+            readableDatabase.query("dependencies", arrayOf("id", "status", "version"), "type = ? AND name = ? AND python_version = ?", arrayOf(depType, identityName, runtimeVersion), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    existingId = cursor.long("id")
+                    existingInstalled = cursor.string("status") == "installed"
+                    existingVersion = cursor.string("version")
+                }
+            }
+            val dependencyId: Long
+            val operationId: String
+            val itemStatus: String
+            val itemVersion: String
+            val itemLog: String
+            if (existingInstalled) {
+                dependencyId = existingId ?: run {
+                    writableDatabase.insertOrThrow("dependencies", null, ContentValues().apply {
+                        put("name", identityName); put("type", depType); put("python_version", runtimeVersion)
+                        put("version", ""); put("status", "installed"); put("log", "Already installed"); put("created_at", now); put("updated_at", now)
+                    })
+                }
+                operationId = newOperationId("dep", dependencyId)
+                insertOperation(operationId, "dependency")
+                finishOperation(operationId, "success", 0, null)
+                itemStatus = "installed"
+                itemVersion = existingVersion
+                itemLog = if (existingVersion.isBlank()) "Already installed" else "Already installed: $existingVersion"
+            } else {
+                dependencyId = existingId ?: run {
+                    writableDatabase.insertOrThrow("dependencies", null, ContentValues().apply {
+                        put("name", identityName); put("type", depType); put("python_version", runtimeVersion)
+                        put("version", ""); put("status", "installing"); put("log", "已加入安装队列"); put("created_at", now); put("updated_at", now)
+                    })
+                }
+                operationId = newOperationId("dep", dependencyId)
+                insertOperation(operationId, "dependency")
+                scheduleDependencyInstall(depType, name, dependencyId, identityName, operationId)
+                itemStatus = "installing"
+                itemVersion = ""
+                itemLog = "已加入安装队列"
+            }
+            items.put(
+                JSONObject()
+                    .put("id", dependencyId)
+                    .put("name", identityName)
+                    .put("type", depType)
+                    .put("version", itemVersion)
+                    .put("status", itemStatus)
+                    .put("log", itemLog)
+                    .put("operation_id", operationId)
+            )
         }
-        val installedPkgs = if (results.any { it.second == "python" && it.third.first == "installed" }) {
-            queryPipInstalledPackages()
-        } else { emptyMap() }
+        return created(JSONObject().put("data", items))
+    }
+
+    private fun scheduleDependencyInstall(depType: String, name: String, dependencyId: Long, identityName: String, operationId: String) {
+        dependencyExecutor.execute {
+            val result = try {
+                installDependencyForFallback(depType, name)
+            } catch (error: Throwable) {
+                "crashed" to "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+            }
+            val success = result.first == "installed"
+            val installedVersion = if (success) {
+                when (depType) {
+                    "python" -> queryPipInstalledPackages()[identityName].orEmpty()
+                    "nodejs" -> queryNpmInstalledPackages()[identityName].orEmpty()
+                    else -> ""
+                }
+            } else {
+                ""
+            }
+            val log = result.second.ifBlank { if (success) "Installed" else "Installation failed" }
+            updateDependencyRecord(dependencyId, if (success) "installed" else "failed", log.take(2000), installedVersion)
+            finishOperation(operationId, if (success) "success" else "failed", if (success) 0 else 1, if (success) null else "INSTALL_FAILED")
+            if (success && depType == "python") recordSubDependenciesAsRows(identityName)
+        }
+    }
+
+    private fun recordSubDependenciesAsRows(primaryName: String) {
+        val installedPkgs = queryPipInstalledPackages()
+        if (installedPkgs.isEmpty()) return
+        val now = Instant.now().toString()
+        val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
         writableDatabase.beginTransaction()
         try {
-            for (triple in results) {
-                val normalizedName = DependencyStorage.normalizedName(triple.second, triple.first)
-                val ver = installedPkgs[normalizedName] ?: ""
-                val runtimeVersion = if (triple.second == "python") DependencyStorage.PYTHON_VERSION else ""
-                val values = ContentValues().apply {
-                    put("name", normalizedName)
-                    put("type", triple.second)
-                    put("python_version", runtimeVersion)
-                    put("version", ver)
-                    put("status", triple.third.first)
-                    put("log", triple.third.second)
-                    put("updated_at", now)
-                }
-                val existingId = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf(triple.second, normalizedName, runtimeVersion), null, null, null).use { cursor ->
-                    if (cursor.moveToFirst()) cursor.long("id") else null
-                }
-                val dependencyId: Long
-                if (existingId == null) {
-                    values.put("created_at", now)
-                    dependencyId = writableDatabase.insertOrThrow("dependencies", null, values)
-                } else {
-                    writableDatabase.update("dependencies", values, "id = ?", arrayOf(existingId.toString()))
-                    dependencyId = existingId
-                }
-                val operationId = newOperationId("dep", dependencyId)
-                insertOperation(operationId, "dependency")
-                val succeeded = triple.third.first == "installed"
-                finishOperation(operationId, if (succeeded) "success" else "failed", if (succeeded) 0 else 1, if (succeeded) null else "INSTALL_FAILED")
-                items.put(
-                    JSONObject()
-                        .put("id", dependencyId)
-                        .put("name", normalizedName)
-                        .put("type", triple.second)
-                        .put("version", ver)
-                        .put("status", triple.third.first)
-                        .put("log", triple.third.second.substring(0, Math.min(500, triple.third.second.length)))
-                        .put("operation_id", operationId)
-                )
-            }
-            if (installedPkgs.isNotEmpty()) {
-                val existingNames = results.map { DependencyStorage.normalizedName(it.second, it.first) }.toSet()
-                val skipNames = setOf("python", "shell", "node", "git", "ssh", "pip")
-                for ((pkgName, pkgVer) in installedPkgs) {
-                    if (pkgName in existingNames || pkgName in skipNames) continue
-                    val cursor = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf("python", pkgName, DependencyStorage.PYTHON_VERSION), null, null, null)
-                    val exists = cursor.count > 0
-                    cursor.close()
-                    if (!exists) {
-                        val values = ContentValues().apply {
-                            put("name", pkgName)
-                            put("type", "python")
-                            put("python_version", DependencyStorage.PYTHON_VERSION)
-                            put("version", pkgVer)
-                            put("status", "installed")
-                            put("log", "Auto-installed as sub-dependency")
-                            put("created_at", now)
-                            put("updated_at", now)
-                        }
-                        writableDatabase.insertWithOnConflict("dependencies", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-                    }
+            for ((pkgName, pkgVer) in installedPkgs) {
+                if (pkgName == primaryName || pkgName in skipNames) continue
+                val cursor = writableDatabase.query("dependencies", arrayOf("id"), "type = ? AND name = ? AND python_version = ?", arrayOf("python", pkgName, DependencyStorage.PYTHON_VERSION), null, null, null)
+                val exists = cursor.count > 0
+                cursor.close()
+                if (!exists) {
+                    writableDatabase.insertWithOnConflict("dependencies", null, ContentValues().apply {
+                        put("name", pkgName)
+                        put("type", "python")
+                        put("python_version", DependencyStorage.PYTHON_VERSION)
+                        put("version", pkgVer)
+                        put("status", "installed")
+                        put("log", "Auto-installed as sub-dependency")
+                        put("created_at", now)
+                        put("updated_at", now)
+                    }, SQLiteDatabase.CONFLICT_IGNORE)
                 }
             }
             writableDatabase.setTransactionSuccessful()
         } finally {
             writableDatabase.endTransaction()
         }
-        return created(JSONObject().put("data", items))
     }
 
     private fun queryPipInstalledPackages(): Map<String, String> {
