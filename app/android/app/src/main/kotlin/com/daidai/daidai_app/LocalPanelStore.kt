@@ -5148,10 +5148,10 @@ fun serveDashboardStats(): JSONObject {
                 if (cursor.moveToFirst()) cursor.string("name") to cursor.string("type") else null
             }
             if (record == null) continue
-            val result = uninstallDependencyForFallback(record.second, record.first)
-            if (result.first) writableDatabase.delete("dependencies", "id = ?", arrayOf(id.toString()))
-            else updateDependencyRecord(id, "failed", result.second, "")
-            statuses.put(JSONObject().put("id", id).put("status", if (result.first) "removed" else "failed").put("log", result.second))
+            val operationId = newOperationId("dep", id)
+            insertOperation(operationId, "dependency")
+            scheduleDependencyUninstall(id, record.second, record.first, operationId)
+            statuses.put(JSONObject().put("id", id).put("status", "uninstalling").put("operation_id", operationId))
         }
         return ok(JSONObject().put("data", JSONObject().put("ids", ids).put("statuses", statuses)))
     }
@@ -5160,19 +5160,27 @@ fun serveDashboardStats(): JSONObject {
         val record = readableDatabase.query("dependencies", arrayOf("name", "type"), "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
             if (cursor.moveToFirst()) cursor.string("name") to cursor.string("type") else null
         } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
-        val result = uninstallDependencyForFallback(record.second, record.first)
-        if (!result.first) {
-            updateDependencyRecord(id, "failed", result.second, "")
-            val operationId = newOperationId("dep", id)
-            insertOperation(operationId, "dependency")
-            finishOperation(operationId, "failed", 1, "UNINSTALL_FAILED")
-            return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, result.second.ifBlank { "物理卸载失败" })
-        }
         val operationId = newOperationId("dep", id)
         insertOperation(operationId, "dependency")
-        finishOperation(operationId, "success", 0, null)
-        writableDatabase.delete("dependencies", "id=?", arrayOf(id.toString()))
-        return ok(JSONObject().put("message", "卸载成功").put("data", JSONObject().put("id", id).put("status", "removed").put("operation_id", operationId)))
+        scheduleDependencyUninstall(id, record.second, record.first, operationId)
+        return ok(JSONObject().put("message", "卸载任务已启动").put("data", JSONObject().put("id", id).put("status", "uninstalling").put("operation_id", operationId)))
+    }
+
+    private fun scheduleDependencyUninstall(dependencyId: Long, depType: String, name: String, operationId: String) {
+        dependencyExecutor.execute {
+            val result = try {
+                uninstallDependencyForFallback(depType, name)
+            } catch (error: Throwable) {
+                false to "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+            }
+            if (result.first) {
+                writableDatabase.delete("dependencies", "id = ?", arrayOf(dependencyId.toString()))
+                finishOperation(operationId, "success", 0, null)
+            } else {
+                updateDependencyRecord(dependencyId, "failed", result.second.ifBlank { "物理卸载失败" }.take(2000), "")
+                finishOperation(operationId, "failed", 1, "UNINSTALL_FAILED")
+            }
+        }
     }
 
     private fun uninstallDependencyForFallback(depType: String, name: String): Pair<Boolean, String> {
