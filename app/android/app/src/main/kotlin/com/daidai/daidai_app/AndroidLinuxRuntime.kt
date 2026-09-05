@@ -433,11 +433,18 @@ object AndroidLinuxRuntime {
         if (!isSafeSystemPackageSpec(pkg)) return null
         return when (manager.trim().lowercase()) {
             "apk" -> "apk update; apk add --no-cache $pkg"
-            "apt", "apt-get" -> "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y $pkg"
+            "apt", "apt-get" -> aptInstallShellScript(pkg)
             "yum" -> "yum install -y $pkg"
             "dnf" -> "dnf install -y $pkg"
             else -> null
         }
+    }
+
+    internal fun aptInstallShellScript(pkg: String): String = buildString {
+        append("export DEBIAN_FRONTEND=noninteractive; ")
+        append("dpkg --configure -a -o DPkg::Lock::Timeout=180 >/dev/null 2>&1 || true; ")
+        append("apt-get update -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 || { sleep 2; apt-get update -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3; }; ")
+        append("apt-get install -y -o DPkg::Lock::Timeout=180 $pkg")
     }
 
     private fun prootCommand(
@@ -457,6 +464,7 @@ object AndroidLinuxRuntime {
         val command = mutableListOf(
             rootfs.proot.absolutePath,
             "--kill-on-exit",
+            "--link2symlink",
             "-k", "4.14.0",
             "-r", rootfs.root.absolutePath,
             "-w", guestWorkingDir,
@@ -474,6 +482,7 @@ object AndroidLinuxRuntime {
 
     internal fun prootCompatibilityFlags(): List<String> = listOf(
         "--kill-on-exit",
+        "--link2symlink",
         "-k", "4.14.0",
         "-0",
     )
@@ -836,6 +845,9 @@ object AndroidLinuxRuntime {
     private fun assetChecksum(context: Context, name: String): String =
         context.assets.open(name).bufferedReader().use { it.readText().trim().substringBefore(' ') }
 
+    private fun rootfsHasCaCertificates(root: File): Boolean =
+        File(root, "etc/ssl/certs/ca-certificates.crt").isFile
+
     internal fun configureRootfsMirrors(root: File, mirrors: MirrorConfig) {
         if (File(root, "etc/alpine-release").isFile || File(root, "sbin/apk").isFile || File(root, "usr/sbin/apk").isFile) {
             val release = File(root, "etc/alpine-release").readTextOrNull()?.trim()?.substringBeforeLast('.')?.takeIf { it.startsWith("3") } ?: "latest-stable"
@@ -848,11 +860,18 @@ object AndroidLinuxRuntime {
             val release = File(root, "etc/lsb-release").readTextOrNull()
                 ?.lineSequence()?.firstOrNull { it.startsWith("DISTRIB_CODENAME=") }?.substringAfter("=")?.trim().orEmpty()
             if (release.isNotEmpty()) {
+                // 下载的 ubuntu-base 默认未装 ca-certificates：https 镜像会因 CA 缺失握手失败
+                //（鸡生蛋问题），缺 CA 时先回退到 http 源，装上证书后的下次启动会自动恢复 https。
+                val aptMirror = when {
+                    mirrors.linuxMirror.startsWith("https://") && !rootfsHasCaCertificates(root) ->
+                        mirrors.linuxMirror.replaceFirst("https://", "http://")
+                    else -> mirrors.linuxMirror
+                }
                 File(root, "etc/apt/sources.list").apply {
                     parentFile?.mkdirs()
-                    writeText("deb ${mirrors.linuxMirror}/ $release main restricted universe multiverse\n" +
-                        "deb ${mirrors.linuxMirror}/ $release-updates main restricted universe multiverse\n" +
-                        "deb ${mirrors.linuxMirror}/ $release-security main restricted universe multiverse\n")
+                    writeText("deb $aptMirror/ $release main restricted universe multiverse\n" +
+                        "deb $aptMirror/ $release-updates main restricted universe multiverse\n" +
+                        "deb $aptMirror/ $release-security main restricted universe multiverse\n")
                 }
                 listOf("etc/apt/sources.list.d").forEach { dir -> File(root, dir).let { if (it.isDirectory) it.listFiles()?.forEach { child -> child.delete() } } }
             }
@@ -1053,14 +1072,55 @@ object AndroidLinuxRuntime {
 
     private fun prootRunnerStatus(context: Context): JSONObject {
         val nativeDir = nativeLibraryDir(context)
+        val prootBinary = File(nativeDir, "libdaidai_proot.so")
         return JSONObject()
-            .put("proot", File(nativeDir, "libdaidai_proot.so").isFile)
+            .put("proot", prootBinary.isFile)
             .put("proot_executable", listOf("libdaidai_proot.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
             .put("proot_loader", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).isFile)
             .put("proot_loader_executable", File(nativeDir, PROOT_LOADER_LIBRARY_NAME).let { it.isFile && it.canExecute() })
             .put("busybox", File(nativeDir, "libdaidai_busybox.so").isFile)
             .put("busybox_executable", listOf("libdaidai_busybox.so").map { File(nativeDir, it) }.any { it.isFile && it.canExecute() })
+            .put("host_page_size_bytes", processPageSizeBytes() ?: JSONObject.NULL)
+            .put("proot_elf_load_max_align", if (prootBinary.isFile) (elfLoadMaxAlignment(prootBinary) ?: JSONObject.NULL) else JSONObject.NULL)
     }
+
+    // 从 /proc/self/auxv 读取 AT_PAGESZ，识别 16K 页设备（应用域进程可直接读取）。
+    private fun processPageSizeBytes(): Long? = runCatching {
+        val bytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/proc/self/auxv"))
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        var offset = 0
+        while (offset + 16 <= buffer.limit()) {
+            val type = buffer.getLong(offset)
+            val value = buffer.getLong(offset + 8)
+            if (type == 0L) break
+            if (type == 6L) return@runCatching value
+            offset += 16
+        }
+        null
+    }.getOrNull()
+
+    // 解析 proot ELF 的 PT_LOAD 最大 p_align：若设备页大于该对齐值，内核加载会失败，
+    // 用于在诊断中提前暴露 16K 页不兼容，而非让首次执行出现 ENOEXEC。
+    private fun elfLoadMaxAlignment(file: File): Long? = runCatching {
+        val bytes = file.readBytes()
+        if (bytes.size < 64 || bytes[0] != 0x7f.toByte() ||
+            bytes[1] != 'E'.code.toByte() || bytes[2] != 'L'.code.toByte() || bytes[3] != 'F'.code.toByte()
+        ) return@runCatching null
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val phoff = buffer.getLong(32)
+        val phentsize = buffer.getShort(54).toInt() and 0xFFFF
+        val phnum = buffer.getShort(56).toInt() and 0xFFFF
+        var maxAlign = 0L
+        for (index in 0 until phnum) {
+            val header = phoff + index.toLong() * phentsize
+            if (header + 56 > bytes.size) break
+            if (buffer.getInt(header) == 1) {
+                val align = buffer.getLong(header + 32)
+                if (align > maxAlign) maxAlign = align
+            }
+        }
+        maxAlign.takeIf { it > 0 }
+    }.getOrNull()
 
     private fun resolveNativeTool(context: Context, candidates: List<String>): File? {
         val nativeDir = nativeLibraryDir(context)
