@@ -5185,7 +5185,7 @@ fun serveDashboardStats(): JSONObject {
                         return@withInstallLock false to "Packaged rootfs Python runtime is not ready"
                     }
                     val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
-                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/pip3", "uninstall", "-y", normalized))
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/pip3", "uninstall", "--break-system-packages", "-y", normalized))
                         ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
                 }
                 "nodejs" -> {
