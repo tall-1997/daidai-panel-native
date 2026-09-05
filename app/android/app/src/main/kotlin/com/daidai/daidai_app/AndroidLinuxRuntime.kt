@@ -1111,13 +1111,15 @@ object AndroidLinuxRuntime {
         val phentsize = buffer.getShort(54).toInt() and 0xFFFF
         val phnum = buffer.getShort(56).toInt() and 0xFFFF
         var maxAlign = 0L
+        var headerBase = phoff
         for (index in 0 until phnum) {
-            val header = phoff + index.toLong() * phentsize
-            if (header + 56 > bytes.size) break
+            if (headerBase + 56 > bytes.size) break
+            val header = headerBase.toInt()
             if (buffer.getInt(header) == 1) {
                 val align = buffer.getLong(header + 32)
                 if (align > maxAlign) maxAlign = align
             }
+            headerBase += phentsize
         }
         maxAlign.takeIf { it > 0 }
     }.getOrNull()
