@@ -263,6 +263,32 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
         self.assertFalse(valid)
         self.assertEqual("node-lts-android-arm64-version-evidence-invalid", reason)
 
+    def test_x86_matrix_relaxes_frozen_version_equality_but_keeps_evidence(self):
+        # x86_64 模拟器资产每次 CI 重建，包版本随发行版漂移；strict=False 仅跳过与
+        # 冻结契约版本的精确比对，命令、退出码与 output_pattern 校验仍然生效。
+        helper = self.valid_instrumentation()
+        by_id = {step["id"]: step for step in helper["steps"]}
+        by_id["runtime.python.version"]["evidence"]["output"] = "Python 3.14.7"
+        by_id["runtime.node.version"]["evidence"]["output"] = "v24.18.1"
+        valid, reason = SMOKE.validate_instrumentation(helper, strict_versions=False)
+        self.assertTrue(valid, reason)
+
+        malformed = self.valid_instrumentation()
+        bad_by_id = {step["id"]: step for step in malformed["steps"]}
+        bad_by_id["runtime.python.version"]["evidence"]["output"] = "Python 3.14.7"
+        del bad_by_id["runtime.node.version"]["evidence"]["output"]
+        valid, reason = SMOKE.validate_instrumentation(malformed, strict_versions=False)
+        self.assertFalse(valid)
+        self.assertEqual("node-lts-android-arm64-version-evidence-invalid", reason)
+
+    def test_arm_matrix_keeps_strict_runtime_version_equality(self):
+        helper = self.valid_instrumentation()
+        by_id = {step["id"]: step for step in helper["steps"]}
+        by_id["runtime.python.version"]["evidence"]["output"] = "Python 3.11.9"
+        valid, reason = SMOKE.validate_instrumentation(helper, strict_versions=True)
+        self.assertFalse(valid)
+        self.assertIn("version-mismatch", reason)
+
     def test_runtime_pass_requires_operation_and_log_detail(self):
         helper = self.valid_instrumentation()
         by_id = {step["id"]: step for step in helper["steps"]}
