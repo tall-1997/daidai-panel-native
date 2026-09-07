@@ -64,7 +64,13 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `system package script supports apk apt yum and dnf`() {
         assertEquals("apk update; apk add --no-cache curl", AndroidLinuxRuntime.packageInstallScript("apk", "curl"))
-        assertEquals("export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y curl", AndroidLinuxRuntime.packageInstallScript("apt", "curl"))
+        assertEquals(
+            "export DEBIAN_FRONTEND=noninteractive; " +
+                "dpkg --configure -a -o DPkg::Lock::Timeout=180 >/dev/null 2>&1 || true; " +
+                "apt-get update -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 || { sleep 2; apt-get update -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3; }; " +
+                "apt-get install -y -o DPkg::Lock::Timeout=180 curl",
+            AndroidLinuxRuntime.packageInstallScript("apt", "curl"),
+        )
         assertEquals("yum install -y curl", AndroidLinuxRuntime.packageInstallScript("yum", "curl"))
         assertEquals("dnf install -y curl", AndroidLinuxRuntime.packageInstallScript("dnf", "curl"))
     }
@@ -216,6 +222,7 @@ class AndroidLinuxRuntimeTest {
         val root = Files.createTempDirectory("linux-runtime-mirror-test").toFile()
         root.resolve("etc/os-release").apply { parentFile.mkdirs(); writeText("NAME=\"Ubuntu\"\n") }
         root.resolve("etc/lsb-release").apply { writeText("DISTRIB_CODENAME=noble\n") }
+        root.resolve("etc/ssl/certs/ca-certificates.crt").apply { parentFile.mkdirs(); writeText("") }
         val mirrors = AndroidLinuxRuntime.MirrorConfig(
             pipMirror = "https://pypi.org/simple",
             npmMirror = "https://registry.npmjs.org",
@@ -235,6 +242,28 @@ class AndroidLinuxRuntimeTest {
 
         AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors.copy(linuxMirror = "https://ports.ubuntu.com/ubuntu-ports"))
         assertTrue(root.resolve("etc/apt/sources.list").readText().contains("https://ports.ubuntu.com/ubuntu-ports/"))
+    }
+
+    @Test
+    fun `ubuntu apt sources fall back to http when rootfs lacks ca certificates`() {
+        val root = Files.createTempDirectory("linux-runtime-mirror-no-ca-test").toFile()
+        root.resolve("etc/os-release").apply { parentFile.mkdirs(); writeText("NAME=\"Ubuntu\"\n") }
+        root.resolve("etc/lsb-release").apply { writeText("DISTRIB_CODENAME=noble\n") }
+        val mirrors = AndroidLinuxRuntime.MirrorConfig(
+            pipMirror = "https://pypi.org/simple",
+            npmMirror = "https://registry.npmjs.org",
+            linuxMirror = "https://mirrors.aliyun.com/ubuntu",
+        )
+
+        AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors)
+
+        val sources = root.resolve("etc/apt/sources.list").readText()
+        assertTrue(sources.contains("deb http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse"))
+        assertFalse(sources.contains("https://mirrors.aliyun.com/ubuntu/"))
+
+        root.resolve("etc/ssl/certs/ca-certificates.crt").apply { parentFile.mkdirs(); writeText("") }
+        AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors)
+        assertTrue(root.resolve("etc/apt/sources.list").readText().contains("deb https://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse"))
     }
 
     @Test
