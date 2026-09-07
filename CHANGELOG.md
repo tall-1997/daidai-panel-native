@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.0.20 - 2026-09-07
+
+### x86_64 本地运行时与 CI 门禁
+
+- 新增 x86_64 Ubuntu 本地运行时（含 Alpine musl rootfs 制作与按需切换），打通 CI x86_64 模拟器全链路 smoke，作为 ARM64 真机 evidence 的行为代理。
+- NDK 自编译 PRoot 全面重建：接入 Termux PRoot 体系，处理 talloc/loader/libc 特性声明与 Android shmem 兼容定义、去除不受支持的 loader/sysvipc 标志，恢复并校验 seccomp 路径。
+- 原生 bsdiff 补丁器替换并修正 BSDIFF 缓冲区长度类型；rootfs 符号链接解包前先清理已存在的占位项。
+- Android 单 ABI 打包、Flutter split ABI 过滤分离；打包原生运行时字节在构建中保持原样。
+- x86 Node 运行时修复 UTF-8 切片（禁用损坏的 TextDecoder 行为）并关闭 V8 JIT；闪退诊断与系统盘故障可读日志。
+- 借 harness 参考加固：proot 每次调用显式 `--link2symlink`；apt 安装加入 `dpkg --configure -a` 恢复与 `DPkg::Lock::Timeout`/`Acquire::Retries`；rootfs 缺 ca-certificates 时 apt 源回退 http（装好证书后下次启动自动恢复 https）；诊断新增 `host_page_size_bytes` 与 `proot_elf_load_max_align`（16K 页预检）。
+
+### 依赖与任务可靠性
+
+- `POST /deps` 依赖安装与 `DELETE /deps` 卸载异步化：立即返回 201/200 并登记 operation，后台更新依赖行状态，避免客户端读超时误判为失败（修复 SocketTimeoutException）。
+- pip 卸载补充 `--break-system-packages`；依赖安装/卸载/重装 operation 补齐，支持本地 wheel/tarball 元数据解析与类型标注。
+- 任务 run/停止的 operation 日志链、env 详情 `GET /api/v1/envs/{id}`、env 更新响应完整性、资源创建统一返回 201。
+- 脚本目录统一迁移到 `local-panel/scripts`；Android ICU 兼容转义补花括号与数组展开场景；shell 版本探测改用 `/bin/bash`。
+- 任务运行日志暴露完整异常因果链，smoke 诊断可回读任务日志并识别存储 DB。
+
+### 门禁与发布
+
+- x86_64 模拟器 smoke 全链路（启动 → 安装 → 28 步骤执行 → evidence/产物归档），失败 run 保留证据便于诊断。
+- 运行时版本契约按矩阵 ABI 区分：ARM64 保持与 `runtime_evidence` 冻结版本精确一致，x86_64 代理矩阵仅校验行为（命令、退出码与输出格式），修复模拟器资产重建导致的版本漂移误报。
+
 ## v1.0.19 - 2026-08-27
 
 ### 切换为 Ubuntu 唯一发行版
