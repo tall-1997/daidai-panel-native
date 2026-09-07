@@ -63,7 +63,7 @@ fetch_pinned() {
     if test "$actual" = "$expected"; then return; fi
   fi
   mkdir -p "$src_dir"
-  curl -fL --connect-timeout 30 --max-time 600 -o "$archive" "$url"
+  curl -fL --retry 4 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 -o "$archive" "$url"
   local actual
   actual="$(sha256sum "$archive" | cut -d' ' -f1)"
   if test "$actual" != "$expected"; then
