@@ -41,6 +41,9 @@ TALLOC_URL="https://www.samba.org/ftp/talloc/talloc-${TALLOC_VERSION}.tar.gz"
 BUSYBOX_VERSION=1.36.1
 BUSYBOX_SHA256=b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314
 BUSYBOX_URL="https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2"
+# Byte-identical fallback for busybox.net outages: Ubuntu archive mirrors the
+# pristine upstream orig tarball. The pinned SHA-256 guarantees content identity.
+BUSYBOX_MIRROR_URL="${BUSYBOX_MIRROR_URL:-https://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox_${BUSYBOX_VERSION}.orig.tar.bz2}"
 UTHASH_VERSION=2.3.0
 UTHASH_SHA256=344175d0ae3d0d7651887f932fc224f6d133559f0fc83ee73fe641697d77211a
 UTHASH_URL="https://raw.githubusercontent.com/troydhanson/uthash/v${UTHASH_VERSION}/src/uthash.h"
@@ -55,7 +58,8 @@ PKT_SCHED_H_URL="https://raw.githubusercontent.com/torvalds/linux/v${LINUX_UAPI_
 log() { printf '[native-build] %s\n' "$*" >&2; }
 
 fetch_pinned() {
-  local name="$1" url="$2" expected="$3"
+  local name="$1" primary_url="$2" expected="$3"
+  shift 3
   local archive="$src_dir/$name"
   if test -f "$archive"; then
     local actual
@@ -63,14 +67,25 @@ fetch_pinned() {
     if test "$actual" = "$expected"; then return; fi
   fi
   mkdir -p "$src_dir"
-  curl -fL --retry 4 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 -o "$archive" "$url"
-  local actual
-  actual="$(sha256sum "$archive" | cut -d' ' -f1)"
-  if test "$actual" != "$expected"; then
-    printf 'SHA-256 mismatch for %s: expected %s got %s\n' "$name" "$expected" "$actual" >&2
-    exit 1
-  fi
-  log "fetched $name ($actual)"
+  local urls=("$primary_url" "$@") idx=0 last=$# url actual
+  for url in "${urls[@]}"; do
+    if curl -fL --retry 4 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 -o "$archive" "$url"; then
+      actual="$(sha256sum "$archive" | cut -d' ' -f1)"
+      if test "$actual" = "$expected"; then
+        log "fetched $name from $url ($actual)"
+        return
+      fi
+      printf 'SHA-256 mismatch for %s from %s: expected %s got %s\n' "$name" "$url" "$expected" "$actual" >&2
+    else
+      printf 'Download failed for %s from %s\n' "$name" "$url" >&2
+    fi
+    if test "$idx" -lt "$last"; then
+      printf 'Trying fallback source for %s\n' "$name" >&2
+    fi
+    idx=$((idx + 1))
+  done
+  printf 'Unable to fetch %s from any pinned source\n' "$name" >&2
+  exit 1
 }
 
 target_and_toolchain() {
@@ -361,7 +376,7 @@ fi
 fetch_pinned "proot-${PROOT_VERSION}.zip" "$PROOT_URL" "$PROOT_SHA256"
 fetch_pinned "libandroid-shmem-${ANDROID_SHMEM_VERSION}.tar.gz" "$ANDROID_SHMEM_URL" "$ANDROID_SHMEM_SHA256"
 fetch_pinned "talloc-${TALLOC_VERSION}.tar.gz" "$TALLOC_URL" "$TALLOC_SHA256"
-fetch_pinned "busybox-${BUSYBOX_VERSION}.tar.bz2" "$BUSYBOX_URL" "$BUSYBOX_SHA256"
+fetch_pinned "busybox-${BUSYBOX_VERSION}.tar.bz2" "$BUSYBOX_URL" "$BUSYBOX_SHA256" "$BUSYBOX_MIRROR_URL"
 
 fetch_pinned "uthash.h" "$UTHASH_URL" "$UTHASH_SHA256"
 fetch_pinned "kd.h" "$KD_H_URL" "$KD_H_SHA256"
