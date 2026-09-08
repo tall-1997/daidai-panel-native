@@ -39,12 +39,23 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本地仅执行任务必需且云端无法替代的构建。
 
 [Android 测试版与正式版发布策略]
-- Date: 2026-08-28
-- Context: 用户明确指定 Android 测试包长期版本号，并将 `v1.0.19` 转为正式版
+- Date: 2026-08-28（2026-09-07 更新）
+- Context: 用户 8-28 指定 Android 版本策略并将 `v1.0.19` 转正式版；2026-09-07 `v1.0.20` 完成正式发布
 - Instructions:
-  - Android `v1.0.19` 已转为正式版并设为 GitHub Latest。
-  - Android `v1.0.20` 用于 x86_64 多架构功能的 prerelease 测试发布。
-  - 只有用户明确要求使用新版本号发布时，才提升测试包版本号。
+  - Android `v1.0.19` 于 2026-08-28 转为正式版并设为 GitHub Latest。
+  - Android `v1.0.20`（x86_64 多架构功能）于 2026-09-07 完成正式发布并设为 GitHub Latest，此前的 prerelease 测试计划随之结束。
+  - 只有用户明确要求使用新版本号发布时，才提升版本号。
+
+[Project Knowledge Summary]
+- Date: 2026-09-07
+- Context: Discovered by Agent while releasing v1.0.20 end-to-end on daidai-panel-native
+- Category: Operations & Deployment | Workflow & Collaboration
+- Instructions:
+  - 仓库当前注册的自托管 runner 数量为 0；android-release.yml 的 stable 通道 stable-device job 运行于 `[self-hosted, android-device]`，release job 对 stable 要求 stable-device success，故 tag-push stable 发布在无 runner 时会无限排队、无法完成。
+  - 无真机 runner 时可行的正式发布路径（v1.0.19/v1.0.20 同款）：main 上 `gh workflow run android-release.yml -f release_channel=prerelease` → verify-build（含签名）→ stable-device 自动 skip → x86-device → release 出 prerelease Release；随后 `gh release edit vX --latest --prerelease=false` 对齐 v1.0.19 展示态（资产仍为 `-prerelease-` 命名，release evidence/真机门禁保持 pending）。
+  - prerelease 发布流程的 tag 要求：tag 必须不存在（由 `gh release create` 现场建 lightweight tag）或为 lightweight 且已存在 prerelease Release；annotated tag 会被「tag type != commit」拒绝。发布前若已有 annotated tag 需先删除再 dispatch。
+  - 发布门禁判定：android-release.yml verify-build 会跑 `:app:testReleaseUnitTest`（release 变体 Kotlin 单测），而 android-device-smoke.yml 不跑 Kotlin 单测；判断能否发布要等 android-release verify-build，不能只看 device-smoke。
+  - busybox.net 站点级故障处置：prepare-android-native-source-build.sh 的 `fetch_pinned` 已带 `--retry 4 --retry-all-errors`，并为 busybox 源 tar 内置字节级回退镜像（Ubuntu archive `busybox_1.36.1.orig.tar.bz2`，sha 钉死 `b8cc24…`）；CI 拉不到 busybox.net 时 verify-build 的 rootfs 步骤会自动走回退，勿误判为代码问题。
 
 [全量审查与优化执行方式]
 - Date: 2026-08-27
