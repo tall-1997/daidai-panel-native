@@ -8,17 +8,18 @@
 
 呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
-当前版本：**v1.0.17**
+当前版本：**v1.0.20**
 
-Android versionCode：**1000170**
+Android versionCode：**1000200**
 
 默认分支：**main**
 
 ## 下载
 
-- 最新稳定版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)
-- v1.0.17：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.17)
-- ARM64 完整版：`daidai-panel-native-1.0.17-release-arm64.apk`
+- 最新版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)（当前 `v1.0.20`）
+- v1.0.20：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.20)
+- ARM64 完整版：`daidai-panel-native-1.0.20-prerelease-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-1.0.20-prerelease-x86_64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -50,12 +51,13 @@ Android versionCode：**1000170**
 | 安装包 | ABI | 本地业务 API | 本地终端环境 | 推荐场景 |
 | --- | --- | --- | --- | --- |
 | ARM64 完整版 | `arm64-v8a` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
+| x86_64 版 | `x86_64` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | x86_64 模拟器、云手机 |
 
 依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 Kotlin fallback 提供；Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
 
 ## 平台边界
 
-- 正式 Release 提供 ARM64 APK。
+- 正式 Release 提供 ARM64 APK，另附 x86_64 APK 供模拟器/云手机使用。
 - 本地服务监听 `0.0.0.0`，支持本机与局域网浏览器访问；App 内请求走 local-token，浏览器请求强制账号密码 + JWT。
 - Linux 终端内核为 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork），不使用 Termux 预编译二进制。
 - Ubuntu 内置在 APK 中。
@@ -63,7 +65,7 @@ Android versionCode：**1000170**
 - 依赖 glibc、桌面 Linux API 或不兼容 ARM64 的原生扩展可能无法使用。
 - APK 内置 runtime 随 App 更新，本地实例不提供后端自更新或 runtime 卸载。
 - 持续调度开启时使用可见 Foreground Service；普通后台模式会暂停 Flutter 连接轮询并降低 fallback 调度唤醒频率。
-- GitHub 云 runner 不支持 ARM64 Android 模拟器，ARM64 矩阵以 blocked evidence 如实记录，真机证据可通过 self-hosted runner 补充。
+- GitHub 云 runner 支持 x86_64 Android 模拟器矩阵，随正式发布门禁执行；不支持 ARM64 模拟器，ARM64 真机矩阵以 blocked evidence 如实记录，真机证据可通过 self-hosted runner 补充。
 
 ## 仓库与分支
 
@@ -73,13 +75,13 @@ Android versionCode：**1000170**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.17` |
+| 当前稳定标签 | `v1.0.20` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |
 | 目标 Android API | 35 |
 | 编译 Android API | 36 |
-| 支持 ABI | `arm64-v8a` |
+| 支持 ABI | `arm64-v8a`、`x86_64` |
 
 ### 分支策略
 
@@ -97,7 +99,7 @@ Android versionCode：**1000170**
 2. `Android Build and Release` snapshot
 3. `Android Device Runtime Smoke`
 
-稳定发布通过 `Android Build and Release` 的 `workflow_dispatch` 执行 `stable` 通道。工作流会验证版本、JKS、证书指纹、Go Core、Flutter、Kotlin、AAR、运行时契约、APK 元数据、SHA-256 和同提交设备证据，然后创建 GitHub Release。
+正式发布经 `Android Build and Release` 的 `workflow_dispatch` 执行 `prerelease` 通道，工作流验证版本、JKS、证书指纹、Go Core、Flutter、Kotlin、AAR、运行时契约、APK 元数据、SHA-256 和同提交设备证据后创建正式签名 Release；无自托管 ARM64 真机 runner 时，v1.0.19/v1.0.20 均按此路径发布，全绿后由维护者将 Release 置为 Latest 且非预发布。`stable` 通道由版本 tag 推送触发（tag 必须等于 `VERSION.json` 的 `v{VERSION}`），STRICT 全量校验后自动创建 Stable Release，需自托管 ARM64 真机证据。
 
 ## 目录结构
 
@@ -233,7 +235,7 @@ Quality 根据改动路径执行：
 | 通道 | 用途 | GitHub Release |
 | --- | --- | --- |
 | `snapshot` | main 日常验证 | 仅 Actions artifact |
-| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v1.0.19` |
+| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v1.0.20` |
 | `stable` | 正式签名稳定版 | 自动创建 Stable Release |
 
 重复运行 `prerelease` 会更新固定版本标签到本次提交，并仅覆盖本轮同名 APK、校验文件、更新清单和证据包；其他 Release 资产保持原样。未来升版只需先明确更新 `VERSION.json`。
@@ -276,17 +278,20 @@ gh workflow run android-release.yml \
 3. 执行 `python3 scripts/version.py check`。
 4. 提交并推送 `main`。
 5. 等待 Quality、snapshot Build 和 Device Smoke 成功。
-6. 触发 stable 工作流。
+6. 触发 `prerelease` 工作流（无自托管真机 runner 路径）。
 7. 核验 Release、APK、SHA-256、更新清单和 evidence 包。
+8. 将 Release 编辑为 Latest 且非预发布，完成正式态。
 
-触发 stable 发布：
+触发正式版发布：
 
 ```bash
 gh workflow run android-release.yml \
   --repo tall-1997/daidai-panel-native \
   --ref main \
-  -f release_channel=stable
+  -f release_channel=prerelease
 ```
+
+`workflow_dispatch` 仅接受 `snapshot` 和 `prerelease`；`stable` 通道由版本 tag 推送触发（`workflow_dispatch` 不支持该通道名）。
 
 工作流对正式 APK 执行：
 
