@@ -100,3 +100,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - seccomp 加速会破坏 apk 3 libfetch 的 connect()（报 Permission denied / DNS transient error），shiyi-agent 用 PROOT_NO_SECCOMP=1 换取 apk 兼容；本项目用默认 seccomp 保证脚本运行，若 apk add 突然报 Permission denied/DNS 错误需权衡该取舍。
   - --link2symlink 会把 link() 转成符号链接并生成 .l2s glue 文件，破坏 node-gyp 的 link+rename 原子发布（原生模块变悬空链接 dlopen 失败）；编译 node 原生模块时应去掉 --link2symlink。
   - proot 需 bind 系统目录 /apex /odm /product /system /system_ext /vendor /linkerconfig 等，供 rootfs 内进程访问系统库；并发 apk 用 mkdir 原子互斥锁 + 超时清理防抢数据库锁（EAGAIN/EINTR）。
+
+[Project Knowledge Summary]
+- Date: 2026-09-11
+- Context: Discovered by Agent while fixing the v2.0.0 prerelease CI failure (Kotlin test + x86_64 emulator smoke)
+- Category: Troubleshooting & Debugging | Environment Configuration
+- Instructions:
+  - `AndroidLinuxRuntime.prootEnvironment` 不得加入 `PROOT_NO_SECCOMP=1`。termux/proot 5.1.107.92 依赖 seccomp mode 2 重写被 Android 外层 seccomp 拦截的 syscall，禁用后 rseq 等会以 SIGSYS 杀掉 tracee（见 commit 0631b3b、CHANGELOG v1.0.20「恢复并校验 seccomp 路径」）。单元测试 `proot environment overrides Termux loader path with packaged ELF` 显式断言该键不存在。
+  - `AndroidLinuxRuntime.baseEnvironment` 必须保留 `LD_LIBRARY_PATH = nativeCompatDir:nativeLibraryDir` 与 `nativeCompatDir`（生成 `libtalloc.so.2`/`libbusybox.so.1.38.0` 版本化软链）。移除后宿主机 proot 子进程无法解析 `libtalloc.so`，x86_64 模拟器 smoke（`executeGuestEvidence` 用 `baseEnvironment` 启动 proot）会失败。
+  - Android Kotlin 运行时改动本地无法编译/执行，必须依赖云端 `android-release.yml` 的 `verify-build`（Kotlin 单测）与 `x86-device`（x86_64 模拟器 smoke）验证；仅本地 go/python 检查无法覆盖。
