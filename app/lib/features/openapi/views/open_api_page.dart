@@ -340,7 +340,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      nameC.dispose();
+      rateLimitC.dispose();
+    });
   }
 
   void _showSecretDialog(String appKey, String appSecret) {
@@ -453,7 +456,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
           ),
         ],
       ),
-    );
+    ).whenComplete(secretC.dispose);
   }
 
   void _showAccessTokenDialog(Map<String, dynamic> data) {
@@ -932,7 +935,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      nameC.dispose();
+      rateLimitC.dispose();
+    });
   }
 
   void _showViewSecretDialog(int id, String appKey) {
@@ -999,7 +1005,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
           ),
         ],
       ),
-    );
+    ).whenComplete(passwordC.dispose);
   }
 
 }

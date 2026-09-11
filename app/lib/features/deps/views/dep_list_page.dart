@@ -713,7 +713,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
           ])],
         ),
       ),
-    );
+    ).whenComplete(namesController.dispose);
   }
 
   Future<void> _handleBatchDelete() async {
@@ -823,38 +823,42 @@ class _DepListPageState extends ConsumerState<DepListPage> {
 
   Future<void> _batchReinstall() async {
     final controller = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('顺序批量重装'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(labelText: '依赖 ID，逗号分隔'),
-        ),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
-        ])],
-      ),
-    );
-    if (ok != true) return;
-    final ids = controller.text
-        .split(',')
-        .map((e) => int.tryParse(e.trim()))
-        .whereType<int>()
-        .toList();
-    if (ids.isEmpty) {
-      _showMessage('请输入有效的依赖 ID');
-      return;
-    }
     try {
-      await DioClient.instance.dio.post(
-        ApiEndpoints.depsBatchReinstall,
-        data: {'ids': ids},
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: const Text('顺序批量重装'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(labelText: '依赖 ID，逗号分隔'),
+          ),
+          actions: [AppLiquidGlassDialogActions(actions: [
+            AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
+            AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
+          ])],
+        ),
       );
-      _showMessage('顺序批量重装已提交');
-    } catch (error) {
-      _showMessage(_extractError(error, '批量重装失败'));
+      if (ok != true) return;
+      final ids = controller.text
+          .split(',')
+          .map((e) => int.tryParse(e.trim()))
+          .whereType<int>()
+          .toList();
+      if (ids.isEmpty) {
+        _showMessage('请输入有效的依赖 ID');
+        return;
+      }
+      try {
+        await DioClient.instance.dio.post(
+          ApiEndpoints.depsBatchReinstall,
+          data: {'ids': ids},
+        );
+        _showMessage('顺序批量重装已提交');
+      } catch (error) {
+        _showMessage(_extractError(error, '批量重装失败'));
+      }
+    } finally {
+      controller.dispose();
     }
   }
 
@@ -1093,7 +1097,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
           ],
         ),
       ),
-    );
+    ).whenComplete(() {
+      pipController.dispose();
+      npmController.dispose();
+      linuxController.dispose();
+    });
   }
 
   Widget _buildCountCard(

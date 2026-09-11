@@ -328,19 +328,31 @@ object AndroidRootfsDownloader {
 
     private data class PublishedChecksum(val digest: String, val sourceUrl: String)
 
-    private fun fetchTrustedChecksum(downloadUrl: String): PublishedChecksum? = runCatching {
-        val fileName = URI(downloadUrl).path.substringAfterLast('/')
-        val checksumUrl = URI(downloadUrl).resolve("SHA256SUMS").toString()
-        val connection = openConnection(checksumUrl, null)
-        try {
-            if (connection.responseCode !in 200..299) return@runCatching null
-            connection.inputStream.bufferedReader().useLines { lines ->
-                parsePublishedChecksum(lines.take(4096), fileName)?.let { PublishedChecksum(it, checksumUrl) }
-            }
-        } finally {
-            connection.disconnect()
+    private fun fetchTrustedChecksum(downloadUrl: String): PublishedChecksum? {
+        val uri = URI(downloadUrl)
+        val fileName = uri.path.substringAfterLast('/')
+        // 不同发行版发布校验值的方式不同：Ubuntu 用目录下 SHA256SUMS，Alpine 用 <归档>.sha256。
+        // 依次探测，取第一个能解析出目标文件校验值的来源。
+        val candidates = listOf(
+            uri.resolve("SHA256SUMS").toString(),
+            "$downloadUrl.sha256",
+        ).distinct()
+        for (checksumUrl in candidates) {
+            val digest = runCatching {
+                val connection = openConnection(checksumUrl, null)
+                try {
+                    if (connection.responseCode !in 200..299) return@runCatching null
+                    connection.inputStream.bufferedReader().useLines { lines ->
+                        parsePublishedChecksum(lines.take(4096), fileName)
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+            }.getOrNull() ?: continue
+            return PublishedChecksum(digest, checksumUrl)
         }
-    }.getOrNull()
+        return null
+    }
 
     internal fun requirePublisherChecksum(actual: String, published: String) {
         if (!published.equals(actual, ignoreCase = true)) {
@@ -349,10 +361,13 @@ object AndroidRootfsDownloader {
     }
 
     internal fun parsePublishedChecksum(lines: Sequence<String>, fileName: String): String? =
-        lines.mapNotNull { line ->
-            Regex("^([0-9a-fA-F]{64})\\s+\\*?(.+)$").matchEntire(line.trim())
-                ?.takeIf { it.groupValues[2].removePrefix("./") == fileName }
-                ?.groupValues?.get(1)?.lowercase()
+        lines.mapNotNull { rawLine ->
+            val line = rawLine.trim()
+            // Alpine 的 <归档>.sha256 只包含一行裸哈希，没有文件名。
+            Regex("^([0-9a-fA-F]{64})$").matchEntire(line)?.groupValues?.get(1)?.lowercase()
+                ?: Regex("^([0-9a-fA-F]{64})\\s+\\*?(.+)$").matchEntire(line)
+                    ?.takeIf { it.groupValues[2].removePrefix("./") == fileName }
+                    ?.groupValues?.get(1)?.lowercase()
         }.firstOrNull()
 
     internal fun isTrustedArchive(file: File, expectedChecksum: String): Boolean =

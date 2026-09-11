@@ -4,7 +4,7 @@ import java.io.File
 import org.json.JSONObject
 
 internal object DependencyStorage {
-    const val PYTHON_VERSION = "3.12"
+    const val PYTHON_VERSION = "3.14"
     const val NODE_VERSION = "18.19.1"
     const val MAX_CACHE_BYTES = 64L * 1024 * 1024
     const val MAX_BACKUPS = 5

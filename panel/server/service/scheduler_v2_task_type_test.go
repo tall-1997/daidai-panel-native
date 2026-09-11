@@ -191,10 +191,10 @@ func TestSchedulerV2StopTaskByScheduleMarksRunningLogAborted(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
 	// 本测试只验证定时停止的数据库兜底收口，不需要真实执行器参与。
-	oldExecutor := globalExecutor
-	globalExecutor = nil
+	oldExecutor := globalExecutor.Load()
+	globalExecutor.Store(nil)
 	t.Cleanup(func() {
-		globalExecutor = oldExecutor
+		globalExecutor.Store(oldExecutor)
 	})
 
 	scheduler := NewSchedulerV2(SchedulerConfig{

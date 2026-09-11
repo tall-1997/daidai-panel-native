@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -72,10 +73,6 @@ func Load(path string) (*Config, error) {
 		cfg.Server.WebDir = envWebDir
 	}
 
-	if cfg.JWT.Secret == "" {
-		cfg.JWT.Secret = loadOrGenerateSecret(cfg.Data.Dir)
-	}
-
 	if cfg.JWT.AccessTokenExpire == 0 {
 		cfg.JWT.AccessTokenExpire = 480 * time.Hour
 	}
@@ -104,6 +101,17 @@ func Load(path string) (*Config, error) {
 	os.MkdirAll(cfg.Data.ScriptsDir, 0755)
 	os.MkdirAll(cfg.Data.LogDir, 0755)
 
+	// 密钥必须落在已解析为绝对路径的数据目录里：若在 resolveDataPath 之前生成，
+	// 相对 data.dir 会按 cwd 解析，导致 cwd 变化时每次启动生成新密钥，所有 token 立即失效，
+	// 且 CLI 与 server 会各持一把互不相认的密钥。
+	if cfg.JWT.Secret == "" {
+		secret, secretErr := loadOrGenerateSecret(cfg.Data.Dir)
+		if secretErr != nil {
+			return nil, fmt.Errorf("初始化 JWT 密钥失败: %w", secretErr)
+		}
+		cfg.JWT.Secret = secret
+	}
+
 	log.Printf("config loaded: path=%s db=%s data_dir=%s", path, cfg.Database.Path, cfg.Data.Dir)
 
 	C = cfg
@@ -128,15 +136,21 @@ func resolveDataPath(baseDir, raw string) string {
 	return filepath.Clean(filepath.Join(baseDir, trimmed))
 }
 
-func loadOrGenerateSecret(dataDir string) string {
+func loadOrGenerateSecret(dataDir string) (string, error) {
 	secretFile := filepath.Join(dataDir, ".jwt_secret")
 	if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
-		return string(data)
+		return string(data), nil
 	}
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("生成随机密钥失败: %w", err)
+	}
 	secret := hex.EncodeToString(b)
-	os.MkdirAll(dataDir, 0755)
-	os.WriteFile(secretFile, []byte(secret), 0600)
-	return secret
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", fmt.Errorf("创建数据目录 %s 失败: %w", dataDir, err)
+	}
+	if err := os.WriteFile(secretFile, []byte(secret), 0600); err != nil {
+		return "", fmt.Errorf("写入密钥文件 %s 失败: %w", secretFile, err)
+	}
+	return secret, nil
 }

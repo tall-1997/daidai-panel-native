@@ -6,9 +6,11 @@ import java.util.zip.ZipInputStream
 import org.json.JSONObject
 
 object AndroidPythonRuntime {
-    private const val VERSION = "3.14"
-    private const val ASSET_ARCHIVE = "python-runtime/3.14/python-runtime.zip"
-    private const val ASSET_MANIFEST = "python-runtime/3.14/prefix/runtime-manifest.json"
+    private const val VERSION = DependencyStorage.PYTHON_VERSION
+    private const val ASSET_ARCHIVE = "python-runtime/$VERSION/python-runtime.zip"
+    private const val ASSET_MANIFEST = "python-runtime/$VERSION/prefix/runtime-manifest.json"
+
+    private const val FAILURE_RETRY_INTERVAL_MILLIS = 30_000L
 
     data class PythonRuntimePaths(
         val executable: String,
@@ -21,13 +23,24 @@ object AndroidPythonRuntime {
     private var cached: PythonRuntimePaths? = null
     @Volatile private var cacheChecked = false
 
+    @Volatile private var lastFailureAtMillis = 0L
+
     fun ensureReady(context: Context): PythonRuntimePaths? {
         if (cacheChecked) return cached
+        val now = System.currentTimeMillis()
+        // 失败结果不永久缓存：升级/首次资源未就绪后应允许重试，但用间隔避免每次请求都触发昂贵的解压。
+        if (lastFailureAtMillis != 0L && now - lastFailureAtMillis < FAILURE_RETRY_INTERVAL_MILLIS) {
+            return cached
+        }
         synchronized(this) {
             if (cacheChecked) return cached
-            val result = doEnsureReady(context)
-            cached = result
-            cacheChecked = true
+            val result = runCatching { doEnsureReady(context) }.getOrNull()
+            if (result != null) {
+                cached = result
+                cacheChecked = true
+            } else {
+                lastFailureAtMillis = System.currentTimeMillis()
+            }
             return result
         }
     }
@@ -54,7 +67,9 @@ object AndroidPythonRuntime {
         val compatLibDir = File(home, "compat-lib")
 
         // Force re-extraction if _ssl.so is missing or marker is old
-        val sslSo = File(home, "lib/python3.14/lib-dynload/_ssl.cpython-314-aarch64-linux-android.so")
+        val pythonDir = "python$VERSION"
+        val pythonTag = VERSION.replace(".", "")
+        val sslSo = File(home, "lib/$pythonDir/lib-dynload/_ssl.cpython-$pythonTag-aarch64-linux-android.so")
         if (!marker.exists() || !sslSo.isFile || marker.length() < 10) {
             if (marker.exists()) { marker.delete() }
             home.deleteRecursively()
@@ -63,7 +78,9 @@ object AndroidPythonRuntime {
                 extractZipAsset(context, home)
                 AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
                 // Bootstrap pip
-                bootstrapPip(context, home, nativeDir, compatLibDir)
+                if (!bootstrapPip(context, home, nativeDir, compatLibDir)) {
+                    return null
+                }
                 marker.writeText("ready:$VERSION")
             } catch (e: Exception) {
                 return null
@@ -81,11 +98,11 @@ object AndroidPythonRuntime {
 
         // Create wrapper script
         val wrapper = AndroidLinuxRuntime.writeShellWrapper(
-            output = File(home, "bin/python3.14-wrapper.sh"),
+            output = File(home, "bin/${pythonDir}-wrapper.sh"),
             env = mapOf(
                 "LD_LIBRARY_PATH" to "$compatLibDir:$libDir:$nativeDir:\$LD_LIBRARY_PATH",
                 "PYTHONHOME" to home.absolutePath,
-                "PYTHONPATH" to "$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages:${DependencyStorage.pythonSitePackages(context.filesDir)}",
+                "PYTHONPATH" to "$home/lib/$pythonDir:$home/lib/$pythonDir/lib-dynload:$home/lib/$pythonDir/site-packages:${DependencyStorage.pythonSitePackages(context.filesDir)}",
                 "HOME" to home.absolutePath,
                 "DAIDAI_RUNTIME_LANGUAGE" to "python",
             ),
@@ -95,8 +112,8 @@ object AndroidPythonRuntime {
         cached = PythonRuntimePaths(
             executable = "/system/bin/sh",
             home = home.absolutePath,
-            stdlib = File(home, "lib/python3.14").absolutePath,
-            sitePackages = File(home, "lib/python3.14/site-packages").absolutePath,
+            stdlib = File(home, "lib/$pythonDir").absolutePath,
+            sitePackages = File(home, "lib/$pythonDir/site-packages").absolutePath,
             wrapperScript = wrapper.absolutePath,
         )
         return cached
@@ -147,10 +164,11 @@ object AndroidPythonRuntime {
         }
     }
 
-    private fun bootstrapPip(context: Context, home: File, nativeDir: String, compatLibDir: File) {
+    private fun bootstrapPip(context: Context, home: File, nativeDir: String, compatLibDir: File): Boolean {
         val launcherExe = File(nativeDir, "libpylauncher.so")
         val libDir = File(home, "lib")
-        val pipDir = File(home, "lib/python3.14/site-packages")
+        val pythonDir = "python$VERSION"
+        val pipDir = File(home, "lib/$pythonDir/site-packages")
         pipDir.mkdirs()
 
         // Install pip by extracting the wheel directly
@@ -159,8 +177,8 @@ object AndroidPythonRuntime {
 import os, sys, zipfile, glob
 
 home = os.environ.get('PYTHONHOME', '')
-site_packages = os.path.join(home, 'lib', 'python3.14', 'site-packages')
-bundled = os.path.join(home, 'lib', 'python3.14', 'ensurepip', '_bundled')
+site_packages = os.path.join(home, 'lib', '$pythonDir', 'site-packages')
+bundled = os.path.join(home, 'lib', '$pythonDir', 'ensurepip', '_bundled')
 
 os.makedirs(site_packages, exist_ok=True)
 
@@ -182,18 +200,30 @@ else:
             "#!/system/bin/sh\n" +
             "export LD_LIBRARY_PATH=\"$compatLibDir:$libDir:$nativeDir:\$LD_LIBRARY_PATH\"\n" +
             "export PYTHONHOME=\"$home\"\n" +
-            "export PYTHONPATH=\"$home/lib/python3.14:$home/lib/python3.14/lib-dynload:$home/lib/python3.14/site-packages\"\n" +
+            "export PYTHONPATH=\"$home/lib/$pythonDir:$home/lib/$pythonDir/lib-dynload:$home/lib/$pythonDir/site-packages\"\n" +
             "export HOME=\"$home\"\n" +
             "exec \"$launcherExe\" \"$bootstrapScript\"\n"
         )
 
-        try {
+        return try {
             val pb = ProcessBuilder("/system/bin/sh", wrapper.absolutePath)
             pb.directory(home)
             pb.redirectErrorStream(true)
             val process = pb.start()
-            process.inputStream.bufferedReader().readText()
-            process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
-        } catch (_: Exception) { }
+            val output = process.inputStream.bufferedReader().readText()
+            val finished = process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                android.util.Log.w("daidai-panel", "bootstrap pip timed out: ${output.takeLast(500)}")
+                return false
+            }
+            if (process.exitValue() != 0) {
+                android.util.Log.w("daidai-panel", "bootstrap pip exit=${process.exitValue()}: ${output.takeLast(500)}")
+            }
+            process.exitValue() == 0
+        } catch (e: Exception) {
+            android.util.Log.w("daidai-panel", "bootstrap pip failed: ${e.message}")
+            false
+        }
     }
 }

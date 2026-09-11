@@ -2,7 +2,9 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1204,6 +1206,100 @@ func buildEnv(envVars map[string]string) []string {
 	return AppendProxyEnv(env)
 }
 
+// runStreamingManagedCommand 启动一个已创建但未 Start 的命令，把 stdout/stderr 合并后按行
+// 回调给 onOutput，并在命令结束（或触发超时/取消）后等待输出完全刷出再返回。
+//
+// 输出通过一个非 *os.File 的 io.Writer 交给 os/exec，由 exec 内部的拷贝 goroutine 串行写入，
+// 这样同时消除两类缺陷：
+//  1. 使用 StdoutPipe 时，Wait 会在读取完成前关闭管道，负载高时尾部输出会被丢弃；
+//  2. onOutput 在函数返回后不得再被调用，否则调用方持有的切片/缓冲会出现数据竞争
+//     —— Wait 保证拷贝 goroutine 已结束后才返回，WaitDelay 进一步兜底后台子进程持有管道的情况。
+//
+// cancel 为 nil 时表示不监听取消；cancelErr/timeoutErr 用于让调用方保留各自的错误语义。
+func runStreamingManagedCommand(
+	cmd *exec.Cmd,
+	onOutput OnOutputFunc,
+	timeout time.Duration,
+	cancel <-chan struct{},
+	cancelErr error,
+	timeoutErr error,
+) error {
+	writer := &managedOutputStream{onOutput: onOutput}
+	cmd.Stdout = writer
+	if cmd.Stderr == nil {
+		cmd.Stderr = writer
+	}
+	// 子进程退出后最多再等 5s 让 os/exec 的 I/O 拷贝刷完残余输出；若脚本把守护进程
+	// 放到后台且其仍持有管道，则到点关闭管道，避免 Wait 永久阻塞。
+	cmd.WaitDelay = 5 * time.Second
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	select {
+	case err := <-waitCh:
+		writer.Flush()
+		if errors.Is(err, exec.ErrWaitDelay) {
+			// 进程已正常退出，只是后台子进程仍持有管道：按成功处理。
+			return nil
+		}
+		return err
+	case <-timer.C:
+		KillProcessGroup(cmd.Process)
+		<-waitCh
+		writer.Flush()
+		return timeoutErr
+	case <-cancel:
+		KillProcessGroup(cmd.Process)
+		<-waitCh
+		writer.Flush()
+		return cancelErr
+	}
+}
+
+// managedOutputStream 把子进程 stdout/stderr 按行回调给 onOutput。
+// 作为非 *os.File 的 io.Writer 交给 os/exec 后，Wait 会等待其内部拷贝 goroutine 结束
+// （并由 WaitDelay 兜底），因此函数返回后 onOutput 不会再被调用，调用方无需额外同步。
+type managedOutputStream struct {
+	mu       sync.Mutex
+	buffer   []byte
+	onOutput OnOutputFunc
+}
+
+func (w *managedOutputStream) Write(p []byte) (int, error) {
+	if w.onOutput == nil {
+		return len(p), nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer = append(w.buffer, p...)
+	for {
+		index := bytes.IndexByte(w.buffer, '\n')
+		if index < 0 {
+			break
+		}
+		w.onOutput(string(w.buffer[:index+1]))
+		w.buffer = w.buffer[index+1:]
+	}
+	return len(p), nil
+}
+
+func (w *managedOutputStream) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buffer) > 0 && w.onOutput != nil {
+		w.onOutput(string(w.buffer))
+	}
+	w.buffer = nil
+}
+
 func RunInlineScript(content, scriptsDir string, envVars map[string]string, timeout int, onOutput OnOutputFunc, scriptArgs ...string) error {
 	tmpFile := filepath.Join(scriptsDir, fmt.Sprintf(".hook_%d.sh", time.Now().UnixNano()))
 	if err := os.WriteFile(tmpFile, NormalizeShellLineEndings([]byte(content)), 0755); err != nil {
@@ -1217,45 +1313,7 @@ func RunInlineScript(content, scriptsDir string, envVars map[string]string, time
 	}
 	defer cleanup()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	reader := bufio.NewReaderSize(stdout, 256*1024)
-	go func() {
-		for {
-			chunk, err := reader.ReadString('\n')
-			if len(chunk) > 0 && onOutput != nil {
-				onOutput(chunk)
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	timer := time.NewTimer(time.Duration(timeout) * time.Second)
-	defer timer.Stop()
-
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
-	}()
-
-	select {
-	case err := <-waitCh:
-		return err
-	case <-timer.C:
-		KillProcessGroup(cmd.Process)
-		<-waitCh
-		return fmt.Errorf("钩子脚本超时，已超过 %d 秒", timeout)
-	}
+	return runStreamingManagedCommand(cmd, onOutput, time.Duration(timeout)*time.Second, nil, nil, fmt.Errorf("钩子脚本超时，已超过 %d 秒", timeout))
 }
 
 func RunHookScript(scriptName, scriptsDir string, envVars map[string]string, onOutput OnOutputFunc, scriptArgs ...string) {
@@ -1282,42 +1340,8 @@ func RunHookScript(scriptName, scriptsDir string, envVars map[string]string, onO
 	}
 	defer cleanup()
 
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		if onOutput != nil {
-			onOutput(fmt.Sprintf("[hook %s failed to start: %s]", scriptName, err))
-		}
-		return
-	}
-
-	reader := bufio.NewReaderSize(stdout, 256*1024)
-	go func() {
-		for {
-			chunk, err := reader.ReadString('\n')
-			if len(chunk) > 0 && onOutput != nil {
-				onOutput(chunk)
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	timer := time.NewTimer(60 * time.Second)
-	defer timer.Stop()
-
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
-	}()
-
-	select {
-	case <-waitCh:
-	case <-timer.C:
-		KillProcessGroup(cmd.Process)
-		<-waitCh
+	if err := runStreamingManagedCommand(cmd, onOutput, 60*time.Second, nil, nil, fmt.Errorf("钩子脚本超时，已超过 60 秒")); err != nil && onOutput != nil {
+		onOutput(fmt.Sprintf("[hook %s] %s\n", scriptName, err))
 	}
 }
 

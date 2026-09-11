@@ -817,40 +817,46 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final nameController = TextEditingController();
     final searchController = TextEditingController();
     final replaceController = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('批量改名'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: '统一新名称（留空则查找替换）')),
-            TextField(controller: searchController, decoration: const InputDecoration(labelText: '查找文本')),
-            TextField(controller: replaceController, decoration: const InputDecoration(labelText: '替换文本')),
-          ],
-        ),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
-        ])],
-      ),
-    );
-    if (ok != true) return;
-    final name = nameController.text.trim();
     try {
-      await DioClient.instance.dio.put(
-        ApiEndpoints.envsBatchRename,
-        data: {
-          'ids': ids,
-          if (name.isNotEmpty) 'name': name,
-          if (name.isEmpty) 'search': searchController.text,
-          if (name.isEmpty) 'replace': replaceController.text,
-        },
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: const Text('批量改名'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameController, decoration: const InputDecoration(labelText: '统一新名称（留空则查找替换）')),
+              TextField(controller: searchController, decoration: const InputDecoration(labelText: '查找文本')),
+              TextField(controller: replaceController, decoration: const InputDecoration(labelText: '替换文本')),
+            ],
+          ),
+          actions: [AppLiquidGlassDialogActions(actions: [
+            AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
+            AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
+          ])],
+        ),
       );
-      await ref.read(envListProvider.notifier).load();
-      if (mounted) AppGlassNotice.show(context, '环境变量已批量改名', type: AppGlassNoticeType.success);
-    } catch (error) {
-      if (mounted) AppGlassNotice.show(context, extractErrorMessage(error, '批量改名失败'), type: AppGlassNoticeType.error);
+      if (ok != true) return;
+      final name = nameController.text.trim();
+      try {
+        await DioClient.instance.dio.put(
+          ApiEndpoints.envsBatchRename,
+          data: {
+            'ids': ids,
+            if (name.isNotEmpty) 'name': name,
+            if (name.isEmpty) 'search': searchController.text,
+            if (name.isEmpty) 'replace': replaceController.text,
+          },
+        );
+        await ref.read(envListProvider.notifier).load();
+        if (mounted) AppGlassNotice.show(context, '环境变量已批量改名', type: AppGlassNoticeType.success);
+      } catch (error) {
+        if (mounted) AppGlassNotice.show(context, extractErrorMessage(error, '批量改名失败'), type: AppGlassNoticeType.error);
+      }
+    } finally {
+      nameController.dispose();
+      searchController.dispose();
+      replaceController.dispose();
     }
   }
 
@@ -946,10 +952,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               } else {
                                 selectedGroups.add(group);
                               }
-                              final merged = _normalizeGroups([
-                                controller.text,
-                                ...selectedGroups,
-                              ]);
+                              // 已有分组以 chip 选中状态为准：从手输文本里剔除这些分组后再合并，
+                              // 否则取消选中时旧值会被 controller.text 重新带回，导致无法取消。
+                              final manual = controller.text
+                                  .split(',')
+                                  .map((value) => value.trim())
+                                  .where((value) => value.isNotEmpty && !groups.contains(value));
+                              final merged = _normalizeGroups([...manual, ...selectedGroups]);
                               controller.text = merged.join(', ');
                               controller.selection = TextSelection.fromPosition(
                                 TextPosition(offset: controller.text.length),
@@ -989,6 +998,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         ),
       ),
     );
+
+    controller.dispose();
 
     if (!mounted || result == null) {
       return;

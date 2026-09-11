@@ -228,19 +228,35 @@ func isPrivateOrLoopbackOrigin(origin string) bool {
 }
 
 var (
-	corsRejectLogOnce sync.Map
-	corsRejectLogTTL  = 5 * time.Minute
+	corsRejectLogMu        sync.Mutex
+	corsRejectLogEntries   = map[string]time.Time{}
+	corsRejectLogTTL       = 5 * time.Minute
+	corsRejectLogMaxSize   = 4096
+	corsRejectLogLastSweep time.Time
 )
 
 func logCORSRejection(c *gin.Context, origin string) {
 	key := origin + "|" + c.Request.Host
 	now := time.Now()
-	if last, ok := corsRejectLogOnce.Load(key); ok {
-		if when, ok := last.(time.Time); ok && now.Sub(when) < corsRejectLogTTL {
-			return
-		}
+
+	corsRejectLogMu.Lock()
+	if last, ok := corsRejectLogEntries[key]; ok && now.Sub(last) < corsRejectLogTTL {
+		corsRejectLogMu.Unlock()
+		return
 	}
-	corsRejectLogOnce.Store(key, now)
+	// 惰性回收：Origin 由客户端控制，若不限流+清理，攻击者可用海量 Origin 撑爆内存。
+	if len(corsRejectLogEntries) >= corsRejectLogMaxSize {
+		corsRejectLogEntries = make(map[string]time.Time)
+	} else if len(corsRejectLogEntries) > 1024 || now.Sub(corsRejectLogLastSweep) > corsRejectLogTTL {
+		for k, when := range corsRejectLogEntries {
+			if now.Sub(when) >= corsRejectLogTTL {
+				delete(corsRejectLogEntries, k)
+			}
+		}
+		corsRejectLogLastSweep = now
+	}
+	corsRejectLogEntries[key] = now
+	corsRejectLogMu.Unlock()
 
 	log.Printf(
 		"[CORS] 拒绝跨域请求 origin=%q host=%q X-Forwarded-Host=%q X-Forwarded-Port=%q X-Forwarded-Proto=%q Forwarded=%q method=%s path=%s — 如需放行请在 config.yaml 的 cors.origins 中加入该 origin",
@@ -266,7 +282,9 @@ func CORS() gin.HandlerFunc {
 
 	return cors.New(cors.Config{
 		AllowOriginWithContextFunc: func(c *gin.Context, origin string) bool {
-			if origin == "" || origin == "null" {
+			// 仅放行“无 Origin 头”的请求；显式 Origin: null（沙箱 iframe / file:// / data:）
+			// 在 AllowCredentials 下可被任意隔离上下文利用，必须走严格校验。
+			if origin == "" {
 				return true
 			}
 			if matchesConfiguredOrigin(origin, allowedOrigins) {

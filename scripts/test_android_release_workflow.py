@@ -46,7 +46,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn('test "${TEST_CERT_SHA256}" = "${APK_CERT_SHA256}"', self.workflow)
 
     def test_version_file_is_the_only_release_tag_policy_source(self):
-        self.assertEqual(self.version, "1.0.20")
+        self.assertEqual(self.version, "2.0.0")
         self.assertIn('RELEASE_TAG="v${VERSION}"', self.workflow)
         self.assertNotRegex(self.workflow, r'RELEASE_TAG=.*-rc[.$]')
         self.assertNotIn('RELEASE_TAG="v1.0.19"', self.workflow)

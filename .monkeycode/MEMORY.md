@@ -58,12 +58,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - busybox.net 站点级故障处置：prepare-android-native-source-build.sh 的 `fetch_pinned` 已带 `--retry 4 --retry-all-errors`，并为 busybox 源 tar 内置字节级回退镜像（Ubuntu archive `busybox_1.36.1.orig.tar.bz2`，sha 钉死 `b8cc24…`）；CI 拉不到 busybox.net 时 verify-build 的 rootfs 步骤会自动走回退，勿误判为代码问题。
 
 [全量审查与优化执行方式]
-- Date: 2026-08-27
-- Context: 用户要求后续项目全量审查、Bug 修复和优化任务采用主动执行模式
+- Date: 2026-08-27（2026-09-10 更新）
+- Context: 用户要求后续项目全量审查、Bug 修复和优化任务采用主动执行模式；2026-09-10 再次明确修复必须采用最优方案
 - Instructions:
   - 全量审查项目最新进度时，默认拆分多个子任务并行检查不同模块，由主任务统一汇总、实施和验证。
   - 发现 Bug、回归风险和明确优化项后直接实现，无需逐项询问用户。
   - 方案选择以项目整体质量、长期可维护性和端到端效果为目标，不以最小改动量作为优先标准。
+  - Bug 修复必须采用最优方案，禁止为省事做最小化修复；修复要覆盖根因，并补齐相应测试与静态检查。
   - 完成前执行覆盖相关模块的测试、静态检查和构建，使用可复核证据闭环。
 
 [Project Knowledge Summary]

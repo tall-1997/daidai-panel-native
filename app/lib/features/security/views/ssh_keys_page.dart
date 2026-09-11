@@ -160,7 +160,10 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      nameC.dispose();
+      privateKeyC.dispose();
+    });
   }
 
   void _showViewDialog(Map<String, dynamic> key) {

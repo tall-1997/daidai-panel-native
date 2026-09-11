@@ -120,7 +120,7 @@ func runEnvSet(rt *cliRuntime, args []string) error {
 		return err
 	}
 	if len(args) < 2 {
-		return fmt.Errorf("用法: ddp env set <名称> <值> [--group 分组] [--remarks 备注] [--disabled]")
+		return fmt.Errorf("用法: ddp env set <名称> <值> [--group 分组] [--remarks 备注] [--enabled|--disabled]")
 	}
 
 	name := strings.TrimSpace(args[0])
@@ -128,6 +128,9 @@ func runEnvSet(rt *cliRuntime, args []string) error {
 	group := ""
 	remarks := ""
 	enabled := true
+	groupSet := false
+	remarksSet := false
+	enabledSet := false
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--group":
@@ -135,15 +138,21 @@ func runEnvSet(rt *cliRuntime, args []string) error {
 				return fmt.Errorf("--group 需要参数")
 			}
 			group = strings.TrimSpace(args[i+1])
+			groupSet = true
 			i++
 		case "--remarks":
 			if i+1 >= len(args) {
 				return fmt.Errorf("--remarks 需要参数")
 			}
 			remarks = args[i+1]
+			remarksSet = true
 			i++
+		case "--enabled":
+			enabled = true
+			enabledSet = true
 		case "--disabled":
 			enabled = false
+			enabledSet = true
 		default:
 			return fmt.Errorf("未知参数: %s", args[i])
 		}
@@ -182,11 +191,16 @@ func runEnvSet(rt *cliRuntime, args []string) error {
 		}
 		fmt.Printf("已创建环境变量: %s (#%d)\n", env.Name, env.ID)
 	case 1:
-		updates := map[string]interface{}{
-			"value":   value,
-			"group":   model.NormalizeEnvGroupValue(group),
-			"remarks": remarks,
-			"enabled": enabled,
+		// 只更新显式传入的字段，避免 `ddp env set FOO bar` 把原有分组/备注/启用状态清空。
+		updates := map[string]interface{}{"value": value}
+		if groupSet {
+			updates["group"] = model.NormalizeEnvGroupValue(group)
+		}
+		if remarksSet {
+			updates["remarks"] = remarks
+		}
+		if enabledSet {
+			updates["enabled"] = enabled
 		}
 		if err := database.DB.Model(&matched[0]).Updates(updates).Error; err != nil {
 			return err

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -149,47 +148,14 @@ func runSubscriptionHookScript(ctx context.Context, content, workDir string, env
 	}
 	defer cleanup()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	reader := bufio.NewReaderSize(stdout, 256*1024)
-	go func() {
-		for {
-			chunk, err := reader.ReadString('\n')
-			if len(chunk) > 0 && onOutput != nil {
-				onOutput(chunk)
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	timer := time.NewTimer(subscriptionHookTimeoutSeconds * time.Second)
-	defer timer.Stop()
-
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-
-	select {
-	case err := <-waitCh:
-		return err
-	case <-timer.C:
-		KillProcessGroup(cmd.Process)
-		<-waitCh
-		return fmt.Errorf("钩子脚本超时，已超过 %d 秒", subscriptionHookTimeoutSeconds)
-	case <-ctx.Done():
-		KillProcessGroup(cmd.Process)
-		<-waitCh
-		return fmt.Errorf("拉取已停止")
-	}
+	return runStreamingManagedCommand(
+		cmd,
+		onOutput,
+		subscriptionHookTimeoutSeconds*time.Second,
+		ctx.Done(),
+		fmt.Errorf("拉取已停止"),
+		fmt.Errorf("钩子脚本超时，已超过 %d 秒", subscriptionHookTimeoutSeconds),
+	)
 }
 
 func buildSubscriptionHookEnv(sub *model.Subscription, workDir string) map[string]string {

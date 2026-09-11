@@ -700,7 +700,10 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      titleC.dispose();
+      contentC.dispose();
+    });
   }
 
   Future<void> _doTest(NotifyChannel channel) async {

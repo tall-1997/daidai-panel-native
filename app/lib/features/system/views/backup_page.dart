@@ -550,7 +550,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
           ],
         ),
       ),
-    );
+    ).whenComplete(passwordController.dispose);
   }
 
   Future<void> _refresh() async {
@@ -778,7 +778,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
             }),
         ])],
       ),
-    );
+    ).whenComplete(passwordController.dispose);
   }
 
   Future<void> _deleteBackup(String filename) async {
@@ -995,40 +995,46 @@ class _BackupPageState extends ConsumerState<BackupPage>
     final timeController = TextEditingController(text: value('backup_schedule_time', '03:00'));
     final weekdayController = TextEditingController(text: value('backup_schedule_weekday', '0'));
     final monthdayController = TextEditingController(text: value('backup_schedule_monthday', '1'));
-    if (!mounted) return;
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('定时备份'),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              SwitchListTile.adaptive(title: const Text('启用定时备份'), value: enabled, onChanged: (value) => setDialogState(() => enabled = value)),
-              DropdownButtonFormField<String>(
-                initialValue: frequency,
-                decoration: const InputDecoration(labelText: '频率'),
-                items: const [DropdownMenuItem(value: 'daily', child: Text('每天')), DropdownMenuItem(value: 'weekly', child: Text('每周')), DropdownMenuItem(value: 'monthly', child: Text('每月'))],
-                onChanged: (value) => setDialogState(() => frequency = value ?? 'daily'),
-              ),
-              const SizedBox(height: 12),
-              TextField(controller: timeController, decoration: const InputDecoration(labelText: '执行时间', hintText: '03:00')),
-              if (frequency == 'weekly') TextField(controller: weekdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '星期', helperText: '0=周日，1-6=周一至周六')),
-              if (frequency == 'monthly') TextField(controller: monthdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '每月日期', helperText: '1-28')),
-            ]),
+    try {
+      if (!mounted) return;
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('定时备份'),
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                SwitchListTile.adaptive(title: const Text('启用定时备份'), value: enabled, onChanged: (value) => setDialogState(() => enabled = value)),
+                DropdownButtonFormField<String>(
+                  initialValue: frequency,
+                  decoration: const InputDecoration(labelText: '频率'),
+                  items: const [DropdownMenuItem(value: 'daily', child: Text('每天')), DropdownMenuItem(value: 'weekly', child: Text('每周')), DropdownMenuItem(value: 'monthly', child: Text('每月'))],
+                  onChanged: (value) => setDialogState(() => frequency = value ?? 'daily'),
+                ),
+                const SizedBox(height: 12),
+                TextField(controller: timeController, decoration: const InputDecoration(labelText: '执行时间', hintText: '03:00')),
+                if (frequency == 'weekly') TextField(controller: weekdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '星期', helperText: '0=周日，1-6=周一至周六')),
+                if (frequency == 'monthly') TextField(controller: monthdayController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: '每月日期', helperText: '1-28')),
+              ]),
+            ),
+            actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('保存'))],
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('保存'))],
         ),
-      ),
-    );
-    if (saved != true || !mounted) return;
-    await DioClient.instance.dio.put(ApiEndpoints.configsBatch, data: {'configs': {
-      'backup_schedule_enabled': enabled ? 'true' : 'false',
-      'backup_schedule_frequency': frequency,
-      'backup_schedule_time': timeController.text.trim(),
-      'backup_schedule_weekday': weekdayController.text.trim(),
-      'backup_schedule_monthday': monthdayController.text.trim(),
-    }});
-    if (mounted) _showMessage('定时备份配置已保存');
+      );
+      if (saved != true || !mounted) return;
+      await DioClient.instance.dio.put(ApiEndpoints.configsBatch, data: {'configs': {
+        'backup_schedule_enabled': enabled ? 'true' : 'false',
+        'backup_schedule_frequency': frequency,
+        'backup_schedule_time': timeController.text.trim(),
+        'backup_schedule_weekday': weekdayController.text.trim(),
+        'backup_schedule_monthday': monthdayController.text.trim(),
+      }});
+      if (mounted) _showMessage('定时备份配置已保存');
+    } finally {
+      timeController.dispose();
+      weekdayController.dispose();
+      monthdayController.dispose();
+    }
   }
 
   Widget _buildActionIcon(bool loading, IconData icon) {

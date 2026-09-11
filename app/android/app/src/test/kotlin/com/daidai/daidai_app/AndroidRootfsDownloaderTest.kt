@@ -59,6 +59,17 @@ class AndroidRootfsDownloaderTest {
     }
 
     @Test
+    fun `published checksum parser accepts bare Alpine hash`() {
+        val expected = "c".repeat(64)
+        val checksum = AndroidRootfsDownloader.parsePublishedChecksum(
+            sequenceOf(expected),
+            "alpine-minirootfs-3.20.0-aarch64.tar.gz",
+        )
+
+        assertEquals(expected, checksum)
+    }
+
+    @Test
     fun `publisher checksum is mandatory and must match`() {
         AndroidRootfsDownloader.requirePublisherChecksum("a".repeat(64), "A".repeat(64))
         assertThrows(java.io.IOException::class.java) {

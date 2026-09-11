@@ -470,7 +470,10 @@ class _UserListPageState extends ConsumerState<UserListPage> {
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      usernameC.dispose();
+      passwordC.dispose();
+    });
   }
 
   void _showResetPasswordDialog(UserListItem user) {
@@ -527,7 +530,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
           ],
         );
       },
-    );
+    ).whenComplete(passwordC.dispose);
   }
 
   Future<void> _confirmDelete(UserListItem user) async {

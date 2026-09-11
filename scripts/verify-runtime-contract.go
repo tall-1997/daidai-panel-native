@@ -143,10 +143,17 @@ type compatibilityRuntime struct {
 }
 
 type smokeEvidence struct {
-	Version   string        `json:"version"`
-	UpdatedAt string        `json:"updated_at,omitempty"`
-	Matrix    []string      `json:"matrix"`
-	Records   []smokeRecord `json:"records"`
+	Version   string                   `json:"version"`
+	UpdatedAt string                   `json:"updated_at,omitempty"`
+	Matrix    []string                 `json:"matrix"`
+	Artifacts map[string]smokeArtifact `json:"artifacts,omitempty"`
+	Records   []smokeRecord            `json:"records"`
+}
+
+type smokeArtifact struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type smokeRecord struct {

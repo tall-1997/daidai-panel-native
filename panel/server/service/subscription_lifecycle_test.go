@@ -99,10 +99,10 @@ func TestPullGitRepoWithCallbackCancelledStagingLeavesActiveVersion(t *testing.T
 
 func TestExecuteSubscriptionPullTracksOperationAndLog(t *testing.T) {
 	root := testutil.SetupTestEnv(t)
-	previousScheduler := globalScheduler
-	globalScheduler = nil
+	previousScheduler := globalScheduler.Load()
+	globalScheduler.Store(nil)
 	t.Cleanup(func() {
-		globalScheduler = previousScheduler
+		globalScheduler.Store(previousScheduler)
 	})
 	remoteDir := filepath.Join(root, "remote.git")
 	worktreeDir := filepath.Join(root, "worktree")

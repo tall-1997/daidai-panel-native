@@ -8,18 +8,18 @@
 
 呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
-当前版本：**v1.0.20**
+当前版本：**v2.0.0**
 
-Android versionCode：**1000200**
+Android versionCode：**2000000**
 
 默认分支：**main**
 
 ## 下载
 
-- 最新版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)（当前 `v1.0.20`）
-- v1.0.20：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v1.0.20)
-- ARM64 完整版：`daidai-panel-native-1.0.20-prerelease-arm64.apk`
-- x86_64 版（模拟器/云手机）：`daidai-panel-native-1.0.20-prerelease-x86_64.apk`
+- 最新版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)（当前 `v2.0.0`）
+- v2.0.0：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.0)
+- ARM64 完整版：`daidai-panel-native-2.0.0-prerelease-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.0-prerelease-x86_64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -75,7 +75,7 @@ Android versionCode：**1000200**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前稳定标签 | `v1.0.20` |
+| 当前稳定标签 | `v2.0.0` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |
@@ -235,7 +235,7 @@ Quality 根据改动路径执行：
 | 通道 | 用途 | GitHub Release |
 | --- | --- | --- |
 | `snapshot` | main 日常验证 | 仅 Actions artifact |
-| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v1.0.20` |
+| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v2.0.0` |
 | `stable` | 正式签名稳定版 | 自动创建 Stable Release |
 
 重复运行 `prerelease` 会更新固定版本标签到本次提交，并仅覆盖本轮同名 APK、校验文件、更新清单和证据包；其他 Release 资产保持原样。未来升版只需先明确更新 `VERSION.json`。

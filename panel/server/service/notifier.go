@@ -23,6 +23,8 @@ import (
 	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/model"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -205,21 +207,12 @@ func recordNotificationSend(channelID uint, sentAt time.Time) {
 	}
 
 	todayKey := sentAt.Format("2006-01-02")
-	var channel model.NotifyChannel
-	if err := database.DB.Select("id", "today_send_count", "today_send_date").First(&channel, channelID).Error; err != nil {
-		log.Printf("load notification channel send stats failed: %v", err)
-		return
-	}
-
-	nextCount := 1
-	if channel.TodaySendDate == todayKey {
-		nextCount = channel.TodaySendCount + 1
-	}
-
+	// 用单条 UPDATE 完成“跨天重置 + 自增”：同一渠道可能被多个通知 goroutine 并发发送，
+	// 先 SELECT 再写回会发生读-改-写覆盖，导致计数偏小。
 	if err := database.DB.Model(&model.NotifyChannel{}).
 		Where("id = ?", channelID).
 		Updates(map[string]interface{}{
-			"today_send_count": nextCount,
+			"today_send_count": gorm.Expr("CASE WHEN today_send_date = ? THEN today_send_count + 1 ELSE 1 END", todayKey),
 			"today_send_date":  todayKey,
 		}).Error; err != nil {
 		log.Printf("update notification channel send stats failed: %v", err)
@@ -410,7 +403,73 @@ func webhookHTTPClient(client *http.Client) *http.Client {
 		}
 		return nil
 	}
+
+	transport, ok := clone.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	} else {
+		transport = transport.Clone()
+	}
+	// 仅对直连生效：走 HTTP 代理时 DialContext 收到的是代理地址，不能按 Webhook 目标校验。
+	if !transportUsesHTTPProxy(transport) {
+		baseDial := transport.DialContext
+		if baseDial == nil {
+			baseDial = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+		}
+		transport.DialContext = newWebhookDialContext(baseDial)
+	}
+	clone.Transport = transport
 	return &clone
+}
+
+// transportUsesHTTPProxy 判断 transport 当前是否会经由 HTTP 代理发起连接。
+// ProxyFromEnvironment 在无代理环境下返回 nil，此时可安全安装直连校验。
+func transportUsesHTTPProxy(transport *http.Transport) bool {
+	if transport.Proxy == nil {
+		return false
+	}
+	probe, err := http.NewRequest(http.MethodGet, "https://webhook.invalid/", nil)
+	if err != nil {
+		return true
+	}
+	proxyURL, err := transport.Proxy(probe)
+	return err == nil && proxyURL != nil
+}
+
+// newWebhookDialContext 在真正建立连接的拨号层校验目标 IP，消除“先校验 DNS、后连接时
+// DNS 重绑定”的 TOCTOU 窗口：每次都重新解析并在每个候选地址上执行私网/回环校验。
+func newWebhookDialContext(base func(ctx context.Context, network, addr string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if err := validateWebhookIP(ip); err != nil {
+				return nil, err
+			}
+			return base(ctx, network, net.JoinHostPort(ip.String(), port))
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("Webhook URL 主机解析失败: %w", err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("Webhook URL 主机没有可用地址")
+		}
+		var lastErr error
+		for _, candidate := range ips {
+			if err := validateWebhookIP(candidate.IP); err != nil {
+				return nil, err
+			}
+			conn, dialErr := base(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
 }
 
 func validateWebhookURL(rawURL string) error {

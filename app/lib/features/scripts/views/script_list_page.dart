@@ -1158,6 +1158,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         );
       },
     );
+    controller.dispose();
   }
 
   Future<void> _confirmDelete(ScriptFile file) async {
@@ -1435,6 +1436,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         );
       },
     );
+    controller.dispose();
   }
 
   Future<void> _showVersionSheet(String path) async {
@@ -1548,6 +1550,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         );
       },
     );
+    nameController.dispose();
   }
 
   Future<void> _showCreateDirectoryDialog(
@@ -1648,6 +1651,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         );
       },
     );
+    nameController.dispose();
   }
 
   Future<void> _pickAndUploadFiles(
@@ -2371,6 +2375,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         );
       },
     );
+    controller.dispose();
   }
 
   Future<void> _handleAction(_ScriptViewerAction action) async {

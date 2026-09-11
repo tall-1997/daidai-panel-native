@@ -598,12 +598,22 @@ func runTaskNow(rt *cliRuntime, identifier string) error {
 	}
 
 	fmt.Printf("任务已启动: %s (#%d)\n", task.Name, task.ID)
-	return waitTaskCompletion(task.ID)
+	return waitTaskCompletion(task.ID, defaultTaskWaitTimeout)
 }
 
-func waitTaskCompletion(taskID uint) error {
+const defaultTaskWaitTimeout = 2 * time.Hour
+
+func waitTaskCompletion(taskID uint, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = defaultTaskWaitTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	lastState := ""
 	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("等待任务完成超时（%s），任务可能仍在运行，可用 `ddp task stop` 终止", timeout)
+		}
+
 		var task model.Task
 		if err := database.DB.First(&task, taskID).Error; err != nil {
 			return err
@@ -1160,12 +1170,12 @@ func findSubscription(identifier string) (*model.Subscription, error) {
 func latestTaskLogOutput(taskLog model.TaskLog) string {
 	if taskLog.Content != "" {
 		if content, err := service.DecompressFromBase64(taskLog.Content); err == nil {
-			return truncateText(content, 20000)
+			return tailText(content, 20000)
 		}
 	}
 	if taskLog.LogPath != nil && strings.TrimSpace(*taskLog.LogPath) != "" && config.C != nil {
 		if content, err := service.ReadLogFile(*taskLog.LogPath, config.C.Data.LogDir); err == nil {
-			return truncateText(content, 20000)
+			return tailText(content, 20000)
 		}
 	}
 	return ""

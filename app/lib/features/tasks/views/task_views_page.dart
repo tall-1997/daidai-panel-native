@@ -34,70 +34,76 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
     final name = TextEditingController(text: view?.name);
     final filters = TextEditingController(text: view?.filters ?? '[]');
     final sortRules = TextEditingController(text: view?.sortRules ?? '[]');
-    var hidden = view?.hidden ?? false;
-    final save = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(view == null ? '新建视图' : '编辑视图'),
-          content: SingleChildScrollView(
-            child: Column(
-              children: [
-                TextField(
-                  controller: name,
-                  decoration: const InputDecoration(labelText: '名称'),
-                ),
-                TextField(
-                  controller: filters,
-                  maxLines: 3,
-                  decoration: const InputDecoration(labelText: '筛选规则 JSON'),
-                ),
-                TextField(
-                  controller: sortRules,
-                  maxLines: 3,
-                  decoration: const InputDecoration(labelText: '排序规则 JSON'),
-                ),
-                SwitchListTile(
-                  value: hidden,
-                  title: const Text('隐藏视图'),
-                  onChanged: (value) => setDialogState(() => hidden = value),
-                ),
-              ],
+    try {
+      var hidden = view?.hidden ?? false;
+      final save = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: Text(view == null ? '新建视图' : '编辑视图'),
+            content: SingleChildScrollView(
+              child: Column(
+                children: [
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(labelText: '名称'),
+                  ),
+                  TextField(
+                    controller: filters,
+                    maxLines: 3,
+                    decoration: const InputDecoration(labelText: '筛选规则 JSON'),
+                  ),
+                  TextField(
+                    controller: sortRules,
+                    maxLines: 3,
+                    decoration: const InputDecoration(labelText: '排序规则 JSON'),
+                  ),
+                  SwitchListTile(
+                    value: hidden,
+                    title: const Text('隐藏视图'),
+                    onChanged: (value) => setDialogState(() => hidden = value),
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              AppLiquidGlassDialogActions(
+                actions: [
+                  AppGlassDialogAction(
+                    label: '取消',
+                    onPressed: () => Navigator.pop(ctx, false),
+                  ),
+                  AppGlassDialogAction(
+                    label: '保存',
+                    onPressed: () => Navigator.pop(ctx, true),
+                  ),
+                ],
+              ),
+            ],
           ),
-          actions: [
-            AppLiquidGlassDialogActions(
-              actions: [
-                AppGlassDialogAction(
-                  label: '取消',
-                  onPressed: () => Navigator.pop(ctx, false),
-                ),
-                AppGlassDialogAction(
-                  label: '保存',
-                  onPressed: () => Navigator.pop(ctx, true),
-                ),
-              ],
-            ),
-          ],
         ),
-      ),
-    );
-    if (save != true || !mounted) return;
-    if (name.text.trim().isEmpty ||
-        !_validRules(filters.text) ||
-        !_validRules(sortRules.text)) {
-      AppGlassNotice.show(context, '名称不能为空，筛选和排序规则必须是 JSON 数组');
-      return;
+      );
+      if (save != true || !mounted) return;
+      if (name.text.trim().isEmpty ||
+          !_validRules(filters.text) ||
+          !_validRules(sortRules.text)) {
+        AppGlassNotice.show(context, '名称不能为空，筛选和排序规则必须是 JSON 数组');
+        return;
+      }
+      await ref
+          .read(taskViewProvider.notifier)
+          .save(
+            id: view?.id,
+            name: name.text.trim(),
+            filters: filters.text,
+            sortRules: sortRules.text,
+            hidden: hidden,
+          );
+    } finally {
+      name.dispose();
+      filters.dispose();
+      sortRules.dispose();
     }
-    await ref
-        .read(taskViewProvider.notifier)
-        .save(
-          id: view?.id,
-          name: name.text.trim(),
-          filters: filters.text,
-          sortRules: sortRules.text,
-          hidden: hidden,
-        );
   }
 
   Future<void> _delete(TaskView view) async {

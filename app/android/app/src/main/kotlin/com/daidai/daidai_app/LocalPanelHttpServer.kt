@@ -31,7 +31,18 @@ class LocalPanelHttpServer(
     @Volatile
     private var localToken = localToken
 
+    // /api/system/health-check 是公开接口且会通过 proot 启动多个 guest smoke，
+    // 采用 TTL 缓存 + single-flight，避免未认证请求反复触发昂贵的运行时探测。
+    private val healthCheckBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    @Volatile
+    private var cachedHealth: JSONObject? = null
+
+    @Volatile
+    private var cachedHealthAtMillis = 0L
+
     companion object {
+        private const val HEALTH_CHECK_TTL_MILLIS = 30_000L
         private fun findAvailablePort(): Int {
             val anyLocal = InetAddress.getByName("0.0.0.0")
             return try {
@@ -423,6 +434,28 @@ class LocalPanelHttpServer(
     }
 
     private fun systemHealth(): JSONObject {
+        val now = System.currentTimeMillis()
+        val cached = cachedHealth
+        if (cached != null && now - cachedHealthAtMillis < HEALTH_CHECK_TTL_MILLIS) {
+            return cached
+        }
+        // 已有请求在刷新时立即返回旧结果，绝不让并发请求同时启动 proot 探测。
+        if (!healthCheckBusy.compareAndSet(false, true)) {
+            return cached ?: JSONObject()
+                .put("items", JSONArray().put(JSONObject().put("name", "Android local panel API").put("status", "ok").put("message", "health check in progress")))
+                .put("last_checked_at", java.time.Instant.now().toString())
+        }
+        return try {
+            val computed = computeSystemHealth()
+            cachedHealth = computed
+            cachedHealthAtMillis = System.currentTimeMillis()
+            computed
+        } finally {
+            healthCheckBusy.set(false)
+        }
+    }
+
+    private fun computeSystemHealth(): JSONObject {
         val items = JSONArray()
             .put(JSONObject().put("name", "Android local panel API").put("status", "ok"))
             .put(goCoreHealthItem())

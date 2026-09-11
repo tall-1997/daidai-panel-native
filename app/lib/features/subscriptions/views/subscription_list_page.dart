@@ -847,6 +847,20 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
     int? selectedSshKeyId = sub.sshKeyId;
     List<Map<String, dynamic>> sshKeys = [];
 
+    void disposeControllers() {
+      nameC.dispose();
+      urlC.dispose();
+      branchC.dispose();
+      subPathC.dispose();
+      scheduleC.dispose();
+      saveDirC.dispose();
+      aliasC.dispose();
+      whitelistC.dispose();
+      blacklistC.dispose();
+      dependOnC.dispose();
+      hookScriptC.dispose();
+    }
+
     try {
       final resp = await DioClient.instance.dio.get(ApiEndpoints.sshKeys);
       final data = extractData(resp.data);
@@ -854,7 +868,10 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
         sshKeys = data.whereType<Map<String, dynamic>>().toList();
       }
       } catch (_) {}
-      if (!mounted) return;
+      if (!mounted) {
+        disposeControllers();
+        return;
+      }
 
       showModalBottomSheet(
       context: context,
@@ -1149,7 +1166,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
           },
         );
       },
-    );
+    ).whenComplete(disposeControllers);
   }
 }
 

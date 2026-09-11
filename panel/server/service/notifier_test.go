@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/smtp"
@@ -373,6 +374,28 @@ func TestWebhookURLValidationRejectsLocalTargetsAndRedirects(t *testing.T) {
 	req.URL, _ = url.Parse("http://169.254.169.254/latest/meta-data")
 	if err := client.CheckRedirect(req, nil); err == nil {
 		t.Fatal("expected metadata redirect target to be rejected")
+	}
+}
+
+func TestWebhookDialContextValidatesResolvedTargets(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	config.C.Server.Mode = "production"
+
+	var dialed string
+	base := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = addr
+		return nil, fmt.Errorf("stop")
+	}
+	dial := newWebhookDialContext(base)
+
+	if _, err := dial(context.Background(), "tcp", "127.0.0.1:80"); err == nil {
+		t.Fatal("expected loopback target to be rejected at dial time")
+	}
+	if _, err := dial(context.Background(), "tcp", "169.254.169.254:80"); err == nil {
+		t.Fatal("expected link-local target to be rejected at dial time")
+	}
+	if _, err := dial(context.Background(), "tcp", "93.184.216.34:443"); err == nil || dialed != "93.184.216.34:443" {
+		t.Fatalf("expected public target to reach base dialer, got addr=%q err=%v", dialed, err)
 	}
 }
 

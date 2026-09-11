@@ -814,11 +814,11 @@ func TestSchedulerV2SetWorkerCountClampsToAtLeastOne(t *testing.T) {
 func TestShutdownSchedulerV2InterruptsRunningTasksBeforeWaiting(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
-	oldScheduler := globalScheduler
-	oldExecutor := globalExecutor
+	oldScheduler := globalScheduler.Load()
+	oldExecutor := globalExecutor.Load()
 	t.Cleanup(func() {
-		globalScheduler = oldScheduler
-		globalExecutor = oldExecutor
+		globalScheduler.Store(oldScheduler)
+		globalExecutor.Store(oldExecutor)
 	})
 
 	executor := NewTaskExecutor()
@@ -855,8 +855,8 @@ func TestShutdownSchedulerV2InterruptsRunningTasksBeforeWaiting(t *testing.T) {
 		QueueSize:    8,
 		RateInterval: time.Millisecond,
 	}, handler)
-	globalScheduler = scheduler
-	globalExecutor = executor
+	globalScheduler.Store(scheduler)
+	globalExecutor.Store(executor)
 	scheduler.Start()
 
 	if err := scheduler.Enqueue(newTestRequest(1, false)); err != nil {
@@ -877,7 +877,7 @@ func TestShutdownSchedulerV2InterruptsRunningTasksBeforeWaiting(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("expected shutdown to finish well below the 5s worker timeout, took %s", elapsed)
 	}
-	if globalScheduler != nil || globalExecutor != nil {
+	if globalScheduler.Load() != nil || globalExecutor.Load() != nil {
 		t.Fatal("expected shutdown to clear scheduler and executor globals")
 	}
 }

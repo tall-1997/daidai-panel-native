@@ -175,15 +175,6 @@ object AndroidLinuxRuntime {
 
     fun nativeLibraryDir(context: Context): File = File(context.applicationInfo.nativeLibraryDir.orEmpty())
 
-    private fun nativeCompatDir(context: Context): File {
-        val compat = File(context.filesDir, "runtimes/native-compat/${currentAbi()}")
-        copyVersionedLibraries(nativeLibraryDir(context), compat, mapOf(
-            "libtalloc_v2.so" to listOf("libtalloc.so.2"),
-            "libbusybox_v138.so" to listOf("libbusybox.so.1.38.0"),
-        ))
-        return compat
-    }
-
     fun baseEnvironment(context: Context, workingDir: File): MutableMap<String, String> {
         val mirrors = mirrorConfig(context)
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME))
@@ -197,7 +188,6 @@ object AndroidLinuxRuntime {
             "PYTHONUNBUFFERED" to "1",
             "PYTHONIOENCODING" to "utf-8",
             "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
-            "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
             nodeRuntimeOptions(currentAbi())?.let { put("NODE_OPTIONS", it) }
@@ -210,6 +200,7 @@ object AndroidLinuxRuntime {
 
     internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
         "PROOT_LOADER" to loader.absolutePath,
+        "PROOT_NO_SECCOMP" to "1",
         "PROOT_TMP_DIR" to cacheDir.absolutePath,
         "PROOT_VERBOSE" to "0",
     )
@@ -411,7 +402,7 @@ object AndroidLinuxRuntime {
         val rootfs = ensureRootfsReady(context, mirrors) ?: return null
         val manager = preferredManager.ifBlank { rootfs.packageManager }
         val script = packageInstallScript(manager, packageSpec) ?: return null
-        return prootCommand(context, rootfs, context.filesDir, "/", listOf("/bin/sh", "-lc", script))
+        return prootCommand(context, rootfs, context.filesDir, "/workspace", listOf("/bin/sh", "-lc", script))
     }
 
     fun isRootfsReady(context: Context): Boolean = ensureRootfsReady(context) != null
@@ -1116,7 +1107,9 @@ object AndroidLinuxRuntime {
             if (headerBase + 56 > bytes.size) break
             val header = headerBase.toInt()
             if (buffer.getInt(header) == 1) {
-                val align = buffer.getLong(header + 32)
+                // ELF64 program header: p_type(0) p_flags(4) p_offset(8) p_vaddr(16)
+                // p_paddr(24) p_filesz(32) p_memsz(40) p_align(48)
+                val align = buffer.getLong(header + 48)
                 if (align > maxAlign) maxAlign = align
             }
             headerBase += phentsize

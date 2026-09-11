@@ -178,3 +178,20 @@ func truncateText(text string, limit int) string {
 	}
 	return string(runes[:limit-1]) + "…"
 }
+
+// tailText 保留文本末尾的 limit 个字符，用于任务日志等“最新输出最重要”的场景。
+func tailText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	if limit <= 1 {
+		return string(runes[len(runes)-limit:])
+	}
+	return "…" + string(runes[len(runes)-(limit-1):])
+}

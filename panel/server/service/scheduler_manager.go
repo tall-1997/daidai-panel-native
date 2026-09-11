@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/model"
 )
 
-var globalScheduler *SchedulerV2
-var globalExecutor *TaskExecutor
+// 调度器与执行器会被 HTTP handler 在运行时无锁读取（GetSchedulerV2 / GetTaskExecutor），
+// 同时又会被 Start/Stop 在生命周期切换时写回，因此统一用 atomic.Pointer 保证跨 goroutine 可见性。
+var globalScheduler atomic.Pointer[SchedulerV2]
+var globalExecutor atomic.Pointer[TaskExecutor]
 
 type schedulerRuntime struct {
 	mu      sync.Mutex
@@ -33,7 +36,7 @@ func resolveSchedulerWorkerCount() int {
 }
 
 func ApplySchedulerWorkerCount() {
-	scheduler := globalScheduler
+	scheduler := globalScheduler.Load()
 	if scheduler == nil {
 		return
 	}
@@ -52,7 +55,8 @@ func StartSchedulerV2(ctx context.Context) error {
 		return nil
 	}
 
-	globalExecutor = NewTaskExecutor()
+	executor := NewTaskExecutor()
+	globalExecutor.Store(executor)
 	if count := RecoverAbandonedActiveTasks("面板上次异常退出，运行中的任务已标记为中断"); count > 0 {
 		log.Printf("recovered %d abandoned active task(s)", count)
 	}
@@ -68,25 +72,26 @@ func StartSchedulerV2(ctx context.Context) error {
 		RateInterval: 200 * time.Millisecond,
 	}
 
-	globalScheduler = NewSchedulerV2(cfg, globalExecutor)
-	globalScheduler.Start()
+	scheduler := NewSchedulerV2(cfg, executor)
+	globalScheduler.Store(scheduler)
+	scheduler.Start()
 
 	var tasks []model.Task
 	database.DB.Where("status = ?", model.TaskStatusEnabled).Find(&tasks)
 
 	for _, task := range tasks {
-		if err := globalScheduler.AddJob(&task); err != nil {
-			globalScheduler.Stop()
-			globalScheduler = nil
-			globalExecutor = nil
+		if err := scheduler.AddJob(&task); err != nil {
+			scheduler.Stop()
+			globalScheduler.Store(nil)
+			globalExecutor.Store(nil)
 			return fmt.Errorf("failed to add task %d: %w", task.ID, err)
 		}
 	}
-	if missed := globalScheduler.EnqueueRecentMissedSchedules(15 * time.Minute); missed > 0 {
+	if missed := scheduler.EnqueueRecentMissedSchedules(15 * time.Minute); missed > 0 {
 		log.Printf("scheduler v2 compensated %d recent missed schedule(s)", missed)
 	}
 
-	startupCount := globalScheduler.EnqueueStartupTasks()
+	startupCount := scheduler.EnqueueStartupTasks()
 	log.Printf("scheduler v2 initialized with %d tasks", len(tasks))
 	if startupCount > 0 {
 		log.Printf("scheduler v2 enqueued %d startup task(s)", startupCount)
@@ -101,26 +106,29 @@ func StopSchedulerV2(ctx context.Context) error {
 	schedulerLifecycle.mu.Lock()
 	defer schedulerLifecycle.mu.Unlock()
 
-	if !schedulerLifecycle.started && globalScheduler == nil && globalExecutor == nil {
+	scheduler := globalScheduler.Load()
+	executor := globalExecutor.Load()
+
+	if !schedulerLifecycle.started && scheduler == nil && executor == nil {
 		return nil
 	}
 
-	if globalScheduler != nil {
-		globalScheduler.SignalStop()
+	if scheduler != nil {
+		scheduler.SignalStop()
 	}
 
-	if globalExecutor != nil {
-		killed := globalExecutor.StopAllRunningTasks()
+	if executor != nil {
+		killed := executor.StopAllRunningTasks()
 		if killed > 0 {
 			log.Printf("interrupted %d running task process(es) during panel shutdown", killed)
 		}
-		if ok := globalExecutor.Wait(5 * time.Second); !ok {
+		if ok := executor.Wait(5 * time.Second); !ok {
 			log.Println("timed out waiting for running task cleanup")
 		}
 	}
 
-	if globalScheduler != nil {
-		if ok := globalScheduler.WaitWorkers(5 * time.Second); !ok {
+	if scheduler != nil {
+		if ok := scheduler.WaitWorkers(5 * time.Second); !ok {
 			log.Println("timed out waiting for scheduler workers to finish")
 		}
 	}
@@ -129,8 +137,8 @@ func StopSchedulerV2(ctx context.Context) error {
 		log.Printf("marked %d active task(s) as interrupted during shutdown", count)
 	}
 
-	globalScheduler = nil
-	globalExecutor = nil
+	globalScheduler.Store(nil)
+	globalExecutor.Store(nil)
 	schedulerLifecycle.started = false
 	return nil
 }
@@ -148,9 +156,9 @@ func ShutdownSchedulerV2() {
 }
 
 func GetSchedulerV2() *SchedulerV2 {
-	return globalScheduler
+	return globalScheduler.Load()
 }
 
 func GetTaskExecutor() *TaskExecutor {
-	return globalExecutor
+	return globalExecutor.Load()
 }

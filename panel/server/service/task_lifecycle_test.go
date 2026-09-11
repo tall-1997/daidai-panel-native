@@ -83,10 +83,10 @@ func TestMarkActiveTasksInterruptedUsesSchedulerRegistration(t *testing.T) {
 		t.Fatalf("ensure columns: %v", err)
 	}
 
-	previousScheduler := globalScheduler
-	globalScheduler = NewSchedulerV2(SchedulerConfig{WorkerCount: 1, QueueSize: 10, RateInterval: time.Hour}, nil)
+	previousScheduler := globalScheduler.Load()
+	globalScheduler.Store(NewSchedulerV2(SchedulerConfig{WorkerCount: 1, QueueSize: 10, RateInterval: time.Hour}, nil))
 	t.Cleanup(func() {
-		globalScheduler = previousScheduler
+		globalScheduler.Store(previousScheduler)
 	})
 
 	enabledManual := &model.Task{
@@ -98,7 +98,7 @@ func TestMarkActiveTasksInterruptedUsesSchedulerRegistration(t *testing.T) {
 	if err := database.DB.Create(enabledManual).Error; err != nil {
 		t.Fatalf("create enabled manual task: %v", err)
 	}
-	if err := globalScheduler.AddJob(enabledManual); err != nil {
+	if err := globalScheduler.Load().AddJob(enabledManual); err != nil {
 		t.Fatalf("register manual task: %v", err)
 	}
 	if err := database.DB.Model(enabledManual).Update("status", model.TaskStatusRunning).Error; err != nil {

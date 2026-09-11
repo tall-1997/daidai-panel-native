@@ -124,6 +124,10 @@ func TestReadContractAcceptsGeneratedRuntimeMetadataExtensions(t *testing.T) {
 	contract.Manifest.Components[0].AssetRevision = "3.12.3-android-arm64-r1"
 	contract.Manifest.Components[0].Artifacts = []runtimeArtifact{{Path: "assets/runtime.py", SHA256: strings.Repeat("2", 64), Size: 42}}
 	contract.Compatibility.PythonWheelPolicy = map[string]any{"python_tag": "cp314", "offline": []any{"py3-none-any"}}
+	contract.Smoke.Artifacts = map[string]smokeArtifact{
+		"app_apk":  {Name: "app.apk", Size: 123, SHA256: strings.Repeat("3", 64)},
+		"test_apk": {Name: "app-test.apk", Size: 456, SHA256: strings.Repeat("4", 64)},
+	}
 	manifestPath := filepath.Join(root, "manifest.json")
 	compatibilityPath := filepath.Join(root, "compatibility.json")
 	smokePath := filepath.Join(root, "smoke-evidence.json")
@@ -141,6 +145,9 @@ func TestReadContractAcceptsGeneratedRuntimeMetadataExtensions(t *testing.T) {
 	}
 	if decoded.Manifest.Components[0].PythonTag != "cp314" || decoded.Manifest.Components[0].ArtifactCount != 1 {
 		t.Fatalf("generated runtime metadata was not decoded: %#v", decoded.Manifest.Components[0])
+	}
+	if decoded.Smoke.Artifacts["app_apk"].Name != "app.apk" || decoded.Smoke.Artifacts["test_apk"].Size != 456 {
+		t.Fatalf("smoke evidence artifacts were not decoded: %#v", decoded.Smoke.Artifacts)
 	}
 }
 
