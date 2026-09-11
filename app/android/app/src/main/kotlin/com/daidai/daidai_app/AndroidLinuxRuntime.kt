@@ -175,6 +175,15 @@ object AndroidLinuxRuntime {
 
     fun nativeLibraryDir(context: Context): File = File(context.applicationInfo.nativeLibraryDir.orEmpty())
 
+    private fun nativeCompatDir(context: Context): File {
+        val compat = File(context.filesDir, "runtimes/native-compat/${currentAbi()}")
+        copyVersionedLibraries(nativeLibraryDir(context), compat, mapOf(
+            "libtalloc_v2.so" to listOf("libtalloc.so.2"),
+            "libbusybox_v138.so" to listOf("libbusybox.so.1.38.0"),
+        ))
+        return compat
+    }
+
     fun baseEnvironment(context: Context, workingDir: File): MutableMap<String, String> {
         val mirrors = mirrorConfig(context)
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME))
@@ -188,6 +197,7 @@ object AndroidLinuxRuntime {
             "PYTHONUNBUFFERED" to "1",
             "PYTHONIOENCODING" to "utf-8",
             "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
+            "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
             nodeRuntimeOptions(currentAbi())?.let { put("NODE_OPTIONS", it) }
@@ -200,7 +210,6 @@ object AndroidLinuxRuntime {
 
     internal fun prootEnvironment(loader: File, cacheDir: File): Map<String, String> = mapOf(
         "PROOT_LOADER" to loader.absolutePath,
-        "PROOT_NO_SECCOMP" to "1",
         "PROOT_TMP_DIR" to cacheDir.absolutePath,
         "PROOT_VERBOSE" to "0",
     )

@@ -18,7 +18,7 @@
 
 ### Android
 
-- 修复 PRoot 参数绑 `/` 覆盖 rootfs 根、向 guest 泄漏 `LD_LIBRARY_PATH`、缺少 `PROOT_NO_SECCOMP` 以及 ELF `p_align` 偏移读取错误；系统包安装工作目录修正为 `/workspace`。
+- 修复 PRoot 工作目录误绑 `/` 覆盖 rootfs 根的问题，系统包安装工作目录修正为 `/workspace`；修正 ELF `p_align` 偏移读取错误。
 - rootfs 校验值下载兼容 Alpine 的 `<archive>.sha256` 裸哈希格式，修复此前校验地址恒 404 的问题。
 - 面板健康检查加入 TTL 缓存与 single-flight，避免公开接口同步执行 PRoot 造成资源耗尽。
 - Python 运行时统一到 3.14，失败不再永久缓存，pip 引导校验退出码；运行时 fallback 元数据版本同步为 3.14。
