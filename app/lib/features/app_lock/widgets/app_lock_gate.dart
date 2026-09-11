@@ -242,9 +242,9 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
     final methods = <_UnlockMethod>[
@@ -359,8 +359,8 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
       ),
     );
     return Material(
-      color: isFlat ? Colors.black : Colors.black.withAlpha(140),
-      child: isFlat
+      color: isMiuix ? Colors.black : Colors.black.withAlpha(140),
+      child: isMiuix
           ? content
           : BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),

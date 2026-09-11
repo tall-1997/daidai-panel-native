@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/local_panel/managed_local_connection_monitor.dart';
 import 'core/router/app_router.dart';
+import 'core/theme/app_miuix_theme.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/theme_provider.dart';
 import 'features/app_lock/widgets/app_lock_gate.dart';
@@ -50,8 +51,9 @@ class _DaidaiAppState extends ConsumerState<DaidaiApp> {
       scrollBehavior: const MaterialScrollBehavior().copyWith(
         overscroll: false,
       ),
-      builder: (context, child) =>
-          AppLockGate(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => AppMiuixTheme(
+        child: AppLockGate(child: child ?? const SizedBox.shrink()),
+      ),
     );
   }
 }

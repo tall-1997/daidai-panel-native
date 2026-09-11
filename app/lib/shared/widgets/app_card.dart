@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -26,30 +27,22 @@ class AppCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
     final performanceMode =
         stableForScrolling || Scrollable.maybeOf(context) != null;
-    Widget card = isFlat
-        ? Material(
-            color: isLight ? Colors.white : AppColors.slate900,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(borderRadius),
-              side: BorderSide(
-                color: isLight ? AppColors.slate200 : AppColors.slate700,
-              ),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: onTap,
-              child: Padding(
-                padding: padding ?? const EdgeInsets.all(16),
-                child: child,
-              ),
-            ),
+    Widget card = isMiuix
+        ? MiuixCard(
+            cornerRadius: borderRadius,
+            insideMargin: padding ?? const EdgeInsets.all(16),
+            onPressed: onTap,
+            feedbackType: onTap == null
+                ? MiuixPressFeedbackType.none
+                : MiuixPressFeedbackType.sink,
+            child: child,
           )
         : LiquidGlassLens(
             style: appLiquidGlassStyle(
@@ -63,7 +56,7 @@ class AppCard extends ConsumerWidget {
             ),
           );
 
-    if (!isFlat && onTap != null) {
+    if (!isMiuix && onTap != null) {
       card = GestureDetector(onTap: onTap, child: card);
     }
 
@@ -91,25 +84,30 @@ class AppListTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: isFlat
-          ? Material(
-              color: isLight ? Colors.white : AppColors.slate900,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-                side: BorderSide(
-                  color: isLight ? AppColors.slate200 : AppColors.slate700,
-                ),
+      child: isMiuix
+          ? MiuixCard(
+              cornerRadius: 14,
+              insideMargin: EdgeInsets.zero,
+              child: MiuixBasicComponent(
+                title: title,
+                startAction: MiuixIcon(icon: icon, size: 20),
+                endActions: [
+                  trailing ??
+                      MiuixIcon(
+                        vector: MiuixIcons.basic.arrowRight,
+                        size: 18,
+                      ),
+                ],
+                onClick: onTap,
               ),
-              clipBehavior: Clip.antiAlias,
-              child: _buildTile(isLight),
             )
           : LiquidGlassLens(
               style: appLiquidGlassStyle(
@@ -159,29 +157,28 @@ class AppGlassIconButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
     final button = SizedBox(
       width: 44,
       height: 44,
       child: Center(
-        child: SizedBox(
-          width: 36,
-          height: 36,
-          child: isFlat
-              ? Material(
-                  color: isLight ? AppColors.slate100 : AppColors.slate800,
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: onTap,
-                    child: Icon(icon, size: iconSize, color: accentColor),
-                  ),
-                )
-              : LiquidGlassLens(
+        child: isMiuix
+            ? MiuixIconButton(
+                onPressed: onTap,
+                child: MiuixIcon(
+                  icon: icon,
+                  size: iconSize,
+                  tint: accentColor,
+                ),
+              )
+            : SizedBox(
+                width: 36,
+                height: 36,
+                child: LiquidGlassLens(
                   style: appLiquidGlassStyle(
                     isLight: isLight,
                     borderRadius: 18,
@@ -198,7 +195,7 @@ class AppGlassIconButton extends ConsumerWidget {
                     ),
                   ),
                 ),
-        ),
+              ),
       ),
     );
     if (tooltip == null) {
@@ -231,33 +228,30 @@ class AppLiquidGlassSurface extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
-    if (isFlat) {
+    if (isMiuix) {
       final accent = accentColor ?? AppColors.primary;
-      return Material(
-        color: selected
-            ? Color.alphaBlend(
-                accent.withAlpha(isLight ? 20 : 32),
-                isLight ? Colors.white : AppColors.slate900,
-              )
-            : (isLight ? Colors.white : AppColors.slate900),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(borderRadius),
-          side: BorderSide(
-            color: selected
-                ? accent.withAlpha(isLight ? 120 : 160)
-                : (isLight ? AppColors.slate200 : AppColors.slate700),
-          ),
+      final miuixColors = MiuixTheme.of(context).colors;
+      final baseColor = miuixColors.surfaceContainer;
+      final color = selected
+          ? Color.alphaBlend(accent.withAlpha(24), baseColor)
+          : baseColor;
+      return MiuixCard(
+        cornerRadius: borderRadius,
+        insideMargin: padding,
+        onPressed: onTap,
+        feedbackType: onTap == null
+            ? MiuixPressFeedbackType.none
+            : MiuixPressFeedbackType.sink,
+        colors: MiuixCardColors(
+          color: color,
+          contentColor: miuixColors.onSurfaceContainer,
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(padding: padding, child: child),
-        ),
+        child: child,
       );
     }
     return LiquidGlassLens(
@@ -343,17 +337,15 @@ class AppStyleSlider extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
-    if (isFlat) {
-      return Slider(
+    if (isMiuix) {
+      return MiuixSlider(
         value: value,
-        onChanged: onChanged,
-        activeColor: activeColor,
-        inactiveColor: inactiveColor,
+        onValueChanged: onChanged,
       );
     }
     return LayoutBuilder(
@@ -384,16 +376,15 @@ class AppLiquidGlassToggle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final enabled = onChanged != null;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
-    if (isFlat) {
-      return Switch(
+    if (isMiuix) {
+      return MiuixSwitch(
         value: value,
         onChanged: onChanged,
-        activeTrackColor: activeColor,
       );
     }
     return Opacity(
@@ -441,9 +432,9 @@ class AppLiquidGlassButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
     final color = switch (variant) {
@@ -453,34 +444,51 @@ class AppLiquidGlassButton extends ConsumerWidget {
       AppLiquidGlassButtonVariant.danger => AppColors.red500,
       AppLiquidGlassButtonVariant.warning => AppColors.amber500,
     };
-    if (isFlat) {
-      final foreground = onPressed == null ? AppColors.slate400 : color;
+    if (isMiuix) {
+      final miuixColors = MiuixTheme.of(context).colors;
+      final MiuixButtonColors buttonColors = switch (variant) {
+        AppLiquidGlassButtonVariant.primary =>
+          MiuixButtonDefaults.buttonColorsPrimary(context),
+        AppLiquidGlassButtonVariant.secondary =>
+          MiuixButtonDefaults.buttonColors(context),
+        AppLiquidGlassButtonVariant.danger => MiuixButtonColors(
+          color: AppColors.red500,
+          disabledColor: miuixColors.disabledPrimaryButton,
+          contentColor: Colors.white,
+          disabledContentColor: miuixColors.disabledOnPrimaryButton,
+        ),
+        AppLiquidGlassButtonVariant.warning => MiuixButtonColors(
+          color: AppColors.amber500,
+          disabledColor: miuixColors.disabledPrimaryButton,
+          contentColor: Colors.white,
+          disabledContentColor: miuixColors.disabledOnPrimaryButton,
+        ),
+      };
+      final Widget content = loading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  MiuixIcon(icon: icon, size: 18),
+                  const SizedBox(width: 6),
+                ],
+                MiuixText(label),
+              ],
+            );
       return SizedBox(
         width: width,
-        height: height,
-        child: OutlinedButton.icon(
+        child: MiuixButton(
           onPressed: loading ? null : onPressed,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: foreground,
-            backgroundColor: isLight ? Colors.white : AppColors.slate900,
-            side: BorderSide(color: foreground.withAlpha(110)),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(height / 2),
-            ),
-          ),
-          icon: loading
-              ? SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: color,
-                  ),
-                )
-              : icon == null
-              ? const SizedBox.shrink()
-              : Icon(icon, size: 18),
-          label: Text(label),
+          minHeight: height,
+          cornerRadius: height / 2,
+          colors: buttonColors,
+          insideMargin: EdgeInsets.zero,
+          child: Center(child: content),
         ),
       );
     }

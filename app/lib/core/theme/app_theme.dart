@@ -69,7 +69,7 @@ class AppColors {
 
 class AppTheme {
   static ThemeData light({
-    AppVisualStyle visualStyle = AppVisualStyle.pureFlat,
+    AppVisualStyle visualStyle = AppVisualStyle.miuix,
   }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
@@ -77,7 +77,7 @@ class AppTheme {
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: visualStyle == AppVisualStyle.pureFlat
+      surface: visualStyle == AppVisualStyle.miuix
           ? Colors.white
           : AppColors.lightSurface,
       onSurface: AppColors.slate900,
@@ -91,7 +91,7 @@ class AppTheme {
   }
 
   static ThemeData dark({
-    AppVisualStyle visualStyle = AppVisualStyle.pureFlat,
+    AppVisualStyle visualStyle = AppVisualStyle.miuix,
   }) {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
@@ -99,7 +99,7 @@ class AppTheme {
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: visualStyle == AppVisualStyle.pureFlat
+      surface: visualStyle == AppVisualStyle.miuix
           ? AppColors.slate900
           : AppColors.darkSurface,
       onSurface: AppColors.slate50,
@@ -114,29 +114,31 @@ class AppTheme {
 
   static ThemeData _buildTheme(ColorScheme cs, AppVisualStyle visualStyle) {
     final isLight = cs.brightness == Brightness.light;
-    final isFlat = visualStyle == AppVisualStyle.pureFlat;
-    final cardColor = isFlat
+    final isMiuix = visualStyle == AppVisualStyle.miuix;
+    final cardColor = isMiuix
         ? (isLight ? Colors.white : AppColors.slate900)
         : (isLight ? AppColors.lightSurface : AppColors.darkSurface);
-    final borderColor = isFlat
+    final borderColor = isMiuix
         ? (isLight ? AppColors.slate200 : AppColors.slate700)
         : (isLight ? const Color(0x70FFFFFF) : AppColors.darkBorder);
-    final scaffoldBg = isLight ? AppColors.lightPage : AppColors.darkPage;
-    final controlColor = isFlat
+    final scaffoldBg = isMiuix
+        ? (isLight ? const Color(0xFFFFFFFF) : const Color(0xFF242424))
+        : (isLight ? AppColors.lightPage : AppColors.darkPage);
+    final controlColor = isMiuix
         ? (isLight ? AppColors.slate100 : AppColors.slate800)
         : (isLight ? AppColors.lightControl : AppColors.darkControl);
-    final pressedControlColor = isFlat
+    final pressedControlColor = isMiuix
         ? (isLight ? AppColors.slate200 : AppColors.slate700)
         : (isLight
               ? AppColors.lightControlPressed
               : AppColors.darkControlPressed);
-    final overlayGlassColor = isFlat
-        ? cardColor
+    final overlayGlassColor = isMiuix
+        ? scaffoldBg
         : (isLight
               ? Colors.white.withAlpha(188)
               : AppColors.slate900.withAlpha(196));
-    final modalSurfaceColor = isFlat
-        ? cardColor
+    final modalSurfaceColor = isMiuix
+        ? scaffoldBg
         : (isLight
               ? Colors.white.withAlpha(236)
               : AppColors.slate900.withAlpha(236));
@@ -146,7 +148,7 @@ class AppTheme {
 
     Color resolveControlColor(Set<WidgetState> states) {
       if (states.contains(WidgetState.disabled)) {
-        return isFlat
+        return isMiuix
             ? Color.alphaBlend(
                 controlColor.withAlpha(isLight ? 120 : 105),
                 cardColor,
@@ -178,17 +180,17 @@ class AppTheme {
       colorScheme: cs,
       scaffoldBackgroundColor: scaffoldBg,
       appBarTheme: AppBarTheme(
-        centerTitle: false,
+        centerTitle: isMiuix,
         elevation: 0,
         scrolledUnderElevation: 0,
-        backgroundColor: isFlat
+        backgroundColor: isMiuix
             ? scaffoldBg
             : scaffoldBg.withAlpha(isLight ? 224 : 230),
         foregroundColor: cs.onSurface,
         titleTextStyle: TextStyle(
           color: cs.onSurface,
-          fontSize: 24,
-          fontWeight: FontWeight.w700,
+          fontSize: isMiuix ? 18 : 24,
+          fontWeight: isMiuix ? FontWeight.w600 : FontWeight.w700,
         ),
       ),
       cardTheme: CardThemeData(
@@ -276,7 +278,7 @@ class AppTheme {
                 states.contains(WidgetState.hovered)) {
               return pressedControlColor;
             }
-            return isFlat
+            return isMiuix
                 ? Color.alphaBlend(
                     controlColor.withAlpha(isLight ? 120 : 105),
                     cardColor,
@@ -330,10 +332,10 @@ class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         elevation: 0,
         height: 60,
-        backgroundColor: isFlat ? cardColor : Colors.transparent,
+        backgroundColor: isMiuix ? cardColor : Colors.transparent,
         surfaceTintColor: Colors.transparent,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        indicatorColor: isFlat
+        indicatorColor: isMiuix
             ? Color.alphaBlend(
                 AppColors.primary.withAlpha(isLight ? 28 : 42),
                 cardColor,
@@ -427,13 +429,13 @@ class AppTheme {
         shadowColor: Colors.transparent,
         barrierColor: modalBarrierColor,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(isMiuix ? 32 : 24),
           side: BorderSide(color: borderColor),
         ),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: isFlat
+        backgroundColor: isMiuix
             ? cardColor
             : (isLight
                   ? AppColors.lightControlPressed

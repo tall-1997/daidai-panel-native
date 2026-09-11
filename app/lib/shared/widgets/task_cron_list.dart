@@ -25,19 +25,19 @@ class TaskCronList extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    final isFlat = ref.watch(
+    final isMiuix = ref.watch(
       appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.pureFlat,
+        (settings) => settings.visualStyle == AppVisualStyle.miuix,
       ),
     );
     final items = _normalized;
-    final cardBg = isFlat
+    final cardBg = isMiuix
         ? theme.colorScheme.surfaceContainerHighest
         : AppColors.slate500.withAlpha(isLight ? 8 : 24);
-    final cardBorder = isFlat
+    final cardBorder = isMiuix
         ? theme.colorScheme.outline
         : AppColors.slate500.withAlpha(isLight ? 28 : 56);
-    final badgeBg = isFlat
+    final badgeBg = isMiuix
         ? Color.alphaBlend(
             AppColors.primary.withAlpha(isLight ? 22 : 36),
             cardBg,

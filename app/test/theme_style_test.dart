@@ -6,6 +6,7 @@ import 'package:daidai_app/shared/widgets/app_card.dart';
 import 'package:daidai_app/shared/widgets/main_scaffold.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -16,10 +17,10 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('AppStyleSettings', () {
-    test('defaults to Pure Flat and system color mode', () {
+    test('defaults to MIUIX and system color mode', () {
       const settings = AppStyleSettings();
 
-      expect(settings.visualStyle, AppVisualStyle.pureFlat);
+      expect(settings.visualStyle, AppVisualStyle.miuix);
       expect(settings.themeMode, ThemeMode.system);
     });
 
@@ -53,12 +54,12 @@ void main() {
   });
 
   group('AppStyleNotifier', () {
-    test('uses Pure Flat when the visual style setting is absent', () async {
+    test('uses MIUIX when the visual style setting is absent', () async {
       SharedPreferences.setMockInitialValues({'theme_mode': 2});
       final notifier = AppStyleNotifier();
       await notifier.initialized;
 
-      expect(notifier.state.visualStyle, AppVisualStyle.pureFlat);
+      expect(notifier.state.visualStyle, AppVisualStyle.miuix);
       expect(notifier.state.themeMode, ThemeMode.dark);
     });
 
@@ -70,17 +71,17 @@ void main() {
       await notifier.initialized;
       expect(notifier.state.visualStyle, AppVisualStyle.liquidGlass);
 
-      await notifier.setVisualStyle(AppVisualStyle.pureFlat);
+      await notifier.setVisualStyle(AppVisualStyle.miuix);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('visual_style'), AppVisualStyle.pureFlat.name);
+      expect(prefs.getString('visual_style'), AppVisualStyle.miuix.name);
     });
 
-    test('falls back to Pure Flat for an unknown persisted value', () async {
+    test('falls back to MIUIX for an unknown persisted value', () async {
       SharedPreferences.setMockInitialValues({'visual_style': 'unknown'});
       final notifier = AppStyleNotifier();
       await notifier.initialized;
 
-      expect(notifier.state.visualStyle, AppVisualStyle.pureFlat);
+      expect(notifier.state.visualStyle, AppVisualStyle.miuix);
     });
 
     test('does not overwrite a style changed while settings load', () async {
@@ -90,16 +91,16 @@ void main() {
       });
       final notifier = AppStyleNotifier();
 
-      await notifier.setVisualStyle(AppVisualStyle.pureFlat);
+      await notifier.setVisualStyle(AppVisualStyle.miuix);
       await notifier.initialized;
 
-      expect(notifier.state.visualStyle, AppVisualStyle.pureFlat);
+      expect(notifier.state.visualStyle, AppVisualStyle.miuix);
       expect(notifier.state.themeMode, ThemeMode.dark);
     });
   });
 
   group('style-aware shared controls', () {
-    test('Pure Flat theme uses opaque shared surfaces', () {
+    test('MIUIX theme uses opaque shared surfaces', () {
       final theme = AppTheme.light();
       final buttonColor = theme.outlinedButtonTheme.style?.backgroundColor
           ?.resolve(<WidgetState>{});
@@ -114,10 +115,10 @@ void main() {
       expect(buttonColor?.a, 1);
     });
 
-    testWidgets('Pure Flat omits liquid glass render widgets', (tester) async {
+    testWidgets('MIUIX omits liquid glass render widgets', (tester) async {
       await tester.pumpWidget(
         _testApp(
-          const AppStyleSettings(visualStyle: AppVisualStyle.pureFlat),
+          const AppStyleSettings(visualStyle: AppVisualStyle.miuix),
         ),
       );
 
@@ -126,18 +127,16 @@ void main() {
       expect(find.byType(LiquidGlassToggle), findsNothing);
       expect(find.byType(LiquidGlassSlider), findsNothing);
       expect(find.byType(Material), findsWidgets);
-      expect(find.byType(Switch), findsOneWidget);
-      expect(find.byType(Slider), findsOneWidget);
+      expect(find.byType(MiuixSwitch), findsOneWidget);
+      expect(find.byType(MiuixSlider), findsOneWidget);
 
-      final surfaceMaterial = tester.widget<Material>(
-        find
-            .descendant(
-              of: find.byKey(const Key('test-surface')),
-              matching: find.byType(Material),
-            )
-            .first,
+      final surfaceCard = tester.widget<MiuixCard>(
+        find.descendant(
+          of: find.byKey(const Key('test-surface')),
+          matching: find.byType(MiuixCard),
+        ),
       );
-      expect(surfaceMaterial.color?.a, 1);
+      expect(surfaceCard.colors?.color.a, 1);
     });
 
     testWidgets('Liquid Glass uses liquid glass render widgets', (tester) async {
@@ -155,7 +154,7 @@ void main() {
   });
 
   group('style-aware page rendering', () {
-    testWidgets('Pure Flat main shell omits liquid glass page widgets', (
+    testWidgets('MIUIX main shell omits liquid glass page widgets', (
       tester,
     ) async {
       final router = _testRouter();
@@ -163,18 +162,18 @@ void main() {
 
       await tester.pumpWidget(
         _routerTestApp(
-          const AppStyleSettings(visualStyle: AppVisualStyle.pureFlat),
+          const AppStyleSettings(visualStyle: AppVisualStyle.miuix),
           router,
         ),
       );
 
-      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(find.byType(MiuixNavigationBar), findsOneWidget);
       expect(find.byType(LiquidGlassScaffold), findsNothing);
       expect(find.byType(LiquidGlassView), findsNothing);
       expect(find.byType(LiquidGlassBottomNavBar), findsNothing);
     });
 
-    testWidgets('Pure Flat background extends behind the status bar', (
+    testWidgets('MIUIX background extends behind the status bar', (
       tester,
     ) async {
       final router = _testRouter();
@@ -182,12 +181,12 @@ void main() {
 
       await tester.pumpWidget(
         _routerTestApp(
-          const AppStyleSettings(visualStyle: AppVisualStyle.pureFlat),
+          const AppStyleSettings(visualStyle: AppVisualStyle.miuix),
           router,
         ),
       );
 
-      final overlayFinder = find.byKey(const ValueKey('pure-flat-system-ui'));
+      final overlayFinder = find.byKey(const ValueKey('miuix-system-ui'));
       final overlay = tester.widget<AnnotatedRegion<SystemUiOverlayStyle>>(
         overlayFinder,
       );
@@ -195,7 +194,7 @@ void main() {
       expect(overlay.value.systemStatusBarContrastEnforced, isFalse);
 
       final scaffoldFinder = find.ancestor(
-        of: find.byType(NavigationBar),
+        of: find.byType(MiuixNavigationBar),
         matching: find.byType(Scaffold),
       );
       final scaffold = tester.widget<Scaffold>(scaffoldFinder.first);
@@ -226,7 +225,7 @@ void main() {
     ) async {
       await tester.pumpWidget(
         _backgroundTestApp(
-          const AppStyleSettings(visualStyle: AppVisualStyle.pureFlat),
+          const AppStyleSettings(visualStyle: AppVisualStyle.miuix),
         ),
       );
       expect(find.byType(LiquidGlassView), findsNothing);
@@ -245,7 +244,7 @@ void main() {
       await tester.pumpWidget(
         _themeSettingsTestApp(
           const AppStyleSettings(
-            visualStyle: AppVisualStyle.pureFlat,
+            visualStyle: AppVisualStyle.miuix,
             backgroundImagePath: '/missing-background.png',
           ),
         ),

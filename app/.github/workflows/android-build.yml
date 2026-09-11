@@ -27,7 +27,7 @@ jobs:
       run:
         shell: bash
     env:
-      FLUTTER_VERSION: 3.41.5
+      FLUTTER_VERSION: 3.44.9
       BUILD_MODE: ${{ github.event.inputs.build_mode || 'debug' }}
 
     steps:

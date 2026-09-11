@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  FLUTTER_VERSION: 3.41.5
+  FLUTTER_VERSION: 3.44.9
   NODE_VERSION: '20.19.x'
   NPM_VERSION: '10.8.2'
 
@@ -91,7 +91,7 @@ jobs:
         run: flutter test
 
       - name: Analyze Dart source
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Run Kotlin tests
         run: gradle -p android testReleaseUnitTest

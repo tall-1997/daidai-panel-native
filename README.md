@@ -123,8 +123,8 @@ CI 使用以下工具链：
 
 | 工具 | 版本 |
 | --- | --- |
-| Flutter | 3.41.5 stable |
-| Dart | Flutter 3.41.5 内置版本 |
+| Flutter | 3.44.9 stable |
+| Dart | Flutter 3.44.9 内置版本 |
 | Go | 1.25.0 |
 | Java | Temurin 17 |
 | Gradle | 9.1.0 |

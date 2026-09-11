@@ -21,7 +21,7 @@ class AppBackground extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final blur = settings.blurIntensity.clamp(0.0, 50.0);
-    final isFlat = settings.visualStyle == AppVisualStyle.pureFlat;
+    final isMiuix = settings.visualStyle == AppVisualStyle.miuix;
     final baseColor = Theme.of(context).scaffoldBackgroundColor;
     final mediaQuery = MediaQuery.of(context);
     final cacheWidth =
@@ -45,14 +45,14 @@ class AppBackground extends ConsumerWidget {
             fit: StackFit.expand,
             children: [
               ColoredBox(color: baseColor),
-              if (isFlat || blur == 0)
+              if (isMiuix || blur == 0)
                 image!
               else
                 ImageFiltered(
                   imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
                   child: image!,
                 ),
-              if (!isFlat && blur > 0)
+              if (!isMiuix && blur > 0)
                 ColoredBox(
                   color: isDark
                       ? AppColors.darkPage.withAlpha(72)
@@ -62,7 +62,7 @@ class AppBackground extends ConsumerWidget {
           )
         : ColoredBox(color: baseColor);
 
-    if (isFlat) {
+    if (isMiuix) {
       return Stack(
         fit: StackFit.expand,
         children: [

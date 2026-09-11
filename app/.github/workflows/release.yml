@@ -32,7 +32,7 @@ jobs:
       run:
         shell: bash
     env:
-      FLUTTER_VERSION: 3.41.5
+      FLUTTER_VERSION: 3.44.9
       BUILD_MODE: ${{ github.event.inputs.build_mode || 'debug' }}
     steps:
       - uses: actions/checkout@v5
@@ -172,7 +172,7 @@ jobs:
       run:
         shell: bash
     env:
-      FLUTTER_VERSION: 3.41.5
+      FLUTTER_VERSION: 3.44.9
     steps:
       - uses: actions/checkout@v5
 
@@ -251,7 +251,7 @@ jobs:
       run:
         shell: bash
     env:
-      FLUTTER_VERSION: 3.41.5
+      FLUTTER_VERSION: 3.44.9
       BUILD_NAME: ${{ needs.prepare.outputs.build_name }}
       BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
       EXPORT_METHOD: development

@@ -109,3 +109,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - `AndroidLinuxRuntime.prootEnvironment` 不得加入 `PROOT_NO_SECCOMP=1`。termux/proot 5.1.107.92 依赖 seccomp mode 2 重写被 Android 外层 seccomp 拦截的 syscall，禁用后 rseq 等会以 SIGSYS 杀掉 tracee（见 commit 0631b3b、CHANGELOG v1.0.20「恢复并校验 seccomp 路径」）。单元测试 `proot environment overrides Termux loader path with packaged ELF` 显式断言该键不存在。
   - `AndroidLinuxRuntime.baseEnvironment` 必须保留 `LD_LIBRARY_PATH = nativeCompatDir:nativeLibraryDir` 与 `nativeCompatDir`（生成 `libtalloc.so.2`/`libbusybox.so.1.38.0` 版本化软链）。移除后宿主机 proot 子进程无法解析 `libtalloc.so`，x86_64 模拟器 smoke（`executeGuestEvidence` 用 `baseEnvironment` 启动 proot）会失败。
   - Android Kotlin 运行时改动本地无法编译/执行，必须依赖云端 `android-release.yml` 的 `verify-build`（Kotlin 单测）与 `x86-device`（x86_64 模拟器 smoke）验证；仅本地 go/python 检查无法覆盖。
+
+[Project Knowledge Summary]
+- Date: 2026-09-11
+- Context: Discovered by Agent while migrating the Flutter client default UI style to flutter_miuix (MIUIX/HyperOS)
+- Category: Build Methods | Environment Configuration | Workflow & Collaboration
+- Instructions:
+  - `flutter_miuix` 1.1.1 要求 Dart SDK `>=3.12.2`，因此 `app/pubspec.yaml` 的 `environment.sdk` 与 CI 的 `FLUTTER_VERSION` 统一为 Flutter 3.44.9（内置 Dart 3.12.2）；`.github/workflows` 与 `app/.github/workflows` 需同步。
+  - 本地 Flutter 工具链位于 `/opt/flutter`（3.44.9），使用前需 `git config --global --add safe.directory /opt/flutter`；pub 下载用 `PUB_HOSTED_URL=https://pub.flutter-io.cn`、`FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` 提速。
+  - Flutter 3.44.9 的 `flutter analyze` 默认将 info 级 lint 视为失败；CI analyze 统一使用 `flutter analyze --no-fatal-infos --no-fatal-warnings`（与 `app/.github/workflows/build.yml` 既有约定一致）。
+  - 客户端默认视觉风格为 `AppVisualStyle.miuix`，`liquidGlass` 为可选；MIUIX 主题经 `AppMiuixTheme` 在 `MaterialApp.builder` 注入，明暗取自 `MaterialApp.themeMode` 解析后的 `Theme.of(context).brightness`。

@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_miuix/miuix.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -154,34 +155,37 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     );
   }
 
-  Widget _buildFlatBottomBar(BuildContext context, int index) {
-    return NavigationBar(
-      selectedIndex: index,
-      onDestinationSelected: _onTabSelected,
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.space_dashboard_outlined),
-          selectedIcon: Icon(Icons.space_dashboard),
+  Widget _buildMiuixBottomBar(BuildContext context, int index) {
+    return MiuixNavigationBar(
+      children: [
+        MiuixNavigationBarItem(
+          selected: index == 0,
+          onPressed: () => _onTabSelected(0),
+          icon: const MiuixIcon(icon: Icons.space_dashboard_outlined),
           label: '主页',
         ),
-        NavigationDestination(
-          icon: Icon(Icons.schedule_outlined),
-          selectedIcon: Icon(Icons.schedule),
+        MiuixNavigationBarItem(
+          selected: index == 1,
+          onPressed: () => _onTabSelected(1),
+          icon: const MiuixIcon(icon: Icons.schedule_outlined),
           label: '任务',
         ),
-        NavigationDestination(
-          icon: Icon(Icons.terminal_outlined),
-          selectedIcon: Icon(Icons.terminal),
+        MiuixNavigationBarItem(
+          selected: index == 2,
+          onPressed: () => _onTabSelected(2),
+          icon: const MiuixIcon(icon: Icons.terminal_outlined),
           label: '日志',
         ),
-        NavigationDestination(
-          icon: Icon(Icons.key_outlined),
-          selectedIcon: Icon(Icons.key),
+        MiuixNavigationBarItem(
+          selected: index == 3,
+          onPressed: () => _onTabSelected(3),
+          icon: const MiuixIcon(icon: Icons.key_outlined),
           label: '变量',
         ),
-        NavigationDestination(
-          icon: Icon(Icons.menu_outlined),
-          selectedIcon: Icon(Icons.menu),
+        MiuixNavigationBarItem(
+          selected: index == 4,
+          onPressed: () => _onTabSelected(4),
+          icon: const MiuixIcon(icon: Icons.menu_outlined),
           label: '更多',
         ),
       ],
@@ -195,7 +199,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     final bg = styleSettings.backgroundImagePath;
     final blur = styleSettings.blurIntensity.clamp(0.0, 50.0);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isFlat = styleSettings.visualStyle == AppVisualStyle.pureFlat;
+    final isMiuix = styleSettings.visualStyle == AppVisualStyle.miuix;
 
     Widget backgroundWidget;
     if (bg != null) {
@@ -207,7 +211,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
         errorBuilder: (_, _, _) =>
             Container(color: Theme.of(context).scaffoldBackgroundColor),
       );
-      if (!isFlat && blur > 0) {
+      if (!isMiuix && blur > 0) {
         backgroundWidget = SizedBox.expand(
           child: Stack(
             fit: StackFit.expand,
@@ -243,9 +247,9 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     return PopScope<void>(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) => _handleBackPress(didPop),
-      child: isFlat
+      child: isMiuix
           ? AnnotatedRegion<SystemUiOverlayStyle>(
-              key: const ValueKey('pure-flat-system-ui'),
+              key: const ValueKey('miuix-system-ui'),
               value: flatOverlayStyle,
               child: Scaffold(
                 backgroundColor: Colors.transparent,
@@ -261,7 +265,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
                     ),
                   ],
                 ),
-                bottomNavigationBar: _buildFlatBottomBar(context, idx),
+                bottomNavigationBar: _buildMiuixBottomBar(context, idx),
               ),
             )
           : LiquidGlassScaffold(

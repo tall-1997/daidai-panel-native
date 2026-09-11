@@ -124,8 +124,8 @@ class _VisualStyleSelector extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      style == AppVisualStyle.pureFlat
-                          ? Icons.layers_clear_outlined
+                      style == AppVisualStyle.miuix
+                          ? Icons.auto_awesome
                           : Icons.blur_on_outlined,
                       color: currentStyle == style
                           ? AppColors.primary
@@ -133,8 +133,8 @@ class _VisualStyleSelector extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      style == AppVisualStyle.pureFlat
-                          ? 'Pure Flat'
+                      style == AppVisualStyle.miuix
+                          ? 'MIUIX'
                           : 'Liquid Glass',
                       style: TextStyle(
                         fontSize: 12,

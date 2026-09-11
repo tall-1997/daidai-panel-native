@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-enum AppVisualStyle { pureFlat, liquidGlass }
+enum AppVisualStyle { miuix, liquidGlass }
 
 class AppStyleSettings {
   final ThemeMode themeMode;
@@ -12,7 +12,7 @@ class AppStyleSettings {
 
   const AppStyleSettings({
     this.themeMode = ThemeMode.system,
-    this.visualStyle = AppVisualStyle.pureFlat,
+    this.visualStyle = AppVisualStyle.miuix,
     this.backgroundImagePath,
     this.blurIntensity = 0,
   });
@@ -69,7 +69,7 @@ class AppStyleNotifier extends StateNotifier<AppStyleSettings> {
         visualStyle: _visualStyleRevision == visualStyleRevision
             ? AppVisualStyle.values.firstWhere(
                 (style) => style.name == visualStyleName,
-                orElse: () => AppVisualStyle.pureFlat,
+                orElse: () => AppVisualStyle.miuix,
               )
             : state.visualStyle,
         backgroundImagePath: _backgroundImageRevision == backgroundImageRevision
@@ -81,7 +81,7 @@ class AppStyleNotifier extends StateNotifier<AppStyleSettings> {
             : state.blurIntensity,
       );
     } catch (_) {
-      // Keep the current state so startup can continue with Pure Flat defaults.
+      // Keep the current state so startup can continue with MIUIX defaults.
     }
   }
 
