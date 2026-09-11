@@ -1436,7 +1436,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         );
       },
     );
-    controller.dispose();
+    nameController.dispose();
   }
 
   Future<void> _showVersionSheet(String path) async {
