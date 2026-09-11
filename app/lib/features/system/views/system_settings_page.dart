@@ -365,9 +365,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   }
 
   void _showUpdateDialog() {
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('发现新版本'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -449,9 +449,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
   }
 
   Future<void> _restart() async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('重启面板'),
         content: const Text('确定要重启面板吗？所有运行中的任务将被中断。'),
         actions: [
@@ -509,7 +509,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
     required TextEditingController controller,
     String? intro,
   }) async {
-    final selected = await showModalBottomSheet<String>(
+    final selected = await showAppBottomSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
@@ -636,7 +636,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -789,7 +789,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                           label: Text(
                                             '${runtime.label}${isDefault ? '（默认）' : ''}',
                                           ),
-                                          avatar: Icon(
+                                          avatar: AppIcon(
                                             runtime.available
                                                 ? Icons.check_circle_outline
                                                 : Icons.error_outline,
@@ -819,7 +819,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                         ),
                                         child: Row(
                                           children: [
-                                            Icon(
+                                            AppIcon(
                                               Icons.android_outlined,
                                               size: 18,
                                               color: isLight
@@ -836,7 +836,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                                 ),
                                               ),
                                             ),
-                                            Icon(
+                                            AppIcon(
                                               Icons.chevron_right,
                                               size: 18,
                                               color: isLight
@@ -865,7 +865,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                           strokeWidth: 2,
                                         ),
                                       )
-                                    : const Icon(Icons.system_update, size: 16),
+                                    : const AppIcon(Icons.system_update, size: 16),
                                 label: Text(
                                   _checking ? '检查中...' : '检查更新',
                                   style: const TextStyle(fontSize: 13),
@@ -979,7 +979,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                     height: 40,
                                     child: OutlinedButton.icon(
                                       onPressed: _loadUpdateStatus,
-                                      icon: const Icon(
+                                      icon: const AppIcon(
                                         Icons.refresh_rounded,
                                         size: 18,
                                       ),
@@ -1257,7 +1257,7 @@ class _InlineHint extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline, size: 16, color: AppColors.blue500),
+          const AppIcon(Icons.info_outline, size: 16, color: AppColors.blue500),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -1448,7 +1448,7 @@ class _ActionBtn extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
-          Icon(
+          AppIcon(
             icon,
             size: 20,
             color: enabled
@@ -1480,7 +1480,7 @@ class _ActionBtn extends ConsumerWidget {
               ],
             ),
           ),
-          Icon(
+          AppIcon(
             Icons.chevron_right,
             size: 18,
             color: isLight ? AppColors.slate400 : AppColors.slate600,

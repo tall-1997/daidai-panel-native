@@ -113,11 +113,11 @@ class _PanelLogPageState extends State<PanelLogPage> {
         actions: [
           IconButton(
             onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
+            icon: const AppIcon(Icons.refresh),
           ),
           IconButton(
             onPressed: _content.trim().isEmpty ? null : _copy,
-            icon: const Icon(Icons.copy_all_outlined),
+            icon: const AppIcon(Icons.copy_all_outlined),
           ),
         ],
       ),
@@ -174,7 +174,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
                       hintText: '比如 update / scheduler / ERROR',
                       suffixIcon: IconButton(
                         onPressed: _load,
-                        icon: const Icon(Icons.search),
+                        icon: const AppIcon(Icons.search),
                       ),
                     ),
                     onSubmitted: (_) => _load(),

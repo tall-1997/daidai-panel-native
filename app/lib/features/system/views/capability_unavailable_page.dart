@@ -23,14 +23,14 @@ class CapabilityUnavailablePage extends StatelessWidget {
                 onPressed: () => context.canPop()
                     ? context.pop()
                     : context.go('/more'),
-                icon: const Icon(Icons.arrow_back_ios),
+                icon: const AppIcon(Icons.arrow_back_ios),
               ),
               const SizedBox(height: 24),
               AppCard(
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   children: [
-                    const Icon(
+                    const AppIcon(
                       Icons.extension_off_outlined,
                       size: 42,
                       color: AppColors.slate400,

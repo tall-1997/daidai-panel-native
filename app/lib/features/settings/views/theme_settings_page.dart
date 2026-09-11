@@ -123,7 +123,7 @@ class _VisualStyleSelector extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
+                    AppIcon(
                       style == AppVisualStyle.miuix
                           ? Icons.auto_awesome
                           : Icons.blur_on_outlined,
@@ -180,7 +180,7 @@ class _ThemeModeSelector extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
+                  AppIcon(
                     _modeIcon(mode),
                     size: 22,
                     color: isSelected
@@ -249,7 +249,7 @@ class _BackgroundImagePicker extends StatelessWidget {
       children: [
         Row(
           children: [
-            Icon(
+            AppIcon(
               Icons.image_outlined,
               size: 20,
               color: isLight ? AppColors.slate500 : AppColors.slate400,
@@ -266,7 +266,7 @@ class _BackgroundImagePicker extends StatelessWidget {
             if (currentPath != null)
               GestureDetector(
                 onTap: () => onChanged(null),
-                child: Icon(
+                child: AppIcon(
                   Icons.close,
                   size: 20,
                   color: isLight ? AppColors.slate400 : AppColors.slate500,
@@ -286,7 +286,7 @@ class _BackgroundImagePicker extends StatelessWidget {
               errorBuilder: (_, _, _) => Container(
                 height: 80,
                 color: isLight ? AppColors.slate100 : AppColors.slate800,
-                child: Icon(
+                child: AppIcon(
                   Icons.broken_image,
                   color: isLight ? AppColors.slate400 : AppColors.slate500,
                 ),
@@ -306,7 +306,7 @@ class _BackgroundImagePicker extends StatelessWidget {
                 onChanged(result.files.single.path);
               }
             },
-            icon: const Icon(Icons.add_photo_alternate, size: 18),
+            icon: const AppIcon(Icons.add_photo_alternate, size: 18),
             label: Text(
               currentPath != null ? '更换图片' : '选择图片',
               style: const TextStyle(fontSize: 13),
@@ -335,7 +335,7 @@ class _BlurIntensitySlider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(
+        AppIcon(
           Icons.blur_on,
           size: 20,
           color: isLight ? AppColors.slate500 : AppColors.slate400,

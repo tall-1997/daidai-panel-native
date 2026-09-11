@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../shared/widgets/app_dialog.dart';
+import '../../shared/widgets/app_icon.dart';
 import '../network/app_user_agent.dart';
 import '../theme/app_theme.dart';
 import 'android_update_manifest.dart';
@@ -655,7 +657,7 @@ class AppUpdateService {
     if (!context.mounted) return;
     final isLight = Theme.of(context).brightness == Brightness.light;
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogCtx) => _UpdateDialog(
@@ -744,7 +746,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   Widget build(BuildContext context) {
     final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-    return AlertDialog(
+    return AppDialog(
       title: const Text('发现新版本'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -763,7 +765,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               ),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(Icons.arrow_forward, size: 14),
+                child: AppIcon(Icons.arrow_forward, size: 14),
               ),
               Text(
                 'v${widget.info.latestVersion}',

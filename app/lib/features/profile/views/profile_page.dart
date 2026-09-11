@@ -136,7 +136,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                   radius: 42,
                   backgroundImage: avatarUrl == null ? null : NetworkImage(avatarUrl),
                   child: user?.avatarUrl == null
-                      ? const Icon(Icons.person, size: 38)
+                      ? const AppIcon(Icons.person, size: 38)
                       : null,
                 ),
                 const SizedBox(height: 12),

@@ -781,7 +781,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                         ),
                         suffixIcon: IconButton(
                           onPressed: _addLabel,
-                          icon: const Icon(Icons.add, size: 16),
+                          icon: const AppIcon(Icons.add, size: 16),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
                             minWidth: 36,
@@ -1057,7 +1057,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                                 ),
                               ),
                             const Spacer(),
-                            Icon(
+                            AppIcon(
                               _showHooks
                                   ? Icons.expand_less
                                   : Icons.expand_more,

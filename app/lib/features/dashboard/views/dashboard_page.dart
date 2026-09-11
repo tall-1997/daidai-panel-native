@@ -316,7 +316,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        Icon(
+                        AppIcon(
                           data.error == null
                               ? Icons.check_circle_outline
                               : Icons.error_outline,
@@ -630,7 +630,7 @@ class _StatCard extends ConsumerWidget {
                 color: isLight ? iconBg : iconBgDark,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(
+              child: AppIcon(
                 icon,
                 size: 16,
                 color: isLight ? iconColor : iconColorDark,
@@ -710,7 +710,7 @@ class _QuickAction extends ConsumerWidget {
 
     final content = Column(
       children: [
-        Icon(
+        AppIcon(
           icon,
           size: 22,
           color: isLight ? AppColors.slate700 : AppColors.slate300,

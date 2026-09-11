@@ -283,9 +283,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Future<bool> _confirmBatchTaskDelete(int count) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('批量删除任务'),
         content: Text('确定要删除选中的 $count 个任务吗？此操作不可恢复。'),
         actions: [
@@ -414,9 +414,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       );
       final data = extractData(response.data);
       if (!mounted) return;
-      await showDialog<void>(
+      await showAppDialog<void>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => AppDialog(
           title: Text('${task.name} 统计'),
           content: _TaskInfoDialogContent(
             emptyText: '暂无统计数据',
@@ -452,9 +452,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 .toList()
           : <TaskLogFile>[];
       if (!mounted) return;
-      final selectedLogId = await showDialog<int>(
+      final selectedLogId = await showAppDialog<int>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => AppDialog(
           title: Text('${task.name} 日志文件'),
           content: _TaskLogFileList(
             files: files,
@@ -689,7 +689,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
 
   Future<void> _showGroupPicker() async {
     final options = [..._knownGroups];
-    final selected = await showModalBottomSheet<String>(
+    final selected = await showAppBottomSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
@@ -711,17 +711,17 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   itemBuilder: (context, index) {
                     if (index == 0) {
                       return ListTile(
-                        leading: const Icon(Icons.layers_clear_outlined),
+                        leading: const AppIcon(Icons.layers_clear_outlined),
                         title: const Text('全部分组'),
                         onTap: () => Navigator.pop(sheetContext, ''),
                       );
                     }
                     final group = options[index - 1];
                     return ListTile(
-                      leading: const Icon(Icons.label_outline),
+                      leading: const AppIcon(Icons.label_outline),
                       title: Text(group),
                       trailing: ref.watch(taskProvider).labelFilter == group
-                          ? const Icon(Icons.check, color: AppColors.primary)
+                          ? const AppIcon(Icons.check, color: AppColors.primary)
                           : null,
                       onTap: () => Navigator.pop(sheetContext, group),
                     );
@@ -886,7 +886,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     hintText: '搜索任务名称或命令...',
-                    prefixIcon: const Icon(
+                    prefixIcon: const AppIcon(
                       Icons.search,
                       size: 18,
                       color: AppColors.slate400,
@@ -894,7 +894,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     isDense: true,
                     suffixIcon: _searchController.text.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(
+                            icon: const AppIcon(
                               Icons.clear,
                               size: 16,
                               color: AppColors.slate400,
@@ -971,7 +971,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.label_outline, size: 16),
+                          const AppIcon(Icons.label_outline, size: 16),
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
@@ -994,7 +994,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       PopupMenuItem(
                         value: _TaskTransferAction.exportTasks,
                         child: ListTile(
-                          leading: Icon(Icons.file_download_outlined),
+                          leading: AppIcon(Icons.file_download_outlined),
                           title: Text('导出任务'),
                           dense: true,
                           contentPadding: EdgeInsets.zero,
@@ -1003,7 +1003,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       PopupMenuItem(
                         value: _TaskTransferAction.importTasks,
                         child: ListTile(
-                          leading: Icon(Icons.file_upload_outlined),
+                          leading: AppIcon(Icons.file_upload_outlined),
                           title: Text('导入任务'),
                           dense: true,
                           contentPadding: EdgeInsets.zero,
@@ -1141,7 +1141,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   performanceMode: true,
                   child: const Row(
                     children: [
-                      Icon(Icons.swap_vert, size: 16, color: AppColors.primary),
+                      AppIcon(Icons.swap_vert, size: 16, color: AppColors.primary),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -1211,7 +1211,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          AppIcon(
             Icons.inbox_outlined,
             size: 56,
             color: AppColors.slate400.withAlpha(120),
@@ -1247,9 +1247,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
 
   Future<void> _renameGroup(String oldName, List<Task> tasks) async {
     final controller = TextEditingController(text: oldName);
-    final newName = await showDialog<String>(
+    final newName = await showAppDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('重命名分组'),
         content: TextField(
           controller: controller,
@@ -1301,9 +1301,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Future<void> _deleteGroup(String groupName, List<Task> tasks) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('删除分组'),
         content: Text('确定将 "$groupName" 分组中的 ${tasks.length} 个任务移回未分组？'),
         actions: [
@@ -1359,10 +1359,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       return;
     }
     final selected = <int>{};
-    await showDialog(
+    await showAppDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
+        builder: (ctx, setDialogState) => AppDialog(
           title: Text('添加任务到 "$targetGroup"'),
           content: SizedBox(
             width: double.maxFinite,
@@ -1449,10 +1449,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   Future<void> _showCreateGroupFromUngrouped(List<Task> ungroupedTasks) async {
     final nameController = TextEditingController();
     final selected = <int>{};
-    await showDialog(
+    await showAppDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
+        builder: (ctx, setDialogState) => AppDialog(
           title: const Text('新建分组'),
           content: SizedBox(
             width: double.maxFinite,
@@ -1565,7 +1565,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           child: Row(
             children: [
-              const Icon(Icons.swap_vert, size: 18),
+              const AppIcon(Icons.swap_vert, size: 18),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
@@ -1606,7 +1606,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 borderRadius: 14,
                 child: Row(
                   children: [
-                    const Icon(
+                    const AppIcon(
                       Icons.drag_handle,
                       size: 20,
                       color: AppColors.slate400,
@@ -1659,7 +1659,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             stableForScrolling: true,
             child: Row(
               children: [
-                const Icon(
+                const AppIcon(
                   Icons.drag_handle,
                   size: 20,
                   color: AppColors.slate400,
@@ -1752,7 +1752,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               child: Row(
                 children: [
-                  Icon(
+                  AppIcon(
                     collapsed ? Icons.chevron_right : Icons.expand_more,
                     size: 20,
                     color: AppColors.slate400,
@@ -1869,10 +1869,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   Future<void> _confirmDelete(Task task) async {
     final scriptPath = _extractScriptPathFromCommand(task.command);
     var deleteScript = false;
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('删除任务'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2004,7 +2004,7 @@ class _TaskLogFileList extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
-                Icon(
+                AppIcon(
                   canOpen ? Icons.description_outlined : Icons.file_present,
                   color: canOpen ? AppColors.primary : AppColors.slate400,
                 ),
@@ -2042,7 +2042,7 @@ class _TaskLogFileList extends StatelessWidget {
                   ),
                 ),
                 if (canOpen)
-                  const Icon(
+                  const AppIcon(
                     Icons.chevron_right,
                     size: 20,
                     color: AppColors.slate400,
@@ -2302,7 +2302,7 @@ class _TaskCard extends StatelessWidget {
                   if (task.isPinned)
                     const Padding(
                       padding: EdgeInsets.only(right: 6),
-                      child: Icon(
+                      child: AppIcon(
                         Icons.push_pin,
                         size: 14,
                         color: AppColors.amber500,
@@ -2402,7 +2402,7 @@ class _TaskPrimaryActionButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: color),
+          AppIcon(icon, size: 16, color: color),
           const SizedBox(width: 4),
           Text(
             label,
@@ -2468,7 +2468,7 @@ class _TaskScheduleSummary extends StatelessWidget {
               color: color.withAlpha(isLight ? 22 : 36),
               borderRadius: BorderRadius.circular(9),
             ),
-            child: Icon(icon, size: 16, color: color),
+            child: AppIcon(icon, size: 16, color: color),
           ),
           const SizedBox(width: 9),
           Expanded(
@@ -2539,7 +2539,7 @@ class _TaskSubscriptionSummary extends ConsumerWidget {
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.sync_rounded, size: 13, color: AppColors.blue500),
+                AppIcon(Icons.sync_rounded, size: 13, color: AppColors.blue500),
                 SizedBox(width: 4),
                 Text(
                   '订阅',
@@ -2821,7 +2821,7 @@ class _TaskHeaderChipButton extends ConsumerWidget {
       padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 7),
       child: Row(
         children: [
-          Icon(icon, size: 16, color: AppColors.slate400),
+          AppIcon(icon, size: 16, color: AppColors.slate400),
           if (!compact) ...[
             const SizedBox(width: 6),
             Text(
@@ -2874,7 +2874,7 @@ class _TaskGlassIconTarget extends StatelessWidget {
                       height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : Icon(icon, size: 18, color: AppColors.slate400),
+                  : AppIcon(icon, size: 18, color: AppColors.slate400),
             ),
           ),
         ),
@@ -2915,7 +2915,7 @@ class _TaskBatchActionButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: foregroundColor),
+          AppIcon(icon, size: 16, color: foregroundColor),
           const SizedBox(width: 6),
           Text(
             label,
@@ -3492,7 +3492,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
                 style: TextStyle(fontSize: 11, color: logTheme.foreground),
               ),
               avatar: _done
-                  ? Icon(Icons.check, size: 14, color: logTheme.foreground)
+                  ? AppIcon(Icons.check, size: 14, color: logTheme.foreground)
                   : SizedBox(
                       width: 12,
                       height: 12,
@@ -3506,7 +3506,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
           ),
           if (_lines.isNotEmpty)
             IconButton(
-              icon: Icon(Icons.copy, color: logTheme.foreground),
+              icon: AppIcon(Icons.copy, color: logTheme.foreground),
               tooltip: '复制全部',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: _lines.join('\n')));
@@ -3518,7 +3518,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
               },
             ),
           IconButton(
-            icon: Icon(
+            icon: AppIcon(
               _autoScroll ? Icons.vertical_align_bottom : Icons.pause,
               color: _autoScroll ? AppColors.primary : logTheme.mutedForeground,
             ),

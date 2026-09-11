@@ -44,9 +44,9 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
 
   Future<void> _load() async {
     if (_dirty) {
-      final discard = await showDialog<bool>(
+      final discard = await showAppDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => AppDialog(
           title: const Text('放弃未保存修改'),
           content: const Text('刷新会覆盖当前编辑内容，是否继续？'),
           actions: [
@@ -100,8 +100,8 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
       appBar: AppBar(
         title: const Text('高级配置脚本'),
         actions: [
-          IconButton(onPressed: () => Clipboard.setData(ClipboardData(text: _controller.text)), icon: const Icon(Icons.copy)),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+          IconButton(onPressed: () => Clipboard.setData(ClipboardData(text: _controller.text)), icon: const AppIcon(Icons.copy)),
+          IconButton(onPressed: _load, icon: const AppIcon(Icons.refresh)),
         ],
       ),
       body: AppAsyncState(

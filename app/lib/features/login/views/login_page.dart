@@ -63,7 +63,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (!mounted) {
       throw const _LoginFlowMessage('登录页面已关闭');
     }
-    final result = await showDialog<Map<String, dynamic>>(
+    final result = await showAppDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
       builder: (_) => GeeTestCaptchaDialog(captchaId: captchaId),
@@ -476,7 +476,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                               value: _currentUrl,
                               isExpanded: true,
                               isDense: false,
-                              icon: Icon(
+                              icon: AppIcon(
                                 Icons.expand_more,
                                 size: 20,
                                 color: theme.colorScheme.onSurfaceVariant,
@@ -538,7 +538,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           onTap: () => setState(
                             () => _obscurePassword = !_obscurePassword,
                           ),
-                          child: Icon(
+                          child: AppIcon(
                             _obscurePassword
                                 ? Icons.visibility_off_outlined
                                 : Icons.visibility_outlined,
@@ -691,7 +691,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         child: TextButton.icon(
                           onPressed: () =>
                               context.go('/server-config?manual=1'),
-                          icon: Icon(
+                          icon: AppIcon(
                             Icons.swap_horiz,
                             size: 18,
                             color: theme.colorScheme.onSurfaceVariant,
@@ -786,7 +786,7 @@ class _IconInput extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: AppColors.slate400),
+            AppIcon(icon, size: 20, color: AppColors.slate400),
             const SizedBox(width: 12),
             Expanded(child: child),
             if (suffix != null) ...[const SizedBox(width: 8), suffix!],

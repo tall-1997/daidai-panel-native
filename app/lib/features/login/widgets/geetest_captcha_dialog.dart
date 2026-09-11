@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/app_icon.dart';
 
 class GeeTestCaptchaDialog extends StatefulWidget {
   final String captchaId;
@@ -211,7 +212,7 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                       color: AppColors.primary.withAlpha(20),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(
+                    child: const AppIcon(
                       Icons.verified_user_outlined,
                       size: 18,
                       color: AppColors.primary,
@@ -230,7 +231,7 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                   IconButton(
                     tooltip: '关闭',
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, size: 20),
+                    icon: const AppIcon(Icons.close, size: 20),
                   ),
                 ],
               ),

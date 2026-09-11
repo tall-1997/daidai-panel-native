@@ -75,10 +75,10 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     var obscurePassword = true;
     var obscureConfirm = true;
 
-    final password = await showDialog<String>(
+    final password = await showAppDialog<String>(
       context: context,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: Text(changing ? '修改应用锁密码' : '设置应用锁密码'),
           content: SizedBox(
             width: 420,
@@ -91,12 +91,12 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                   decoration: InputDecoration(
                     labelText: '新密码',
                     hintText: '至少 4 位',
-                    prefixIcon: const Icon(Icons.password_outlined),
+                    prefixIcon: const AppIcon(Icons.password_outlined),
                     suffixIcon: IconButton(
                       onPressed: () => setDialogState(
                         () => obscurePassword = !obscurePassword,
                       ),
-                      icon: Icon(
+                      icon: AppIcon(
                         obscurePassword
                             ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
@@ -110,12 +110,12 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                   obscureText: obscureConfirm,
                   decoration: InputDecoration(
                     labelText: '确认密码',
-                    prefixIcon: const Icon(Icons.lock_person_outlined),
+                    prefixIcon: const AppIcon(Icons.lock_person_outlined),
                     suffixIcon: IconButton(
                       onPressed: () => setDialogState(
                         () => obscureConfirm = !obscureConfirm,
                       ),
-                      icon: Icon(
+                      icon: AppIcon(
                         obscureConfirm
                             ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
@@ -184,7 +184,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
   }
 
   Future<void> _configurePattern({required bool changing}) async {
-    final pattern = await showDialog<List<int>>(
+    final pattern = await showAppDialog<List<int>>(
       context: context,
       builder: (_) => const _PatternSetupDialog(),
     );
@@ -225,9 +225,9 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     String content, {
     required AppLiquidGlassButtonVariant variant,
   }) {
-    return showDialog<bool>(
+    return showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: Text(title),
         content: Text(content),
         actions: [
@@ -267,7 +267,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -308,7 +308,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                       color: AppColors.primary.withAlpha(18),
                                       borderRadius: BorderRadius.circular(14),
                                     ),
-                                    child: const Icon(
+                                    child: const AppIcon(
                                       Icons.lock_person_outlined,
                                       color: AppColors.primary,
                                     ),
@@ -503,7 +503,7 @@ class _MethodCard extends ConsumerWidget {
         children: [
           Row(
             children: [
-              Icon(icon, size: 22, color: AppColors.primary),
+              AppIcon(icon, size: 22, color: AppColors.primary),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -632,7 +632,7 @@ class _PatternSetupDialogState extends State<_PatternSetupDialog> {
   Widget build(BuildContext context) {
     final isConfirmStep = _firstPattern != null;
 
-    return AlertDialog(
+    return AppDialog(
       title: Text(isConfirmStep ? '确认图案' : '设置图案'),
       content: SizedBox(
         width: 360,

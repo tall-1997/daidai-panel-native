@@ -115,7 +115,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -157,7 +157,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.api_outlined,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -179,7 +179,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             AppCard(
                               child: Row(
                                 children: [
-                                  const Icon(
+                                  const AppIcon(
                                     Icons.cloud_off_outlined,
                                     color: AppColors.red500,
                                   ),
@@ -210,7 +210,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
     final nameC = TextEditingController();
     final rateLimitC = TextEditingController(text: '100');
     final selectedScopes = <String>{};
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -347,10 +347,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
   }
 
   void _showSecretDialog(String appKey, String appSecret) {
-    showDialog(
+    showAppDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('应用密钥'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -390,9 +390,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
 
   void _showTokenRequestDialog(String appKey) {
     final secretC = TextEditingController();
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('获取访问 Token'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -463,9 +463,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
     final token = data['access_token']?.toString() ?? '';
     final tokenType = data['token_type']?.toString() ?? 'Bearer';
     final expiresIn = data['expires_in']?.toString() ?? '86400';
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('访问 Token'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -582,7 +582,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             ),
                           ),
                           const SizedBox(width: 4),
-                          Icon(Icons.copy, size: 12, color: AppColors.slate400),
+                          AppIcon(Icons.copy, size: 12, color: AppColors.slate400),
                         ],
                       ),
                     ),
@@ -610,7 +610,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                 ),
               ),
               PopupMenuButton<String>(
-                icon: Icon(
+                icon: AppIcon(
                   Icons.more_vert,
                   size: 18,
                   color: isLight ? AppColors.slate400 : AppColors.slate500,
@@ -651,9 +651,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                       _showTokenRequestDialog(appKey);
                       break;
                     case 'toggle':
-                      final confirm = await showDialog<bool>(
+                      final confirm = await showAppDialog<bool>(
                         context: context,
-                        builder: (d) => AlertDialog(
+                        builder: (d) => AppDialog(
                           title: Text(enabled ? '禁用应用' : '启用应用'),
                           content: Text(
                             enabled
@@ -741,9 +741,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                       context.push('/open-api/$id/logs');
                       break;
                     case 'delete':
-                      final confirm = await showDialog<bool>(
+                      final confirm = await showAppDialog<bool>(
                         context: context,
-                        builder: (d) => AlertDialog(
+                        builder: (d) => AppDialog(
                           title: const Text('删除应用'),
                           content: Text('确定要删除「$name」吗？'),
                           actions: [
@@ -815,7 +815,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
     final rateLimitC = TextEditingController(text: rateLimit.toString());
     final selectedScopes = _parseScopes(scopes).toSet();
 
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -943,9 +943,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
 
   void _showViewSecretDialog(int id, String appKey) {
     final passwordC = TextEditingController();
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('查看密钥'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1054,7 +1054,7 @@ class _CopyableField extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Icon(Icons.copy, size: 14, color: AppColors.slate400),
+                const AppIcon(Icons.copy, size: 14, color: AppColors.slate400),
               ],
             ),
           ),
@@ -1130,7 +1130,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(

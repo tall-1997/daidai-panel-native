@@ -78,10 +78,10 @@ class _PlatformTokensPageState extends State<PlatformTokensPage> {
           ? (token!['platform_id'] as num).toInt()
           : _platformId ??
                 (_platforms.firstOrNull?['id'] as num?)?.toInt();
-      final ok = await showDialog<bool>(
+      final ok = await showAppDialog<bool>(
         context: context,
         builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDialogState) => AlertDialog(
+          builder: (ctx, setDialogState) => AppDialog(
             title: Text(token == null ? '新增平台令牌' : '编辑平台令牌'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -316,7 +316,7 @@ class _PlatformTokensPageState extends State<PlatformTokensPage> {
                                   : (_) => _toggle(token),
                             ),
                             trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline),
+                              icon: const AppIcon(Icons.delete_outline),
                               onPressed: _mutating
                                   ? null
                                   : () => _remove(

@@ -49,7 +49,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -182,9 +182,9 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
   }
 
   Future<void> _clearLogs() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('清理登录日志'),
         content: const Text('确定要清理全部登录日志吗？'),
         actions: [
@@ -258,10 +258,10 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                           controller: _usernameController,
                           decoration: InputDecoration(
                             hintText: '按用户名筛选',
-                            prefixIcon: const Icon(Icons.search, size: 18),
+                            prefixIcon: const AppIcon(Icons.search, size: 18),
                             suffixIcon: _usernameController.text.isNotEmpty
                                 ? IconButton(
-                                    icon: const Icon(Icons.clear, size: 16),
+                                    icon: const AppIcon(Icons.clear, size: 16),
                                     onPressed: () {
                                       _usernameController.clear();
                                       setState(() {});
@@ -277,7 +277,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                       const SizedBox(width: 10),
                       OutlinedButton.icon(
                         onPressed: _load,
-                        icon: const Icon(Icons.refresh, size: 16),
+                        icon: const AppIcon(Icons.refresh, size: 16),
                         label: const Text('刷新'),
                       ),
                     ],
@@ -285,7 +285,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                   const SizedBox(height: 10),
                   FilledButton.tonalIcon(
                     onPressed: _clearLogs,
-                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                    icon: const AppIcon(Icons.delete_sweep_outlined, size: 16),
                     label: const Text('清理登录日志'),
                     style: FilledButton.styleFrom(
                       foregroundColor: AppColors.red500,
@@ -318,7 +318,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                           ),
                           child: Row(
                             children: [
-                              Icon(
+                              AppIcon(
                                 success ? Icons.check_circle : Icons.cancel,
                                 size: 18,
                                 color: success
@@ -437,9 +437,9 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
   }
 
   Future<void> _revokeOthers() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('撤销其他会话'),
         content: const Text('确定要撤销当前账号的所有其他活跃会话吗？'),
         actions: [
@@ -482,9 +482,9 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
   }
 
   Future<void> _revokeSession(int id) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('撤销会话'),
         content: const Text('确定要撤销这个活跃会话吗？'),
         actions: [
@@ -554,7 +554,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                     height: 36,
                     child: OutlinedButton.icon(
                       onPressed: _revokeOthers,
-                      icon: const Icon(Icons.logout, size: 16),
+                      icon: const AppIcon(Icons.logout, size: 16),
                       label: const Text(
                         '撤销其他会话',
                         style: TextStyle(fontSize: 12),
@@ -584,7 +584,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                       height: 36,
                       child: OutlinedButton.icon(
                         onPressed: _revokeOthers,
-                        icon: const Icon(Icons.logout, size: 16),
+                        icon: const AppIcon(Icons.logout, size: 16),
                         label: const Text(
                           '撤销其他会话',
                           style: TextStyle(fontSize: 12),
@@ -607,7 +607,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                     ),
                     child: Row(
                       children: [
-                        const Icon(
+                        const AppIcon(
                           Icons.devices,
                           size: 18,
                           color: AppColors.primary,
@@ -669,7 +669,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                               _revokeSession(id);
                             }
                           },
-                          child: const Icon(
+                          child: const AppIcon(
                             Icons.close,
                             size: 18,
                             color: AppColors.red500,
@@ -733,9 +733,9 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
       return;
     }
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('删除白名单'),
         content: Text('确定删除 IP「${item['ip'] ?? ''}」吗？'),
         actions: [
@@ -809,7 +809,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                     height: 36,
                     child: FilledButton.icon(
                       onPressed: _showAddDialog,
-                      icon: const Icon(Icons.add, size: 16),
+                      icon: const AppIcon(Icons.add, size: 16),
                       label: const Text(
                         '添加 IP',
                         style: TextStyle(fontSize: 12),
@@ -839,7 +839,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                       height: 36,
                       child: FilledButton.icon(
                         onPressed: _showAddDialog,
-                        icon: const Icon(Icons.add, size: 16),
+                        icon: const AppIcon(Icons.add, size: 16),
                         label: const Text(
                           '添加 IP',
                           style: TextStyle(fontSize: 12),
@@ -859,7 +859,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                   borderRadius: 12,
                   child: Row(
                     children: [
-                      const Icon(
+                      const AppIcon(
                         Icons.shield_outlined,
                         size: 18,
                         color: AppColors.primary,
@@ -892,7 +892,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                       ),
                       GestureDetector(
                         onTap: () => _deleteItem(item),
-                        child: const Icon(
+                        child: const AppIcon(
                           Icons.delete_outline,
                           size: 18,
                           color: AppColors.red500,
@@ -909,9 +909,9 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
   void _showAddDialog() {
     final ipC = TextEditingController();
     final remarksC = TextEditingController();
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('添加 IP 白名单'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1042,7 +1042,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
             borderRadius: 14,
             child: Row(
               children: [
-                Icon(
+                AppIcon(
                   Icons.security,
                   size: 24,
                   color: _enabled ? AppColors.primary : AppColors.slate400,
@@ -1075,7 +1075,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                   ),
                 ),
                 if (!_supported)
-                  const Icon(Icons.block, color: AppColors.slate400)
+                  const AppIcon(Icons.block, color: AppColors.slate400)
                 else if (_enabled)
                   OutlinedButton(
                     onPressed: _disable2FA,
@@ -1175,9 +1175,9 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
 
   Future<void> _disable2FA() async {
     final codeController = TextEditingController();
-    final code = await showDialog<String>(
+    final code = await showAppDialog<String>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('禁用两步验证'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1487,7 +1487,7 @@ class _AuditLogsTabState extends ConsumerState<_AuditLogsTab>
                       children: [
                         Row(
                           children: [
-                            const Icon(
+                            const AppIcon(
                               Icons.history,
                               size: 16,
                               color: AppColors.primary,

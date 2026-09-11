@@ -204,7 +204,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -252,7 +252,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.people_outline,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -299,10 +299,10 @@ class _UserListPageState extends ConsumerState<UserListPage> {
 
   Future<void> _showRolePicker(UserListItem user) async {
     String role = user.role;
-    final changed = await showDialog<String>(
+    final changed = await showAppDialog<String>(
       context: context,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: Text('修改 ${user.username} 的角色'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -357,7 +357,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     final passwordC = TextEditingController();
     String role = 'operator';
 
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -478,10 +478,10 @@ class _UserListPageState extends ConsumerState<UserListPage> {
 
   void _showResetPasswordDialog(UserListItem user) {
     final passwordC = TextEditingController();
-    showDialog(
+    showAppDialog(
       context: context,
       builder: (dialogCtx) {
-        return AlertDialog(
+        return AppDialog(
           title: Text('重置 ${user.username} 的密码'),
           content: TextField(
             controller: passwordC,
@@ -534,9 +534,9 @@ class _UserListPageState extends ConsumerState<UserListPage> {
   }
 
   Future<void> _confirmDelete(UserListItem user) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('删除用户'),
         content: Text('确定要删除「${user.username}」吗？'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -582,7 +582,7 @@ class _UserLoadError extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 32),
     children: [
       const SizedBox(height: 100),
-      const Icon(Icons.cloud_off_outlined, size: 56, color: AppColors.slate400),
+      const AppIcon(Icons.cloud_off_outlined, size: 56, color: AppColors.slate400),
       const SizedBox(height: 12),
       Text(message, textAlign: TextAlign.center),
       const SizedBox(height: 12),
@@ -603,7 +603,7 @@ class _InlineUserLoadError extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
     child: Row(
       children: [
-        const Icon(Icons.sync_problem_outlined, color: AppColors.amber500),
+        const AppIcon(Icons.sync_problem_outlined, color: AppColors.amber500),
         const SizedBox(width: 10),
         Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
         TextButton(onPressed: onRetry, child: const Text('重试')),
@@ -728,7 +728,7 @@ class _UserCard extends ConsumerWidget {
             ),
           ),
           PopupMenuButton<String>(
-            icon: Icon(
+            icon: AppIcon(
               Icons.more_vert,
               size: 18,
               color: isLight ? AppColors.slate400 : AppColors.slate500,

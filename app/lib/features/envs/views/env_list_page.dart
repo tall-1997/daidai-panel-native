@@ -528,10 +528,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
 
   Future<_EnvImportMode?> _showEnvImportModeDialog(int count) async {
     var mode = _EnvImportMode.merge;
-    return showDialog<_EnvImportMode>(
+    return showAppDialog<_EnvImportMode>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('导入环境变量'),
           content: SizedBox(
             width: 400,
@@ -585,9 +585,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   Future<bool> _confirmReplaceEnvImport(int count) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('确认替换全部变量'),
         content: Text(
           '当前全部环境变量将由文件中的 $count 个变量替换。此操作可能影响任务运行，请确认已完成必要备份。',
@@ -672,9 +672,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   Future<bool> _confirmBatchDelete(int count) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('批量删除'),
         content: Text('确定删除选中的 $count 个环境变量吗？'),
         actions: [
@@ -699,9 +699,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   Future<void> _deleteEnv(EnvVar env) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('删除环境变量'),
         content: Text('确定删除“${env.name}”吗？'),
         actions: [
@@ -818,9 +818,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final searchController = TextEditingController();
     final replaceController = TextEditingController();
     try {
-      final ok = await showDialog<bool>(
+      final ok = await showAppDialog<bool>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => AppDialog(
           title: const Text('批量改名'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -912,10 +912,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
 
     final controller = TextEditingController();
     final selectedGroups = <String>{};
-    final result = await showDialog<List<String>>(
+    final result = await showAppDialog<List<String>>(
       context: context,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('批量分组'),
           content: SingleChildScrollView(
             child: Column(
@@ -1134,7 +1134,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           controller: _searchController,
                           decoration: InputDecoration(
                             hintText: '搜索变量...',
-                            prefixIcon: const Icon(
+                            prefixIcon: const AppIcon(
                               Icons.search,
                               size: 18,
                               color: AppColors.slate400,
@@ -1142,7 +1142,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             isDense: true,
                             suffixIcon: _searchController.text.isNotEmpty
                                 ? IconButton(
-                                    icon: const Icon(
+                                    icon: const AppIcon(
                                       Icons.clear,
                                       size: 16,
                                       color: AppColors.slate400,
@@ -1225,7 +1225,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
+                              const AppIcon(
                                 Icons.label_outline,
                                 size: 18,
                                 color: AppColors.slate400,
@@ -1245,7 +1245,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 ),
                               ),
                               const SizedBox(width: 4),
-                              const Icon(
+                              const AppIcon(
                                 Icons.expand_more,
                                 size: 18,
                                 color: AppColors.slate400,
@@ -1265,7 +1265,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       PopupMenuItem(
                         value: _EnvTransferAction.exportAll,
                         child: ListTile(
-                          leading: Icon(Icons.file_download_outlined),
+                          leading: AppIcon(Icons.file_download_outlined),
                           title: Text('导出全部变量'),
                           dense: true,
                           contentPadding: EdgeInsets.zero,
@@ -1274,7 +1274,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       PopupMenuItem(
                         value: _EnvTransferAction.importEnvs,
                         child: ListTile(
-                          leading: Icon(Icons.file_upload_outlined),
+                          leading: AppIcon(Icons.file_upload_outlined),
                           title: Text('导入变量'),
                           dense: true,
                           contentPadding: EdgeInsets.zero,
@@ -1426,7 +1426,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(
+                      const AppIcon(
                         Icons.swap_vert,
                         size: 16,
                         color: AppColors.primary,
@@ -1470,7 +1470,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         children: [
                           const SizedBox(height: 100),
-                          const Icon(
+                          const AppIcon(
                             Icons.error_outline,
                             size: 56,
                             color: AppColors.red500,
@@ -1487,7 +1487,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           Center(
                             child: OutlinedButton.icon(
                               onPressed: _refresh,
-                              icon: const Icon(Icons.refresh, size: 16),
+                              icon: const AppIcon(Icons.refresh, size: 16),
                               label: const Text('重试'),
                             ),
                           ),
@@ -1498,7 +1498,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.key_off,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -1555,7 +1555,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             borderRadius: 14,
                             child: Row(
                               children: [
-                                const Icon(
+                                const AppIcon(
                                   Icons.drag_handle,
                                   size: 20,
                                   color: AppColors.slate400,
@@ -1662,7 +1662,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final groups = [...ref.read(envListProvider).groups];
     var valueEditorOpen = false;
 
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1740,7 +1740,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               type: AppGlassNoticeType.success,
                             );
                           },
-                          icon: Icon(
+                          icon: AppIcon(
                             env.enabled
                                 ? Icons.pause_circle_outline
                                 : Icons.play_arrow,
@@ -1779,7 +1779,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         labelText: '值',
                         suffixIcon: IconButton(
                           // 变量值较长时切到弹窗内的大输入区，不再新开页面，避免回填丢失。
-                          icon: const Icon(Icons.open_in_full, size: 18),
+                          icon: const AppIcon(Icons.open_in_full, size: 18),
                           tooltip: '放大编辑变量值',
                           onPressed: () =>
                               setSheetState(() => valueEditorOpen = true),
@@ -1804,7 +1804,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed: () => Navigator.of(ctx).pop(),
-                            icon: const Icon(Icons.close, size: 16),
+                            icon: const AppIcon(Icons.close, size: 16),
                             label: const Text('关闭'),
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size(0, 44),
@@ -1824,7 +1824,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 type: AppGlassNoticeType.info,
                               );
                             },
-                            icon: const Icon(Icons.copy, size: 16),
+                            icon: const AppIcon(Icons.copy, size: 16),
                             label: const Text('复制'),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: AppColors.blue500,
@@ -1869,7 +1869,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 );
                               }
                             },
-                            icon: const Icon(Icons.save, size: 16),
+                            icon: const AppIcon(Icons.save, size: 16),
                             label: const Text('保存'),
                             style: FilledButton.styleFrom(
                               minimumSize: const Size(0, 44),
@@ -1901,7 +1901,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final groups = [...ref.read(envListProvider).groups];
     var valueEditorOpen = false;
 
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1956,7 +1956,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         labelText: '值',
                         suffixIcon: IconButton(
                           // 新建变量时也用同一个控制器放大编辑，完成后原表单立即保留输入。
-                          icon: const Icon(Icons.open_in_full, size: 18),
+                          icon: const AppIcon(Icons.open_in_full, size: 18),
                           tooltip: '放大编辑变量值',
                           onPressed: () =>
                               setSheetState(() => valueEditorOpen = true),
@@ -2085,7 +2085,7 @@ class _EnvValueSheetEditor extends ConsumerWidget {
                         color: AppColors.primary.withAlpha(isLight ? 20 : 34),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(
+                      child: const AppIcon(
                         Icons.open_in_full,
                         size: 18,
                         color: AppColors.primary,
@@ -2104,7 +2104,7 @@ class _EnvValueSheetEditor extends ConsumerWidget {
                     IconButton(
                       tooltip: '回到表单',
                       onPressed: onDone,
-                      icon: const Icon(Icons.close),
+                      icon: const AppIcon(Icons.close),
                     ),
                   ],
                 ),
@@ -2143,7 +2143,7 @@ class _EnvValueSheetEditor extends ConsumerWidget {
                         onPressed: () {
                           controller.clear();
                         },
-                        icon: const Icon(Icons.cleaning_services, size: 16),
+                        icon: const AppIcon(Icons.cleaning_services, size: 16),
                         label: const Text('清空'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppColors.slate500,
@@ -2157,7 +2157,7 @@ class _EnvValueSheetEditor extends ConsumerWidget {
                       child: FilledButton.icon(
                         // 不再新开路由，直接收起大输入区，因此原表单控制器会立即保留当前文本。
                         onPressed: onDone,
-                        icon: const Icon(Icons.check, size: 18),
+                        icon: const AppIcon(Icons.check, size: 18),
                         label: const Text('完成，回到表单'),
                         style: FilledButton.styleFrom(
                           minimumSize: const Size(0, 44),
@@ -2198,7 +2198,7 @@ class _HeaderChipButton extends ConsumerWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: AppColors.slate400),
+          AppIcon(icon, size: 16, color: AppColors.slate400),
           const SizedBox(width: 6),
           Text(
             label,
@@ -2246,7 +2246,7 @@ class _BatchActionButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: foregroundColor),
+              AppIcon(icon, size: 16, color: foregroundColor),
               const SizedBox(width: 6),
               Text(
                 label,
@@ -2544,7 +2544,7 @@ class _EnvSwipeAction extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: color, size: 20),
+              AppIcon(icon, color: color, size: 20),
               const SizedBox(height: 5),
               Text(
                 label,
@@ -2579,7 +2579,7 @@ class _MiniBtn extends StatelessWidget {
         child: SizedBox(
           width: 30,
           height: 30,
-          child: Icon(icon, size: 14, color: AppColors.slate400),
+          child: AppIcon(icon, size: 14, color: AppColors.slate400),
         ),
       ),
     );

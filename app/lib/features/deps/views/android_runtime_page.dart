@@ -169,8 +169,8 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
                   title: Text(runtime['name'].toString()),
                   subtitle: Text('${runtime['version'] ?? '未安装'}\n${runtime['path'] ?? ''}'),
                   trailing: Wrap(children: [
-                    IconButton(onPressed: _busy ? null : () => _install(runtime['name'].toString()), icon: const Icon(Icons.download)),
-                    IconButton(onPressed: runtime['installed'] == true ? () => _uninstall(runtime['name'].toString()) : null, icon: const Icon(Icons.delete_outline)),
+                    IconButton(onPressed: _busy ? null : () => _install(runtime['name'].toString()), icon: const AppIcon(Icons.download)),
+                    IconButton(onPressed: runtime['installed'] == true ? () => _uninstall(runtime['name'].toString()) : null, icon: const AppIcon(Icons.delete_outline)),
                   ]),
                 ),
               ),

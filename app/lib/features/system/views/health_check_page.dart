@@ -52,7 +52,7 @@ class _HealthCheckPageState extends State<HealthCheckPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: Colors.transparent,
-    appBar: AppBar(title: const Text('系统健康诊断'), leading: IconButton(onPressed: context.pop, icon: const Icon(Icons.arrow_back_ios))),
+    appBar: AppBar(title: const Text('系统健康诊断'), leading: IconButton(onPressed: context.pop, icon: const AppIcon(Icons.arrow_back_ios))),
     body: _loading ? const Center(child: CircularProgressIndicator()) : _error != null
         ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Text(_error!), const SizedBox(height: 12), AppLiquidGlassButton(label: '重试', onPressed: _load)]))
         : ListView(padding: const EdgeInsets.all(20), children: [
@@ -62,7 +62,7 @@ class _HealthCheckPageState extends State<HealthCheckPage> {
             ..._items.map((item) {
               final status = item['status']?.toString() ?? 'unknown';
               final color = status == 'ok' ? AppColors.primary : status == 'warning' ? AppColors.amber500 : AppColors.red500;
-              return AppCard(margin: const EdgeInsets.only(bottom: 10), child: Row(children: [Icon(status == 'ok' ? Icons.check_circle : Icons.warning_amber, color: color), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_label(item['name']?.toString() ?? ''), style: const TextStyle(fontWeight: FontWeight.w700)), if ((item['message']?.toString() ?? '').isNotEmpty) Text(item['message'].toString())]))]));
+              return AppCard(margin: const EdgeInsets.only(bottom: 10), child: Row(children: [AppIcon(status == 'ok' ? Icons.check_circle : Icons.warning_amber, color: color), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_label(item['name']?.toString() ?? ''), style: const TextStyle(fontWeight: FontWeight.w700)), if ((item['message']?.toString() ?? '').isNotEmpty) Text(item['message'].toString())]))]));
             }),
             const SizedBox(height: 12),
             AppLiquidGlassButton(label: '立即检查', icon: Icons.health_and_safety_outlined, onPressed: () => _load(run: true)),

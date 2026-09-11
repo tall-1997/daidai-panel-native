@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_provider.dart';
+import 'app_icon.dart';
 
 class TaskCronList extends ConsumerWidget {
   final List<String> expressions;
@@ -105,7 +106,7 @@ class TaskCronList extends ConsumerWidget {
                             color: AppColors.primary,
                           ),
                         )
-                      : const Icon(
+                      : const AppIcon(
                           Icons.schedule_rounded,
                           size: 16,
                           color: AppColors.primary,

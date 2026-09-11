@@ -91,7 +91,7 @@ class PatternPad extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: selectedPoints.isEmpty ? null : onBackspace,
-                icon: const Icon(Icons.backspace_outlined, size: 18),
+                icon: const AppIcon(Icons.backspace_outlined, size: 18),
                 label: const Text('撤回'),
               ),
             ),
@@ -99,7 +99,7 @@ class PatternPad extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: selectedPoints.isEmpty ? null : onClear,
-                icon: const Icon(Icons.refresh_outlined, size: 18),
+                icon: const AppIcon(Icons.refresh_outlined, size: 18),
                 label: const Text('清空'),
               ),
             ),

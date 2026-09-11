@@ -479,7 +479,7 @@ class _MorePageState extends ConsumerState<MorePage> {
           const SizedBox(height: 10),
           Row(
             children: [
-              Icon(
+              AppIcon(
                 Icons.link,
                 size: 14,
                 color: isLight ? AppColors.slate400 : AppColors.slate500,
@@ -506,9 +506,9 @@ class _MorePageState extends ConsumerState<MorePage> {
   }
 
   Future<void> _logout(BuildContext context, WidgetRef ref) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('退出登录'),
         content: const Text('确定要退出登录吗？'),
         actions: [
@@ -539,9 +539,9 @@ class _MorePageState extends ConsumerState<MorePage> {
   Future<void> _showAboutDialog(BuildContext context) async {
     final isLight = Theme.of(context).brightness == Brightness.light;
     final packageInfoFuture = PackageInfo.fromPlatform();
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('关于'),
         content: SingleChildScrollView(
           child: Column(
@@ -557,7 +557,7 @@ class _MorePageState extends ConsumerState<MorePage> {
                       color: AppColors.primary.withAlpha(20),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
+                    child: const AppIcon(
                       Icons.dashboard_customize_outlined,
                       color: AppColors.primary,
                     ),
@@ -714,7 +714,7 @@ class _SettingsItem extends ConsumerWidget {
     final enabled = onTap != null;
     final rowContent = Row(
       children: [
-        Icon(
+        AppIcon(
           icon,
           size: 20,
           color: enabled
@@ -733,7 +733,7 @@ class _SettingsItem extends ConsumerWidget {
           ),
         ),
         if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
-        Icon(
+        AppIcon(
           Icons.chevron_right,
           size: 18,
           color: isLight ? AppColors.slate400 : AppColors.slate600,
@@ -772,7 +772,7 @@ class _RepoInfoRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(
+        AppIcon(
           icon,
           size: 15,
           color: isLight ? AppColors.slate400 : AppColors.slate500,

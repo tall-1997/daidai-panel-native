@@ -122,9 +122,9 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     bool isNewPanel = false,
   }) async {
     final panelLabel = panel.name.isNotEmpty ? panel.name : panel.url;
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('切换服务器'),
         content: Text(
           isNewPanel
@@ -219,9 +219,9 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
 
     var finalUrl = _normalizeUrl(_controller.text);
     if (_isExplicitHttpUrl(finalUrl) && !_isAllowedHttpUrl(finalUrl)) {
-      final confirm = await showDialog<bool>(
+      final confirm = await showAppDialog<bool>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => AppDialog(
           title: const Text('安全提示'),
           content: const Text('当前使用 HTTP 连接，数据传输未加密。\n建议仅在可信网络中使用，确认继续？'),
           actions: [AppLiquidGlassDialogActions(actions: [
@@ -319,9 +319,9 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     }
 
     final panelLabel = panel.name.isNotEmpty ? panel.name : panel.url;
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('删除服务器'),
         content: Text('确定删除“$panelLabel”吗？'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -403,7 +403,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                     child: ListTile(
                       leading: CircleAvatar(
                         backgroundColor: theme.colorScheme.primaryContainer,
-                        child: Icon(
+                        child: AppIcon(
                           Icons.dashboard,
                           size: 20,
                           color: theme.colorScheme.primary,
@@ -441,7 +441,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                               ),
                             ),
                           IconButton(
-                            icon: Icon(
+                            icon: AppIcon(
                               Icons.delete_outline,
                               size: 20,
                               color: theme.colorScheme.error,
@@ -468,7 +468,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                       decoration: const InputDecoration(
                         labelText: '面板名称（可选）',
                         hintText: '如：家里的面板',
-                        prefixIcon: Icon(Icons.label_outline),
+                        prefixIcon: AppIcon(Icons.label_outline),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -477,7 +477,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                       decoration: const InputDecoration(
                         labelText: '服务器地址',
                         hintText: '192.168.1.100:5700 或 panel.example.com',
-                        prefixIcon: Icon(Icons.link),
+                        prefixIcon: AppIcon(Icons.link),
                       ),
                       keyboardType: TextInputType.url,
                       textInputAction: TextInputAction.go,

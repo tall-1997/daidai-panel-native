@@ -273,7 +273,7 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
                       color: AppColors.primary.withAlpha(22),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(
+                    child: const AppIcon(
                       Icons.lock_outline,
                       size: 30,
                       color: AppColors.primary,
@@ -381,7 +381,7 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
           decoration: const InputDecoration(
             labelText: '应用锁密码',
             hintText: '请输入密码',
-            prefixIcon: Icon(Icons.password_outlined),
+            prefixIcon: AppIcon(Icons.password_outlined),
           ),
         ),
         const SizedBox(height: 14),
@@ -441,7 +441,7 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
           ),
           child: Column(
             children: [
-              const Icon(Icons.fingerprint, size: 42, color: AppColors.primary),
+              const AppIcon(Icons.fingerprint, size: 42, color: AppColors.primary),
               const SizedBox(height: 12),
               Text(
                 '使用${widget.state.biometricLabel}解锁',

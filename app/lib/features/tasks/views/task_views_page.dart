@@ -36,10 +36,10 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
     final sortRules = TextEditingController(text: view?.sortRules ?? '[]');
     try {
       var hidden = view?.hidden ?? false;
-      final save = await showDialog<bool>(
+      final save = await showAppDialog<bool>(
         context: context,
         builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDialogState) => AlertDialog(
+          builder: (ctx, setDialogState) => AppDialog(
             title: Text(view == null ? '新建视图' : '编辑视图'),
             content: SingleChildScrollView(
               child: Column(
@@ -107,9 +107,9 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
   }
 
   Future<void> _delete(TaskView view) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('删除任务视图'),
         content: Text('确定删除「${view.name}」吗？'),
         actions: [
@@ -166,7 +166,7 @@ class _TaskViewsPageState extends ConsumerState<TaskViewsPage> {
                   subtitle: Text(view.hidden ? '已隐藏' : '可见'),
                   onTap: () => _edit(view),
                   trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline),
+                    icon: const AppIcon(Icons.delete_outline),
                     onPressed: () => _delete(view),
                   ),
                 ),

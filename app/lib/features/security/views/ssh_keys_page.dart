@@ -45,9 +45,9 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
     final id = (key['id'] as num?)?.toInt();
     if (id == null) return;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('删除 SSH 密钥'),
         content: Text('确定要删除密钥「${key['name'] ?? ''}」吗？'),
         actions: [
@@ -91,9 +91,9 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
   void _showAddDialog() {
     final nameC = TextEditingController();
     final privateKeyC = TextEditingController();
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('添加 SSH 密钥'),
         content: SingleChildScrollView(
           child: Column(
@@ -169,9 +169,9 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
   void _showViewDialog(Map<String, dynamic> key) {
     final publicKey = key['public_key']?.toString() ?? '';
     final fingerprint = key['fingerprint']?.toString() ?? '';
-    showDialog(
+    showAppDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: Text(key['name']?.toString() ?? 'SSH 密钥'),
         content: SingleChildScrollView(
           child: Column(
@@ -201,7 +201,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                           type: AppGlassNoticeType.success,
                         );
                       },
-                      child: const Icon(Icons.copy, size: 16, color: AppColors.primary),
+                      child: const AppIcon(Icons.copy, size: 16, color: AppColors.primary),
                     ),
                   ],
                 ),
@@ -249,7 +249,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                 children: [
                   GestureDetector(
                     onTap: () => Navigator.of(context).pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -260,7 +260,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                   ),
                   IconButton(
                     onPressed: _showAddDialog,
-                    icon: const Icon(Icons.add, size: 22),
+                    icon: const AppIcon(Icons.add, size: 22),
                   ),
                 ],
               ),
@@ -293,7 +293,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                               height: 36,
                               child: FilledButton.icon(
                                 onPressed: _showAddDialog,
-                                icon: const Icon(Icons.add, size: 16),
+                                icon: const AppIcon(Icons.add, size: 16),
                                 label: const Text(
                                   '添加 SSH 密钥',
                                   style: TextStyle(fontSize: 12),
@@ -323,7 +323,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                                 height: 36,
                                 child: FilledButton.icon(
                                   onPressed: _showAddDialog,
-                                  icon: const Icon(Icons.add, size: 16),
+                                  icon: const AppIcon(Icons.add, size: 16),
                                   label: const Text(
                                     '添加 SSH 密钥',
                                     style: TextStyle(fontSize: 12),
@@ -345,7 +345,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(
+                                const AppIcon(
                                   Icons.vpn_key_outlined,
                                   size: 18,
                                   color: AppColors.primary,
@@ -391,7 +391,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                                 ),
                                 GestureDetector(
                                   onTap: () => _showViewDialog(key),
-                                  child: const Icon(
+                                  child: const AppIcon(
                                     Icons.visibility_outlined,
                                     size: 18,
                                     color: AppColors.primary,
@@ -400,7 +400,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                                 const SizedBox(width: 12),
                                 GestureDetector(
                                   onTap: () => _deleteKey(key),
-                                  child: const Icon(
+                                  child: const AppIcon(
                                     Icons.delete_outline,
                                     size: 18,
                                     color: AppColors.red500,

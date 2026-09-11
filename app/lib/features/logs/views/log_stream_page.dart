@@ -298,7 +298,7 @@ class _LogStreamPageState extends State<LogStreamPage> {
                 style: TextStyle(fontSize: 12, color: logTheme.foreground),
               ),
               avatar: _done
-                  ? Icon(Icons.check, size: 16, color: logTheme.foreground)
+                  ? AppIcon(Icons.check, size: 16, color: logTheme.foreground)
                   : SizedBox(
                       width: 14,
                       height: 14,
@@ -312,7 +312,7 @@ class _LogStreamPageState extends State<LogStreamPage> {
           ),
           if (_lines.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.copy),
+              icon: const AppIcon(Icons.copy),
               tooltip: '复制全部',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: _lines.join('\n')));
@@ -334,7 +334,7 @@ class _LogStreamPageState extends State<LogStreamPage> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.download_outlined),
+                  : const AppIcon(Icons.download_outlined),
               itemBuilder: (context) => const [
                 PopupMenuItem(
                   value: _RawLogSaveAction.documents,
@@ -347,7 +347,7 @@ class _LogStreamPageState extends State<LogStreamPage> {
               ],
             ),
           IconButton(
-            icon: Icon(_autoScroll ? Icons.vertical_align_bottom : Icons.pause),
+            icon: AppIcon(_autoScroll ? Icons.vertical_align_bottom : Icons.pause),
             tooltip: _autoScroll ? '自动滚动: 开' : '自动滚动: 关',
             onPressed: () {
               setState(() => _autoScroll = !_autoScroll);

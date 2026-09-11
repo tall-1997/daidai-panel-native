@@ -627,11 +627,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     var createType = ref.read(depListProvider).selectedType;
     var autoSplit = true;
 
-    return showDialog<_CreateDepRequest>(
+    return showAppDialog<_CreateDepRequest>(
       context: context,
       useRootNavigator: true,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('安装依赖'),
           content: SizedBox(
             width: 460,
@@ -720,9 +720,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     if (_selectedIds.isEmpty) {
       return;
     }
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('批量卸载'),
         content: Text('确定要批量卸载选中的 ${_selectedIds.length} 个依赖吗？'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -751,9 +751,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   }
 
   Future<void> _confirmDelete(Dependency dep, {bool force = false}) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: Text(force ? '强制卸载依赖' : '卸载依赖'),
         content: Text(
           force
@@ -798,9 +798,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       );
       if (!mounted) return;
       final content = response.data?.toString() ?? '';
-      await showDialog<void>(
+      await showAppDialog<void>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => AppDialog(
           title: Text('${type == 'python' ? 'Python' : 'Node'} 依赖导出'),
           content: SizedBox(
             width: double.maxFinite,
@@ -824,9 +824,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   Future<void> _batchReinstall() async {
     final controller = TextEditingController();
     try {
-      final ok = await showDialog<bool>(
+      final ok = await showAppDialog<bool>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => AppDialog(
           title: const Text('顺序批量重装'),
           content: TextField(
             controller: controller,
@@ -938,10 +938,10 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     final npmController = TextEditingController(text: initial.npmMirror);
     final linuxController = TextEditingController(text: initial.linuxMirror);
 
-    return showDialog<DepMirrorConfig>(
+    return showAppDialog<DepMirrorConfig>(
       context: context,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('镜像源设置'),
           content: SizedBox(
             width: 520,
@@ -1312,7 +1312,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -1335,7 +1335,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.settings_suggest_outlined),
+                        : const AppIcon(Icons.settings_suggest_outlined),
                   ),
                   AppGlassIconButton(
                     icon: Icons.add,
@@ -1344,7 +1344,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   ),
                   PopupMenuButton<String>(
                     tooltip: '更多操作',
-                    icon: const Icon(Icons.more_vert_outlined),
+                    icon: const AppIcon(Icons.more_vert_outlined),
                     onSelected: (value) {
                       switch (value) {
                         case 'export-python':
@@ -1468,7 +1468,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: FilledButton.tonalIcon(
                   onPressed: _handleBatchDelete,
-                  icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                  icon: const AppIcon(Icons.delete_sweep_outlined, size: 18),
                   label: Text('批量卸载 (${_selectedIds.length})'),
                   style: FilledButton.styleFrom(
                     foregroundColor: AppColors.red500,
@@ -1511,7 +1511,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.cloud_off_outlined, size: 42),
+                                const AppIcon(Icons.cloud_off_outlined, size: 42),
                                 const SizedBox(height: 10),
                                 Text(
                                   state.error!,
@@ -1538,7 +1538,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             physics: const AlwaysScrollableScrollPhysics(),
                             children: [
                               const SizedBox(height: 100),
-                              Icon(
+                              AppIcon(
                                 Icons.inventory_2_outlined,
                                 size: 56,
                                 color: AppColors.slate400.withAlpha(120),
@@ -1767,7 +1767,7 @@ class _DepCard extends ConsumerWidget {
           const SizedBox(width: 4),
           IconButton(
             onPressed: onViewLog,
-            icon: const Icon(Icons.terminal, size: 18),
+            icon: const AppIcon(Icons.terminal, size: 18),
             tooltip: '日志',
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -1785,7 +1785,7 @@ class _DepCard extends ConsumerWidget {
                   onForceDelete?.call();
               }
             },
-            icon: const Icon(Icons.more_horiz, size: 18),
+            icon: const AppIcon(Icons.more_horiz, size: 18),
             itemBuilder: (_) => [
               if (dep.isBusy)
                 const PopupMenuItem(value: 'cancel', child: Text('取消安装')),

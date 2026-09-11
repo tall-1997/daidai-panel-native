@@ -446,9 +446,9 @@ class _LogListPageState extends ConsumerState<LogListPage>
   Future<void> _batchDeleteSelected() async {
     if (_selectedIds.isEmpty) return;
     final count = _selectedIds.length;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('批量删除'),
         content: Text('确定要删除选中的 $count 条日志吗？'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -471,7 +471,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
   }
 
   Future<void> _showCleanDialog() async {
-    final days = await showDialog<int>(
+    final days = await showAppDialog<int>(
       context: context,
       builder: (ctx) => SimpleDialog(
         title: const Text('清理旧日志'),
@@ -501,9 +501,9 @@ class _LogListPageState extends ConsumerState<LogListPage>
       if (!mounted) {
         return;
       }
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showAppDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => AppDialog(
           title: const Text('清理全部日志'),
           content: const Text('确定要清理当前筛选条件下的全部日志吗？此操作不可恢复。'),
           actions: [AppLiquidGlassDialogActions(actions: [
@@ -538,9 +538,9 @@ class _LogListPageState extends ConsumerState<LogListPage>
   }
 
   Future<void> _handleDelete(TaskLog log) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => AppDialog(
         title: const Text('删除日志'),
         content: Text('确定要删除日志 #${log.id} 吗？'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -598,7 +598,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                   ),
                   if (_selectionMode) ...[
                     IconButton(
-                      icon: Icon(
+                      icon: AppIcon(
                         _selectedIds.length == state.logs.length
                             ? Icons.deselect
                             : Icons.select_all,
@@ -610,7 +610,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                           : '全选',
                     ),
                     IconButton(
-                      icon: const Icon(
+                      icon: const AppIcon(
                         Icons.delete_outline,
                         size: 20,
                         color: AppColors.red500,
@@ -619,13 +619,13 @@ class _LogListPageState extends ConsumerState<LogListPage>
                       tooltip: '批量删除',
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close, size: 20),
+                      icon: const AppIcon(Icons.close, size: 20),
                       onPressed: _exitSelectionMode,
                       tooltip: '取消',
                     ),
                   ] else ...[
                     IconButton(
-                      icon: const Icon(
+                      icon: const AppIcon(
                         Icons.cleaning_services_outlined,
                         size: 20,
                       ),
@@ -645,7 +645,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                 controller: _searchController,
                 decoration: InputDecoration(
                   hintText: '搜索任务名称...',
-                  prefixIcon: const Icon(
+                  prefixIcon: const AppIcon(
                     Icons.search,
                     size: 18,
                     color: AppColors.slate400,
@@ -653,7 +653,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                   isDense: true,
                   suffixIcon: _searchController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(
+                          icon: const AppIcon(
                             Icons.clear,
                             size: 16,
                             color: AppColors.slate400,
@@ -752,7 +752,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                 child: AppCard(
                   child: Row(
                     children: [
-                      const Icon(Icons.error_outline, color: AppColors.red500),
+                      const AppIcon(Icons.error_outline, color: AppColors.red500),
                       const SizedBox(width: 10),
                       Expanded(child: Text(state.error!)),
                       TextButton(
@@ -793,7 +793,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                           AppCard(
                             child: Column(
                               children: [
-                                const Icon(Icons.cloud_off_outlined, size: 42),
+                                const AppIcon(Icons.cloud_off_outlined, size: 42),
                                 const SizedBox(height: 10),
                                 Text(state.error!, textAlign: TextAlign.center),
                                 const SizedBox(height: 12),
@@ -813,7 +813,7 @@ class _LogListPageState extends ConsumerState<LogListPage>
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.article_outlined,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -972,7 +972,7 @@ class _LogItem extends ConsumerWidget {
               onPressed: onDelete,
               visualDensity: VisualDensity.compact,
               splashRadius: 20,
-              icon: const Icon(Icons.delete_outline, size: 20),
+              icon: const AppIcon(Icons.delete_outline, size: 20),
               color: AppColors.red500,
             ),
           ],

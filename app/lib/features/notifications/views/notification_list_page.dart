@@ -425,7 +425,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -480,7 +480,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                         padding: const EdgeInsets.symmetric(horizontal: 32),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.cloud_off_outlined,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -507,7 +507,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.notifications_off,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -561,7 +561,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     final titleC = TextEditingController(text: '呆呆面板通知');
     final contentC = TextEditingController();
     final selectedIds = <int>{};
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -730,9 +730,9 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
   }
 
   Future<void> _confirmDelete(NotifyChannel channel) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('删除通知渠道'),
         content: Text('确定要删除「${channel.name}」吗？'),
         actions: [
@@ -1045,7 +1045,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       );
     }
 
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1228,7 +1228,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                                         false);
                                               });
                                             },
-                                            icon: Icon(
+                                            icon: AppIcon(
                                               credentialVisibility[f.key] ??
                                                       false
                                                   ? Icons.visibility_off_outlined
@@ -1446,7 +1446,7 @@ class _InlineLoadError extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
-            const Icon(Icons.sync_problem_outlined, color: AppColors.amber500),
+            const AppIcon(Icons.sync_problem_outlined, color: AppColors.amber500),
             const SizedBox(width: 10),
             Expanded(
               child: Text(message, style: const TextStyle(fontSize: 13)),
@@ -1514,7 +1514,7 @@ class _ChannelCard extends StatelessWidget {
                   : AppColors.slate200.withAlpha(60),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(
+            child: AppIcon(
               _typeIcon(),
               size: 18,
               color: channel.enabled ? AppColors.primary : AppColors.slate400,
@@ -1549,14 +1549,14 @@ class _ChannelCard extends StatelessWidget {
             onTap: onTest,
             child: const Padding(
               padding: EdgeInsets.all(6),
-              child: Icon(Icons.send, size: 16, color: AppColors.blue500),
+              child: AppIcon(Icons.send, size: 16, color: AppColors.blue500),
             ),
           ),
           GestureDetector(
             onTap: onEdit,
             child: const Padding(
               padding: EdgeInsets.all(6),
-              child: Icon(
+              child: AppIcon(
                 Icons.edit_outlined,
                 size: 18,
                 color: AppColors.blue500,
@@ -1567,7 +1567,7 @@ class _ChannelCard extends StatelessWidget {
             onTap: onToggle,
             child: Padding(
               padding: const EdgeInsets.all(6),
-              child: Icon(
+              child: AppIcon(
                 channel.enabled ? Icons.toggle_on : Icons.toggle_off,
                 size: 28,
                 color: channel.enabled ? AppColors.primary : AppColors.slate400,
@@ -1578,7 +1578,7 @@ class _ChannelCard extends StatelessWidget {
             onTap: onDelete,
             child: const Padding(
               padding: EdgeInsets.all(6),
-              child: Icon(
+              child: AppIcon(
                 Icons.delete_outline,
                 size: 18,
                 color: AppColors.red500,

@@ -472,10 +472,10 @@ class _BackupPageState extends ConsumerState<BackupPage>
     final passwordController = TextEditingController();
     var selection = const _BackupSelection.defaults();
 
-    return showDialog<_CreateBackupRequest>(
+    return showAppDialog<_CreateBackupRequest>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => AppDialog(
           title: const Text('创建备份'),
           content: SizedBox(
             width: 420,
@@ -699,9 +699,9 @@ class _BackupPageState extends ConsumerState<BackupPage>
     final passwordController = TextEditingController();
     final needsPassword = filename.toLowerCase().endsWith('.enc');
 
-    return showDialog<String>(
+    return showAppDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('恢复备份'),
         content: SizedBox(
           width: 400,
@@ -745,7 +745,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                 child: const Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
+                    AppIcon(
                       Icons.warning_amber_rounded,
                       size: 18,
                       color: AppColors.amber500,
@@ -782,9 +782,9 @@ class _BackupPageState extends ConsumerState<BackupPage>
   }
 
   Future<void> _deleteBackup(String filename) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('删除备份'),
         content: Text('确定要删除备份「$filename」吗？删除后将无法恢复。'),
         actions: [AppLiquidGlassDialogActions(actions: [
@@ -997,10 +997,10 @@ class _BackupPageState extends ConsumerState<BackupPage>
     final monthdayController = TextEditingController(text: value('backup_schedule_monthday', '1'));
     try {
       if (!mounted) return;
-      final saved = await showDialog<bool>(
+      final saved = await showAppDialog<bool>(
         context: context,
         builder: (dialogContext) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: const Text('定时备份'),
             content: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1045,7 +1045,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     }
-    return Icon(icon, size: 18);
+    return AppIcon(icon, size: 18);
   }
 
   Widget _buildActionCard(bool isLight) {
@@ -1068,7 +1068,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                     color: AppColors.blue500.withAlpha(isLight ? 24 : 36),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: const Icon(
+                  child: const AppIcon(
                     Icons.inventory_2_outlined,
                     color: AppColors.blue500,
                   ),
@@ -1119,7 +1119,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                 ),
                 OutlinedButton.icon(
                   onPressed: _busyRestoring ? null : _configureBackupSchedule,
-                  icon: const Icon(Icons.schedule_rounded),
+                  icon: const AppIcon(Icons.schedule_rounded),
                   label: const Text('定时备份'),
                 ),
               ],
@@ -1177,7 +1177,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                     color: color.withAlpha(isLight ? 24 : 36),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: Icon(_restoreStatusIcon(progress), color: color),
+                  child: AppIcon(_restoreStatusIcon(progress), color: color),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -1206,7 +1206,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                     tooltip: '收起',
                     onPressed: () =>
                         setState(() => _hideRestoreProgress = true),
-                    icon: const Icon(Icons.close_rounded),
+                    icon: const AppIcon(Icons.close_rounded),
                   ),
               ],
             ),
@@ -1284,7 +1284,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
               runSpacing: 8,
               children: [
                 Chip(
-                  avatar: const Icon(
+                  avatar: const AppIcon(
                     Icons.widgets_outlined,
                     size: 16,
                     color: AppColors.blue500,
@@ -1293,7 +1293,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                 ),
                 if (progress.startedAt != null)
                   Chip(
-                    avatar: const Icon(
+                    avatar: const AppIcon(
                       Icons.schedule_outlined,
                       size: 16,
                       color: AppColors.blue500,
@@ -1302,7 +1302,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                   ),
                 if (progress.updatedAt != null)
                   Chip(
-                    avatar: const Icon(
+                    avatar: const AppIcon(
                       Icons.update_outlined,
                       size: 16,
                       color: AppColors.blue500,
@@ -1362,7 +1362,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                         : AppColors.blue500.withAlpha(isLight ? 18 : 28),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
+                  child: AppIcon(
                     record.encrypted
                         ? Icons.lock_outline_rounded
                         : Icons.archive_outlined,
@@ -1389,14 +1389,14 @@ class _BackupPageState extends ConsumerState<BackupPage>
                         children: [
                           Chip(
                             label: Text(_formatSize(record.size)),
-                            avatar: const Icon(
+                            avatar: const AppIcon(
                               Icons.data_object_rounded,
                               size: 16,
                             ),
                           ),
                           Chip(
                             label: Text(_formatDateTime(record.createdAt)),
-                            avatar: const Icon(
+                            avatar: const AppIcon(
                               Icons.schedule_outlined,
                               size: 16,
                             ),
@@ -1404,7 +1404,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                           if (record.encrypted)
                             const Chip(
                               label: Text('已加密'),
-                              avatar: Icon(
+                              avatar: AppIcon(
                                 Icons.shield_outlined,
                                 size: 16,
                                 color: AppColors.amber500,
@@ -1433,7 +1433,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                   onPressed: _busyRestoring
                       ? null
                       : () => _restoreBackup(record.filename),
-                  icon: const Icon(Icons.restore_rounded, size: 18),
+                  icon: const AppIcon(Icons.restore_rounded, size: 18),
                   label: const Text('恢复'),
                 ),
                 OutlinedButton.icon(
@@ -1474,7 +1474,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -1489,7 +1489,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                   IconButton(
                     tooltip: '刷新',
                     onPressed: _loading ? null : _refresh,
-                    icon: const Icon(Icons.refresh_rounded),
+                    icon: const AppIcon(Icons.refresh_rounded),
                   ),
                 ],
               ),
@@ -1532,7 +1532,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                       AppCard(
                         child: Row(
                           children: [
-                            const Icon(
+                            const AppIcon(
                               Icons.cloud_off_outlined,
                               color: AppColors.red500,
                             ),
@@ -1571,7 +1571,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
                           ),
                           child: Column(
                             children: [
-                              Icon(
+                              AppIcon(
                                 Icons.folder_open_rounded,
                                 size: 56,
                                 color: isLight

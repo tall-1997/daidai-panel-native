@@ -156,7 +156,7 @@ class _SponsorPageState extends State<SponsorPage> {
                       stableForScrolling: true,
                       child: Column(
                         children: [
-                          Icon(
+                          AppIcon(
                             Icons.favorite_border,
                             size: 44,
                             color: AppColors.primary.withAlpha(180),

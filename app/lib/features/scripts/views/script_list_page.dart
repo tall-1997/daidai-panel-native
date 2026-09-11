@@ -639,9 +639,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _maybePromptAddToTask(String path) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('加入任务'),
         content: Text('脚本「${path.split('/').last}」上传成功，是否直接添加到定时任务？'),
         actions: [
@@ -686,7 +686,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -702,7 +702,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     onTap: () => ref.read(scriptProvider.notifier).loadTree(),
                     child: const Padding(
                       padding: EdgeInsets.all(4),
-                      child: Icon(Icons.refresh, size: 22),
+                      child: AppIcon(Icons.refresh, size: 22),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -713,7 +713,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                         value: _ScriptAction.upload,
                         child: ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.upload_file_outlined, size: 20),
+                          leading: AppIcon(Icons.upload_file_outlined, size: 20),
                           title: Text('上传脚本'),
                         ),
                       ),
@@ -721,7 +721,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                         value: _ScriptAction.createFile,
                         child: ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.note_add_outlined, size: 20),
+                          leading: AppIcon(Icons.note_add_outlined, size: 20),
                           title: Text('新建脚本'),
                         ),
                       ),
@@ -729,7 +729,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                         value: _ScriptAction.createDirectory,
                         child: ListTile(
                           contentPadding: EdgeInsets.zero,
-                          leading: Icon(
+                          leading: AppIcon(
                             Icons.create_new_folder_outlined,
                             size: 20,
                           ),
@@ -754,7 +754,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     hintText: '搜索脚本名称或路径...',
-                    prefixIcon: const Icon(
+                    prefixIcon: const AppIcon(
                       Icons.search,
                       size: 18,
                       color: AppColors.slate400,
@@ -767,7 +767,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                               ref.read(scriptProvider.notifier).setKeyword('');
                               setState(() {});
                             },
-                            icon: const Icon(Icons.clear, size: 18),
+                            icon: const AppIcon(Icons.clear, size: 18),
                           ),
                   ),
                   onChanged: (value) {
@@ -827,7 +827,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          AppIcon(
             Icons.folder_off,
             size: 56,
             color: AppColors.slate400.withAlpha(120),
@@ -841,18 +841,18 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
             children: [
               OutlinedButton.icon(
                 onPressed: () => _handleAction(_ScriptAction.upload, state),
-                icon: const Icon(Icons.upload_file_outlined),
+                icon: const AppIcon(Icons.upload_file_outlined),
                 label: const Text('上传脚本'),
               ),
               OutlinedButton.icon(
                 onPressed: () => _handleAction(_ScriptAction.createFile, state),
-                icon: const Icon(Icons.note_add_outlined),
+                icon: const AppIcon(Icons.note_add_outlined),
                 label: const Text('新建脚本'),
               ),
               OutlinedButton.icon(
                 onPressed: () =>
                     _handleAction(_ScriptAction.createDirectory, state),
-                icon: const Icon(Icons.create_new_folder_outlined),
+                icon: const AppIcon(Icons.create_new_folder_outlined),
                 label: const Text('新建文件夹'),
               ),
             ],
@@ -877,7 +877,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _handleEntryAction(ScriptFile file, ScriptState state) async {
-    final action = await showModalBottomSheet<_ScriptEntryAction>(
+    final action = await showAppBottomSheet<_ScriptEntryAction>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -893,14 +893,14 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 children: [
                   if (!file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.open_in_new),
+                      leading: const AppIcon(Icons.open_in_new),
                       title: const Text('打开脚本'),
                       onTap: () =>
                           Navigator.pop(sheetContext, _ScriptEntryAction.open),
                     ),
                   if (!file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.playlist_add_outlined),
+                      leading: const AppIcon(Icons.playlist_add_outlined),
                       title: const Text('加入任务'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -909,7 +909,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   if (!file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.download_outlined),
+                      leading: const AppIcon(Icons.download_outlined),
                       title: const Text('下载'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -918,7 +918,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   if (!file.isDirectory)
                     ListTile(
-                      leading: Icon(
+                      leading: AppIcon(
                         _favoriteScriptPaths.contains(file.path)
                             ? Icons.push_pin_outlined
                             : Icons.push_pin,
@@ -935,7 +935,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   if (!file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.history_outlined),
+                      leading: const AppIcon(Icons.history_outlined),
                       title: const Text('版本历史'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -943,20 +943,20 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ),
                     ),
                   ListTile(
-                    leading: const Icon(Icons.drive_file_move_outline),
+                    leading: const AppIcon(Icons.drive_file_move_outline),
                     title: Text(file.isDirectory ? '移动文件夹' : '移动文件'),
                     onTap: () =>
                         Navigator.pop(sheetContext, _ScriptEntryAction.move),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.copy_outlined),
+                    leading: const AppIcon(Icons.copy_outlined),
                     title: Text(file.isDirectory ? '复制文件夹' : '复制文件'),
                     onTap: () =>
                         Navigator.pop(sheetContext, _ScriptEntryAction.copy),
                   ),
                   if (file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.upload_file_outlined),
+                      leading: const AppIcon(Icons.upload_file_outlined),
                       title: const Text('上传到此处'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -965,7 +965,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   if (file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.note_add_outlined),
+                      leading: const AppIcon(Icons.note_add_outlined),
                       title: const Text('在此新建脚本'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -974,7 +974,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   if (file.isDirectory)
                     ListTile(
-                      leading: const Icon(Icons.create_new_folder_outlined),
+                      leading: const AppIcon(Icons.create_new_folder_outlined),
                       title: const Text('在此新建文件夹'),
                       onTap: () => Navigator.pop(
                         sheetContext,
@@ -982,13 +982,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ),
                     ),
                   ListTile(
-                    leading: const Icon(Icons.drive_file_rename_outline),
+                    leading: const AppIcon(Icons.drive_file_rename_outline),
                     title: const Text('重命名'),
                     onTap: () =>
                         Navigator.pop(sheetContext, _ScriptEntryAction.rename),
                   ),
                   ListTile(
-                    leading: const Icon(
+                    leading: const AppIcon(
                       Icons.delete_outline,
                       color: AppColors.red500,
                     ),
@@ -1081,11 +1081,11 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   Future<void> _showRenameDialog(ScriptFile file) async {
     final controller = TextEditingController(text: file.name);
     final parent = _defaultScriptDirectory(file.path);
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
-        return AlertDialog(
+        return AppDialog(
           title: Text(file.isDirectory ? '重命名文件夹' : '重命名脚本'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1162,9 +1162,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _confirmDelete(ScriptFile file) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: Text(file.isDirectory ? '删除文件夹' : '删除脚本'),
         content: Text(
           file.isDirectory
@@ -1249,12 +1249,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     ).where((folder) => folder != file.path).toList();
     String targetDir = _defaultScriptDirectory(file.path);
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: Text(file.isDirectory ? '移动文件夹' : '移动文件'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1334,12 +1334,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     final nameController = TextEditingController(text: file.name);
     String targetDir = _defaultScriptDirectory(file.path);
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: Text(file.isDirectory ? '复制文件夹' : '复制文件'),
             content: SingleChildScrollView(
               child: Column(
@@ -1443,7 +1443,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     if (!mounted) {
       return;
     }
-    await showModalBottomSheet<void>(
+    await showAppBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1460,13 +1460,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     String parent =
         initialParent ?? _defaultScriptDirectory(state.selectedPath);
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       useRootNavigator: true,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: const Text('新建脚本'),
             content: SingleChildScrollView(
               child: Column(
@@ -1562,13 +1562,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     String parent =
         initialParent ?? _defaultScriptDirectory(state.selectedPath);
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       useRootNavigator: true,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: const Text('新建文件夹'),
             content: SingleChildScrollView(
               child: Column(
@@ -1678,13 +1678,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         ? initialDir
         : _defaultScriptDirectory(state.selectedPath);
 
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
       useRootNavigator: true,
       builder: (dialogContext) {
         final navigator = Navigator.of(dialogContext);
         return StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
+          builder: (context, setDialogState) => AppDialog(
             title: const Text('上传脚本'),
             content: SingleChildScrollView(
               child: Column(
@@ -1801,7 +1801,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
+          const AppIcon(
             Icons.cloud_off_outlined,
             size: 56,
             color: AppColors.slate400,
@@ -1831,7 +1831,7 @@ class _ScriptInlineLoadError extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
     child: Row(
       children: [
-        const Icon(Icons.sync_problem_outlined, color: AppColors.amber500),
+        const AppIcon(Icons.sync_problem_outlined, color: AppColors.amber500),
         const SizedBox(width: 10),
         Expanded(child: Text(message, style: const TextStyle(fontSize: 13))),
         TextButton(onPressed: onRetry, child: const Text('重试')),
@@ -1890,7 +1890,7 @@ class _FileTreeItemState extends ConsumerState<_FileTreeItem> {
             ),
             child: Row(
               children: [
-                Icon(
+                AppIcon(
                   file.isDirectory
                       ? (_expanded ? Icons.folder_open : Icons.folder)
                       : Icons.description_outlined,
@@ -1914,14 +1914,14 @@ class _FileTreeItemState extends ConsumerState<_FileTreeItem> {
                   ),
                 ),
                 if (file.isDirectory)
-                  Icon(
+                  AppIcon(
                     _expanded ? Icons.expand_less : Icons.expand_more,
                     size: 18,
                     color: AppColors.slate400,
                   ),
                 IconButton(
                   onPressed: () => widget.onAction(file),
-                  icon: const Icon(Icons.more_vert, size: 18),
+                  icon: const AppIcon(Icons.more_vert, size: 18),
                   visualDensity: VisualDensity.compact,
                   color: AppColors.slate400,
                   splashRadius: 18,
@@ -2045,7 +2045,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     if (!mounted) {
       return;
     }
-    await showModalBottomSheet<void>(
+    await showAppBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -2093,7 +2093,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       if (!mounted) {
         return;
       }
-      await showModalBottomSheet<void>(
+      await showAppBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         showDragHandle: true,
@@ -2144,7 +2144,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       if (!mounted) {
         return;
       }
-      await showModalBottomSheet<void>(
+      await showAppBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         showDragHandle: true,
@@ -2321,7 +2321,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     }
 
     final controller = TextEditingController(text: _lastSearchQuery);
-    await showModalBottomSheet<void>(
+    await showAppBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -2344,7 +2344,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                 textInputAction: TextInputAction.search,
                 decoration: const InputDecoration(
                   hintText: '输入关键字，例如 send / token / class',
-                  prefixIcon: Icon(Icons.search),
+                  prefixIcon: AppIcon(Icons.search),
                 ),
                 onSubmitted: (value) => _findInContent(value, forward: true),
               ),
@@ -2355,7 +2355,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                     child: OutlinedButton.icon(
                       onPressed: () =>
                           _findInContent(controller.text, forward: false),
-                      icon: const Icon(Icons.keyboard_arrow_up, size: 18),
+                      icon: const AppIcon(Icons.keyboard_arrow_up, size: 18),
                       label: const Text('上一个'),
                     ),
                   ),
@@ -2364,7 +2364,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                     child: FilledButton.icon(
                       onPressed: () =>
                           _findInContent(controller.text, forward: true),
-                      icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+                      icon: const AppIcon(Icons.keyboard_arrow_down, size: 18),
                       label: const Text('下一个'),
                     ),
                   ),
@@ -2420,7 +2420,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
           if (!state.isBinary)
             IconButton(
               onPressed: _showFindSheet,
-              icon: const Icon(Icons.search),
+              icon: const AppIcon(Icons.search),
               tooltip: '查找代码',
             ),
           if (!state.isBinary)
@@ -2431,7 +2431,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   value: _ScriptViewerAction.addToTask,
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.playlist_add_outlined),
+                    leading: AppIcon(Icons.playlist_add_outlined),
                     title: Text('加入任务'),
                   ),
                 ),
@@ -2439,7 +2439,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   value: _ScriptViewerAction.format,
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.auto_fix_high_outlined),
+                    leading: AppIcon(Icons.auto_fix_high_outlined),
                     title: Text('格式化'),
                   ),
                 ),
@@ -2447,7 +2447,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   value: _ScriptViewerAction.versions,
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.history_outlined),
+                    leading: AppIcon(Icons.history_outlined),
                     title: Text('版本历史'),
                   ),
                 ),
@@ -2455,7 +2455,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   value: _ScriptViewerAction.debug,
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.play_circle_outline),
+                    leading: AppIcon(Icons.play_circle_outline),
                     title: Text('调试运行'),
                   ),
                 ),
@@ -2470,13 +2470,13 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.play_arrow_rounded),
+                  : const AppIcon(Icons.play_arrow_rounded),
               tooltip: '调试运行',
             ),
           if (!state.isBinary)
             IconButton(
               onPressed: () => setState(() => _editing = !_editing),
-              icon: Icon(
+              icon: AppIcon(
                 _editing ? Icons.visibility_outlined : Icons.edit_outlined,
               ),
             ),
@@ -2489,7 +2489,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.save_outlined),
+                  : const AppIcon(Icons.save_outlined),
             ),
         ],
       ),
@@ -2612,9 +2612,9 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
   }
 
   Future<void> _rollback(ScriptVersionRecord version) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('回滚脚本'),
         content: Text('确定要回滚到 v${version.version} 吗？'),
         actions: [
@@ -2774,7 +2774,7 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                   alignment: Alignment.centerRight,
                                   child: OutlinedButton.icon(
                                     onPressed: () => _rollback(version),
-                                    icon: const Icon(Icons.restore, size: 18),
+                                    icon: const AppIcon(Icons.restore, size: 18),
                                     label: const Text('回滚到此版本'),
                                   ),
                                 ),
@@ -3005,9 +3005,9 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
   }
 
   Future<void> _clearRun() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAppDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => AppDialog(
         title: const Text('清除运行记录'),
         content: const Text('确定要清除此运行记录吗？'),
         actions: [
@@ -3119,7 +3119,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
                               type: AppGlassNoticeType.success,
                             );
                           },
-                    icon: const Icon(Icons.copy_all_outlined),
+                    icon: const AppIcon(Icons.copy_all_outlined),
                   ),
                   IconButton(
                     onPressed: () {
@@ -3128,7 +3128,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
                         _scrollToBottom();
                       }
                     },
-                    icon: Icon(
+                    icon: AppIcon(
                       _autoScroll
                           ? Icons.vertical_align_bottom
                           : Icons.pause_circle_outline,
@@ -3137,12 +3137,12 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
                   if (!_done)
                     IconButton(
                       onPressed: _stopRun,
-                      icon: const Icon(Icons.stop_circle_outlined),
+                      icon: const AppIcon(Icons.stop_circle_outlined),
                     ),
                   if (_done)
                     IconButton(
                       onPressed: _clearRun,
-                      icon: const Icon(Icons.delete_outline),
+                      icon: const AppIcon(Icons.delete_outline),
                       tooltip: '清除运行记录',
                     ),
                 ],

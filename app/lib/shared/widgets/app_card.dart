@@ -5,6 +5,10 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/theme_provider.dart';
+import 'app_icon.dart';
+
+export 'app_dialog.dart';
+export 'app_icon.dart';
 
 class AppCard extends ConsumerWidget {
   final Widget child;
@@ -124,11 +128,11 @@ class AppListTile extends ConsumerWidget {
   }
 
   Widget _buildTile(bool isLight) => ListTile(
-    leading: Icon(icon, size: 20),
+    leading: AppIcon(icon, size: 20),
     title: Text(title),
     trailing:
         trailing ??
-        Icon(
+        AppIcon(
           Icons.chevron_right,
           size: 18,
           color: isLight ? AppColors.slate400 : AppColors.slate600,
@@ -191,7 +195,7 @@ class AppGlassIconButton extends ConsumerWidget {
                     child: InkWell(
                       customBorder: const CircleBorder(),
                       onTap: onTap,
-                      child: Icon(icon, size: iconSize, color: accentColor),
+                      child: AppIcon(icon, size: iconSize, color: accentColor),
                     ),
                   ),
                 ),
@@ -595,7 +599,7 @@ class AppLiquidGlassActionChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 15, color: accentColor),
+            AppIcon(icon, size: 15, color: accentColor),
             const SizedBox(width: 5),
           ],
           Text(
@@ -645,7 +649,7 @@ class AppLiquidGlassInputChip extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               child: const Padding(
                 padding: EdgeInsets.all(3),
-                child: Icon(Icons.close, size: 14),
+                child: AppIcon(Icons.close, size: 14),
               ),
             ),
           ],
@@ -754,7 +758,7 @@ class AppGlassNotice {
           duration: duration,
           content: Row(
             children: [
-              Icon(icon, size: 19, color: color),
+              AppIcon(icon, size: 19, color: color),
               const SizedBox(width: 10),
               Expanded(child: Text(message)),
             ],

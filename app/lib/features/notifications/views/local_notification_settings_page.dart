@@ -156,7 +156,7 @@ class _LocalNotificationSettingsPageState
         const SizedBox(height: 12),
         Row(
           children: [
-            Icon(
+            AppIcon(
               _permissionGranted ? Icons.check_circle : Icons.cancel,
               size: 20,
               color: _permissionGranted ? AppColors.primary : AppColors.red500,
@@ -234,7 +234,7 @@ class _ChannelTile extends ConsumerWidget {
                 color: isLight ? iconBg : iconBgDark,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, size: 20, color: iconColor),
+              child: AppIcon(icon, size: 20, color: iconColor),
             ),
             const SizedBox(width: 14),
             Expanded(

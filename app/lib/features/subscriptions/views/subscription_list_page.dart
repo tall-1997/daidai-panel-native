@@ -249,7 +249,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                 children: [
                   GestureDetector(
                     onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
+                    child: const AppIcon(Icons.arrow_back_ios, size: 20),
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -281,7 +281,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     hintText: '搜索订阅...',
-                    prefixIcon: const Icon(
+                    prefixIcon: const AppIcon(
                       Icons.search,
                       size: 18,
                       color: AppColors.slate400,
@@ -289,7 +289,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                     isDense: true,
                     suffixIcon: _searchController.text.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(
+                            icon: const AppIcon(
                               Icons.clear,
                               size: 16,
                               color: AppColors.slate400,
@@ -347,7 +347,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
                           const SizedBox(height: 100),
-                          Icon(
+                          AppIcon(
                             Icons.sync_disabled,
                             size: 56,
                             color: AppColors.slate400.withAlpha(120),
@@ -459,9 +459,9 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
   }
 
   Future<void> _confirmDelete(Subscription sub) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAppDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('删除订阅'),
         content: Text('确定要删除「${sub.name}」吗？'),
         actions: [
@@ -531,7 +531,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       } catch (_) {}
       if (!mounted) return;
 
-      showModalBottomSheet(
+      showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -873,7 +873,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
         return;
       }
 
-      showModalBottomSheet(
+      showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1366,7 +1366,7 @@ class _SmallIconBtn extends StatelessWidget {
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.all(6),
-        child: Icon(icon, size: 18, color: color ?? AppColors.slate400),
+        child: AppIcon(icon, size: 18, color: color ?? AppColors.slate400),
       ),
     );
   }
@@ -1462,7 +1462,7 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
     final borderColor = logTheme.brightness == Brightness.dark
         ? AppColors.slate700
         : AppColors.slate200;
-    showModalBottomSheet(
+    showAppBottomSheet(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
