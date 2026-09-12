@@ -178,6 +178,14 @@ object AndroidLinuxRuntime {
     private fun nativeCompatDir(context: Context): File {
         val compat = File(context.filesDir, "runtimes/native-compat/${currentAbi()}")
         copyVersionedLibraries(nativeLibraryDir(context), compat, mapOf(
+            // PRoot's own DT_NEEDED. Resolve them from this curated directory instead of
+            // the whole nativeLibraryDir: the packaged OpenSSL 3 libs are named
+            // libcrypto.so/libssl.so, and putting nativeLibraryDir on LD_LIBRARY_PATH lets
+            // system libraries that need the legacy libcrypto (e.g. /system/lib64/libcurl.so
+            // which references EVP_MD_CTX_create) bind to the bundled OpenSSL 3 and fail with
+            // "cannot locate symbol". Keep the search path collision-free.
+            "libtalloc.so" to listOf("libtalloc.so"),
+            "libandroid-shmem.so" to listOf("libandroid-shmem.so"),
             "libtalloc_v2.so" to listOf("libtalloc.so.2"),
             "libbusybox_v138.so" to listOf("libbusybox.so.1.38.0"),
         ))
@@ -197,7 +205,7 @@ object AndroidLinuxRuntime {
             "PYTHONUNBUFFERED" to "1",
             "PYTHONIOENCODING" to "utf-8",
             "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
-            "LD_LIBRARY_PATH" to "${nativeCompatDir(context).absolutePath}:${nativeLibraryDir(context).absolutePath}",
+            "LD_LIBRARY_PATH" to nativeCompatDir(context).absolutePath,
         ).apply {
             prootLoader?.let { putAll(prootEnvironment(it, context.cacheDir)) }
             nodeRuntimeOptions(currentAbi())?.let { put("NODE_OPTIONS", it) }

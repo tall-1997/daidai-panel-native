@@ -107,7 +107,8 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Troubleshooting & Debugging | Environment Configuration
 - Instructions:
   - `AndroidLinuxRuntime.prootEnvironment` 不得加入 `PROOT_NO_SECCOMP=1`。termux/proot 5.1.107.92 依赖 seccomp mode 2 重写被 Android 外层 seccomp 拦截的 syscall，禁用后 rseq 等会以 SIGSYS 杀掉 tracee（见 commit 0631b3b、CHANGELOG v1.0.20「恢复并校验 seccomp 路径」）。单元测试 `proot environment overrides Termux loader path with packaged ELF` 显式断言该键不存在。
-  - `AndroidLinuxRuntime.baseEnvironment` 必须保留 `LD_LIBRARY_PATH = nativeCompatDir:nativeLibraryDir` 与 `nativeCompatDir`（生成 `libtalloc.so.2`/`libbusybox.so.1.38.0` 版本化软链）。移除后宿主机 proot 子进程无法解析 `libtalloc.so`，x86_64 模拟器 smoke（`executeGuestEvidence` 用 `baseEnvironment` 启动 proot）会失败。
+  - `AndroidLinuxRuntime.baseEnvironment` 的 `LD_LIBRARY_PATH` 只能指向策划过的 `nativeCompatDir`，禁止再拼接 `nativeLibraryDir`。`nativeLibraryDir` 内有 OpenSSL 3 的 `libcrypto.so`/`libssl.so`（SONAME `libcrypto_python.so`/`libssl_python.so`），会把系统库（如 `/system/lib64/libcurl.so`，其 NEEDED 是遗留 `libcrypto.so` 且引用已被 OpenSSL 3 删除的 `EVP_MD_CTX_create`）抢解析，报 `CANNOT LINK EXECUTABLE ".../libdaidai_proot.so": cannot locate symbol "EVP_MD_CTX_create" referenced by "/system/lib64/libcurl.so"`。`nativeCompatDir` 必须显式复制 proot 自身 DT_NEEDED：`libtalloc.so`、`libandroid-shmem.so`，并保留 `libtalloc.so.2`/`libbusybox.so.1.38.0` 版本化名。
+  - `EVP_MD_CTX_create` 崩溃发生在 proot 启动阶段（`baseEnvironment`），与 `AndroidNodeRuntime`/`AndroidPythonRuntime` 的宿主 launcher 无关：v2.0.0 APK 内没有 `libnode_exec.so`/`libpylauncher.so`，二者 `ensureReady()` 因 launcher 缺失返回 null，实际运行的是 rootfs 内 guest 运行时。
   - Android Kotlin 运行时改动本地无法编译/执行，必须依赖云端 `android-release.yml` 的 `verify-build`（Kotlin 单测）与 `x86-device`（x86_64 模拟器 smoke）验证；仅本地 go/python 检查无法覆盖。
 
 [Project Knowledge Summary]

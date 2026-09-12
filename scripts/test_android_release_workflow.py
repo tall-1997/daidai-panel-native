@@ -143,14 +143,30 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         for asset in (
             '"${APP_APK}"',
             '"${APP_APK}.sha256"',
-            '"${TEST_APK}"',
-            '"${TEST_APK}.sha256"',
             "candidate/android-update.json",
             '"release-evidence-${VERSION}.tar.gz"',
         ):
             self.assertIn(asset, upload)
         self.assertIn("--clobber", upload)
-        self.assertNotIn("gh release delete-asset", self.workflow)
+
+    def test_release_publishes_only_production_apks(self):
+        release_job = self.workflow.split("  release:", 1)[1]
+        for block in re.findall(
+            r'gh release (?:create|upload) "\$\{RELEASE_TAG\}"(.*?)(?=\n\s+--repo)',
+            release_job,
+            re.DOTALL,
+        ):
+            self.assertNotIn("${TEST_APK}", block)
+            self.assertNotIn("TEST_APK_NAME", block)
+            self.assertNotIn("androidTest.apk", block)
+        self.assertIn('"${APP_APK}"', release_job)
+        self.assertIn('"candidate/${X64_APK_NAME}"', release_job)
+
+    def test_prerelease_update_prunes_deprecated_test_apk_assets(self):
+        update = self.workflow.rsplit('test "${CHANNEL}" = prerelease', 1)[1].split("exit 0", 1)[0]
+        self.assertIn("gh release delete-asset", update)
+        self.assertIn('"${TEST_APK_NAME}"', update)
+        self.assertIn('"${X64_TEST_APK_NAME}"', update)
 
     def test_all_actions_artifacts_include_attempt_and_download_via_outputs(self):
         self.assertIn("RUN_ATTEMPT: ${{ github.run_attempt }}", self.workflow)
@@ -212,11 +228,11 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn(".pending_evidence.long_running_device_samples.status", self.workflow)
         self.assertIn("required-gates-only", self.workflow)
 
-    def test_evidence_and_release_retain_test_apk_and_audit_metadata(self):
+    def test_evidence_bundle_retains_test_apk_and_audit_metadata(self):
         self.assertIn("release/apk-metadata/**", self.workflow)
         self.assertIn('cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" \\', self.workflow)
         self.assertIn('"candidate/${X64_TEST_APK_NAME}" "candidate/${X64_TEST_APK_NAME}.sha256" release/artifacts/', self.workflow)
-        self.assertGreaterEqual(self.workflow.count('"${TEST_APK}.sha256"'), 2)
+        self.assertGreaterEqual(self.workflow.count('"${TEST_APK}.sha256"'), 1)
 
     def test_gradle_web_jobs_pin_node_and_npm_contract(self):
         workflow_paths = (

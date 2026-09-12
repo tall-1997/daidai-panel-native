@@ -709,12 +709,8 @@ jobs:
             gh release create "${RELEASE_TAG}" \
               "${APP_APK}" \
               "${APP_APK}.sha256" \
-              "${TEST_APK}" \
-              "${TEST_APK}.sha256" \
               "candidate/${X64_APK_NAME}" \
               "candidate/${X64_APK_NAME}.sha256" \
-              "candidate/${X64_TEST_APK_NAME}" \
-              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
               "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -759,15 +755,20 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "呆呆面板本机版 ${RELEASE_TAG}" \
               --notes-file release-notes.md
+            # androidTest APKs stay in the candidate artifact and the evidence tarball
+            # as audit evidence, but are no longer published as release installers.
+            # Remove the ones left behind by earlier prereleases of the same tag.
+            for DEPRECATED_ASSET in \
+              "${TEST_APK_NAME}" "${TEST_APK_NAME}.sha256" \
+              "${X64_TEST_APK_NAME}" "${X64_TEST_APK_NAME}.sha256"; do
+              gh release delete-asset "${RELEASE_TAG}" "${DEPRECATED_ASSET}" \
+                --yes --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true
+            done
             gh release upload "${RELEASE_TAG}" \
               "${APP_APK}" \
               "${APP_APK}.sha256" \
-              "${TEST_APK}" \
-              "${TEST_APK}.sha256" \
               "candidate/${X64_APK_NAME}" \
               "candidate/${X64_APK_NAME}.sha256" \
-              "candidate/${X64_TEST_APK_NAME}" \
-              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
               "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -795,12 +796,8 @@ jobs:
           gh release create "${RELEASE_TAG}" \
             "${APP_APK}" \
             "${APP_APK}.sha256" \
-            "${TEST_APK}" \
-            "${TEST_APK}.sha256" \
             "candidate/${X64_APK_NAME}" \
             "candidate/${X64_APK_NAME}.sha256" \
-            "candidate/${X64_TEST_APK_NAME}" \
-            "candidate/${X64_TEST_APK_NAME}.sha256" \
             candidate/android-update.json \
             "release-evidence-${VERSION}.tar.gz" \
             --repo "${GITHUB_REPOSITORY}" \
