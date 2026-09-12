@@ -281,6 +281,7 @@ object AndroidLinuxRuntime {
         // 缺失时回退到该 ABI 的默认发行版，避免卡死在缺失资产上；资产存在时严格尊重用户选择
         // （arm64 默认 ubuntu 且资产始终存在，行为不变）。
         if (assetExists(context, "$ROOTFS_ASSET_PREFIX/$abi/$stored/$ROOTFS_ASSET_NAME")) return stored
+        if (AndroidRootfsDownloader.downloadedArchive(context, abi, stored) != null) return stored
         return defaultDistributionFor(abi)
     }
 
@@ -569,7 +570,8 @@ object AndroidLinuxRuntime {
             }
             require(verifyRootfsLibraries(root)) { "rootfs missing dynamic linker" }
             File(root, ROOTFS_READY_MARKER).writeText("downloaded:$abi:$distribution:$expected")
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            android.util.Log.e("daidai-panel", "installDownloadedRootfs: downloaded rootfs install failed for abi=$abi distribution=$distribution: ${failure.message}", failure)
             root.deleteRecursively()
             return null
         }

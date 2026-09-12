@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PYTHON="${PYTHON3:-python3}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.14.6}"
 PYTHON_ABI_VERSION="${PYTHON_ABI_VERSION:-3.14}"
 PYTHON_ARCHIVE="python-${PYTHON_VERSION}-aarch64-linux-android.tar.gz"
@@ -24,7 +25,7 @@ LAUNCHER_SRC="$ANDROID_APP_DIR/src/main/cpp/python_exec.c"
 RUNTIME_DIR="${PYTHON_METADATA_DIR:-$APP_ROOT/../runtime}"
 
 verify_wheelhouse() {
-  python3 - "$1" <<'PY'
+  "$PYTHON" - "$1" <<'PY'
 import pathlib
 import re
 import sys
@@ -59,7 +60,7 @@ verify_ensurepip_bundle() {
 }
 
 generate_metadata() {
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+  "$PYTHON" - "$1" "$2" "$3" "$4" "$5" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -121,7 +122,7 @@ PY
 }
 
 runtime_digest() {
-  python3 - "$1" "$2" <<'PY'
+  "$PYTHON" - "$1" "$2" <<'PY'
 import hashlib, pathlib, sys
 
 digest = hashlib.sha256()
@@ -162,7 +163,7 @@ if [[ ! -s "$ARCHIVE_PATH" ]]; then
 fi
 verify_sha256 "$ARCHIVE_PATH" "$PYTHON_ARCHIVE_SHA256"
 
-python3 - "$ARCHIVE_PATH" "$EXTRACT_DIR" <<'PY'
+"$PYTHON" - "$ARCHIVE_PATH" "$EXTRACT_DIR" <<'PY'
 import pathlib
 import shutil
 import sys
@@ -186,13 +187,13 @@ PY
 ENSUREPIP_BUNDLED="$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/ensurepip/_bundled"
 mkdir -p "$ENSUREPIP_BUNDLED"
 if ! compgen -G "$ENSUREPIP_BUNDLED/pip-*-py3-none-any.whl" >/dev/null; then
-  python3 -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --no-deps \
+  "$PYTHON" -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --no-deps \
     --dest "$ENSUREPIP_BUNDLED" pip==24.0
 fi
 verify_ensurepip_bundle "$ENSUREPIP_BUNDLED"
 [[ -d "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/venv" ]] || { printf 'venv stdlib is missing\n' >&2; exit 1; }
 
-python3 - "$PREFIX_DIR" <<'PY'
+"$PYTHON" - "$PREFIX_DIR" <<'PY'
 import pathlib
 import struct
 import sys
@@ -208,7 +209,7 @@ for path in root.rglob("*"):
         raise SystemExit(f"foreign Python artifact in Android runtime: {path}")
 PY
 
-python3 - "$PREFIX_DIR" "$STAGE_DIR" <<'PY'
+"$PYTHON" - "$PREFIX_DIR" "$STAGE_DIR" <<'PY'
 import pathlib
 import shutil
 import sys
@@ -220,7 +221,7 @@ shutil.copytree(source / "lib" / "python3.14", stage / "lib" / "python3.14")
 (stage / "wheelhouse").mkdir()
 PY
 
-python3 -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --dest "$STAGE_DIR/wheelhouse" \
+"$PYTHON" -m pip download --disable-pip-version-check --only-binary=:all: --platform any --python-version 3.14 --implementation py --abi none --dest "$STAGE_DIR/wheelhouse" \
   certifi==2026.5.20 charset-normalizer==3.3.2 idna==3.18 requests==2.34.2 urllib3==2.7.0 beautifulsoup4==4.13.4 soupsieve==2.8.1 typing-extensions==4.15.0
 cp "$PREFIX_DIR/lib/python${PYTHON_ABI_VERSION}/ensurepip/_bundled/"pip-*-py3-none-any.whl "$STAGE_DIR/wheelhouse/"
 
@@ -232,7 +233,7 @@ if [[ ! -s "$PYYAML_SDIST" ]]; then
   mv "$PYYAML_SDIST.part" "$PYYAML_SDIST"
 fi
 verify_sha256 "$PYYAML_SDIST" "$PYYAML_SHA256"
-python3 - "$PYYAML_SDIST" "$STAGE_DIR/wheelhouse" "$PYYAML_VERSION" <<'PY'
+"$PYTHON" - "$PYYAML_SDIST" "$STAGE_DIR/wheelhouse" "$PYYAML_VERSION" <<'PY'
 import base64, csv, hashlib, io, pathlib, sys, tarfile, zipfile
 
 sdist, wheelhouse, version = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
@@ -257,7 +258,7 @@ with tarfile.open(sdist) as source, zipfile.ZipFile(wheel, "w") as output:
 PY
 
 verify_wheelhouse "$STAGE_DIR/wheelhouse"
-python3 - "$STAGE_DIR/wheelhouse" <<'PY'
+"$PYTHON" - "$STAGE_DIR/wheelhouse" <<'PY'
 import hashlib, json, pathlib, sys
 wheelhouse = pathlib.Path(sys.argv[1])
 wheels = [{"filename": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size} for path in sorted(wheelhouse.glob("*.whl"))]
@@ -267,7 +268,7 @@ wheels = [{"filename": path.name, "sha256": hashlib.sha256(path.read_bytes()).he
 }, indent=2) + "\n")
 PY
 
-python3 - "$STAGE_DIR" <<'PY'
+"$PYTHON" - "$STAGE_DIR" <<'PY'
 import pathlib, sys, zipfile
 stage = pathlib.Path(sys.argv[1])
 certifi = next((stage / "wheelhouse").glob("certifi-*.whl"))
@@ -279,7 +280,7 @@ target.write_bytes(data)
 PY
 
 STAGE_JNI_DIR="$WORK_DIR/stage-jni"
-python3 - "$PREFIX_DIR/lib" "$STAGE_JNI_DIR" <<'PY'
+"$PYTHON" - "$PREFIX_DIR/lib" "$STAGE_JNI_DIR" <<'PY'
 import pathlib, shutil, sys
 source, target = map(pathlib.Path, sys.argv[1:])
 shutil.rmtree(target, ignore_errors=True)
@@ -308,7 +309,7 @@ STAGE_LAUNCHER_OUT="$STAGE_JNI_DIR/libpython_exec.so"
   -lpython${PYTHON_ABI_VERSION} -ldl -lm -llog -o "$STAGE_LAUNCHER_OUT"
 chmod 755 "$STAGE_LAUNCHER_OUT"
 
-python3 - "$STAGE_LAUNCHER_OUT" "$STAGE_JNI_DIR/libpython${PYTHON_ABI_VERSION}.so" <<'PY'
+"$PYTHON" - "$STAGE_LAUNCHER_OUT" "$STAGE_JNI_DIR/libpython${PYTHON_ABI_VERSION}.so" <<'PY'
 import pathlib, struct, subprocess, sys
 for path in map(pathlib.Path, sys.argv[1:]):
     header = path.read_bytes()[:20]
@@ -319,7 +320,7 @@ if "libpython3.14.so" not in dynamic:
     raise SystemExit("Python launcher is not linked to libpython3.14.so")
 PY
 
-python3 - "$STAGE_DIR" "$ASSET_DIR" "$STAGE_JNI_DIR" "$JNI_DIR" <<'PY'
+"$PYTHON" - "$STAGE_DIR" "$ASSET_DIR" "$STAGE_JNI_DIR" "$JNI_DIR" <<'PY'
 import pathlib, shutil, sys
 stage_assets, assets, stage_jni, jni = map(pathlib.Path, sys.argv[1:])
 shutil.rmtree(assets, ignore_errors=True)

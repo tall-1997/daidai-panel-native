@@ -1662,7 +1662,7 @@ class LocalPanelStore(
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
-        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort")
+        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort", "by-name")
         return when {
             segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
             id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
@@ -1672,6 +1672,7 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/export-files" -> exportEnvFiles(body(session))
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/import" -> importEnvs(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/envs/batch") -> serveEnvBatch(session, action)
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/by-name" -> upsertEnvByName(body(session))
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
             session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
@@ -4485,6 +4486,57 @@ fun serveDashboardStats(): JSONObject {
         return created(JSONObject().put("data", JSONObject().put("id", id)))
     }
 
+    private fun upsertEnvByName(json: JSONObject): NanoHTTPD.Response {
+        val name = json.optString("name").trim()
+        if (name.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名不能为空")
+        if (!name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名格式无效")
+        val remarks = json.optString("remarks").trim()
+        val matched = readableDatabase.rawQuery(
+            "SELECT * FROM envs WHERE name = ?" + (if (remarks.isNotEmpty()) " AND remarks = ?" else "") + " ORDER BY id ASC",
+            if (remarks.isNotEmpty()) arrayOf(name, remarks) else arrayOf(name)
+        ).use { cursor ->
+            val rows = mutableListOf<Long>()
+            while (cursor.moveToNext()) rows.add(cursor.long("id"))
+            rows
+        }
+        if (matched.size > 1) {
+            return error(
+                NanoHTTPD.Response.Status.CONFLICT,
+                "存在 ${matched.size} 条名为 '$name' 的环境变量（多账号场景），已拒绝写入以免破坏结构。请在请求体中带上 remarks 精确定位，或改用 PUT /envs/:id。"
+            )
+        }
+        if (matched.isEmpty()) {
+            val now = Instant.now().toString()
+            val values = ContentValues().apply {
+                put("name", name)
+                put("value", json.optString("value"))
+                put("remarks", remarks)
+                put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
+                put("groups_json", normalizeGroups(json).toString())
+                put("created_at", now)
+                put("updated_at", now)
+            }
+            val id = writableDatabase.insertOrThrow("envs", null, values)
+            if (json.has("enabled") && !json.optBoolean("enabled", true)) {
+                writableDatabase.execSQL("UPDATE envs SET enabled = 0 WHERE id = ?", arrayOf<Any?>(id))
+            }
+            val row = envRow(id) ?: JSONObject().put("id", id)
+            return created(JSONObject().put("message", "创建成功").put("data", row).put("created", true))
+        }
+        val existingId = matched[0]
+        val values = ContentValues().apply {
+            if (json.has("value")) put("value", json.optString("value"))
+            if (json.has("remarks")) put("remarks", json.optString("remarks").trim())
+            if (json.has("group") || json.has("groups")) put("groups_json", normalizeGroups(json).toString())
+            if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
+            put("updated_at", Instant.now().toString())
+        }
+        if (writableDatabase.update("envs", values, "id = ?", arrayOf(existingId.toString())) != 1)
+            return error(NanoHTTPD.Response.Status.NOT_FOUND, "环境变量不存在")
+        val row = envRow(existingId) ?: JSONObject().put("id", existingId)
+        return ok(JSONObject().put("message", "更新成功").put("data", row).put("created", false))
+    }
+
     private fun exportEnvs(asObject: Boolean): NanoHTTPD.Response {
         val rows = envRows()
         if (!asObject) return ok(JSONObject().put("data", rows))
@@ -5712,6 +5764,7 @@ fun serveDashboardStats(): JSONObject {
         scriptProcesses.clear()
         taskProcesses.clear()
         scriptRunExecutor.shutdownNow()
+        dependencyExecutor.shutdownNow()
         taskRunExecutor.shutdownNow()
         runningTaskIds.clear()
         taskAbortRequested.clear()
@@ -5727,6 +5780,10 @@ fun serveDashboardStats(): JSONObject {
         scriptRunLogCharacters.clear()
         scriptRunPendingPersistence.clear()
         scriptRunLocks.clear()
+        synchronized(operationsDatabaseLock) {
+            operationsDatabaseHandle?.close()
+            operationsDatabaseHandle = null
+        }
         super.close()
     }
 

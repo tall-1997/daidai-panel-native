@@ -96,10 +96,10 @@ class VersionTest(unittest.TestCase):
     def test_check_reports_drift(self):
         result = self.run_script("check")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("app/pubspec.yaml", result.stderr)
-        self.assertIn("panel/web/package.json", result.stderr)
-        self.assertIn("panel/web/package-lock.json", result.stderr)
-        self.assertIn("panel/server/handler/version.go", result.stderr)
+        self.assertIn("app/pubspec.yaml", result.stderr.replace("\\", "/"))
+        self.assertIn("panel/web/package.json", result.stderr.replace("\\", "/"))
+        self.assertIn("panel/web/package-lock.json", result.stderr.replace("\\", "/"))
+        self.assertIn("panel/server/handler/version.go", result.stderr.replace("\\", "/"))
 
     def test_check_reports_package_lock_root_package_drift(self):
         sync = self.run_script("sync")
