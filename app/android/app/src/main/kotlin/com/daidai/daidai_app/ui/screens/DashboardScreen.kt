@@ -52,6 +52,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.daidai.daidai_app.ui.navigation.MoreEntryListScreen
+import com.daidai.daidai_app.ui.navigation.NavSelections
+import com.daidai.daidai_app.ui.navigation.Routes
+import com.daidai.daidai_app.ui.screens.envs.EnvListScreen
+import com.daidai.daidai_app.ui.screens.logs.LogListScreen
+import com.daidai.daidai_app.ui.screens.tasks.TaskListScreen
 import com.daidai.daidai_app.data.model.DailyStat
 import com.daidai.daidai_app.data.model.DashboardStats
 import com.daidai.daidai_app.data.model.SystemInfo
@@ -76,10 +82,16 @@ private val dashboardTabs = listOf(
 /**
  * 仪表盘（dashboard）：主面板壳，带 5 个底部导航 tab。
  * overview tab 展示真实仪表盘数据（CPU/内存/磁盘 + 任务统计 + 7 日趋势），
- * tasks/logs/envs 仍为占位，more 复用 [MoreScreen]。
+ * tasks/logs/envs 已接入真实模块列表（替换阶段 1 占位），more 复用
+ * [MoreEntryListScreen] 提供 设置/安全/用户/系统 等模块入口。
+ *
+ * @param navTo 顶层导航回调：dashboard 内嵌列表页进入二级（表单/详情）或更模块入口时调用。
  */
 @Composable
-fun DashboardScreen(modifier: Modifier = Modifier) {
+fun DashboardScreen(
+    modifier: Modifier = Modifier,
+    navTo: (String) -> Unit = {},
+) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -116,15 +128,21 @@ fun DashboardScreen(modifier: Modifier = Modifier) {
                 DashboardOverviewPage()
             }
             composable("tasks") {
-                PlaceholderPage("任务", "任务列表与调度（阶段 1）")
+                TaskListScreen(
+                    onCreateTask = { NavSelections.task = null; navTo(Routes.TASKS_NEW) },
+                    onEditTask = { NavSelections.task = it; navTo(Routes.TASKS_EDIT) },
+                )
             }
             composable("logs") {
-                PlaceholderPage("日志", "运行日志（阶段 1）")
+                LogListScreen()
             }
             composable("envs") {
-                PlaceholderPage("环境", "运行时环境管理（阶段 1）")
+                EnvListScreen(
+                    onCreate = { NavSelections.env = null; navTo(Routes.ENVS_FORM) },
+                    onEdit = { NavSelections.env = it; navTo(Routes.ENVS_FORM) },
+                )
             }
-            composable("more") { MoreScreen() }
+            composable("more") { MoreEntryListScreen(onOpen = { route -> navTo(route) }) }
         }
     }
 }

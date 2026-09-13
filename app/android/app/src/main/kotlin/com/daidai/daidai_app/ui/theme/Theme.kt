@@ -7,8 +7,11 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.daidai.daidai_app.ui.screens.settings.ThemeMode
 
 /**
  * Compose 原生工程主题。
@@ -64,7 +67,15 @@ fun AppTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) AppThemes.darkColors() else AppThemes.lightColors()
+    // 主题模式由全局 ThemeController 驱动（设置模块写入），用于覆盖 system 默认值：
+    //  SYSTEM -> 跟随系统（退回到 darkTheme 参数）；LIGHT -> 浅色；DARK -> 深色。
+    val themeMode by ThemeController.mode.collectAsStateWithLifecycle()
+    val resolvedDark = when (themeMode) {
+        ThemeMode.SYSTEM -> darkTheme
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+    val colorScheme = if (resolvedDark) AppThemes.darkColors() else AppThemes.lightColors()
     MaterialTheme(
         colorScheme = colorScheme,
         shapes = AppThemes.shapes(),
