@@ -10,14 +10,20 @@ import com.daidai.daidai_app.ui.screens.DashboardScreen
 import com.daidai.daidai_app.ui.screens.LoginScreen
 import com.daidai.daidai_app.ui.screens.MoreScreen
 import com.daidai.daidai_app.ui.screens.ServerConfigScreen
+import com.daidai.daidai_app.ui.screens.logs.LogListScreen
+import com.daidai.daidai_app.ui.screens.notifications.NotificationListScreen
+import com.daidai.daidai_app.ui.screens.openapi.OpenApiListScreen
 
-/** 顶层路由常量（boot / server-config / login / dashboard / more）。 */
+/** 顶层路由常量（boot / server-config / login / dashboard / more / logs / notifications / openapi）。 */
 object Routes {
     const val BOOT = "boot"
     const val SERVER_CONFIG = "server-config"
     const val LOGIN = "login"
     const val DASHBOARD = "dashboard"
     const val MORE = "more"
+    const val LOGS = "logs"
+    const val NOTIFICATIONS = "notifications"
+    const val OPENAPI = "openapi"
 }
 
 /**
@@ -54,6 +60,18 @@ fun AppNavHost(modifier: Modifier = Modifier) {
         }
         composable(Routes.MORE) {
             MoreScreen()
+        }
+        // 阶段 2 只读模块：独立顶层路由（日志 / 通知渠道 / Open API 应用），
+        // 依赖各自注入/默认装配，不传参即可。logs 同时存在于 dashboard 内嵌
+        // 壳中作为占位，此处为独立的全屏入口（供顶层跳转/后续独立使用）。
+        composable(Routes.LOGS) {
+            LogListScreen()
+        }
+        composable(Routes.NOTIFICATIONS) {
+            NotificationListScreen()
+        }
+        composable(Routes.OPENAPI) {
+            OpenApiListScreen()
         }
     }
 }
