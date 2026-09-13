@@ -38,6 +38,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Compose native entry (phase 0). Coexists with MainActivity; not the launcher, launched via adb only to avoid disturbing the Flutter path. -->
+        <activity
+            android:name=".NativeMainActivity"
+            android:exported="true"
+            android:label="呆呆面板原生"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:windowSoftInputMode="adjustResize">
+        </activity>
         <service
             android:name=".LocalPanelHostService"
             android:exported="false"

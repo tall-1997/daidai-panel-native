@@ -9,6 +9,7 @@ import org.gradle.api.tasks.Sync
 plugins {
     id("com.android.application")
     id("kotlin-android")
+    id("org.jetbrains.kotlin.plugin.compose")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -140,6 +141,7 @@ android {
     buildFeatures {
         aidl = true
         buildConfig = true
+        compose = true
     }
 
     defaultConfig {
@@ -247,6 +249,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
@@ -487,6 +490,20 @@ tasks.named("preBuild").configure {
 dependencies {
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Compose native phase 0 (kept alongside the existing Flutter entry point).
+    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+    implementation("androidx.navigation:navigation-compose:2.8.2")
+    implementation("top.yukonga.miuix.kmp:miuix-android:0.8.8")
 }
 
 flutter {
