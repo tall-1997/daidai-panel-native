@@ -62,11 +62,15 @@ object AppServices {
         PanelSession.refreshTokenProvider = { repository.config.value.refreshToken }
         PanelSession.refreshCoordinator = {
             val cfg = repository.getConfig()
-            val refresh = cfg.refreshToken ?: return@refreshCoordinator false
-            val base = cfg.serverUrl.takeIf { it.isNotBlank() } ?: return@refreshCoordinator false
-            PanelRequests.refreshAccessToken(base, refresh) { access, refreshed ->
-                repository.setAccessToken(access)
-                repository.setRefreshToken(refreshed)
+            val refresh = cfg.refreshToken
+            val base = cfg.serverUrl
+            if (refresh == null || base.isBlank()) {
+                false
+            } else {
+                PanelRequests.refreshAccessToken(base, refresh) { access, refreshed ->
+                    repository.setAccessToken(access)
+                    repository.setRefreshToken(refreshed)
+                }
             }
         }
     }
