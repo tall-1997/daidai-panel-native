@@ -10,8 +10,6 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("org.jetbrains.kotlin.plugin.compose")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
-    id("dev.flutter.flutter-gradle-plugin")
 }
 
 // Release signing priority: key.properties, environment variables, then debug for snapshots.
@@ -28,6 +26,14 @@ fun resolveSigningValue(propertyKey: String, envKey: String): String? {
     }
     return System.getenv(envKey)?.trim()?.takeIf { it.isNotEmpty() }
 }
+
+// 去 Flutter 后的版本号与工具链：VERSION.json 是单一事实来源。
+@Suppress("UNCHECKED_CAST")
+val versionManifest = JsonSlurper().parse(rootProject.file("../../VERSION.json")) as Map<String, Any>
+val appVersionName = versionManifest["version"] as? String ?: error("VERSION.json must define version.")
+val appVersionCode = (versionManifest["androidVersionCode"] as? Number)?.toInt()
+    ?: error("VERSION.json must define androidVersionCode.")
+val DEFLUTTER_NDK_VERSION = "28.2.13676358"
 
 val releaseStoreFile = resolveSigningValue("storeFile", "KEYSTORE_FILE")
 val releaseStorePassword = resolveSigningValue("storePassword", "KEYSTORE_PASSWORD")
@@ -50,7 +56,6 @@ val defaultAndroidAbi = androidAbiMatrix["default_abi"] as? String
 val requestedAbis = (System.getenv("ANDROID_RUNTIME_ABIS")?.replace(',', ' ')?.split(Regex("\\s+"))?.filter(String::isNotBlank)
     ?: listOf(defaultAndroidAbi)).distinct()
 check(requestedAbis.size == 1) { "Android runtime APK builds must select exactly one ABI." }
-val flutterSplitPerAbi = System.getenv("FLUTTER_SPLIT_PER_ABI") == "true"
 requestedAbis.forEach { abi ->
     val config = androidAbiConfigs[abi] ?: error("Unknown Android runtime ABI: $abi")
     check(config["package"] == true) { "Android runtime ABI is not packageable: $abi" }
@@ -63,7 +68,7 @@ check(!requireReleaseSigning || hasReleaseSigning) {
 android {
     namespace = "com.daidai.daidai_app"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = DEFLUTTER_NDK_VERSION
     testBuildType = "release"
 
     compileOptions {
@@ -83,12 +88,10 @@ android {
         minSdk = 24
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        versionCode = appVersionCode
+        versionName = appVersionName
         ndk {
-            if (!flutterSplitPerAbi) {
-                abiFilters += requestedAbis
-            }
+            abiFilters += requestedAbis
         }
         externalNativeBuild {
             cmake {
@@ -506,6 +509,3 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-android:0.8.8")
 }
 
-flutter {
-    source = "../.."
-}

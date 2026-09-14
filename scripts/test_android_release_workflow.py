@@ -21,13 +21,13 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertNotIn(":app:testDebugUnitTest", self.workflow)
         self.assertIn(":app:assembleReleaseAndroidTest", self.workflow)
         self.assertIn(
-            'cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"',
+            'cp android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"',
             self.workflow,
         )
 
     def test_device_smoke_builds_and_runs_release_variants(self):
         workflow = (ROOT / ".github/workflows/android-device-smoke.yml").read_text(encoding="utf-8")
-        self.assertIn("flutter build apk --release --target-platform android-arm64", workflow)
+        self.assertIn("gradle -p android :app:assembleRelease :app:assembleReleaseAndroidTest", workflow)
         self.assertIn(":app:assembleReleaseAndroidTest", workflow)
         self.assertGreaterEqual(workflow.count("app-release.apk"), 3)
         self.assertGreaterEqual(workflow.count("app-release-androidTest.apk"), 3)
@@ -55,11 +55,13 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         matrix = json.loads((ROOT / "runtime/android-abi-matrix.json").read_text(encoding="utf-8"))
         self.assertEqual({"arm64-v8a", "x86_64"}, {abi for abi, config in matrix["abis"].items() if config["release"]})
         self.assertIn("android-abi-matrix.py list release", self.workflow)
-        self.assertIn('get "${ABI}" flutter_target', self.workflow)
         self.assertIn('get "${ABI}" release_suffix', self.workflow)
-        self.assertIn('--split-per-abi', self.workflow)
-        self.assertIn('FLUTTER_SPLIT_PER_ABI=true', self.workflow)
-        self.assertIn('app-${ABI}-release.apk', self.workflow)
+        self.assertIn('gradle -p android :app:assembleRelease :app:assembleReleaseAndroidTest', self.workflow)
+        self.assertIn('android/app/build/outputs/apk/release/app-release.apk', self.workflow)
+        self.assertNotIn('flutter build apk', self.workflow)
+        self.assertNotIn('flutter-action', self.workflow)
+        # 去 Flutter 后产物必须不含 Flutter 引擎
+        self.assertIn('libflutter.so', self.workflow)
         self.assertIn("schemaVersion: 2", self.workflow)
         self.assertIn('"x86_64": {full:', self.workflow)
 

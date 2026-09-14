@@ -46,7 +46,6 @@ type evidenceInputs struct {
 	Compatibility   string `json:"compatibility_matrix"`
 	RouteTrace      string `json:"route_trace"`
 	GoMod           string `json:"go_mod"`
-	FlutterLock     string `json:"flutter_lock"`
 	PackageLock     string `json:"package_lock"`
 }
 
@@ -148,7 +147,6 @@ func main() {
 	compatibilityPath := flag.String("compatibility", "runtime/compatibility.json", "runtime compatibility matrix path")
 	routeTracePath := flag.String("route-trace", "contracts/backend-api-mobile.json", "route trace path")
 	goModPath := flag.String("go-mod", "panel/server/go.mod", "Go module file path")
-	flutterLockPath := flag.String("flutter-lock", "app/pubspec.lock", "Flutter lockfile path")
 	packageLockPath := flag.String("package-lock", "panel/web/package-lock.json", "Node package lock path")
 	releaseContractPath := flag.String("release-contract", "scripts/release-runtime-contract.json", "release gate scope contract")
 	gitCommit := flag.String("git-commit", os.Getenv("GITHUB_SHA"), "git commit for the evidence bundle")
@@ -174,7 +172,7 @@ func main() {
 	artifacts := collectArtifacts(*apkPath, *testAPKPath, *runtimeManifestPath, *runtimeSmokePath, *compatibilityPath, *routeTracePath)
 	runtimeManifest := readRuntimeManifest(*runtimeManifestPath)
 	routes := readRouteTrace(*routeTracePath)
-	components := collectSBOMComponents(runtimeManifest, *goModPath, *flutterLockPath, *packageLockPath)
+	components := collectSBOMComponents(runtimeManifest, *goModPath, *packageLockPath)
 
 	writeJSON(filepath.Join(*outputDir, "sbom.cyclonedx.json"), sbomDocument{
 		BOMFormat:    "CycloneDX",
@@ -223,7 +221,6 @@ func main() {
 			Compatibility:   *compatibilityPath,
 			RouteTrace:      *routeTracePath,
 			GoMod:           *goModPath,
-			FlutterLock:     *flutterLockPath,
 			PackageLock:     *packageLockPath,
 		},
 		Artifacts: artifacts,
@@ -377,7 +374,7 @@ func readRouteTrace(path string) routeTrace {
 	return trace
 }
 
-func collectSBOMComponents(manifest runtimeManifest, goModPath, flutterLockPath, packageLockPath string) []sbomComponent {
+func collectSBOMComponents(manifest runtimeManifest, goModPath, packageLockPath string) []sbomComponent {
 	seen := map[string]bool{}
 	var components []sbomComponent
 	add := func(component sbomComponent) {
@@ -393,9 +390,6 @@ func collectSBOMComponents(manifest runtimeManifest, goModPath, flutterLockPath,
 	}
 	for _, module := range parseGoMod(goModPath) {
 		add(sbomComponent{Type: "library", Name: module.name, Version: module.version, PURL: "pkg:golang/" + module.name + "@" + module.version})
-	}
-	for _, pkg := range parsePubspecLock(flutterLockPath) {
-		add(sbomComponent{Type: "library", Name: pkg.name, Version: pkg.version, PURL: "pkg:pub/" + pkg.name + "@" + pkg.version})
 	}
 	for _, pkg := range parsePackageLock(packageLockPath) {
 		add(sbomComponent{Type: "library", Name: pkg.name, Version: pkg.version, PURL: "pkg:npm/" + pkg.name + "@" + pkg.version})
@@ -444,39 +438,6 @@ func parseGoMod(path string) []packageVersion {
 		}
 	}
 	return modules
-}
-
-func parsePubspecLock(path string) []packageVersion {
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var packages []packageVersion
-	var current string
-	inPackages := false
-	for _, rawLine := range strings.Split(string(payload), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "packages:" {
-			inPackages = true
-			continue
-		}
-		if !inPackages || line == "" {
-			continue
-		}
-		if !strings.HasPrefix(rawLine, "  ") && strings.HasSuffix(line, ":") {
-			break
-		}
-		if strings.HasPrefix(rawLine, "  ") && !strings.HasPrefix(rawLine, "    ") && strings.HasSuffix(line, ":") {
-			current = strings.TrimSuffix(line, ":")
-			continue
-		}
-		if current != "" && strings.HasPrefix(line, "version:") {
-			version := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "version:")), "\"")
-			packages = append(packages, packageVersion{name: current, version: version})
-			current = ""
-		}
-	}
-	return packages
 }
 
 func parsePackageLock(path string) []packageVersion {
@@ -568,8 +529,6 @@ func buildTestPlaceholders() map[string]any {
 		"schema_version": "1",
 		"reports": []map[string]string{
 			{"id": "go_core_race", "path": "test-reports/go-core-race.json", "status": "pending-targeted-run"},
-			{"id": "flutter_test", "path": "test-reports/flutter-test.json", "status": "pending-targeted-run"},
-			{"id": "flutter_analyze", "path": "test-reports/flutter-analyze.json", "status": "pending-targeted-run"},
 			{"id": "kotlin_unit", "path": "test-reports/kotlin-unit/", "status": "ci-uploaded-when-present"},
 			{"id": "runtime_smoke", "path": "runtime/smoke-evidence.json", "status": "pending-device-verification"},
 		},

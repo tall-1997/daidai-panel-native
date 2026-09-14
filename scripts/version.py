@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 SEMVER_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
-PUBSPEC_VERSION_PATTERN = re.compile(r"(?m)^version:[ \t]*([^\s]+)[ \t]*$")
 GO_VERSION_PATTERN = re.compile(r'(?m)^var Version = "([^"]+)"[ \t]*$')
 
 
@@ -62,7 +61,6 @@ def read_source(root):
 
 def expected_files(root, manifest_paths):
     return [
-        ("pubspec", root / "app" / "pubspec.yaml"),
         ("package", root / "panel" / "web" / "package.json"),
         ("package_lock", root / "panel" / "web" / "package-lock.json"),
         ("go_version", root / "panel" / "server" / "handler" / "version.go"),
@@ -76,18 +74,6 @@ def resolve_manifest_paths(root, values):
         path = Path(value)
         paths.append(path if path.is_absolute() else root / path)
     return paths
-
-
-def sync_pubspec(path, version, version_code):
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise VersionError(f"cannot read {path}: {error}") from error
-    replacement = f"version: {version}+{version_code}"
-    updated, count = PUBSPEC_VERSION_PATTERN.subn(replacement, content)
-    if count != 1:
-        raise VersionError(f"expected exactly one version field in {path}")
-    path.write_text(updated, encoding="utf-8")
 
 
 def sync_package(path, version):
@@ -136,14 +122,7 @@ def check_files(root, manifest_paths, version, version_code):
     errors = []
     for kind, path in expected_files(root, manifest_paths):
         try:
-            if kind == "pubspec":
-                content = path.read_text(encoding="utf-8")
-                match = PUBSPEC_VERSION_PATTERN.search(content)
-                actual = match.group(1) if match else "<missing>"
-                expected = f"{version}+{version_code}"
-                if actual != expected:
-                    errors.append(f"{path}: expected version {expected}, found {actual}")
-            elif kind == "go_version":
+            if kind == "go_version":
                 content = path.read_text(encoding="utf-8")
                 match = GO_VERSION_PATTERN.search(content)
                 actual = match.group(1) if match else "<missing>"
@@ -204,7 +183,6 @@ def main(argv=None):
         version, version_code = read_source(root)
         manifests = resolve_manifest_paths(root, args.manifest)
         if args.action == "sync":
-            sync_pubspec(root / "app" / "pubspec.yaml", version, version_code)
             sync_package(root / "panel" / "web" / "package.json", version)
             sync_package_lock(root / "panel" / "web" / "package-lock.json", version)
             sync_go_version(root / "panel" / "server" / "handler" / "version.go", version)

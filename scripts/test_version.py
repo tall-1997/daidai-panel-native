@@ -35,9 +35,6 @@ class VersionTest(unittest.TestCase):
             )
             + "\n"
         )
-        (self.root / "app" / "pubspec.yaml").write_text(
-            "name: sample\nversion: 0.0.1+1\n"
-        )
         (self.root / "panel" / "web" / "package.json").write_text(
             json.dumps({"name": "web", "version": "2.3.1"}, indent=2) + "\n"
         )
@@ -72,13 +69,9 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(module.android_version_code("0.3.15"), 30150)
         self.assertEqual(module.android_version_code("1.2.3"), 1020030)
 
-    def test_sync_updates_flutter_and_web_then_check_passes(self):
+    def test_sync_updates_web_then_check_passes(self):
         result = self.run_script("sync")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            (self.root / "app" / "pubspec.yaml").read_text(),
-            "name: sample\nversion: 0.3.15+30150\n",
-        )
         package = json.loads((self.root / "panel" / "web" / "package.json").read_text())
         self.assertEqual(package["version"], "0.3.15")
         package_lock = json.loads(
@@ -96,7 +89,6 @@ class VersionTest(unittest.TestCase):
     def test_check_reports_drift(self):
         result = self.run_script("check")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("app/pubspec.yaml", result.stderr.replace("\\", "/"))
         self.assertIn("panel/web/package.json", result.stderr.replace("\\", "/"))
         self.assertIn("panel/web/package-lock.json", result.stderr.replace("\\", "/"))
         self.assertIn("panel/server/handler/version.go", result.stderr.replace("\\", "/"))

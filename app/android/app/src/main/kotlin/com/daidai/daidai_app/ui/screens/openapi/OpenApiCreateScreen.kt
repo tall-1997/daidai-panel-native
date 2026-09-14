@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,15 +80,34 @@ fun OpenApiCreateScreen(
     var selectedScopes by remember { mutableStateOf(setOf<String>()) }
     var scopesError by remember { mutableStateOf(false) }
 
-    // 创建成功副作用：一次性交回密钥并复位写状态。
+    // 创建成功副作用：先在本屏弹窗展示一次性密钥，用户确认后再交回父级。
     val created = state.createdApp
     val secret = state.resetSecret
+    var pendingSecret by remember { mutableStateOf<OpenApiAppWithSecret?>(null) }
     LaunchedEffect(created) {
         if (created != null && secret != null && state.mutationSucceeded) {
-            onCreated(OpenApiAppWithSecret(appKey = created.appKey, secret = secret.secret))
+            pendingSecret = OpenApiAppWithSecret(appKey = created.appKey, secret = secret.secret)
             resolvedVm.consumeSecret()
             resolvedVm.consumeMutation()
         }
+    }
+    pendingSecret?.let { credential ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {},
+            title = { Text("应用已创建") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Secret 仅在创建时展示一次，请立即保存：")
+                    Text(credential.secret, fontWeight = FontWeight.Bold)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingSecret = null
+                    onCreated(credential)
+                }) { Text("我已保存") }
+            },
+        )
     }
 
     Column(

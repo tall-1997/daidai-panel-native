@@ -18,7 +18,6 @@ concurrency:
 
 env:
   GO_VERSION: 1.25.0
-  FLUTTER_VERSION: 3.44.9
   JAVA_VERSION: '17'
   GRADLE_VERSION: 9.1.0
   NODE_VERSION: '20.19.x'
@@ -32,7 +31,6 @@ jobs:
     outputs:
       go: ${{ steps.filter.outputs.go }}
       route: ${{ steps.filter.outputs.route }}
-      flutter: ${{ steps.filter.outputs.flutter }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
       panel_web: ${{ steps.filter.outputs.panel_web }}
       release_scripts: ${{ steps.filter.outputs.release_scripts }}
@@ -58,13 +56,6 @@ jobs:
               - 'contracts/backend-api-mobile.json'
               - 'go.work'
               - 'go.work.sum'
-            flutter:
-              - '.github/workflows/ci.yml'
-              - 'app/lib/**'
-              - 'app/test/**'
-              - 'app/pubspec.yaml'
-              - 'app/pubspec.lock'
-              - 'app/analysis_options.yaml'
             kotlin:
               - '.github/workflows/ci.yml'
               - 'app/android/**'
@@ -189,35 +180,6 @@ jobs:
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check
 
-  flutter-quality:
-    name: Flutter analyze and test
-    needs: changes
-    if: needs.changes.outputs.flutter == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: app
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v5
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: Resolve Flutter packages
-        run: flutter pub get
-
-      - name: Analyze Flutter source
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-
-      - name: Run Flutter tests
-        run: flutter test
-
   kotlin-test:
     name: Kotlin unit tests
     needs: changes
@@ -257,17 +219,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: Resolve Flutter packages
-        working-directory: app
-        run: flutter pub get
 
       - name: Prepare Android Node runtime
         working-directory: app
@@ -385,7 +336,6 @@ jobs:
       - go-quality
       - go-race
       - route-contract
-      - flutter-quality
       - kotlin-test
       - panel-web
       - release-scripts

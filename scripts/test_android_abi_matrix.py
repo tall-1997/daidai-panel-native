@@ -14,7 +14,6 @@ class AndroidAbiMatrixTest(unittest.TestCase):
     def test_release_matrix_contains_arm64_and_x86_64(self):
         matrix = abi_matrix.load_matrix(abi_matrix.DEFAULT_MATRIX)
         self.assertEqual(["arm64-v8a", "x86_64"], abi_matrix.resolve_abis(matrix, "release"))
-        self.assertEqual("android-x64", matrix["abis"]["x86_64"]["flutter_target"])
         self.assertEqual(62, matrix["abis"]["x86_64"]["elf_machine"])
 
     def test_rejects_unknown_requested_abi(self):

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +55,8 @@ fun OpenApiListScreen(
     modifier: Modifier = Modifier,
     repository: OpenApiRepository? = null,
     viewModel: OpenApiViewModel? = null,
+    onCreate: () -> Unit = {},
+    onOpenDetail: (OpenApiApp) -> Unit = {},
 ) {
     val context = LocalContext.current
     val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
@@ -67,6 +71,9 @@ fun OpenApiListScreen(
         OpenApiViewModel(resolved)
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+
+    // 创建/编辑在独立返回栈条目完成，回到本页时刷新一次。
+    LaunchedEffect(Unit) { screenViewModel.refresh() }
 
     Box(
         modifier = modifier
@@ -83,31 +90,40 @@ fun OpenApiListScreen(
                 if (state.apps.isEmpty()) {
                     EmptyContent()
                 } else {
-                    AppList(apps = state.apps)
+                    AppList(apps = state.apps, onOpenDetail = onOpenDetail)
                 }
+        }
+        androidx.compose.material3.ExtendedFloatingActionButton(
+            onClick = onCreate,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp),
+        ) {
+            Text("新建应用")
         }
     }
 }
 
 @Composable
-private fun AppList(apps: List<OpenApiApp>, modifier: Modifier = Modifier) {
+private fun AppList(apps: List<OpenApiApp>, onOpenDetail: (OpenApiApp) -> Unit, modifier: Modifier = Modifier) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(apps, key = { it.id }) { app ->
-            OpenApiAppCard(app)
+            OpenApiAppCard(app, onClick = { onOpenDetail(app) })
         }
     }
 }
 
 @Composable
-private fun OpenApiAppCard(app: OpenApiApp, modifier: Modifier = Modifier) {
+private fun OpenApiAppCard(app: OpenApiApp, onClick: () -> Unit = {}, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),

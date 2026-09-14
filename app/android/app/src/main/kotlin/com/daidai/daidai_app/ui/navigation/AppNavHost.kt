@@ -198,7 +198,16 @@ fun AppNavHost(modifier: Modifier = Modifier) {
             LocalNotificationSettingsScreen()
         }
         composable(Routes.OPENAPI) {
-            OpenApiListScreen()
+            OpenApiListScreen(
+                onCreate = {
+                    NavSelections.openApiApp = null
+                    navController.navigate(Routes.OPENAPI_CREATE) { launchSingleTop = true }
+                },
+                onOpenDetail = {
+                    NavSelections.openApiApp = it
+                    navController.navigate(Routes.OPENAPI_DETAIL) { launchSingleTop = true }
+                },
+            )
         }
         composable(Routes.SETTINGS_THEME) {
             ThemeSettingsScreen(
@@ -301,7 +310,10 @@ fun AppNavHost(modifier: Modifier = Modifier) {
             )
         }
         composable(Routes.OPENAPI_CREATE) {
-            OpenApiCreateScreen(onBack = { navController.popBackStack() })
+            OpenApiCreateScreen(
+                onBack = { navController.popBackStack() },
+                onCreated = { navController.popBackStack() },
+            )
         }
         composable(Routes.OPENAPI_DETAIL) {
             OpenApiDetailScreen(

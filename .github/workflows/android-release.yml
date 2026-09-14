@@ -36,7 +36,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
-  FLUTTER_VERSION: 3.44.9
   GO_VERSION: 1.25.0
   NODE_VERSION: '20.19.x'
   NPM_VERSION: '10.8.2'
@@ -88,13 +87,6 @@ jobs:
         with:
           gradle-version: '9.1.0'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
       - name: Resolve and validate release version
         id: version
         env:
@@ -140,8 +132,6 @@ jobs:
           {
             printf 'VERSION=%s\n' "${VERSION}"
             printf 'ANDROID_VERSION_CODE=%s\n' "${ANDROID_VERSION_CODE}"
-            printf 'FLUTTER_BUILD_NAME=%s\n' "${FLUTTER_BUILD_NAME}"
-            printf 'FLUTTER_BUILD_NUMBER=%s\n' "${FLUTTER_BUILD_NUMBER}"
             printf 'RELEASE_CHANNEL=%s\n' "${CHANNEL}"
             printf 'STRICT_RUNTIME=%s\n' "${STRICT}"
             printf 'RELEASE_SIGNING_REQUIRED=%s\n' "${SIGNING_REQUIRED}"
@@ -269,18 +259,6 @@ jobs:
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check
 
-      - name: Resolve Flutter packages
-        working-directory: app
-        run: flutter pub get
-
-      - name: Run Flutter tests
-        working-directory: app
-        run: flutter test
-
-      - name: Analyze Flutter source
-        working-directory: app
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-
       - name: Run Kotlin tests
         working-directory: app
         run: gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
@@ -312,13 +290,10 @@ jobs:
         working-directory: app
         run: |
           for ABI in $(python3 ../scripts/android-abi-matrix.py list release); do
-            TARGET="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" flutter_target)"
             SUFFIX="$(python3 ../scripts/android-abi-matrix.py get "${ABI}" release_suffix)"
-            ANDROID_RUNTIME_ABIS="${ABI}" FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform "${TARGET}" --split-per-abi \
-              --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"
-            ANDROID_RUNTIME_ABIS="${ABI}" gradle -p android :app:assembleReleaseAndroidTest --no-daemon --stacktrace
-            cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
-            cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"
+            ANDROID_RUNTIME_ABIS="${ABI}" gradle -p android :app:assembleRelease :app:assembleReleaseAndroidTest --no-daemon --stacktrace
+            cp "android/app/build/outputs/apk/release/app-release.apk" "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}.apk"
+            cp android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"
           done
 
       - name: Extract and verify APK runtime metadata
@@ -338,6 +313,10 @@ jobs:
             --compatibility ./runtime/compatibility.json \
             --smoke-evidence ./runtime/smoke-evidence.json \
             --apk "${APK_SOURCE}"
+          if unzip -l "${APP_APK_NAME}" | grep -q "libflutter.so"; then
+            printf '%s unexpectedly contains libflutter.so\n' "${APP_APK_NAME}" >&2
+            exit 1
+          fi
           for APK in "${APP_APK_NAME}" "${TEST_APK_NAME}"; do
             sha256sum "${APK}" > "${APK}.sha256"
           done

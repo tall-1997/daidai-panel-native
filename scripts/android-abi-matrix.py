@@ -9,7 +9,6 @@ DEFAULT_MATRIX = pathlib.Path(__file__).resolve().parents[1] / "runtime" / "andr
 BOOLEAN_CAPABILITIES = ("package", "native", "rootfs", "yaegi", "smoke", "release")
 REQUIRED_FIELDS = (
     *BOOLEAN_CAPABILITIES,
-    "flutter_target",
     "release_suffix",
     "ndk_triple",
     "goarch",
@@ -28,7 +27,6 @@ def load_matrix(path: pathlib.Path) -> dict:
     assert isinstance(abis, dict) and abis, "ABI matrix must contain ABIs"
     assert matrix.get("default_abi") in abis, "default ABI is missing from matrix"
     suffixes = set()
-    targets = set()
     for abi, config in abis.items():
         assert isinstance(config, dict), f"invalid ABI configuration: {abi}"
         missing = set(REQUIRED_FIELDS) - set(config)
@@ -37,10 +35,8 @@ def load_matrix(path: pathlib.Path) -> dict:
         assert config["minimum_load_alignment"] >= 16384, f"ABI {abi} alignment is below 16 KB"
         assert config["elf_machine"] > 0, f"ABI {abi} has invalid ELF machine"
         assert config["release_suffix"] not in suffixes, f"duplicate release suffix: {config['release_suffix']}"
-        assert config["flutter_target"] not in targets, f"duplicate Flutter target: {config['flutter_target']}"
         assert not config["release"] or all(config[name] for name in ("package", "native", "rootfs", "yaegi")), f"release ABI {abi} is incomplete"
         suffixes.add(config["release_suffix"])
-        targets.add(config["flutter_target"])
     return matrix
 
 
