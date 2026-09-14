@@ -69,6 +69,7 @@ class UsersViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = UsersUiState.Phase.Error,
@@ -89,6 +90,7 @@ class UsersViewModel(
                 _uiState.update { it.copy(actionError = null, actionMessage = "用户「$username」创建成功") }
                 refresh()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         actionError = error.message?.takeIf(String::isNotBlank)
@@ -109,6 +111,7 @@ class UsersViewModel(
                 _uiState.update { it.copy(actionError = null, actionMessage = "用户「$username」已更新") }
                 refresh()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         actionError = error.message?.takeIf(String::isNotBlank)
@@ -130,6 +133,7 @@ class UsersViewModel(
                 _uiState.update { it.copy(userIdInProgress = null, actionError = null, actionMessage = "用户「$username」已删除") }
                 refresh()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         userIdInProgress = null,
@@ -151,6 +155,7 @@ class UsersViewModel(
                 repo.resetPassword(id, ResetPasswordPayload(newPassword))
                 _uiState.update { it.copy(userIdInProgress = null, actionError = null, actionMessage = "用户「$username」密码已重置") }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         userIdInProgress = null,

@@ -41,7 +41,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel? = null,
     onNavigate: (SettingsEntry) -> Unit = {},
 ) {
-    val vm = viewModel ?: remember { SettingsViewModel() }
+    val vm = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = { SettingsViewModel() })
     val state by vm.uiState.collectAsStateWithLifecycle()
 
     Column(

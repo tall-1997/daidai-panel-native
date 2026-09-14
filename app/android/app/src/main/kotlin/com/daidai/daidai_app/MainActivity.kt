@@ -66,11 +66,13 @@ class MainActivity : FlutterActivity() {
                 "installApk" -> {
                     val path = call.argument<String>("path")
                     if (path != null) {
-                        try {
-                            ApkInstaller.installApk(this, path)
-                            result.success(null)
-                        } catch (e: Exception) {
-                            result.error("INSTALL_ERROR", e.message, null)
+                        updateExecutor.execute {
+                            try {
+                                ApkInstaller.installApk(applicationContext, path)
+                                runOnUiThread { result.success(null) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("INSTALL_ERROR", e.message, null) }
+                            }
                         }
                     } else {
                         result.error("INVALID_ARGS", "Path is required", null)
@@ -267,4 +269,4 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-}
+}

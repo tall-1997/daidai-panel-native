@@ -47,10 +47,10 @@ fun NotificationListScreen(
     viewModel: NotificationsViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val repo = repository ?: defaultNotificationsRepository(context)
         NotificationsViewModel(repo)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     when {

@@ -55,7 +55,7 @@ fun TaskFormScreen(
     onSaved: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelTasksRepository(
@@ -65,13 +65,12 @@ fun TaskFormScreen(
             )
         }
         TasksViewModel(resolved)
-    }
-    // 表单进入时拉取一次（保证已装配校验；失败不阻塞编辑）。首次编辑态直接可用。
-    LaunchedEffect(Unit) { screenViewModel.refresh() }
+    })
 
     var name by remember { mutableStateOf(editingTask?.name ?: "") }
     var scriptPath by remember { mutableStateOf(editingTask?.scriptPath ?: "") }
     var schedule by remember { mutableStateOf(editingTask?.schedule ?: "") }
+    val originalType = editingTask?.type
     var isCron by remember { mutableStateOf(editingTask?.type == "cron" || editingTask == null) }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -96,7 +95,7 @@ fun TaskFormScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage)
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -180,9 +179,18 @@ fun TaskFormScreen(
                     errorMessage = "请输入脚本路径"
                     return@Button
                 }
+                if (isCron && schedule.isBlank()) {
+                    errorMessage = "Cron 任务需要至少一个调度表达式"
+                    return@Button
+                }
                 errorMessage = null
                 saving = true
-                val type = if (isCron) "cron" else "manual"
+                // 编辑 startup 任务时保持原类型，避免被表单静默改写为 manual。
+                val type = when {
+                    originalType == "startup" -> "startup"
+                    isCron -> "cron"
+                    else -> "manual"
+                }
                 val payload = TaskWritePayload(
                     name = trimmedName,
                     scriptPath = trimmedScript,

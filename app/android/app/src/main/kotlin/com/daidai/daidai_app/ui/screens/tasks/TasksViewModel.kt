@@ -47,6 +47,8 @@ class TasksViewModel(
         refresh()
     }
 
+    private var refreshGeneration = 0
+
     fun refresh() {
         val repo = repository ?: run {
             _uiState.update {
@@ -54,14 +56,18 @@ class TasksViewModel(
             }
             return
         }
+        val generation = ++refreshGeneration
         _uiState.update { it.copy(phase = TasksUiState.Phase.Loading, errorMessage = null) }
         viewModelScope.launch {
             try {
                 val tasks = repo.getTasks()
+                if (generation != refreshGeneration) return@launch
                 _uiState.update {
                     it.copy(tasks = tasks, phase = TasksUiState.Phase.Loaded, errorMessage = null)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                if (generation != refreshGeneration) return@launch
                 _uiState.update {
                     it.copy(
                         phase = TasksUiState.Phase.Error,
@@ -82,6 +88,7 @@ class TasksViewModel(
                 repo.createTask(payload)
                 reloadAfterMutation(success = true)
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(errorMessage = friendly(error, "创建失败"))
                 }
@@ -98,6 +105,7 @@ class TasksViewModel(
                 repo.updateTask(id, payload)
                 reloadAfterMutation(success = true)
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(errorMessage = friendly(error, "保存失败"))
                 }
@@ -114,6 +122,7 @@ class TasksViewModel(
                 repo.deleteTask(id)
                 reloadAfterMutation()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(busyTaskId = null, errorMessage = friendly(error, "删除失败"))
                 }
@@ -130,6 +139,7 @@ class TasksViewModel(
                 repo.runTask(id)
                 reloadAfterMutation()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(busyTaskId = null, errorMessage = friendly(error, "运行失败"))
                 }
@@ -146,6 +156,7 @@ class TasksViewModel(
                 repo.toggleTask(id, enabled)
                 reloadAfterMutation()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(busyTaskId = null, errorMessage = friendly(error, "切换失败"))
                 }
@@ -172,6 +183,7 @@ class TasksViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         busyTaskId = null,

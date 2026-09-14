@@ -5,10 +5,13 @@ import androidx.lifecycle.ViewModel
 import com.daidai.daidai_app.data.prefs.AppLockStore
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 
 /**
  * 应用锁的 UI 状态（阶段 4-2）。
@@ -207,8 +210,8 @@ class AppLockViewModel(
         _uiState.update { it.copy(notice = null) }
     }
 
-    /** 验证图案：校验通过返回 true 并解锁；否则记录失败。 */
-    fun verifyPattern(points: List<Int>): Boolean {
+    /** 验证图案：校验通过返回 true 并解锁；否则记录失败。哈希迭代在 Default 调度器执行。 */
+    suspend fun verifyPattern(points: List<Int>): Boolean {
         if (!_uiState.value.hasPattern) return false
         if (isInBackoff()) return false
         val raw = points.joinToString("-")
@@ -222,8 +225,8 @@ class AppLockViewModel(
         }
     }
 
-    /** 验证密码：校验通过返回 true 并解锁；否则记录失败。 */
-    fun verifyPassword(password: String): Boolean {
+    /** 验证密码：校验通过返回 true 并解锁；否则记录失败。哈希迭代在 Default 调度器执行。 */
+    suspend fun verifyPassword(password: String): Boolean {
         if (!_uiState.value.hasPassword) return false
         if (isInBackoff()) return false
         val ok = matchesSecret(password, store.getPasswordHash())
@@ -298,14 +301,16 @@ class AppLockViewModel(
         return "$HASH_VERSION:$HASH_ROUNDS:$salt:$digest"
     }
 
-    /** 校验明文是否匹配已存哈希。 */
-    private fun matchesSecret(value: String, storedHash: String): Boolean {
+    /** 校验明文是否匹配已存哈希（CPU 密集，切 Default 调度器）。 */
+    private suspend fun matchesSecret(value: String, storedHash: String): Boolean {
         if (storedHash.isEmpty()) return false
         val parts = storedHash.split(":")
         if (parts.size != 4 || parts[0] != HASH_VERSION) return false
         val rounds = parts[1].toIntOrNull() ?: return false
         if (rounds <= 0 || parts[2].isEmpty() || parts[3].isEmpty()) return false
-        return deriveSecret(value, parts[2], rounds) == parts[3]
+        return withContext(Dispatchers.Default) {
+            deriveSecret(value, parts[2], rounds) == parts[3]
+        }
     }
 
     private fun deriveSecret(value: String, salt: String, rounds: Int): String {
@@ -313,7 +318,8 @@ class AppLockViewModel(
         repeat(rounds) {
             current = sha256(current)
         }
-        return current.joinToString("") { "%02x".format(it) }
+        // 显式 Locale：摘要必须与 Dart 端 ASCII hex 完全一致。
+        return current.joinToString("") { "%02x".format(Locale.ROOT, it) }
     }
 
     private fun sha256(input: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(input)

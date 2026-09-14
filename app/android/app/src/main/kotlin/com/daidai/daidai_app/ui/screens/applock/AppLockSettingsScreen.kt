@@ -50,7 +50,8 @@ fun AppLockSettingsScreen(
     viewModel: AppLockViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) { AppLockViewModel(context) }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+AppLockViewModel(context) })
     val state by screenViewModel.uiState.collectAsState()
 
     var showMessage by remember { mutableStateOf<String?>(null) }
@@ -184,8 +185,9 @@ fun AppLockSettingsScreen(
         PasswordDialog(
             hasPassword = state.hasPassword,
             onSave = { password ->
+                val hadPassword = state.hasPassword
                 val ok = screenViewModel.enablePassword(password)
-                if (ok) showMessage = if (state.hasPassword) "密码已更新" else "密码已设置"
+                if (ok) showMessage = if (hadPassword) "密码已更新" else "密码已设置"
                 showPasswordDialog = false
             },
             onDismiss = { showPasswordDialog = false },

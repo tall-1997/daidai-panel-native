@@ -1,5 +1,7 @@
 package com.daidai.daidai_app.data.remote
 
+import org.json.JSONObject
+
 /** Request sent to the panel when creating the first administrator. */
 data class AuthInitRequest(
     val username: String,
@@ -40,4 +42,27 @@ data class AuthResponse(
 class PanelApiException(
     val statusCode: Int,
     val responseBody: String,
-) : RuntimeException("Panel request failed with HTTP $statusCode")
+) : RuntimeException(formatMessage(statusCode, responseBody)) {
+
+    /** 服务端错误体中的可读信息（message/error/msg 字段），缺失时为 null。 */
+    val serverMessage: String? = extractServerMessage(responseBody)
+
+    /** 服务端要求两步验证码（two_factor_required）。 */
+    val twoFactorRequired: Boolean = runCatching {
+        JSONObject(responseBody).optBoolean("two_factor_required")
+    }.getOrDefault(false)
+
+    private companion object {
+        fun extractServerMessage(body: String): String? = runCatching {
+            val json = JSONObject(body)
+            val payload = json.optJSONObject("data") ?: json
+            listOf("message", "error", "msg").firstNotNullOfOrNull { key ->
+                payload.optString(key).takeIf { it.isNotEmpty() }
+            }
+        }.getOrNull()
+
+        fun formatMessage(statusCode: Int, body: String): String =
+            extractServerMessage(body)?.takeIf { it.isNotBlank() }
+                ?: "Panel request failed with HTTP $statusCode"
+    }
+}

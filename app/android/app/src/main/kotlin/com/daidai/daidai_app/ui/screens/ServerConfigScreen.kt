@@ -39,9 +39,9 @@ fun ServerConfigScreen(
     viewModel: ServerConfigViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
-        ServerConfigViewModel(repository ?: AppServices.serverConfigRepository(context))
-    }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+ServerConfigViewModel(repository ?: AppServices.serverConfigRepository(context))
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Column(

@@ -69,7 +69,7 @@ fun BackupScreen(
 ) {
     val context = LocalContext.current
     val resolvedRepository = repository ?: remember { BackupRepository(context) }
-    val screenViewModel = viewModel ?: remember { SystemViewModel(resolvedRepository) }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = { SystemViewModel(resolvedRepository) })
 
     val state by screenViewModel.uiState.collectAsState()
     var pendingDelete by remember { mutableStateOf<BackupRecord?>(null) }
@@ -85,7 +85,7 @@ fun BackupScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = AppColors.lightPage,
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             BackupTopBar(
@@ -181,7 +181,7 @@ private fun BackupCreateBar(creating: Boolean, onCreate: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(AppColors.lightPage)
+            .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         HorizontalDivider(color = AppColors.slate200)
@@ -231,7 +231,7 @@ private fun BackupRow(record: BackupRecord, deleting: Boolean, onDelete: () -> U
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

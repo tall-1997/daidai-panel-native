@@ -4,6 +4,7 @@ import com.daidai.daidai_app.data.model.OpenApiApp
 import com.daidai.daidai_app.data.model.parseOpenApiApps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -37,32 +38,16 @@ class PanelOpenApiRepository(
     private val baseUrl: String = baseUrl.trim().trimEnd('/')
 
     override suspend fun getApps(): List<OpenApiApp> = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$baseUrl/api/open-api/apps")
-            .apply {
-                accessToken?.takeIf { it.isNotBlank() }
-                    ?.let { header("Authorization", "Bearer $it") }
-                localToken?.takeIf { it.isNotBlank() }
-                    ?.let { header("X-Daidai-Local-Token", it) }
-            }
-            .get()
-            .build()
-
-        httpClient.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IllegalStateException(
-                    "Open API 应用加载失败（HTTP ${response.code}）：$body",
-                )
-            }
-            parseOpenApiApps(body)
-        }
+        val body = PanelRequests.execute(
+            "GET",
+            "$baseUrl/api/open-api/apps",
+            accessToken = accessToken,
+            localToken = localToken,
+        )
+        parseOpenApiApps(body)
     }
 
     private companion object {
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
+        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }

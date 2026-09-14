@@ -59,20 +59,20 @@ fun ProfileScreen(
     viewModel: ProfileViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val config = AppServices.configRepository(context).config.value
         ProfileViewModel(
             baseUrl = config.serverUrl,
             accessToken = config.accessToken,
             localToken = config.localToken,
         )
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when (val s = state) {
             is ProfileUiState.Loading -> LoadingView()

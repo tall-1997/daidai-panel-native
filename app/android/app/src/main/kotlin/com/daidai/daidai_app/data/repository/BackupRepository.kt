@@ -177,9 +177,6 @@ class BackupRepository(
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
+        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }

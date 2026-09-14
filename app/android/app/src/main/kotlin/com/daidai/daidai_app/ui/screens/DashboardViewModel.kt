@@ -39,13 +39,19 @@ class DashboardViewModel(
         refresh()
     }
 
+    private var refreshGeneration = 0
+
     fun refresh() {
+        val generation = ++refreshGeneration
         _uiState.value = DashboardUiState.Loading
         viewModelScope.launch {
             try {
                 val bundle: DashboardDataBundle = repository.loadDashboard()
+                if (generation != refreshGeneration) return@launch
                 _uiState.value = DashboardUiState.Success(bundle.systemInfo, bundle.stats)
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                if (generation != refreshGeneration) return@launch
                 _uiState.update {
                     DashboardUiState.Error(
                         error.message?.takeIf { it.isNotBlank() } ?: "加载仪表盘数据失败，请重试",

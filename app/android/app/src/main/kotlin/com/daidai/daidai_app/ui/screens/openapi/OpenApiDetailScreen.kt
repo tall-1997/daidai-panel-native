@@ -61,14 +61,14 @@ fun OpenApiDetailScreen(
     onDeleted: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val resolvedVm = viewModel ?: remember(context) {
+    val resolvedVm = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val config = AppServices.configRepository(context).config.value
         OpenApiWriteViewModel(
             baseUrl = config.serverUrl,
             accessToken = config.accessToken,
             localToken = config.localToken,
         )
-    }
+    })
     val state by resolvedVm.uiState.collectAsStateWithLifecycle()
 
     // 删除确认弹窗
@@ -99,7 +99,7 @@ fun OpenApiDetailScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         DetailTopBar(onBack = onBack)
 
@@ -191,7 +191,7 @@ private fun DetailCard(app: OpenApiApp, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -273,7 +273,7 @@ private fun ToggleEnabledRow(app: OpenApiApp, enabled: Boolean, onToggle: () -> 
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

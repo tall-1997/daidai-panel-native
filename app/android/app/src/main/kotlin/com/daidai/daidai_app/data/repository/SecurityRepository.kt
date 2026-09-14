@@ -13,6 +13,7 @@ import com.daidai.daidai_app.data.model.parseSessions
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -92,27 +93,16 @@ class SecurityRepository(
         }
     }
 
-    private fun get(conn: Connection, path: String): String {
-        val builder = Request.Builder().url(conn.baseUrl + path)
-        conn.accessToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("Authorization", "Bearer $it") }
-        conn.localToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("x-daidai-local-token", it) }
-        builder.get()
-        httpClient.newCall(builder.build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw SecurityApiException(response.code, body)
-            }
-            return body
-        }
-    }
+    private fun get(conn: Connection, path: String): String =
+        PanelRequests.execute(
+            "GET",
+            conn.baseUrl + path,
+            accessToken = conn.accessToken,
+            localToken = conn.localToken,
+        )
 
     private companion object {
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
+        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }
 

@@ -69,7 +69,7 @@ fun UserListScreen(
     viewModel: UsersViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelUsersRepository(
@@ -79,8 +79,25 @@ fun UserListScreen(
             )
         }
         UsersViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    var pendingDelete by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    pendingDelete?.let { (id, username) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除用户") },
+            text = { Text("确定删除用户“$username”？其会话与权限将一并移除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    screenViewModel.deleteUser(id, username)
+                    pendingDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
+    }
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 操作成功 / 失败提示
@@ -102,7 +119,7 @@ fun UserListScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // 顶部标题 + 新建入口
@@ -137,7 +154,7 @@ fun UserListScreen(
                             users = state.users,
                             inProgressId = state.userIdInProgress,
                             onEdit = { editingUser = it },
-                            onDelete = screenViewModel::deleteUser,
+                            onDelete = { id, username -> pendingDelete = id to username },
                             onResetPassword = { resettingUser = it },
                         )
                     }
@@ -287,8 +304,8 @@ private fun UserCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
-            .border(1.dp, AppColors.glassCardBorder, RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
         Row(

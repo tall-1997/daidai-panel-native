@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** The panel endpoint selected by the user. */
@@ -25,6 +27,7 @@ data class PanelConfig(
     val mode: PanelConnectionMode = PanelConnectionMode.REMOTE,
     val accessToken: String? = null,
     val localToken: String? = null,
+    val refreshToken: String? = null,
 )
 
 /**
@@ -33,6 +36,7 @@ data class PanelConfig(
  */
 class PanelConfigRepository(context: Context) {
     private val storage = SecurePreferences(context)
+    private val writeMutex = Mutex()
     private val _config = MutableStateFlow(readConfig())
 
     val config: StateFlow<PanelConfig> = _config.asStateFlow()
@@ -50,13 +54,13 @@ class PanelConfigRepository(context: Context) {
 
     suspend fun setLocalToken(token: String?) = update { copy(localToken = token.cleanToken()) }
 
+    suspend fun setRefreshToken(token: String?) = update { copy(refreshToken = token.cleanToken()) }
+
     suspend fun setConfig(config: PanelConfig) = withContext(Dispatchers.IO) {
-        val normalized = config.normalized()
-        storage.putPlain(KEY_SERVER_URL, normalized.serverUrl)
-        storage.putPlain(KEY_MODE, normalized.mode.persistedValue)
-        storage.putSecret(KEY_ACCESS_TOKEN, normalized.accessToken)
-        storage.putSecret(KEY_LOCAL_TOKEN, normalized.localToken)
-        _config.value = normalized
+        writeMutex.withLock {
+            val normalized = config.normalized()
+            writeConfig(normalized)
+        }
     }
 
     suspend fun clearAccessToken() = setAccessToken(null)
@@ -64,13 +68,29 @@ class PanelConfigRepository(context: Context) {
     suspend fun clearLocalToken() = setLocalToken(null)
 
     suspend fun clearTokens() = withContext(Dispatchers.IO) {
-        storage.remove(KEY_ACCESS_TOKEN)
-        storage.remove(KEY_LOCAL_TOKEN)
-        _config.value = _config.value.copy(accessToken = null, localToken = null)
+        writeMutex.withLock {
+            storage.remove(KEY_ACCESS_TOKEN)
+            storage.remove(KEY_LOCAL_TOKEN)
+            storage.remove(KEY_REFRESH_TOKEN)
+            _config.value = _config.value.copy(accessToken = null, localToken = null, refreshToken = null)
+        }
     }
 
+    /** 串行化「读内存 → 变换 → 整包落盘」，避免并发 update 互相覆盖丢字段。 */
     private suspend fun update(transform: PanelConfig.() -> PanelConfig) = withContext(Dispatchers.IO) {
-        setConfig(_config.value.transform())
+        writeMutex.withLock {
+            val normalized = _config.value.transform().normalized()
+            writeConfig(normalized)
+        }
+    }
+
+    private fun writeConfig(normalized: PanelConfig) {
+        storage.putPlain(KEY_SERVER_URL, normalized.serverUrl)
+        storage.putPlain(KEY_MODE, normalized.mode.persistedValue)
+        storage.putSecret(KEY_ACCESS_TOKEN, normalized.accessToken)
+        storage.putSecret(KEY_LOCAL_TOKEN, normalized.localToken)
+        storage.putSecret(KEY_REFRESH_TOKEN, normalized.refreshToken)
+        _config.value = normalized
     }
 
     private suspend fun refresh() {
@@ -82,6 +102,7 @@ class PanelConfigRepository(context: Context) {
         mode = PanelConnectionMode.fromPersistedValue(storage.getPlain(KEY_MODE)),
         accessToken = storage.getSecret(KEY_ACCESS_TOKEN).cleanToken(),
         localToken = storage.getSecret(KEY_LOCAL_TOKEN).cleanToken(),
+        refreshToken = storage.getSecret(KEY_REFRESH_TOKEN).cleanToken(),
     )
 
     companion object {
@@ -89,6 +110,7 @@ class PanelConfigRepository(context: Context) {
         private const val KEY_MODE = "mode"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_LOCAL_TOKEN = "local_token"
+        private const val KEY_REFRESH_TOKEN = "refresh_token"
 
         internal fun normalizeServerUrl(value: String): String {
             var v = value.trim()

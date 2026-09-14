@@ -19,9 +19,25 @@ class SecurePreferences(context: Context) {
 
     fun putSecret(key: String, value: String?) {
         preferences.edit().apply {
-            if (value == null) remove(key) else putString(key, CryptoBox.encrypt(value, keyAlias))
+            if (value == null) remove(key) else putString(key, encryptWithRecovery(value))
         }.apply()
     }
+
+    /**
+     * 加密带恢复路径：Keystore 异常（如锁屏凭据变更导致密钥失效）先删除别名重建再试一次；
+     * 仍失败则降级为明文存储并记录日志，保证登录/写配置不因 Keystore 故障而崩溃。
+     */
+    private fun encryptWithRecovery(value: String): String =
+        runCatching { CryptoBox.encrypt(value, keyAlias) }
+            .recoverCatching {
+                android.util.Log.w(TAG, "keystore encrypt failed, recreating key", it)
+                CryptoBox.deleteKey(keyAlias)
+                CryptoBox.encrypt(value, keyAlias)
+            }
+            .getOrElse {
+                android.util.Log.e(TAG, "keystore unavailable, storing value in plaintext", it)
+                value
+            }
 
     fun getSecret(key: String): String? = preferences.getString(key, null)?.let {
         runCatching { CryptoBox.decrypt(it, keyAlias) }.getOrNull()
@@ -38,6 +54,7 @@ class SecurePreferences(context: Context) {
     fun getPlain(key: String): String? = preferences.getString(key, null)
 
     companion object {
+        private const val TAG = "SecurePreferences"
         private const val FILE_NAME = "panel_config"
         private const val KEY_ALIAS = "daidai_panel_config_aes"
         private val keyAlias: String get() = KEY_ALIAS
@@ -92,5 +109,13 @@ object CryptoBox {
             .setRandomizedEncryptionRequired(true)
             .build())
         return generator.generateKey()
+    }
+
+    /** 删除指定别名（密钥失效恢复路径使用）；别名不存在时静默返回。 */
+    fun deleteKey(alias: String) {
+        runCatching {
+            val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (store.containsAlias(alias)) store.deleteEntry(alias)
+        }
     }
 }

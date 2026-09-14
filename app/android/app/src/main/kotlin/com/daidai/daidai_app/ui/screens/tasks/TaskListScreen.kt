@@ -70,7 +70,7 @@ fun TaskListScreen(
     onEditTask: (Task) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelTasksRepository(
@@ -80,13 +80,16 @@ fun TaskListScreen(
             )
         }
         TasksViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+
+    // 表单/详情在独立返回栈条目保存，回到本页时刷新一次保证数据最新。
+    LaunchedEffect(Unit) { screenViewModel.refresh() }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when (state.phase) {
             TasksUiState.Phase.Loading -> LoadingView()
@@ -209,7 +212,7 @@ private fun TaskCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

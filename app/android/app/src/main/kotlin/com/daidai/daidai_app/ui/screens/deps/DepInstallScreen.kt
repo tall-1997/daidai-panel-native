@@ -57,7 +57,7 @@ fun DepInstallScreen(
     onAfterSubmit: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             DepsRepository(
@@ -67,7 +67,7 @@ fun DepInstallScreen(
             )
         }
         DepsViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     var manager by remember { mutableStateOf(DepManager.Pip) }
@@ -77,7 +77,7 @@ fun DepInstallScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage)
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -152,7 +152,7 @@ fun DepInstallScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(AppColors.red50)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .padding(12.dp),
             )
         }

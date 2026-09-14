@@ -92,6 +92,7 @@ class LogsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(deletingId = null, errorMessage = error.message?.takeIf(String::isNotBlank) ?: "删除失败，请重试")
                 }
@@ -141,6 +142,7 @@ class LogsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 if (generation != loadGeneration) return@launch
                 _uiState.update {
                     it.copy(

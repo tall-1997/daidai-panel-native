@@ -23,8 +23,8 @@ interface LoginRepository {
     /** 首次初始化面板（用户名/密码创建管理员）。仅在 need_init 为 true 时调用。 */
     suspend fun init(username: String, password: String)
 
-    /** 登录并取得 access_token；校验失败抛异常。 */
-    suspend fun login(username: String, password: String): LoginResult
+    /** 登录并取得 access_token；[totpCode] 为两步验证码（开启 2FA 的面板必填）。校验失败抛异常。 */
+    suspend fun login(username: String, password: String, totpCode: String? = null): LoginResult
 }
 
 /** 登录成功回调所需的最小凭据结果。 */
@@ -57,6 +57,10 @@ class LoginViewModel(
         _uiState.update { it.copy(password = value, errorMessage = null) }
     }
 
+    fun setTotpCode(value: String) {
+        _uiState.update { it.copy(totpCode = value, errorMessage = null) }
+    }
+
     fun refreshInitState() {
         val repository = repository ?: run {
             _uiState.update { it.copy(phase = LoginUiState.Phase.Error, errorMessage = "登录后端未装配") }
@@ -72,6 +76,7 @@ class LoginViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = LoginUiState.Phase.Error,
@@ -115,7 +120,7 @@ class LoginViewModel(
                 if (needInit) {
                     repository.init(username, password)
                 }
-                val result = repository.login(username, password)
+                val result = repository.login(username, password, state.totpCode.trim().takeIf(String::isNotEmpty))
                 _uiState.update {
                     it.copy(
                         phase = LoginUiState.Phase.Success,
@@ -124,6 +129,7 @@ class LoginViewModel(
                 }
                 onSuccess()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = LoginUiState.Phase.Error,

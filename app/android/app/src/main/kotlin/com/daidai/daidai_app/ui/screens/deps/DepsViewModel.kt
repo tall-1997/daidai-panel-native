@@ -73,6 +73,7 @@ class DepsViewModel(
                     it.copy(deps = items, phase = DepsUiState.Phase.Loaded, errorMessage = null)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 if (generation != refreshGeneration) return@launch
                 _uiState.update {
                     it.copy(
@@ -103,6 +104,7 @@ class DepsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         operatingId = null,
@@ -127,6 +129,7 @@ class DepsViewModel(
                 _uiState.update { it.copy(operatingId = null, notice = "重装请求已提交") }
                 refresh()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         operatingId = null,
@@ -156,6 +159,7 @@ class DepsViewModel(
                     it.copy(submittingInstall = false, notice = "安装请求已提交")
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         submittingInstall = false,

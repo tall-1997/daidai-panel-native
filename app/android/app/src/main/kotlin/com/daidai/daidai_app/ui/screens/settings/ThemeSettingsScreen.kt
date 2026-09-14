@@ -43,10 +43,8 @@ fun ThemeSettingsScreen(
     viewModel: SettingsViewModel? = null,
     onThemeModeChange: (ThemeMode) -> Unit = {},
 ) {
-    val vm = viewModel ?: remember { SettingsViewModel() }
-    val state by vm.uiState.collectAsStateWithLifecycle()
+    val currentMode by com.daidai.daidai_app.ui.theme.ThemeController.mode.collectAsStateWithLifecycle()
     val onModeChange: (ThemeMode) -> Unit = { mode ->
-        vm.setThemeMode(mode)
         onThemeModeChange(mode)
     }
 
@@ -63,7 +61,7 @@ fun ThemeSettingsScreen(
             color = AppColors.primary,
         )
         Text(
-            text = "选择视觉风格与主题模式。当前仅预览效果，主题切换将在集成阶段接入 Theme.kt。",
+            text = "选择视觉风格与主题模式，选择实时应用到全局主题。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -73,7 +71,7 @@ fun ThemeSettingsScreen(
             ThemeMode.entries.forEach { mode ->
                 ThemeModeRow(
                     mode = mode,
-                    selected = state.themeMode == mode,
+                    selected = currentMode == mode,
                     onSelect = { onModeChange(mode) },
                 )
             }
@@ -109,16 +107,16 @@ fun ThemeSettingsScreen(
         // 主题切换状态回显
         CardView(title = "当前主题模式") {
             Text(
-                text = state.themeMode.label,
+                text = currentMode.label,
                 style = MaterialTheme.typography.bodyLarge,
                 color = when {
-                    state.themeMode == ThemeMode.DARK -> AppColors.miuixBlue
-                    state.themeMode == ThemeMode.LIGHT -> AppColors.primary
+                    currentMode == ThemeMode.DARK -> AppColors.miuixBlue
+                    currentMode == ThemeMode.LIGHT -> AppColors.primary
                     else -> AppColors.slate500
                 },
             )
             Text(
-                text = "该状态由 SettingsViewModel 持有，尚未应用到全局主题。",
+                text = "主题选择已持久化，重启后保持。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

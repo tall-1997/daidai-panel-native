@@ -5,6 +5,7 @@ import com.daidai.daidai_app.data.model.User
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -50,7 +51,7 @@ class PanelUsersRepository(
     private val baseUrl: String = baseUrl.trim().trimEnd('/')
 
     override suspend fun getUsers(): List<User> = withContext(Dispatchers.IO) {
-        val body = execute("GET", "$baseUrl/api/auth/users")
+        val body = execute("GET", "$baseUrl/api/users")
         User.parseList(body)
     }
 
@@ -85,39 +86,12 @@ class PanelUsersRepository(
         }
     }
 
-    private fun execute(method: String, url: String, json: String? = null): String {
-        val builder = Request.Builder().url(url)
-        accessToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("Authorization", "Bearer $it") }
-        localToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("X-Daidai-Local-Token", it) }
-        if (json != null) {
-            builder.method(method, json.toRequestBody(JSON_MEDIA_TYPE))
-        } else {
-            builder.method(method, null)
-        }
-        httpClient.newCall(builder.build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                val message = try {
-                    val parsed = JSONObject(body)
-                    parsed.optString("error").takeIf(String::isNotEmpty)
-                        ?: parsed.optString("message")
-                } catch (_: Exception) {
-                    null
-                }
-                throw UsersApiException(response.code, body, message)
-            }
-            return body
-        }
-    }
+    private fun execute(method: String, url: String, json: String? = null): String =
+        PanelRequests.execute(method, url, json, accessToken = accessToken, localToken = localToken)
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
+        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }
 

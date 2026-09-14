@@ -58,7 +58,7 @@ fun ScriptViewScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         ViewHeader(
             path = path,

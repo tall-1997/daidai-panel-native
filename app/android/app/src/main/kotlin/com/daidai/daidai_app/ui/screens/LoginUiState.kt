@@ -4,6 +4,7 @@ package com.daidai.daidai_app.ui.screens
 data class LoginUiState(
     val username: String = "",
     val password: String = "",
+    val totpCode: String = "",
     val phase: Phase = Phase.CheckingInitialization,
     val errorMessage: String? = null,
 ) {

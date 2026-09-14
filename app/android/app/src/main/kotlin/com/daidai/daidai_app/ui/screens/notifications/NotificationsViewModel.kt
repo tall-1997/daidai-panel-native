@@ -44,6 +44,7 @@ class NotificationsViewModel(
                     it.copy(isLoading = false, channels = channels, errorMessage = null)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         isLoading = false,

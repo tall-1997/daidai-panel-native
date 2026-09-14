@@ -80,6 +80,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = ScriptsUiState.Phase.Error,
@@ -138,6 +139,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         loadingContent = false,
@@ -162,6 +164,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         actionError = error.message?.takeIf(String::isNotBlank)
@@ -191,6 +194,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         runningPath = null,
@@ -219,6 +223,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         actionError = error.message?.takeIf(String::isNotBlank)
@@ -250,6 +255,7 @@ class ScriptsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         deletingPath = null,

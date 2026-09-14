@@ -60,6 +60,7 @@ class SystemViewModel(
                     it.copy(backups = backups, backupPhase = SystemUiState.BackupPhase.Loaded)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         backupPhase = SystemUiState.BackupPhase.Error,
@@ -85,6 +86,7 @@ class SystemViewModel(
                 }
                 refreshBackups()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         creatingBackup = false,
@@ -110,6 +112,7 @@ class SystemViewModel(
                 }
                 refreshBackups()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         deletingBackupName = null,
@@ -129,6 +132,7 @@ class SystemViewModel(
                 val health = repository.runHealthCheck()
                 _uiState.update { it.copy(health = health, healthRunning = false) }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(healthRunning = false, errorMessage = friendly(error, "健康检查失败"))
                 }
@@ -144,6 +148,7 @@ class SystemViewModel(
                 val health = repository.healthCheckSnapshot()
                 _uiState.update { it.copy(health = health) }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 // 快照缺失时静默，允许用户点击“立即检查”
                 _uiState.update { it.copy(health = null) }
             }

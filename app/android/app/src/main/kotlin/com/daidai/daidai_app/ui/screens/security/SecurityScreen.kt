@@ -65,15 +65,15 @@ fun SecurityScreen(
     viewModel: SecurityViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
-        SecurityViewModel(repository ?: SecurityRepository(context))
-    }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+SecurityViewModel(repository ?: SecurityRepository(context))
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when (state.phase) {
             SecurityUiState.Phase.Loading -> SecurityLoading()
@@ -181,7 +181,7 @@ private fun TabChip(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) AppColors.primary else AppColors.glassCard)
+            .background(if (selected) AppColors.primary else MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
             .padding(vertical = 9.dp),
         contentAlignment = Alignment.Center,
@@ -473,7 +473,7 @@ private fun GlassCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(14.dp),
     ) {
         content()

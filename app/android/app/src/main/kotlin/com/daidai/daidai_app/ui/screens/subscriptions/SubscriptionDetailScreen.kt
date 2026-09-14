@@ -64,10 +64,10 @@ fun SubscriptionDetailScreen(
     onSaved: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: SubscriptionsRepository(context)
         SubscriptionsViewModel(resolved)
-    }
+    })
 
     // 表单初始值：编辑态来自订阅对象，新建态为空。
     var name by remember { mutableStateOf(subscription?.name ?: "") }
@@ -97,7 +97,7 @@ fun SubscriptionDetailScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         // 顶部栏：返回 + 标题
         Row(

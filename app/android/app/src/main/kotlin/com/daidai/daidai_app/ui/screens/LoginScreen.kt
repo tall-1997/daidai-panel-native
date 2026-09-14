@@ -48,9 +48,9 @@ fun LoginScreen(
     viewModel: LoginViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         LoginViewModel(repository ?: AppServices.loginRepository(context))
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Column(
@@ -95,6 +95,16 @@ fun LoginScreen(
             enabled = !isBusy(state.phase),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             visualTransformation = PasswordVisualTransformation(),
+        )
+
+        OutlinedTextField(
+            value = state.totpCode,
+            onValueChange = screenViewModel::setTotpCode,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("两步验证码（已开启 2FA 时必填）") },
+            singleLine = true,
+            enabled = !isBusy(state.phase),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
         )
 
         state.errorMessage?.let {

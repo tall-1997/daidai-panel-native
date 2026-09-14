@@ -86,6 +86,7 @@ class SecurityViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = SecurityUiState.Phase.Error,

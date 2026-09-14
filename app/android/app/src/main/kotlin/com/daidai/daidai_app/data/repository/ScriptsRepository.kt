@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
+import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -161,38 +162,8 @@ class PanelScriptsRepository(
     // ------------------------------------------------------------------
 
     /** 统一请求执行：注入认证头、校验状态码、返回响应体字符串。 */
-    private fun execute(method: String, url: String, body: JSONObject?): String {
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .apply {
-                accessToken?.takeIf { it.isNotBlank() }
-                    ?.let { header("Authorization", "Bearer $it") }
-                localToken?.takeIf { it.isNotBlank() }
-                    ?.let { header("X-Daidai-Local-Token", it) }
-            }
-        val request = when (method) {
-            "POST" -> {
-                val rb = body?.toString().orEmpty()
-                    .toRequestBody("application/json; charset=utf-8".toMediaType())
-                requestBuilder.post(rb).build()
-            }
-            "PUT" -> {
-                val rb = body?.toString().orEmpty()
-                    .toRequestBody("application/json; charset=utf-8".toMediaType())
-                requestBuilder.put(rb).build()
-            }
-            "DELETE" -> requestBuilder.delete().build()
-            else -> requestBuilder.get().build()
-        }
-
-        httpClient.newCall(request).execute().use { response ->
-            val responseBody = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw ScriptsApiException(response.code, responseBody)
-            }
-            return responseBody
-        }
-    }
+    private fun execute(method: String, url: String, body: JSONObject?): String =
+        PanelRequests.execute(method, url, body?.toString(), accessToken = accessToken, localToken = localToken)
 
     /** 取响应体，兼容直接列表 / 内容，也兼容 { data: ... } 包装。 */
     private fun dataOrBody(body: String): Any {
@@ -220,10 +191,7 @@ class PanelScriptsRepository(
             ?: java.net.URLEncoder.encode(raw, "UTF-8")
 
     private companion object {
-        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
+        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }
 

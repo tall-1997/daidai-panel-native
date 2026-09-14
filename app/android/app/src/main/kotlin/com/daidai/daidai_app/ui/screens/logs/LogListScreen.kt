@@ -58,7 +58,7 @@ fun LogListScreen(
     viewModel: LogsViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             LogsRepository(
@@ -68,13 +68,13 @@ fun LogListScreen(
             )
         }
         LogsViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when {
             state.loading && state.logs.isEmpty() -> LoadingContent()
@@ -131,7 +131,7 @@ private fun LogEntryCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

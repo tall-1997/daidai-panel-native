@@ -55,7 +55,7 @@ fun OpenApiListScreen(
     viewModel: OpenApiViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelOpenApiRepository(
@@ -65,13 +65,13 @@ fun OpenApiListScreen(
             )
         }
         OpenApiViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when (state.phase) {
             OpenApiUiState.Phase.Loading -> LoadingContent()
@@ -108,7 +108,7 @@ private fun OpenApiAppCard(app: OpenApiApp, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

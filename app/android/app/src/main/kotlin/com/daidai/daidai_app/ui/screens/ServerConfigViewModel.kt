@@ -1,6 +1,7 @@
 package com.daidai.daidai_app.ui.screens
 
 import androidx.lifecycle.ViewModel
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,7 @@ class ServerConfigViewModel(
                 _uiState.update { it.copy(isSaving = false) }
                 onSuccess()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         isSaving = false,
@@ -68,6 +70,8 @@ class ServerConfigViewModel(
         }
     }
 
-    private fun isValidUrl(value: String): Boolean =
-        value.startsWith("https://") || value.startsWith("http://")
+    private fun isValidUrl(value: String): Boolean = runCatching {
+        val url = value.toHttpUrlOrNull() ?: return false
+        (url.scheme == "https" || url.scheme == "http") && url.host.isNotBlank()
+    }.getOrDefault(false)
 }

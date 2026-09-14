@@ -21,10 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,7 +65,7 @@ fun DepListScreen(
     onNavigateToInstall: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(repository, context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             DepsRepository(
@@ -72,13 +75,30 @@ fun DepListScreen(
             )
         }
         DepsViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    var pendingUninstallId by remember { mutableStateOf<Long?>(null) }
+    if (pendingUninstallId != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingUninstallId = null },
+            title = { Text("卸载依赖") },
+            text = { Text("确定卸载该依赖？相关运行环境可能受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    screenViewModel.uninstall(pendingUninstallId!!)
+                    pendingUninstallId = null
+                }) { Text("卸载", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingUninstallId = null }) { Text("取消") }
+            },
+        )
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when {
             state.phase == DepsUiState.Phase.Loading -> LoadingView()
@@ -92,7 +112,7 @@ fun DepListScreen(
             )
             else -> DepList(
                 state = state,
-                onUninstall = screenViewModel::uninstall,
+                onUninstall = { id -> pendingUninstallId = id },
                 onReinstall = screenViewModel::reinstall,
             )
         }
@@ -142,7 +162,7 @@ private fun DepCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

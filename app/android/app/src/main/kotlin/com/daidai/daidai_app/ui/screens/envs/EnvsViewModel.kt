@@ -18,6 +18,8 @@ data class EnvsUiState(
     val envs: List<EnvVar> = emptyList(),
     val phase: EnvListPhase = EnvListPhase.Loading,
     val errorMessage: String? = null,
+    /** 新建/更新成功的一次性标记，表单页消费后经 [consumeMutation] 复位。 */
+    val mutationSucceeded: Boolean = false,
     /** 正在被启停/删除的 env id，用于展示行内忙碌态；null 表示无进行中的操作。 */
     val busyId: Long? = null,
     val busyType: BusyType = BusyType.None,
@@ -57,6 +59,7 @@ class EnvsViewModel(
                     it.copy(envs = envs, phase = EnvListPhase.Loaded, errorMessage = null)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = EnvListPhase.Error,
@@ -80,7 +83,9 @@ class EnvsViewModel(
             try {
                 repo.create(name = name, value = value, remark = remark)
                 refresh()
+                _uiState.update { it.copy(mutationSucceeded = true) }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         errorMessage = error.message?.takeIf(String::isNotBlank)
@@ -101,7 +106,9 @@ class EnvsViewModel(
             try {
                 repo.update(id = id, name = name, value = value, remark = remark, enabled = enabled)
                 refresh()
+                _uiState.update { it.copy(mutationSucceeded = true) }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         errorMessage = error.message?.takeIf(String::isNotBlank)
@@ -110,6 +117,11 @@ class EnvsViewModel(
                 }
             }
         }
+    }
+
+    /** 表单页消费成功标记后复位。 */
+    fun consumeMutation() {
+        _uiState.update { it.copy(mutationSucceeded = false) }
     }
 
     /** 删除环境变量；成功后刷新列表。 */
@@ -125,6 +137,7 @@ class EnvsViewModel(
                 repo.delete(id)
                 _uiState.update { it.copy(envs = it.envs.filterNot { env -> env.id == id }) }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         errorMessage = error.message?.takeIf(String::isNotBlank)
@@ -156,6 +169,7 @@ class EnvsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         errorMessage = error.message?.takeIf(String::isNotBlank)

@@ -24,7 +24,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +61,7 @@ fun EnvListScreen(
     onEdit: (EnvVar) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context, repository) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelEnvsRepository(
@@ -68,8 +71,28 @@ fun EnvListScreen(
             )
         }
         EnvsViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+
+    // 表单/详情在独立返回栈条目保存，回到本页时刷新一次保证数据最新。
+    LaunchedEffect(Unit) { screenViewModel.refresh() }
+    var pendingDeleteId by remember { mutableStateOf<Long?>(null) }
+    if (pendingDeleteId != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("删除环境变量") },
+            text = { Text("确定删除该环境变量？此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    screenViewModel.delete(pendingDeleteId!!)
+                    pendingDeleteId = null
+                }) { Text("删除", color = AppColors.errorColor) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("取消") }
+            },
+        )
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         EnvHeader(
@@ -79,7 +102,7 @@ fun EnvListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AppColors.lightPage),
+                .background(MaterialTheme.colorScheme.background),
         ) {
             when (state.phase) {
                 EnvListPhase.Loading -> LoadingContent()
@@ -97,7 +120,7 @@ fun EnvListScreen(
                             busyType = state.busyType,
                             onToggle = { env -> screenViewModel.setEnabled(env.id, !env.enabled) },
                             onEdit = onEdit,
-                            onDelete = screenViewModel::delete,
+                            onDelete = { id -> pendingDeleteId = id },
                         )
                     }
             }

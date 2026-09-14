@@ -55,6 +55,7 @@ class OpenApiViewModel(
                     it.copy(apps = apps, phase = OpenApiUiState.Phase.Loaded, errorMessage = null)
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = OpenApiUiState.Phase.Error,

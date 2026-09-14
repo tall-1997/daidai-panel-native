@@ -75,6 +75,7 @@ class SubscriptionsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         phase = SubscriptionsUiState.Phase.Error,
@@ -94,6 +95,7 @@ class SubscriptionsViewModel(
                 repo.create(payload)
                 reloadAfterMutation(success = true)
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(errorMessage = friendly(error, "创建失败"))
                 }
@@ -110,6 +112,7 @@ class SubscriptionsViewModel(
                 repo.update(id, payload)
                 reloadAfterMutation(success = true)
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(errorMessage = friendly(error, "保存失败"))
                 }
@@ -126,6 +129,7 @@ class SubscriptionsViewModel(
                 repo.delete(id)
                 reloadAfterMutation()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(busyId = null, errorMessage = friendly(error, "删除失败"))
                 }
@@ -142,6 +146,7 @@ class SubscriptionsViewModel(
                 repo.pull(id)
                 reloadAfterMutation()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         pullingId = null,
@@ -178,6 +183,7 @@ class SubscriptionsViewModel(
                     )
                 }
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
                     it.copy(
                         busyId = null,

@@ -39,9 +39,9 @@ fun LocalNotificationSettingsScreen(
     viewModel: LocalNotificationViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context, prefs) {
-        LocalNotificationViewModel(prefs ?: LocalNotificationPrefs.getInstance(context))
-    }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+LocalNotificationViewModel(prefs ?: LocalNotificationPrefs.getInstance(context))
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     LazyColumn(

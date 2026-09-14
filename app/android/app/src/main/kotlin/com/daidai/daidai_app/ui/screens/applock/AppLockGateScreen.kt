@@ -31,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.daidai.daidai_app.ui.theme.AppColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val MIN_PATTERN_POINTS = 4
 
@@ -219,7 +222,7 @@ fun AppLockGateScreen(
     viewModel: AppLockViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) { AppLockViewModel(context) }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = { AppLockViewModel(context) })
     val state by screenViewModel.uiState.collectAsState()
 
     var method by remember {
@@ -228,6 +231,7 @@ fun AppLockGateScreen(
             else UnlockMethod.Pattern,
         )
     }
+    val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
     var patternPoints by remember { mutableStateOf<List<Int>>(emptyList()) }
 
@@ -238,8 +242,15 @@ fun AppLockGateScreen(
         }
     }
 
-    val backoffActive =
-        state.lockedUntilEpochMs > 0L && System.currentTimeMillis() < state.lockedUntilEpochMs
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.lockedUntilEpochMs) {
+        while (state.lockedUntilEpochMs > 0L && System.currentTimeMillis() < state.lockedUntilEpochMs) {
+            delay(500)
+            nowMs = System.currentTimeMillis()
+        }
+        nowMs = System.currentTimeMillis()
+    }
+    val backoffActive = state.lockedUntilEpochMs > 0L && nowMs < state.lockedUntilEpochMs
 
     Surface(modifier = Modifier.fillMaxSize(), color = AppColors.darkPage) {
         Column(
@@ -296,11 +307,11 @@ fun AppLockGateScreen(
                             // 校验通过即解锁；否则由 ViewModel 记录失败并清空点位于 UI 层处理，
                             // 这里通过重置本地 points 让用户重新绘制。
                             if (!backoffActive) {
-                                if (screenViewModel.verifyPattern(points)) {
-                                    patternPoints = emptyList()
-                                    onUnlocked()
-                                } else {
-                                    patternPoints = emptyList()
+                                patternPoints = emptyList()
+                                scope.launch {
+                                    if (screenViewModel.verifyPattern(points)) {
+                                        onUnlocked()
+                                    }
                                 }
                             }
                         },
@@ -323,10 +334,15 @@ fun AppLockGateScreen(
                     Spacer(Modifier.height(16.dp))
                     Button(
                         onClick = {
-                            if (!backoffActive && screenViewModel.verifyPassword(password)) {
-                                onUnlocked()
-                            } else if (!backoffActive) {
-                                password = ""
+                            if (!backoffActive) {
+                                val candidate = password
+                                scope.launch {
+                                    if (screenViewModel.verifyPassword(candidate)) {
+                                        onUnlocked()
+                                    } else {
+                                        password = ""
+                                    }
+                                }
                             }
                         },
                         enabled = !backoffActive,

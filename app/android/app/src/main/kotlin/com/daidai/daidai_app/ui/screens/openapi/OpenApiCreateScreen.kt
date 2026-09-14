@@ -64,14 +64,14 @@ fun OpenApiCreateScreen(
     onCreated: (OpenApiAppWithSecret) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val resolvedVm = viewModel ?: remember(context) {
+    val resolvedVm = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val config = AppServices.configRepository(context).config.value
         OpenApiWriteViewModel(
             baseUrl = config.serverUrl,
             accessToken = config.accessToken,
             localToken = config.localToken,
         )
-    }
+    })
     val state by resolvedVm.uiState.collectAsStateWithLifecycle()
 
     var name by remember { mutableStateOf("") }
@@ -93,7 +93,7 @@ fun OpenApiCreateScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         CreateScreenTopBar(onBack = onBack)
         Column(
@@ -235,7 +235,7 @@ private fun CreateScreenTopBar(onBack: () -> Unit) {
 
 @Composable
 private fun ScopeChip(label: String, selected: Boolean, onToggle: () -> Unit) {
-    val background = if (selected) AppColors.primary else AppColors.glassCard
+    val background = if (selected) AppColors.primary else MaterialTheme.colorScheme.surface
     val content = if (selected) Color.White else AppColors.slate700
     Box(
         modifier = Modifier

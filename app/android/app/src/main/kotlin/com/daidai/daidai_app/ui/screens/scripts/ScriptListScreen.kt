@@ -67,7 +67,7 @@ fun ScriptListScreen(
     viewModel: ScriptsViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelScriptsRepository(
@@ -77,8 +77,28 @@ fun ScriptListScreen(
             )
         }
         ScriptsViewModel(resolved)
-    }
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    var pendingDelete by remember { mutableStateOf<ScriptFile?>(null) }
+    pendingDelete?.let { file ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除脚本") },
+            text = { Text(
+                if (file.isDirectory) "“${file.name}”是文件夹，删除将移除其中的全部内容，且不可撤销。"
+                else "确定删除脚本“${file.name}”？此操作不可撤销。"
+            ) },
+            confirmButton = {
+                TextButton(onClick = {
+                    screenViewModel.deleteScript(file.path, file.isDirectory)
+                    pendingDelete = null
+                }) { Text("删除", color = AppColors.errorColor) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
+    }
 
     // 内部内容页切换：未接导航，用状态位在列表页与内容页间切换。
     var viewingPath by remember { mutableStateOf<String?>(null) }
@@ -87,7 +107,7 @@ fun ScriptListScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         when {
             // 正在查看某个脚本内容
@@ -127,9 +147,7 @@ fun ScriptListScreen(
                                 },
                                 onToggleExpand = screenViewModel::toggleExpanded,
                                 onRun = screenViewModel::runScript,
-                                onDelete = { f ->
-                                    screenViewModel.deleteScript(f.path, f.isDirectory)
-                                },
+                                onDelete = { f -> pendingDelete = f },
                             )
                         }
                     }
@@ -210,7 +228,7 @@ private fun ScriptNodeRow(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .clickable {
                 if (isDir) onToggleExpand(file.path) else onOpenFile(file.path)
             }

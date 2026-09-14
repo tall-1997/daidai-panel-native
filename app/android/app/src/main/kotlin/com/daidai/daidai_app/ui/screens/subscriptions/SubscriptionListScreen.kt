@@ -69,9 +69,9 @@ fun SubscriptionListScreen(
     viewModel: SubscriptionsViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context) {
-        SubscriptionsViewModel(repository ?: SubscriptionsRepository(context))
-    }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+SubscriptionsViewModel(repository ?: SubscriptionsRepository(context))
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     // 本地导航状态：编辑/新建目标；null 表示在列表模式。
@@ -80,7 +80,7 @@ fun SubscriptionListScreen(
     // 删除确认框的候选订阅。
     var pendingDelete by remember { mutableStateOf<Subscription?>(null) }
 
-    Box(modifier = modifier.fillMaxSize().background(AppColors.lightPage)) {
+    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when {
             editing != null -> SubscriptionDetailScreen(
                 modifier = Modifier.fillMaxSize(),
@@ -263,7 +263,7 @@ private fun SubscriptionCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AppColors.glassCard)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

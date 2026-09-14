@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.daidai.daidai_app.data.model.EnvVar
@@ -56,7 +58,7 @@ fun EnvFormScreen(
     onCancel: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember(context, repository) {
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             PanelEnvsRepository(
@@ -66,20 +68,36 @@ fun EnvFormScreen(
             )
         }
         EnvsViewModel(resolved)
-    }
+    })
+    val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     var name by remember(env.id) { mutableStateOf(env.name) }
     var value by remember(env.id) { mutableStateOf(env.value) }
     var remark by remember(env.id) { mutableStateOf(env.remark) }
     var secret by remember(env.id) { mutableStateOf(env.secret) }
     var enabled by remember(env.id) { mutableStateOf(env.enabled) }
+    var saving by remember { mutableStateOf(false) }
 
     val isEditing = env.id > 0L
+
+    // 提交后等待真实结果：失败显示错误留在本页；成功回调 onSaved 关闭表单。
+    LaunchedEffect(state.errorMessage) {
+        if (saving && state.errorMessage != null) {
+            saving = false
+        }
+    }
+    LaunchedEffect(state.mutationSucceeded) {
+        if (saving && state.mutationSucceeded) {
+            saving = false
+            screenViewModel.consumeMutation()
+            onSaved()
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(AppColors.lightPage)
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -154,10 +172,19 @@ fun EnvFormScreen(
             }
         }
 
+        state.errorMessage?.takeIf { saving || it.isNotBlank() }?.let {
+            Text(
+                it,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+            )
+        }
+
         Button(
             onClick = {
                 val trimmedName = name.trim()
                 if (trimmedName.isEmpty()) return@Button
+                saving = true
                 if (isEditing) {
                     screenViewModel.update(
                         id = env.id,
@@ -169,8 +196,8 @@ fun EnvFormScreen(
                 } else {
                     screenViewModel.create(name = trimmedName, value = value, remark = remark)
                 }
-                onSaved()
             },
+            enabled = !saving,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (isEditing) "保存" else "创建")

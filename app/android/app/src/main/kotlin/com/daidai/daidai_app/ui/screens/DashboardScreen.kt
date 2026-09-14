@@ -162,9 +162,8 @@ private fun DashboardOverviewPage(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: remember {
-        DashboardViewModel(DashboardRepository(context))
-    }
+    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = { DashboardViewModel(DashboardRepository(context))
+    })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
 
     when (val s = state) {
@@ -389,7 +388,7 @@ private fun TaskStatsCard(stats: DashboardStats) {
             StatCell("运行中", stats.runningTasks.toString())
             StatCell("禁用", stats.disabledTasks.toString())
         }
-        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = AppColors.glassCardBorder)
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outline)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -504,7 +503,7 @@ private fun DashboardCard(content: @Composable () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        color = AppColors.glassCard,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

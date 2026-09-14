@@ -4,13 +4,19 @@ import android.content.Context
 import com.daidai.daidai_app.data.localcore.PanelCoreController
 import com.daidai.daidai_app.data.remote.AuthInitRequest
 import com.daidai.daidai_app.data.remote.AuthLoginRequest
+import com.daidai.daidai_app.data.remote.PanelApiException
 import com.daidai.daidai_app.data.remote.PanelHttpClient
+import com.daidai.daidai_app.data.remote.PanelRequests
+import com.daidai.daidai_app.data.remote.PanelSession
 import com.daidai.daidai_app.data.repository.PanelConfigRepository
 import com.daidai.daidai_app.data.repository.PanelConnectionMode
 import com.daidai.daidai_app.ui.screens.LoginRepository
 import com.daidai.daidai_app.ui.screens.LoginResult
 import com.daidai.daidai_app.ui.screens.ServerConfigRepository
 import com.daidai.daidai_app.ui.screens.ServerMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * 阶段 1 应用级装配（wire）。
@@ -40,7 +46,28 @@ object AppServices {
             if (panelConfig != null) return
             val appContext = context.applicationContext
             PanelCoreController.initialize(appContext)
-            panelConfig = PanelConfigRepository(appContext)
+            val repository = PanelConfigRepository(appContext)
+            panelConfig = repository
+            wirePanelSession(repository)
+        }
+    }
+
+    /**
+     * 装配进程级共享会话：所有自包含仓库经 [PanelSession] 取最新 token，
+     * 401 时经 [PanelRequests.refreshAccessToken] 单飞刷新。
+     */
+    private fun wirePanelSession(repository: PanelConfigRepository) {
+        PanelSession.accessTokenProvider = { repository.config.value.accessToken }
+        PanelSession.localTokenProvider = { repository.config.value.localToken }
+        PanelSession.refreshTokenProvider = { repository.config.value.refreshToken }
+        PanelSession.refreshCoordinator = {
+            val cfg = repository.getConfig()
+            val refresh = cfg.refreshToken ?: return@refreshCoordinator false
+            val base = cfg.serverUrl.takeIf { it.isNotBlank() } ?: return@refreshCoordinator false
+            PanelRequests.refreshAccessToken(base, refresh) { access, refreshed ->
+                repository.setAccessToken(access)
+                repository.setRefreshToken(refreshed)
+            }
         }
     }
 
@@ -70,6 +97,28 @@ object AppServices {
             }
             return checkNotNull(loginRepository)
         }
+    }
+
+    /**
+     * 启动期会话探测：存在持久化 access_token 时请求一个受 JWT 保护的端点验证有效性，
+     * 401 则尝试刷新后复验。返回 true 表示可以跳过登录直达主面板。
+     */
+    suspend fun probeExistingSession(): Boolean {
+        val repository = panelConfig ?: return false
+        val cfg = repository.getConfig()
+        if (cfg.accessToken.isNullOrBlank()) return false
+        val base = when (cfg.mode) {
+            PanelConnectionMode.MANAGED_LOCAL ->
+                withContext(Dispatchers.IO) { PanelCoreController.ensureStarted() }
+                    .baseUrl?.takeIf { it.isNotBlank() } ?: return false
+            PanelConnectionMode.REMOTE -> cfg.serverUrl.takeIf { it.isNotBlank() } ?: return false
+        }
+        val probe: suspend () -> Boolean = {
+            runCatching { PanelRequests.execute("GET", "$base/api/users") }.isSuccess
+        }
+        if (probe()) return true
+        if (PanelSession.tryRefresh()) return probe()
+        return false
     }
 
     /**
@@ -107,12 +156,13 @@ object AppServices {
             client().init(AuthInitRequest(username, password))
         }
 
-        override suspend fun login(username: String, password: String): LoginResult {
+        override suspend fun login(username: String, password: String, totpCode: String?): LoginResult {
             val http = client()
-            val response = http.login(AuthLoginRequest(username, password))
+            val response = http.login(AuthLoginRequest(username, password, totpCode))
             val token = response.accessToken
                 ?: throw IllegalStateException("登录响应未包含访问令牌（access_token），请检查面板认证接口")
             configRepository.setAccessToken(token)
+            response.refreshToken?.let { configRepository.setRefreshToken(it) }
             return LoginResult(accessToken = token, username = response.user?.username ?: username)
         }
 
@@ -120,11 +170,13 @@ object AppServices {
             val config = configRepository.getConfig()
             return when (config.mode) {
                 PanelConnectionMode.MANAGED_LOCAL -> {
-                    val status = coreController.ensureStarted()
+                    // 本地运行时启动含 socket 绑定与健康探测睡眠，必须离开主线程。
+                    val status = withContext(Dispatchers.IO) { coreController.ensureStarted() }
                     val baseUrl = status.baseUrl
                     if (baseUrl.isNullOrBlank()) {
                         throw IllegalStateException("本地服务未能启动：${status.message ?: "未知原因"}")
                     }
+                    persistResolvedConnection(baseUrl, status.localToken)
                     PanelHttpClient(baseUrl = baseUrl, localToken = status.localToken)
                 }
                 PanelConnectionMode.REMOTE -> {
@@ -132,8 +184,24 @@ object AppServices {
                     if (baseUrl.isBlank()) {
                         throw IllegalStateException("尚未配置远程服务地址，请先在“配置服务器”页面填写")
                     }
+                    persistResolvedConnection(baseUrl, null)
                     PanelHttpClient(baseUrl = baseUrl)
                 }
+            }
+        }
+
+        /**
+         * 把解析出的连接信息持久化到 [PanelConfigRepository]：
+         * 托管本地模式下 serverUrl/localToken 此前从不落盘，导致模块页
+         * 自包含仓库读到空地址与空 token 而全部失效；这里登录期统一写回，
+         * 让“面板连接”只有配置存储这一个事实来源。
+         */
+        private suspend fun persistResolvedConnection(baseUrl: String, localToken: String?) {
+            configRepository.setServerUrl(baseUrl)
+            if (localToken != null) {
+                configRepository.setLocalToken(localToken)
+            } else {
+                configRepository.setLocalToken(null)
             }
         }
     }

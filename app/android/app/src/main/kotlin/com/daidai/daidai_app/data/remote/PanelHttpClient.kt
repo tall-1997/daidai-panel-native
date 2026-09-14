@@ -12,7 +12,7 @@ import org.json.JSONObject
 class PanelHttpClient(
     baseUrl: String,
     private val localToken: String? = null,
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = PanelRequests.sharedClient,
 ) : PanelApi {
     var baseUrl: String = normalizeBaseUrl(baseUrl)
         set(value) { field = normalizeBaseUrl(value) }
@@ -44,6 +44,7 @@ class PanelHttpClient(
 
     private fun execute(method: String, path: String, json: String? = null): String {
         val builder = Request.Builder().url(baseUrl + path)
+        PanelRequests.originOf(baseUrl + path)?.let { builder.header("Origin", it) }
         localToken?.takeIf { it.isNotBlank() }?.let { builder.header("x-daidai-local-token", it) }
         if (json != null) {
             builder.post(json.toRequestBody(JSON_MEDIA_TYPE))

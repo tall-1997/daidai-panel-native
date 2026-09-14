@@ -70,8 +70,8 @@ data class Task(
             },
             type = json.optString("task_type").takeIf { it.isNotEmpty() } ?: "cron",
             status = json.optDouble("status", 0.0),
-            createdAt = json.optString("created_at"),
-            updatedAt = json.optString("updated_at"),
+            createdAt = json.optString("created_at").takeIf { it.isNotEmpty() && it != "null" } ?: "",
+            updatedAt = json.optString("updated_at").takeIf { it.isNotEmpty() && it != "null" } ?: "",
         )
 
         /** 解析后端 Paginated() 列表响应 {data:[...], total:N} 或直接 {data:[...]}。 */

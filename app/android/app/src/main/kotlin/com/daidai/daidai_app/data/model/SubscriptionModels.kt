@@ -35,7 +35,7 @@ data class Subscription(
                 .takeIf { it.isNotBlank() }
                 ?: json.optString("target_path"),
             enabled = if (json.has("enabled")) json.optBoolean("enabled") else true,
-            lastPullAt = json.optString("last_pull_at")
+            lastPullAt = json.optString("last_pull_at").takeIf { it.isNotEmpty() && it != "null" } ?: ""
                 .takeIf { it.isNotBlank() }
                 ?: json.optString("last_sync"),
         )

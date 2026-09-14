@@ -81,6 +81,7 @@ class ProfileViewModel(
             val user = try {
                 profileDeferred.await()
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 // 未登录或拉取失败：回退到登录态展示。
                 if (hasCredential) {
                     _uiState.value = ProfileUiState.Error(

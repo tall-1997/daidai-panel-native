@@ -17,19 +17,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.daidai.daidai_app.data.localcore.AppLockSession
+import com.daidai.daidai_app.data.repository.PanelConnectionMode
 import com.daidai.daidai_app.data.model.EnvVar
 import com.daidai.daidai_app.data.model.OpenApiApp
 import com.daidai.daidai_app.data.model.Subscription
 import com.daidai.daidai_app.data.model.Task
+import com.daidai.daidai_app.di.AppServices
 import com.daidai.daidai_app.ui.screens.BootScreen
 import com.daidai.daidai_app.ui.screens.DashboardScreen
 import com.daidai.daidai_app.ui.screens.LoginScreen
@@ -46,12 +54,12 @@ import com.daidai.daidai_app.ui.screens.notifications.NotificationListScreen
 import com.daidai.daidai_app.ui.screens.openapi.OpenApiCreateScreen
 import com.daidai.daidai_app.ui.screens.openapi.OpenApiDetailScreen
 import com.daidai.daidai_app.ui.screens.openapi.OpenApiListScreen
+import com.daidai.daidai_app.ui.screens.profile.ProfileScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptListScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptViewScreen
 import com.daidai.daidai_app.ui.screens.security.SecurityScreen
 import com.daidai.daidai_app.ui.screens.settings.SettingsEntry
 import com.daidai.daidai_app.ui.screens.settings.SettingsScreen
-import com.daidai.daidai_app.ui.screens.settings.SettingsViewModel
 import com.daidai.daidai_app.ui.screens.settings.SystemSettingsScreen
 import com.daidai.daidai_app.ui.screens.settings.ThemeSettingsScreen
 import com.daidai.daidai_app.ui.screens.subscriptions.SubscriptionDetailScreen
@@ -62,6 +70,7 @@ import com.daidai.daidai_app.ui.screens.tasks.TaskFormScreen
 import com.daidai.daidai_app.ui.screens.tasks.TaskListScreen
 import com.daidai.daidai_app.ui.screens.users.UserListScreen
 import com.daidai.daidai_app.ui.theme.ThemeController
+import kotlinx.coroutines.launch
 
 /** 顶层路由常量：引导链路 + 全部模块主入口 + 二级（表单/详情）路由。 */
 object Routes {
@@ -84,6 +93,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val SETTINGS_THEME = "settings/theme"
     const val SETTINGS_SYSTEM = "settings/system"
+    const val PROFILE = "profile"
     const val APPLOCK = "applock"
     const val APPLOCK_GATE = "applock/gate"
     const val USERS = "users"
@@ -123,30 +133,58 @@ object NavSelections {
 fun AppNavHost(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
 
+    // 应用锁门禁：启用后（冷启动 / 退后台回前台）锁定态自动压栈到 gate 页。
+    val appLocked by AppLockSession.locked.collectAsStateWithLifecycle()
+    LaunchedEffect(appLocked) {
+        if (appLocked && navController.currentDestination?.route != Routes.APPLOCK_GATE) {
+            navController.navigate(Routes.APPLOCK_GATE) { launchSingleTop = true }
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = Routes.BOOT,
         modifier = modifier,
     ) {
         composable(Routes.BOOT) {
-            BootScreen(onContinue = { navController.navigate(Routes.SERVER_CONFIG) })
+            val context = LocalContext.current
+            var destination by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(Unit) {
+                val config = AppServices.configRepository(context).getConfig()
+                destination = when {
+                    AppServices.probeExistingSession() -> Routes.DASHBOARD
+                    config.mode == PanelConnectionMode.MANAGED_LOCAL || config.serverUrl.isNotBlank() -> Routes.LOGIN
+                    else -> Routes.SERVER_CONFIG
+                }
+                if (destination == Routes.DASHBOARD) {
+                    navController.navigate(Routes.DASHBOARD) {
+                        popUpTo(Routes.BOOT) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            BootScreen(
+                isResolving = destination == null,
+                onContinue = { navController.navigate(destination ?: Routes.SERVER_CONFIG) { launchSingleTop = true } },
+            )
         }
         composable(Routes.SERVER_CONFIG) {
-            ServerConfigScreen(onContinue = { navController.navigate(Routes.LOGIN) })
+            ServerConfigScreen(onContinue = { navController.navigate(Routes.LOGIN) { launchSingleTop = true } })
         }
         composable(Routes.LOGIN) {
             LoginScreen(onContinue = {
                 navController.navigate(Routes.DASHBOARD) {
                     // 进入主面板后清空引导栈，避免返回键回到登录页。
                     popUpTo(Routes.BOOT) { inclusive = true }
+                    launchSingleTop = true
                 }
             })
         }
         composable(Routes.DASHBOARD) {
-            DashboardScreen(navTo = { route -> navController.navigate(route) })
+            DashboardScreen(navTo = { route -> navController.navigate(route) { launchSingleTop = true } })
         }
         composable(Routes.MORE) {
-            MoreEntryListScreen(onOpen = { route -> navController.navigate(route) })
+            MoreEntryListScreen(onOpen = { route -> navController.navigate(route) { launchSingleTop = true } })
         }
 
         // ---- 顶层模块入口（列表 / 只读页，自包含装配） ----
@@ -184,7 +222,25 @@ fun AppNavHost(modifier: Modifier = Modifier) {
             AppLockSettingsScreen()
         }
         composable(Routes.APPLOCK_GATE) {
-            AppLockGateScreen(onUnlocked = { navController.navigateUp() })
+            AppLockGateScreen(onUnlocked = {
+                AppLockSession.unlock()
+                navController.navigateUp()
+            })
+        }
+        composable(Routes.PROFILE) {
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            ProfileScreen(
+                onLogout = {
+                    scope.launch {
+                        AppServices.configRepository(context).clearTokens()
+                        navController.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                },
+            )
         }
         composable(Routes.USERS) {
             UserListScreen()
@@ -270,10 +326,10 @@ private fun settingsRouteFor(entry: SettingsEntry): String? = when (entry) {
  */
 @Composable
 fun MoreEntryListScreen(onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
-    val vm = remember { SettingsViewModel() }
-    val themeMode by vm.uiState.collectAsStateWithLifecycle()
+    val themeMode by ThemeController.mode.collectAsStateWithLifecycle()
 
     val entries = listOf(
+        Triple(Routes.PROFILE, "个人中心", "账号资料与退出登录"),
         Triple(Routes.SETTINGS, "设置", "应用与面板的各项设置入口"),
         Triple(Routes.SECURITY, "安全", "登录日志、在线会话与审计"),
         Triple(Routes.APPLOCK, "应用锁", "密码 / 图案 / 生物识别锁"),
@@ -303,7 +359,7 @@ fun MoreEntryListScreen(onOpen: (String) -> Unit, modifier: Modifier = Modifier)
             color = MaterialTheme.colorScheme.primary,
         )
         Text(
-            text = "设置 / 安全 / 用户 / 系统 等模块入口。当前主题：$themeMode",
+            text = "设置 / 安全 / 用户 / 系统 等模块入口。当前主题：${themeMode.label}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
