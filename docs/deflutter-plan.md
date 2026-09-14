@@ -380,3 +380,158 @@
   →砍；webview→原生 WebView；notification→NotificationManager（代码已含）。
 - **收益**：APK 去 Flutter 后约 **-15 MB+（arm64）**，冷启动提速毫秒级–数百毫秒；
   独立 ABI/runtime 资产不受影响，可逐步（4 步，各自验证/回滚）平稳落地。
+
+---
+
+## 8. CI 改造细化清单（阶段 5-D）
+
+> 本章把第 3/6 章的 CI 改造点落到 **workflow 层、step 级**（step 名 + 当前内容 + 改造后内容），
+> 并标注行号。**行号以本任务核查时（`main@66ba859`）为准；文档后续增删会使行号漂移，执行时以
+> 当时 workflow 实际内容比对。** 本规划只修改 `docs/deflutter-plan.md`，不直接改动 workflow 文件。
+>
+> 约束：去 Flutter 后 **Flutter 引擎/Dart 代码删除**，但 `android release` 的以下能力**必须照常保留**：
+> - 签名（tag 稳定版正式签名 + 证书指纹校验）
+> - 运行时资产/ABI/rootfs 校验（`verify-android-apk-abi.py`、`verify-android-linux-runtime.py` 等）
+> - 真机/模拟器 runtime smoke（`android-runtime-smoke.py run`）
+> 上述内容的 Flutter-only 环节（`--apk`/`--test-apk` 指向 `flutter-apk/` 路径、`flutter build apk`）需改为
+> 指向 Gradle 原生产物路径。
+
+### 8.1 `android-release.yml`（发布主流水线）
+
+关键字段：`FLUTTER_VERSION=3.44.9`；`verify-build` job 内 `flutter pub get / flutter test /
+flutter analyze / flutter build apk`；产物 `build/app/outputs/flutter-apk/`；版本号经
+`FLUTTER_BUILD_NAME`/`FLUTTER_BUILD_NUMBER` 传给 `flutter build apk` 的 `--build-name/--build-number`。
+去 Flutter 后版本号改由 Gradle `-P` 属性注入。
+
+| # | Step 名（现行为准） | 当前内容 | 改造后内容 | 参考行号 |
+|---|---------------------|----------|------------|----------|
+| R1 | `env.FLUTTER_VERSION` | `FLUTTER_VERSION: 3.44.9` | **删除**该 env 项 | 39 |
+| R2 | `Set up Flutter` | `subosito/flutter-action@v2` + `flutter-version: env.FLUTTER_VERSION` + `channel: stable` + `cache: true` | **删除**该 step。Gradle 原生构建不再需要 Flutter SDK，`setup-java/setup-gradle`（`@v4`，gradle 9.1.0）已经具备 | 91–96 |
+| R3 | `Resolve and validate release version`（`id: version`） | 用 `scripts/version.py` 解析 `VERSION`、`ANDROID_VERSION_CODE`、`FLUTTER_BUILD_NAME`、`FLUTTER_BUILD_NUMBER`（行143–144） | 保留 step；**删除 `FLUTTER_BUILD_NAME`/`FLUTTER_BUILD_NUMBER` 输出**（纯 Flutter 概念），改成输出 `GRADLE_APP_VERSION`/`GRADLE_APP_VERSION_CODE` 或直接复用 `VERSION`/`ANDROID_VERSION_CODE` 透传给下面构建 step 的 `-PappVersion=...`；`VERSION.json`/evidence 一致性校验保留（见风险） | 98–169 |
+| R4 | `Resolve Flutter packages` | `working-directory: app` + `flutter pub get` | **删除**该 step。Gradle 构建用 `gradle` 自身依赖解析，不再有 `pubspec` | 272–274 |
+| R5 | `Run Flutter tests` | `working-directory: app` + `flutter test` | **删除**该 step。Dart 测试随引擎移除；Kotlin 单测由下文的 `Run Kotlin tests`（`gradle -p android :app:testReleaseUnitTest`，行284–286）接管，**保留** | 276–278 |
+| R6 | `Analyze Flutter source` | `working-directory: app` + `flutter analyze --no-fatal-infos --no-fatal-warnings` | **删除**该 step。语言静态检查由 Kotlin/Gradle 承担（如 `:app:check`/linter 接入，属新增事项，见 8.4） | 280–282 |
+| R7 | `Build installable release APK` | 每 ABI 循环：`ANDROID_RUNTIME_ABIS=${ABI} FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform "${TARGET}" --split-per-abi --build-name "${FLUTTER_BUILD_NAME}" --build-number "${FLUTTER_BUILD_NUMBER}"`，随后 `gradle -p android :app:assembleReleaseAndroidTest`；`cp "build/app/outputs/flutter-apk/app-${ABI}-release.apk" "…-${SUFFIX}.apk"`，test 从 `build/app/outputs/apk/androidTest/release/app-release-androidTest.apk` 拷出 | 改为**纯 Gradle**：`ANDROID_RUNTIME_ABIS=${ABI} gradle -p android :app:assembleRelease`（约等同于 `:app:assembleRelease`），并把版本号以 `-PappVersion`/`-PappVersionCode` 传给 gradle；`--target-platform`/`--split-per-abi` 的 ABI 维度改由 Gradle 侧 flavor/productFlavor 或 `-Pabi` 决定。**产物路径改为** `app/android/app/build/outputs/apk/release/app-${ABI}-release.apk`（主 APK）与 `…/apk/release/app-${ABI}-release-androidTest.apk`（androidTest，若仍按 ABI 分开产出）；`cp` 目标文件名（`daidai-panel-native-…-${SUFFIX}.apk`）**保持不变**，只改源路径 | 311–322 |
+| R8 | `Extract and verify APK runtime metadata` | `unzip` APK 内 `assets/manifest.json` 等 + `verify-runtime-contract.go --apk "${APK_SOURCE}"` + `verify-android-apk-abi.py --apk "${APP_APK_NAME}"`（arm64/x86_64 两个） | **保留 step，仅改源路径**到 Gradle 产物同名文件（`${APP_APK_NAME}` 仍指向 ../ 下重命名后的 APK，实际不变）；若 ABI 产物命名有变，`X64_APK_NAME`/`APP_APK_NAME` 赋值处（行132、344–345）随之改 | 324–352 |
+| R9 | `Verify release APK signing certificate` | 用 `apksigner` 校验证书 `KEYSTORE_CERT_SHA256`，`if: signing_required` | **保留不变**（纯 Gradle 签名后 apksigner 校验逻辑复用） | 354+ |
+| R10 | `Upload signed candidate APKs` | `actions/upload-artifact@v4` 上传 `APP_APK_NAME`/`TEST_APK_NAME`/x86_64 与 `android-update.json`/runtime 资产/`release/apk-metadata/**` | **保留不变**（路径引用的是 ../ 重命名后产物，与 R7 的 `cp` 一致即可） | 410–430 |
+| R11 | `Run x86_64 candidate runtime smoke`（x86 模拟器）+ x86-device/stable-device 真机 smoke | 用下载下来的 candidate APK 经 `android-runtime-smoke.py run --apk candidate/…` | **保留 step**（smoke/签名/资产校验必须留存）；仅当候选 APK 文件名/子路径随 R7 变化时同步 `--apk`/`--test-apk` 引用 | 432–460、566–597 |
+| R12 | `Generate final release evidence` / `Verify final release evidence gates` / `Create or update GitHub Release` | 汇总 `release-evidence-${VERSION}.tar.gz`、生成 `release-notes.md`（读 `CHANGELOG.md`）、`gh release create --prerelease` 附 APK + sha256 | **保留不变**（引用 ./ 下 APK 文件名，不受 Flutter 影响） | 599–808 |
+
+### 8.2 `android-device-smoke.yml`（运行时 smoke 独立流水线）
+
+| # | Step 名（现行为准） | 当前内容 | 改造后内容 | 参考行号 |
+|---|---------------------|----------|------------|----------|
+| S1 | `env.FLUTTER_VERSION` | `FLUTTER_VERSION: 3.44.9` | **删除** | 67 |
+| S2 | `subosito/flutter-action@v2` | flutter-version + stable + cache | **删除**该 step（`setup-java/setup-gradle` 已在） | 99–103 |
+| S3 | `Prepare embedded runtimes and Go Core` | 内含 `flutter pub get`（行128） | 保留 step，**删行128 的 `flutter pub get`**；runtime 准备脚本（`prepare-android-*-runtime.sh`、yaegi）照常 | 117–128 |
+| S4 | `Build release application and instrumentation APKs` | `flutter build apk --release --target-platform android-arm64 && gradle -p android :app:assembleReleaseAndroidTest` | 改为 **`gradle -p android :app:assembleRelease :app:assembleReleaseAndroidTest`**（arm64 默认 ABI）；产物落 Gradle 原生目录 | 129–131 |
+| S5 | `Verify smoke driver dry-run` / `Test smoke driver` | `--apk app/build/app/outputs/flutter-apk/app-release.apk` + `--test-apk app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk` | **保留 step，改 `--apk`/`--test-apk` 源路径**为 `app/android/app/build/outputs/apk/release/app-release.apk` 与 `…/androidTest/release/app-release-androidTest.apk`（与 R7 规则一致） | 132–142 |
+| S6 | `upload-artifact: android-runtime-smoke-apks` | path 含 `app/build/app/outputs/flutter-apk/app-release.apk` | **改 path**为 Gradle 原生产物路径 | 143–148 |
+| S7 | `Build x86_64 release APKs` | `ANDROID_RUNTIME_ABIS=x86_64 FLUTTER_SPLIT_PER_ABI=true flutter build apk --release --target-platform android-x64 --split-per-abi` + gradle androidTest；产物 `build/app/outputs/flutter-apk/app-x86_64-release.apk` | 改为 **`ANDROID_RUNTIME_ABIS=x86_64 gradle -p android -Pabi=x86_64 :app:assembleRelease :app:assembleReleaseAndroidTest`**；产物 `app/android/app/build/outputs/apk/release/app-x86_64-release.apk` | 255–270 |
+| S8 | `Run x86_64 runtime smoke`（emulator） | `--apk app/build/app/outputs/flutter-apk/app-x86_64-release.apk` + `--test-apk …/androidTest/release/app-release-androidTest.apk` | **保留 step，改路径**为 Gradle 原生产物 | 298–307 |
+| S9 | `stable-device` 真机 job | `--apk smoke-apks/flutter-apk/app-release.apk` + `--test-apk smoke-apks/apk/androidTest/release/app-release-androidTest.apk` | **保留 step，改路径**（S6 上传的目录名、子路径若变则同步） | 179–184 |
+
+### 8.3 `ci.yml`：`flutter-quality` job 删除影响
+
+- `flutter-quality` job（行192–219）：name `Flutter analyze and test`，`needs: changes`，
+  `if: needs.changes.outputs.flutter == 'true'`，内含 `flutter pub get`、`flutter analyze`、`flutter test`。
+  **删除后**：
+  - **`quality-gate` job 的 `needs:`（行385–391）必须移除 `flutter-quality`**，否则 `needs.*` 引用不存在的 job 导致 workflow 校验失败。当前 `quality-gate` 还 `needs` changes/go-quality/go-race/route-contract/kotlin-test/panel-web/release-scripts，删后保留其余项。
+  - **`changes` job 的 `flutter` filter 输出（行35）与 filter 项（行61–64：`ci.yml` / `app/lib/**` / `app/test/**`）**：去 Flutter 后 `app/lib/`、`app/test/`（Dart 目录）也随之删除。建议**移除该 filter 项**及 job outputs 中的 `flutter` 键（行35、61–64），避免残留对已删目录/不存在的 DIFF key。属性项在 `dorny/paths-filter` 中键不作为不存在时会报错或空匹配，需同步清理。
+  - `FLUTTER_VERSION` env（行21）：删除。
+  - Dart 静态检查/单测在去 Flutter 后无对应物；若需等价门禁，可在 `kotlin-test`/`panel-web` 或新增 Kotlin lint job 中补（属新增事项）。
+- 注意：`ci.yml` push 分支为 `main`，改动 workflow 需要与 `android-device-smoke.yml`/`android-release.yml` 对 `app/lib/**` 等 path filter 一并核查（见 8.4 风险）。
+
+### 8.4 需一并核查的跨文件引用与风险
+
+1. **`paths` 触发过滤**：三个 workflow 的 `on.*.paths` 内的 `app/**`、`app/android/**`、`app/lib/**`
+   等过滤器在引擎移除后需要逐条核对；`app/lib/**`、`app/test/**` 属 Dart 目录，删除后该项应移除或改指 `app/android/**`。
+2. **版本号单一来源**（第 6 节风险 6 落地）：改 `-P` 注入后必须保证 `VERSION.json → Gradle
+   `versionCode/versionName` → release-evidence` 三方一致，否则 tag 校验 `GITHUB_REF_NAME == v${VERSION}`
+   （release 行107–110）失败。
+3. **产物路径漂移**（第 6 节风险 7 落地）：所有 `flutter-apk/` 引用（R7、S4、S5、S7、S8、S9）统一改成
+   Gradle 原生 `build/outputs/apk/`，否则发布/上传/smoke 会取到旧目录（空文件或残留）。
+4. **`android-abi-matrix.py` 的 `flutter_target` / `release_suffix`**：`runtime/android-abi-matrix.json`
+   里 `flutter_target`（arm64→`android-arm64`、x86_64→`android-x64`）在纯 Gradle 后不再用于 flutter，
+   但 ABI→`release_suffix`/Gradle productFlavor 的映射仍需保留以生成发行文件名。
+5. **保留项重申**：签名（R9）与运行时资产/ABI 校验（R8、verify-android-apk-abi.py）**不得随去
+   Flutter 一并删除**；smoke（R11、S5/S8/S9）同样保留，仅替换 `--apk/--test-apk` 的路径来源。
+
+
+## 9. Gradle 去 Flutter 细化清单
+
+> 本节按当前仓库实际状态逐行盘点 `app/android/settings.gradle.kts` 与
+> `app/android/app/build.gradle.kts` 里所有 Flutter 引用点（删除 / 替换 / 保留），
+> 给出替换后的目标代码与可回滚的切换步骤、验证命令。配套辅助开关文件已新增于
+> `app/android/deflutter.gradle.kts`（见 §9.4），本规划阶段**不改动任何现有构建文件**，
+> 下述改动需在 launcher 切换（§3 起动流程）落地后的集成阶段再执行，当前 branches 均保留。
+
+### 9.1 Flutter 引用点清单（删除 / 替换）
+
+#### app/android/settings.gradle.kts
+
+| 行 | 现状 | 处理 |
+|----|------|------|
+| L1–18 | `pluginManagement { val flutterSdkPath = run { 读 local.properties 的 flutter.sdk } ... includeBuild("$flutterSdkPath/packages/flutter_tools/gradle") }` | **删除整段**。同时去掉读 `local.properties` 的 `flutter.sdk`/`flutter.versionName`/`flutter.versionCode` 依赖（这些键将不再需要）。`repositories { google(); mavenCentral(); gradlePluginPortal() }` 保留 |
+| L21 | `id("dev.flutter.flutter-plugin-loader") version "1.0.0"` | **删除**。`com.android.application` / kotlin / compose 插件保留 |
+
+> 目标 `settings.gradle.kts`：`pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }` +
+> `plugins { id("com.android.application") version "9.0.1" apply false; ... }` + `include(":app")`，不再出现任何 Flutter 词。
+
+#### app/android/app/build.gradle.kts
+
+| 行 | 现状 | 处理 |
+|----|------|------|
+| L13–14 | 注释「The Flutter Gradle Plugin must be applied…」+ `id("dev.flutter.flutter-gradle-plugin")` | **删除**（注释一并删） |
+| L53 | `val flutterSplitPerAbi = System.getenv("FLUTTER_SPLIT_PER_ABI") == "true"` | **替换**为 `val splitPerAbi = false`（去 Flutter 命名的常量）。ABI 选择已完全由 `requestedAbis` 驱动 |
+| L66 | `ndkVersion = flutter.ndkVersion` | **替换**为 `ndkVersion = deflutterNdkVersion`（= `"28.2.13676358"`，与当前 `flutter.ndkVersion` 解析值一致，保持 CMake/打包行为不变；与 native PRoot/rootfs 的 `android-ndk-r27` 工具链无冲突，因那是预编译产物仅做校验） |
+| L86–87 | `versionCode = flutter.versionCode` / `versionName = flutter.versionName` | **替换**为 `versionCode = deflutterVersionCode` / `versionName = deflutterVersionName`。推荐经 `scripts/version.py` 由仓库根 `VERSION.json` 读取（`version="2.0.0"` → versionName、`androidVersionCode=2000000` → versionCode），与现有发布口径严格一致；集成时亦可先写死 `2000000` / `"2.0.0"` |
+| L88–92 | `ndk { if (!flutterSplitPerAbi) { abiFilters += requestedAbis } }` | **替换**为 `ndk { abiFilters += requestedAbis }`（删去 flutter split 条件分支；Flutter 移除后不存在 per-ABI split 需求，ABI 始终由 `ANDROID_RUNTIME_ABIS` 决定并保持单 ABI 打包） |
+| L509–511 | `flutter { source = "../.." }` | **删除**整个块 |
+
+> 目标 `app/build.gradle.kts`：去掉 `dev.flutter.flutter-gradle-plugin`、`flutter.*` 三处属性与
+> `flutter { source }` 块；其余（`packageLocalPanelWeb`、`packageSelectedRuntimeAssets`、rootfs assets、
+> CMake、AIDL、`buildConfig RUNTIME_LINUX_MIRRORS/RUNTIME_UBUNTU_ARCHES/PACKAGED_RUNTIME_ABIS`、
+> `jniLibs`、签名、混淆）全部不动。
+
+### 9.2 保留清单（native assets 相关，务必原样保留）
+
+以下任务 / 配置属于 Compose 原生运行时打包，**不得**随去 Flutter 删除：
+
+- `installLocalPanelWebDependencies` / `buildLocalPanelWeb` / `packageLocalPanelWeb`（Panel Web 打包）
+- `packageSelectedRuntimeAssets`（按 `requestedAbis` 选 ABI runtime 资产)
+- `verifyLocalPanelWeb` / `verifyRuntimeMetadata` / `verifyLinuxRootfsRuntime`（校验）
+- `preBuild` 上对上述任务的 `dependsOn` 接线（L483–488）
+- `sourceSets.main.assets` 三个目录：`../../../runtime`、
+  `generated/localWebAssets`、`generated/runtimeAssets`（L159–170）
+- `packaging { jniLibs { useLegacyPackaging; excludes libpython_exec.so; keepDebugSymbols "**/*.so" } }`（L124–131）
+- `externalNativeBuild { cmake { path = src/main/jni/CMakeLists.txt } }`（L153–157）及
+  `defaultConfig.externalNativeBuild.cmake.arguments`（L93–97）
+- `buildFeatures { aidl; buildConfig; compose }`（L141–145）与
+  `defaultConfig.buildConfigField` RUNTIME_UBUNTU_ARCHES / RUNTIME_LINUX_MIRRORS / PACKAGED_RUNTIME_ABIS（L147–151）
+- `androidResources.ignoreAssetsPattern`（L133–135）、签名 `signingConfigs.release` / `buildTypes.release`（L100–122）
+- `app/android/build.gradle.kts`（根 Android 脚本）**本就无 Flutter 引用**，完全不动
+
+### 9.3 切换步骤（集成阶段按序执行，每步可回滚）
+
+1. **改 settings**：删 `pluginManagement` 的 flutterSdkPath/includeBuild 段与
+   `flutter-plugin-loader` 插件声明。验证 `gradlew.bat :app:dependencies` 不再拉 flutter 插件。
+2. **改 app/build.gradle.kts**：删 `flutter-gradle-plugin`；三处 `flutter.*` 换静态值；
+   `flutter { source }` 删除。在文件顶部 `apply(from = rootProject.file("deflutter.gradle.kts"))`，
+   并把 `-Pdeflutter=true` 传入构建以读 `definitiveDeflutter`/`isDeflutter` 走原生分支。
+3. **校验**：`cd app/android && cmd /c "set JAVA_HOME=...jdk17...&& set ANDROID_RUNTIME_ABIS=x86_64&& set PATH=node20;%PATH%&& gradlew.bat :app:assembleRelease"`。
+   核对产物 `build/app/outputs/.../*.apk` 存在、`RUNTIME_*` BuildConfig 值正确、native `.so` 齐全。
+4. **收尾**：删 `local.properties` 的 `flutter.sdk`/`flutter.versionName`/`flutter.versionCode`；
+   确认 `android-abi-matrix.json`、`ANDROID_RUNTIME_ABIS` 路径仍驱动打包。
+
+### 9.4 辅助开关文件 app/android/deflutter.gradle.kts（本阶段已新增，未引用）
+
+仅定义布尔开关，供后续集成低风险切换使用，当前不被任何构建脚本引用（纯评估载体）：
+
+- `ext.definitiveDeflutter`：默认 `false`；集成时置 `true`（`-Pdeflutter=true`）走原生构建分支。
+- `ext.isDeflutter`：与 `definitiveDeflutter` 同值，供 `app/build.gradle.kts` 语义化读取。
+- `ext.deflutterVersionName / deflutterVersionCode / deflutterNdkVersion`：
+  `"2.0.0"` / `2000000` / `"28.2.13676358"`，作为去 Flutter 后的静态版本/工具链来源，供集成核对。
+
+该文件行尾与同目录 `settings.gradle.kts`/`build.gradle.kts` 一致（CRLF），当前对现有构建零影响。
