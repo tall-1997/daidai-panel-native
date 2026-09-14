@@ -120,3 +120,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本地 Flutter 工具链位于 `/opt/flutter`（3.44.9），使用前需 `git config --global --add safe.directory /opt/flutter`；pub 下载用 `PUB_HOSTED_URL=https://pub.flutter-io.cn`、`FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` 提速。
   - Flutter 3.44.9 的 `flutter analyze` 默认将 info 级 lint 视为失败；CI analyze 统一使用 `flutter analyze --no-fatal-infos --no-fatal-warnings`（与 `app/.github/workflows/build.yml` 既有约定一致）。
   - 客户端默认视觉风格为 `AppVisualStyle.miuix`，`liquidGlass` 为可选；MIUIX 主题经 `AppMiuixTheme` 在 `MaterialApp.builder` 注入，明暗取自 `MaterialApp.themeMode` 解析后的 `Theme.of(context).brightness`。
+
+[Project Knowledge Summary]
+- Date: 2026-09-14
+- Context: Discovered by Agent while de-Fluttering CI (phase-5 Step D); two CI roundtrips were lost to APK output paths
+- Category: Build Methods
+- Instructions:
+  - app/android/build.gradle.kts 将根 build 目录重定位到 `app/build/`，每个子模块为 `app/build/<moduleName>`：`:app` 的 APK/androidTest/单测报告实际落在 `app/build/app/outputs/...`（与旧 flutter-apk 同一棵树），写 CI 路径时必须用它，`app/android/app/build/...` 是错的。
+  - 去 Flutter 后版本号来源：app/android/app/build.gradle.kts 直接用 JsonSlurper 读仓库根 VERSION.json（version → versionName，androidVersionCode → versionCode），ndkVersion 钉在 28.2.13676358；改版本只动 VERSION.json。
+  - AGP 9.0.1 单 ABI（abiFilters）构建产物固定名 `app-release.apk`/`app-release-androidTest.apk`，无 per-ABI 后缀；发布循环里靠 ANDROID_RUNTIME_ABIS 每次重建后立即 cp 改名。
