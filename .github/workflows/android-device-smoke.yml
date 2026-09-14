@@ -259,7 +259,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import zipfile
-          apk = "android/app/build/outputs/apk/release/app-release.apk"
+          apk = "build/app/outputs/apk/release/app-release.apk"
           z = zipfile.ZipFile(apk)
           runtime = [n for n in z.namelist() if n.startswith("assets/android-runtime/")]
           for n in sorted(runtime):
