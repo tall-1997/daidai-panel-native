@@ -21,7 +21,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertNotIn(":app:testDebugUnitTest", self.workflow)
         self.assertIn(":app:assembleReleaseAndroidTest", self.workflow)
         self.assertIn(
-            'cp android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"',
+            'cp build/app/outputs/apk/androidTest/release/app-release-androidTest.apk "../daidai-panel-native-${VERSION}-${RELEASE_CHANNEL}-${SUFFIX}-androidTest.apk"',
             self.workflow,
         )
 
@@ -57,7 +57,7 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("android-abi-matrix.py list release", self.workflow)
         self.assertIn('get "${ABI}" release_suffix', self.workflow)
         self.assertIn('gradle -p android :app:assembleRelease :app:assembleReleaseAndroidTest', self.workflow)
-        self.assertIn('android/app/build/outputs/apk/release/app-release.apk', self.workflow)
+        self.assertIn('build/app/outputs/apk/release/app-release.apk', self.workflow)
         self.assertNotIn('flutter build apk', self.workflow)
         self.assertNotIn('flutter-action', self.workflow)
         # 去 Flutter 后产物必须不含 Flutter 引擎

@@ -125,7 +125,7 @@ jobs:
       - name: Verify smoke driver dry-run
         run: |
           python3 scripts/android-runtime-smoke.py dry-run \
-            --apk app/android/app/build/outputs/apk/release/app-release.apk \
+            --apk app/build/app/outputs/apk/release/app-release.apk \
             --test-apk app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk \
             --matrix-id "${DEVICE_MATRIX_ID}" \
             --expected-api "${DEVICE_EXPECTED_API}" \
@@ -137,8 +137,8 @@ jobs:
         with:
           name: android-runtime-smoke-apks
           path: |
-            app/android/app/build/outputs/apk/release/app-release.apk
-            app/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+            app/build/app/outputs/apk/release/app-release.apk
+            app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -173,8 +173,8 @@ jobs:
           ANDROID_SERIAL: ${{ inputs.physical_device_serial }}
         run: |
           python3 scripts/android-runtime-smoke.py run \
-            --apk smoke-apks/apk/release/app-release.apk \
-            --test-apk smoke-apks/apk/androidTest/release/app-release-androidTest.apk \
+            --apk smoke-apks/release/app-release.apk \
+            --test-apk smoke-apks/androidTest/release/app-release-androidTest.apk \
             --matrix-id "${DEVICE_MATRIX_ID}" \
             --expected-api "${DEVICE_EXPECTED_API}" \
             --expected-page-size "${DEVICE_EXPECTED_PAGE_SIZE}" \
@@ -283,7 +283,7 @@ jobs:
           disable-animations: true
           script: >-
             python3 scripts/android-runtime-smoke.py run
-            --apk app/android/app/build/outputs/apk/release/app-release.apk
+            --apk app/build/app/outputs/apk/release/app-release.apk
             --test-apk app/build/app/outputs/apk/androidTest/release/app-release-androidTest.apk
             --matrix-id api30-x86_64-4k
             --expected-api 30
