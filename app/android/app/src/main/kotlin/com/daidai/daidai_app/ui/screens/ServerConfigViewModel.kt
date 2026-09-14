@@ -48,7 +48,7 @@ class ServerConfigViewModel(
         val state = _uiState.value
         val url = state.remoteUrl.trim()
         if (state.mode == ServerMode.Remote && !isValidUrl(url)) {
-            _uiState.update { it.copy(errorMessage = "请输入有效的远程服务 URL（例如 https://example.com）") }
+            _uiState.update { it.copy(errorMessage = "请输入有效的 HTTPS 远程服务 URL（本机调试可用 http://127.0.0.1）") }
             return
         }
 
@@ -70,8 +70,15 @@ class ServerConfigViewModel(
         }
     }
 
+    // 与 network_security_config.xml 对齐：明文 HTTP 仅限本机/模拟器回环地址。
+    private val cleartextAllowedHosts = setOf("localhost", "127.0.0.1", "::1", "10.0.2.2", "10.0.3.2")
+
     private fun isValidUrl(value: String): Boolean = runCatching {
         val url = value.toHttpUrlOrNull() ?: return false
-        (url.scheme == "https" || url.scheme == "http") && url.host.isNotBlank()
+        when (url.scheme) {
+            "https" -> url.host.isNotBlank()
+            "http" -> url.host.isNotBlank() && url.host.lowercase() in cleartextAllowedHosts
+            else -> false
+        }
     }.getOrDefault(false)
 }
