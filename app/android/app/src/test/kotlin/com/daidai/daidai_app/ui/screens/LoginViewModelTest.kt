@@ -44,7 +44,7 @@ class LoginViewModelTest {
             initCalls.add(username to password)
             needInit = false
         }
-        override suspend fun login(username: String, password: String): LoginResult =
+        override suspend fun login(username: String, password: String, totpCode: String?): LoginResult =
             LoginResult(accessToken = "token-$username", username = username).also {
                 loginCalls.add(username to password)
             }
