@@ -118,7 +118,11 @@ object PanelRequests {
     }
 
     /** 刷新 access_token（Authorization: Bearer <refresh_token>），成功持久化并返回 true。 */
-    suspend fun refreshAccessToken(baseUrl: String, refreshToken: String, onRefreshed: (String, String?) -> Unit): Boolean {
+    suspend fun refreshAccessToken(
+        baseUrl: String,
+        refreshToken: String,
+        onRefreshed: suspend (String, String?) -> Unit,
+    ): Boolean {
         val body = runCatching {
             execute(
                 method = "POST",
