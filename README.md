@@ -33,7 +33,7 @@ Android versionCode：**2000000**
 
 ## 核心能力
 
-- Flutter UI 统一管理 Android 本地实例和远程呆呆面板。
+- 纯原生 Kotlin + Jetpack Compose UI（已去除 Flutter 引擎与 Dart 代码），统一管理 Android 本地实例和远程呆呆面板。
 - 本地 Kotlin fallback 运行于 Android `:panel` 独立进程，并监听动态 `127.0.0.1` 端口。
 - **内置 Linux 终端**：NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，无需依赖 Termux。
 - 支持任务、Cron、脚本、日志、环境变量、订阅、通知、用户、安全、SSH、Open API、平台令牌和备份恢复。
@@ -64,7 +64,7 @@ Android versionCode：**2000000**
 - 默认 Linux 包管理器镜像源为华为云/阿里云/npmmirror，可在「我的 → 依赖管理」页右上角切换。
 - 依赖 glibc、桌面 Linux API 或不兼容 ARM64 的原生扩展可能无法使用。
 - APK 内置 runtime 随 App 更新，本地实例不提供后端自更新或 runtime 卸载。
-- 持续调度开启时使用可见 Foreground Service；普通后台模式会暂停 Flutter 连接轮询并降低 fallback 调度唤醒频率。
+- 持续调度开启时使用可见 Foreground Service；普通后台模式会暂停连接轮询并降低 fallback 调度唤醒频率。
 - GitHub 云 runner 支持 x86_64 Android 模拟器矩阵，随正式发布门禁执行；不支持 ARM64 模拟器，ARM64 真机矩阵以 blocked evidence 如实记录，真机证据可通过 self-hosted runner 补充。
 
 ## 仓库与分支
@@ -99,13 +99,13 @@ Android versionCode：**2000000**
 2. `Android Build and Release` snapshot
 3. `Android Device Runtime Smoke`
 
-正式发布经 `Android Build and Release` 的 `workflow_dispatch` 执行 `prerelease` 通道，工作流验证版本、JKS、证书指纹、Go Core、Flutter、Kotlin、AAR、运行时契约、APK 元数据、SHA-256 和同提交设备证据后创建正式签名 Release；无自托管 ARM64 真机 runner 时，v1.0.19/v1.0.20 均按此路径发布，全绿后由维护者将 Release 置为 Latest 且非预发布。`stable` 通道由版本 tag 推送触发（tag 必须等于 `VERSION.json` 的 `v{VERSION}`），STRICT 全量校验后自动创建 Stable Release，需自托管 ARM64 真机证据。
+正式发布经 `Android Build and Release` 的 `workflow_dispatch` 执行 `prerelease` 通道，工作流验证版本、JKS、证书指纹、Go Core、Kotlin、AAR、运行时契约、APK 元数据、SHA-256 和同提交设备证据后创建正式签名 Release；无自托管 ARM64 真机 runner 时，v1.0.19/v1.0.20 均按此路径发布，全绿后由维护者将 Release 置为 Latest 且非预发布。`stable` 通道由版本 tag 推送触发（tag 必须等于 `VERSION.json` 的 `v{VERSION}`），STRICT 全量校验后自动创建 Stable Release，需自托管 ARM64 真机证据。
 
 ## 目录结构
 
 | 路径 | 用途 |
 | --- | --- |
-| `app/` | Flutter App、Android Host、Kotlin fallback 和移动端测试 |
+| `app/` | Android Host（纯 Kotlin + Compose）、Kotlin fallback 和移动端测试 |
 | `app/android/app/src/main/jniLibs/` | NDK 自编译原生二进制（PRoot、BusyBox、Talloc、libandroid-shmem） |
 | `app/android/app/src/main/assets/android-runtime/` | 嵌入式 Linux 运行时资产（Ubuntu rootfs、Manifest） |
 | `panel/server/` | upstream Go 后端源码，作为业务 API 兼容基线参考（不再编译进 APK） |
@@ -123,8 +123,9 @@ CI 使用以下工具链：
 
 | 工具 | 版本 |
 | --- | --- |
-| Flutter | 3.44.9 stable |
-| Dart | Flutter 3.44.9 内置版本 |
+| Kotlin | 2.2.21 |
+| AGP | 9.0.1 |
+| Compose BOM | 2024.09.03（miuix 0.8.8） |
 | Go | 1.25.0 |
 | Java | Temurin 17 |
 | Gradle | 9.1.0 |
@@ -164,13 +165,10 @@ go -C panel/server vet ./...
 go -C panel/server test -race ./mobilecore ./router ./handler ./service ./database
 ```
 
-### 3. 测试 Flutter
+### 3. 运行 Kotlin 单元测试
 
 ```bash
-cd app
-flutter pub get
-flutter analyze
-flutter test
+gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
 ```
 
 ### 4. 准备 Android runtime
@@ -182,26 +180,22 @@ bash scripts/prepare-android-ubuntu-rootfs.sh
 bash scripts/prepare-android-yaegi-runtime.sh
 ```
 
-### 5. 运行 Kotlin 单元测试
+### 5. 构建 Android release APK
 
-```bash
-gradle -p app/android :app:testReleaseUnitTest --no-daemon --stacktrace
-```
-
-### 6. 构建 ARM64 release APK
+单 ABI 构建（驱动打包所需的所有 ABI 循环重复执行）：
 
 ```bash
 cd app
-flutter build apk --release --target-platform android-arm64
+ANDROID_RUNTIME_ABIS=arm64-v8a gradle -p android :app:assembleRelease --no-daemon --stacktrace
 ```
 
-Flutter APK 输出：
+APK 输出：
 
 ```text
-app/build/app/outputs/flutter-apk/app-release.apk
+app/build/app/outputs/apk/release/app-release.apk
 ```
 
-### 7. 构建本机 Panel Web
+### 6. 构建本机 Panel Web
 
 ```bash
 cd panel/web
@@ -220,7 +214,6 @@ Android Gradle 构建会自动将本机 Web 资源打包到 APK 的 `/local-ui/`
 Quality 根据改动路径执行：
 
 - Go test、vet 和 race
-- Flutter analyze 与 tests
 - Kotlin unit tests
 - 路由契约检查
 - Panel Web build
@@ -329,7 +322,7 @@ gh workflow run android-release.yml \
 
 | 组件 | 来源 | 用途 |
 | --- | --- | --- |
-| Flutter App | [linzixuanzz/Dumb-Panel-APP](https://github.com/linzixuanzz/Dumb-Panel-APP) | 移动端 UI 与管理体验基础 |
+| Flutter App | [linzixuanzz/Dumb-Panel-APP](https://github.com/linzixuanzz/Dumb-Panel-APP) | 移动端 UI 与管理体验基础（历史上游，已迁移为纯 Kotlin + Compose 原生） |
 | Go 面板 | [linzixuanzz/daidai-panel](https://github.com/linzixuanzz/daidai-panel) | 任务、脚本、依赖和订阅核心能力基础 |
 
 ## 许可证

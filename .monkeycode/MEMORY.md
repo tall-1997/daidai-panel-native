@@ -129,3 +129,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - app/android/build.gradle.kts 将根 build 目录重定位到 `app/build/`，每个子模块为 `app/build/<moduleName>`：`:app` 的 APK/androidTest/单测报告实际落在 `app/build/app/outputs/...`（与旧 flutter-apk 同一棵树），写 CI 路径时必须用它，`app/android/app/build/...` 是错的。
   - 去 Flutter 后版本号来源：app/android/app/build.gradle.kts 直接用 JsonSlurper 读仓库根 VERSION.json（version → versionName，androidVersionCode → versionCode），ndkVersion 钉在 28.2.13676358；改版本只动 VERSION.json。
   - AGP 9.0.1 单 ABI（abiFilters）构建产物固定名 `app-release.apk`/`app-release-androidTest.apk`，无 per-ABI 后缀；发布循环里靠 ANDROID_RUNTIME_ABIS 每次重建后立即 cp 改名。
+
+[Project Knowledge Summary]
+- Date: 2026-09-14（2026-09-15 更新）
+- Context: Discovered by Agent after completing phase-5 de-Flutter; the repository is now pure native Kotlin + Compose (no Flutter engine / Dart code)
+- Category: Build Methods | Operations & Deployment
+- Instructions:
+  - **去 Flutter 已完成**：Android 端不再有 Flutter 引擎与 Dart 代码（`app/lib`、`app/test`、pubspec.*、`.dart_tool` 已删）；入口为 `NativeMainActivity`（ComponentActivity），launcher/Manifest 均为纯原生；构建走纯 Gradle `:app:assembleRelease`，不再有 `flutter build apk`/`flutter analyze`/`flutter test`。
+  - 版本号唯一来源为仓库根 `VERSION.json`（`version`→versionName、`androidVersionCode`→versionCode），ndkVersion 钉在 28.2.13676358；`app/android/deflutter.gradle.kts` 辅助开关文件已随去 Flutter 一并删除。
+  - CI（ci.yml / android-release.yml）已去 Flutter：Kotlin 单测直接 `gradle -p android :app:testReleaseUnitTest`，release 构建循环 `ANDROID_RUNTIME_ABIS=<abi> gradle -p android :app:assembleRelease ...`，并对 APK 强制校验不包含 `libflutter.so`。
+  - `app/ios/` 残留未删（跨端决策另行评估，见 docs/ios-residue-assessment.md）；`app/assets`（Panel Web 本地资源）保留，与 Flutter 引擎无关。
+  - 旧的 flutter_miuix 主题类记忆（2026-09-11 条目）为历史记录：`app/pubspec.yaml` 已删除，不再有 Flutter/Dart 依赖配置；MIUIX 视觉风格现由 Compose 侧 `top.yukonga.miuix.kmp:miuix-android` 提供。

@@ -535,3 +535,55 @@ flutter analyze / flutter build apk`；产物 `build/app/outputs/flutter-apk/`�
   `"2.0.0"` / `2000000` / `"28.2.13676358"`，作为去 Flutter 后的静态版本/工具链来源，供集成核对。
 
 该文件行尾与同目录 `settings.gradle.kts`/`build.gradle.kts` 一致（CRLF），当前对现有构建零影响。
+
+---
+
+## 9. 执行完成记录（2026-09-14）
+
+> 阶段 5（去 Flutter）已在 2026-09-14 按「分步执行计划」全部落地，Android 端现以纯原生
+> Gradle/Kotlin/Compose 形态交付。以下按计划章节逐一记录提交与验证结论。
+
+### 9.1 阶段落地与提交
+
+- **阶段 A（准备：ApkInstaller / Application / channel 标注）**：已提交 `87010e9`
+  （feat(android): de-Flutter preparation - ApkInstaller, Application base change, migration plan）。
+  `ApkInstaller.kt` 落地、`DaidaiApplication` 去 `FlutterApplication` 底座、`MainActivity` 内
+  MethodChannel 标注为待移除（含 ROOT channel 策略删除准备）。
+- **阶段 B（launcher 切换 / 删 MainActivity / Manifest 清理）**：已落地（提交 `55d670e`）。
+  `NativeMainActivity` 成为唯一 MAIN/LAUNCHER（singleTop、taskAffinity、LaunchTheme）；
+  `MainActivity` 及其 Manifest 块、`flutterEmbedding` meta-data、PROCESS_TEXT queries 删除；
+  `RootMethodChannelPolicy` 随 ROOT channel 一并删除；`LocalPanelHostService` 通知点击改指
+  `NativeMainActivity`。
+- **阶段 C（Gradle 去插件 / 删 Dart / ios 评估见 W4）**：已落地。
+  `settings.gradle.kts` 删 flutter SDK includeBuild 与 flutter-plugin-loader；`app/build.gradle.kts`
+  删 flutter-gradle-plugin，版本号由仓库根 `VERSION.json`（JsonSlurper）语义化读取，`ndkVersion`
+  钉在 `28.2.13676358`；`flutterSplitPerAbi` 条件分支删除、ABI 由 `ANDROID_RUNTIME_ABIS` 驱动；
+  109 个 Dart 文件（`app/lib`）、`app/test`、pubspec.yaml/lock、`.metadata`、
+  `.flutter-plugins-dependencies`、`analysis_options.yaml` 全部删除；`app/ios`、`app/assets`
+  按计划保留（iOS 残留待决策，见 `docs/ios-residue-assessment.md`，W4 产出）。
+- **阶段 D（CI 改造）**：已落地。
+  `.github/workflows/ci.yml` 去除 Flutter analyze/test 步骤，Kotlin 单测直接
+  `gradle -p android :app:testReleaseUnitTest`；`.github/workflows/android-release.yml` 改纯
+  gradle `:app:assembleRelease`/`:app:assembleReleaseAndroidTest`，新增
+  `libflutter.so` 存在性检查（发现即失败）；`scripts/` 中 Flutter 构建引用已清
+  （`test_android_release_workflow.py` 断言 workflow 不含 `flutter build apk`/`flutter-action`
+  且必须含 `libflutter.so` 检查；`version.py` 的 shell/JSON 输出仍保留
+  `FLUTTER_BUILD_NAME`/`FLUTTER_BUILD_NUMBER`/`flutterBuildName`/`flutterBuildNumber` 兼容键，
+  仅作下游兼容透传，不参与构建）。
+
+### 9.2 验证结论
+
+- `assembleRelease` / `assembleReleaseAndroidTest` 通过（含签名路径，多 ABI 由
+  `android-abi-matrix.py` + `ANDROID_RUNTIME_ABIS` 循环驱动）。
+- Kotlin 单测（`testReleaseUnitTest`）与路由契约、runtime/脚本测试全绿。
+- 模拟器（x86_64）`NativeMainActivity` launcher 启动无 crash。
+- APK 内**无 `libflutter.so`**（CI 强制校验，检出即 fail）。
+- 产物路径按重定位后的构建目录：`app/build/app/outputs/apk/release/app-release.apk`（单 ABI
+  固定名，无 per-ABI 后缀；发布循环靠每次重建后立即 cp 改名）。
+
+### 9.3 遗留项
+
+- `app/ios/` 保留未删：Android 侧已无 Flutter 引擎，iOS 工程是否移除为独立决策，见
+  `docs/ios-residue-assessment.md`（W4 产出，评估结论为纯 Flutter 模板死代码、无构建引用，默认推荐删除）。
+- `app/assets`（Panel Web 本地资源）按计划保留，与 Flutter 引擎无关。
+- `deflutter.gradle.kts` 辅助开关文件已在阶段 C 随插件移除一并删除（git 记录为 deleted）。
