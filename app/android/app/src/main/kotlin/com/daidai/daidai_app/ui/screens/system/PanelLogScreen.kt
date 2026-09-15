@@ -155,7 +155,7 @@ fun PanelLogScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     ) {
                         items(page!!.lines.size) { index ->
-                            val text = page.lines[index]
+                            val text = page!!.lines[index]
                             Text(
                                 text = text,
                                 style = MaterialTheme.typography.bodySmall,

@@ -5,11 +5,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -200,12 +202,12 @@ fun PanelSettingsScreen(
 @Composable
 private fun Row(
     modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
+    content: @Composable RowScope.() -> Unit,
 ) = androidx.compose.foundation.layout.Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
 
 @Composable
 private fun IconPlaceholder(label: String) {
-    androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.foundation.layout.Box(
             modifier = Modifier.size(16.dp)
                 .clip(RoundedCornerShape(4.dp))
