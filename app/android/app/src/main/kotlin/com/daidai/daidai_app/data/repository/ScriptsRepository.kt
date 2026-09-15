@@ -2,11 +2,14 @@ package com.daidai.daidai_app.data.repository
 
 import com.daidai.daidai_app.data.model.ScriptContent
 import com.daidai.daidai_app.data.model.ScriptFile
+import com.daidai.daidai_app.data.model.ScriptRunLogPage
+import com.daidai.daidai_app.data.model.ScriptVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
+import com.daidai.daidai_app.data.remote.PanelApiException
 import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -41,6 +44,28 @@ interface ScriptsRepository {
 
     /** 删除文件或目录。 */
     suspend fun deleteScript(path: String, isDirectory: Boolean)
+
+    // ------------------------------------------------------------------
+    // C2：运行历史 / 删除记录 / 版本查看与回滚
+    // ------------------------------------------------------------------
+
+    /** 拉取一次运行的日志增量；服务端已无此记录（404）时返回 null。 */
+    suspend fun getRunLogs(runId: String, cursor: Long = 0): ScriptRunLogPage?
+
+    /** 删除服务端运行记录（Go 端运行中会先终止再清除；本地端运行中返回 409）。 */
+    suspend fun clearRun(runId: String)
+
+    /** 某脚本的版本历史（按 version 降序，不含 content）。 */
+    suspend fun listVersions(path: String): List<ScriptVersion>
+
+    /** 单个版本详情（含 content）；不存在（404）返回 null。 */
+    suspend fun getVersion(versionId: Long): ScriptVersion?
+
+    /** 回滚到指定版本；返回服务端生成的新版本号。 */
+    suspend fun rollbackVersion(versionId: Long): Int?
+
+    /** 清空某脚本的版本历史，返回清除条数。 */
+    suspend fun clearVersions(path: String): Int
 }
 
 /**
@@ -156,6 +181,81 @@ class PanelScriptsRepository(
             execute("DELETE", url, null)
         }
     }
+
+    // ------------------------------------------------------------------
+    // C2：运行历史 / 删除记录 / 版本查看与回滚
+    // ------------------------------------------------------------------
+
+    override suspend fun getRunLogs(runId: String, cursor: Long): ScriptRunLogPage? =
+        withContext(Dispatchers.IO) {
+            val url = "$baseUrl/api/scripts/run/${encodePath(runId)}/logs?cursor=$cursor"
+            try {
+                val raw = dataOrBody(execute("GET", url, null))
+                val obj = if (raw is JSONObject) raw else JSONObject()
+                ScriptRunLogPage.fromData(obj)
+            } catch (error: PanelApiException) {
+                if (error.statusCode == 404) null
+                else throw error
+            }
+        }
+
+    override suspend fun clearRun(runId: String) {
+        withContext(Dispatchers.IO) {
+            execute("DELETE", "$baseUrl/api/scripts/run/${encodePath(runId)}", null)
+        }
+    }
+
+    override suspend fun listVersions(path: String): List<ScriptVersion> =
+        withContext(Dispatchers.IO) {
+            val url = "$baseUrl/api/scripts/versions?path=${encodePath(path)}"
+            val raw = dataOrBody(execute("GET", url, null))
+            val result = ArrayList<ScriptVersion>()
+            when (raw) {
+                is JSONArray -> {
+                    for (i in 0 until raw.length()) {
+                        val obj = raw.optJSONObject(i) ?: continue
+                        result.add(ScriptVersion.fromJson(obj))
+                    }
+                }
+                is JSONObject -> {
+                    raw.optJSONArray("data")?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            result.add(ScriptVersion.fromJson(obj))
+                        }
+                    }
+                }
+            }
+            result
+        }
+
+    override suspend fun getVersion(versionId: Long): ScriptVersion? =
+        withContext(Dispatchers.IO) {
+            try {
+                val body = execute("GET", "$baseUrl/api/scripts/versions/$versionId")
+                val raw = dataOrBody(body)
+                if (raw is JSONObject) ScriptVersion.fromJson(raw) else null
+            } catch (error: PanelApiException) {
+                if (error.statusCode == 404) null
+                else throw error
+            }
+        }
+
+    override suspend fun rollbackVersion(versionId: Long): Int? =
+        withContext(Dispatchers.IO) {
+            val body = execute("PUT", "$baseUrl/api/scripts/versions/$versionId/rollback")
+            val raw = dataOrBody(body)
+            val obj = if (raw is JSONObject) raw else JSONObject()
+            obj.optInt("version").let { if (it > 0) it else null }
+        }
+
+    override suspend fun clearVersions(path: String): Int =
+        withContext(Dispatchers.IO) {
+            val url = "$baseUrl/api/scripts/versions?path=${encodePath(path)}"
+            val raw = dataOrBody(execute("DELETE", url, null))
+            val obj = if (raw is JSONObject) raw else JSONObject()
+            obj.optInt("cleared_count")
+        }
 
     // ------------------------------------------------------------------
     // 内部工具

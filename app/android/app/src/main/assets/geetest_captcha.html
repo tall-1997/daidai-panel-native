@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>人机验证</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; font-family: sans-serif; }
+    #status { font-size: 13px; color: #64748b; padding: 8px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="geetest-captcha"></div>
+  <div id="status">正在加载验证组件…</div>
+  <script>
+    function reportError(message) {
+      var el = document.getElementById('status');
+      if (el) el.textContent = message;
+      try {
+        if (window.GeetestAndroidBridge && GeetestAndroidBridge.onError) {
+          GeetestAndroidBridge.onError(message);
+        }
+      } catch (e) { /* bridge unavailable */ }
+    }
+
+    function captchaIdFromUrl() {
+      var match = /[?&]captcha_id=([^&]*)/.exec(window.location.search);
+      return match ? decodeURIComponent(match[1]) : '';
+    }
+
+    function startVerification(captcha) {
+      captcha.onReady(function () {
+        var el = document.getElementById('status');
+        if (el) el.textContent = '请点击开始验证';
+        captcha.showCaptcha();
+      });
+      captcha.onSuccess(function () {
+        captcha.getVerifyResult(function (result) {
+          try {
+            GeetestAndroidBridge.onVerified(JSON.stringify(result));
+          } catch (e) {
+            reportError('验证结果回传失败，请重试');
+          }
+        });
+      });
+      captcha.onFail(function (result) {
+        reportError('验证失败：' + ((result && result.reason) || '请重新完成滑块验证'));
+      });
+      captcha.onError(function () {
+        reportError('验证码服务暂时不可用，请检查网络后重试');
+      });
+      captcha.showBox();
+    }
+
+    function bootstrap() {
+      var captchaId = captchaIdFromUrl();
+      if (!captchaId) {
+        reportError('缺少 captcha_id，无法发起人机验证');
+        return;
+      }
+      if (typeof initGeetest4 !== 'function') {
+        reportError('极验 SDK 加载失败，请检查网络后重试');
+        return;
+      }
+      initGeetest4({ captchaId: captchaId, product: 'bind' }, function (captcha) {
+        startVerification(captcha);
+      });
+    }
+
+    var script = document.createElement('script');
+    script.src = 'https://static.geetest.com/v4/gt4.js';
+    script.onload = bootstrap;
+    script.onerror = function () {
+      reportError('极验 SDK 加载失败，请检查网络后重试');
+    };
+    document.head.appendChild(script);
+  </script>
+</body>
+</html>

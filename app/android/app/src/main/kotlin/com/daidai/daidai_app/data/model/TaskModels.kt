@@ -55,6 +55,7 @@ data class Task(
     val successExitCodes: String = "0",
     val randomDelaySeconds: Int? = null,
     val labels: List<String> = emptyList(),
+    val subscriptionLocked: Boolean = false,
 ) {
     /** status == 1 视为已启用（与 Flutter Task.isEnabled 一致）。 */
     val enabled: Boolean get() = status == 1.0
@@ -85,6 +86,7 @@ data class Task(
     companion object {
         fun fromJson(json: JSONObject): Task = Task(
             id = json.optLong("id"),
+            subscriptionLocked = json.optBoolean("subscription_locked"),
             name = json.optString("name"),
             scriptPath = json.optString("command"),
             schedule = json.optString("cron_expression"),
@@ -146,6 +148,67 @@ data class Task(
                 else -> return emptyList()
             }
             return items.map { fromJson(it) }
+        }
+    }
+}
+
+data class TaskView(
+    val id: Long = 0,
+    val name: String = "",
+    val filters: String = "[]",
+    val sortRules: String = "[]",
+    val hidden: Boolean = false,
+    val sortOrder: Int = 0,
+) {
+    fun toJson(): JSONObject {
+        require(name.isNotBlank()) { "请输入视图名称" }
+        JSONArray(filters)
+        JSONArray(sortRules)
+        return JSONObject().put("name", name.trim()).put("filters", filters)
+            .put("sort_rules", sortRules).put("hidden", hidden).put("sort_order", sortOrder)
+    }
+
+    companion object {
+        fun parseList(raw: String): List<TaskView> {
+            val rows = if (raw.trimStart().startsWith("[")) JSONArray(raw)
+                else JSONObject(raw).getJSONArray("data")
+            return (0 until rows.length()).map { index ->
+                val row = rows.getJSONObject(index)
+                TaskView(row.getLong("id"), row.optString("name"), row.optString("filters", "[]"),
+                    row.optString("sort_rules", "[]"), row.optBoolean("hidden"), row.optInt("sort_order"))
+            }
+        }
+    }
+}
+
+data class TaskStats(val days: Int, val total: Int, val success: Int, val failed: Int,
+    val aborted: Int, val successRate: Double, val averageDuration: Double) {
+    companion object {
+        fun fromJson(data: JSONObject): TaskStats {
+            val stats = data.getJSONObject("stats")
+            return TaskStats(data.optInt("period_days", 7), stats.optInt("total_runs"),
+                stats.optInt("success_runs"), stats.optInt("failed_runs"), stats.optInt("aborted_runs"),
+                stats.optDouble("success_rate", 0.0), stats.optDouble("avg_duration", 0.0))
+        }
+    }
+}
+
+data class TaskBatchResult(val accepted: Int, val requested: Int) {
+    val message: String get() = "成功处理 $accepted / $requested 个任务"
+    companion object {
+        fun fromJson(raw: String, requested: Int): TaskBatchResult {
+            val root = JSONObject(raw)
+            val data = root.optJSONObject("data") ?: root
+            val results = data.optJSONArray("results")
+            val count = if (results != null) (0 until results.length()).count {
+                results.getJSONObject(it).optString("status") == "accepted"
+            } else when {
+                data.has("success_count") -> data.getInt("success_count")
+                data.has("affected") -> data.getInt("affected")
+                data.has("count") -> data.getInt("count")
+                else -> throw IllegalStateException("服务端未返回处理数量")
+            }
+            return TaskBatchResult(count, requested)
         }
     }
 }

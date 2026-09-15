@@ -112,3 +112,114 @@ data class ScriptContent(
                 .put("message", message)
     }
 }
+
+/**
+ * 脚本版本记录（C2 版本查看 / 回滚）。
+ *
+ * 对应 Go model.ScriptVersion.ToDict / 本地 LocalPanelStore.listScriptVersions：
+ *   GET    /api/scripts/versions?path=     -> {data: [ScriptVersion]}（不含 content）
+ *   GET    /api/scripts/versions/:id       -> {data: {..., content}}
+ *   PUT    /api/scripts/versions/:id/rollback -> {message, version}
+ *   DELETE /api/scripts/versions?path=     -> {message, cleared_count}
+ */
+data class ScriptVersion(
+    val id: Long = 0,
+    val scriptPath: String = "",
+    val version: Int = 0,
+    val message: String = "",
+    val createdAt: String = "",
+    val contentLength: Int = 0,
+    /** 仅详情接口返回；列表条目为 null。 */
+    val content: String? = null,
+) {
+    companion object {
+        fun fromJson(json: JSONObject): ScriptVersion {
+            val rawContent = if (json.has("content") && !json.isNull("content")) {
+                json.optString("content")
+            } else {
+                null
+            }
+            return ScriptVersion(
+                id = json.optLong("id"),
+                scriptPath = json.optString("script_path").takeIf { it.isNotBlank() }
+                    ?: json.optString("scriptPath"),
+                version = json.optInt("version"),
+                message = json.optString("message"),
+                createdAt = json.optString("created_at").takeIf { it.isNotBlank() }
+                    ?: json.optString("createdAt"),
+                contentLength = json.optInt("content_length", -1)
+                    .takeIf { it >= 0 }
+                    ?: (rawContent?.length ?: 0),
+                content = rawContent,
+            )
+        }
+    }
+}
+
+/**
+ * 运行日志一段增量结果（GET /api/scripts/run/:run_id/logs?cursor=N）。
+ *
+ * Go 端返回扁平对象，本地面板返回 {data: {...}} 包装——repository 已抹平差异。
+ * cursor 语义：本次返回后日志总行数（下次增量请求传该值）。
+ */
+data class ScriptRunLogPage(
+    val logs: List<String> = emptyList(),
+    val cursor: Long = 0,
+    val totalLines: Int = 0,
+    val done: Boolean = false,
+    val status: String = "",
+    val exitCode: Int? = null,
+    val error: String? = null,
+) {
+    val isFinished: Boolean
+        get() = done || status == "exited" || status == "failed" || status == "stopped" || status == "completed"
+
+    companion object {
+        fun fromData(data: JSONObject): ScriptRunLogPage {
+            val logs = ArrayList<String>()
+            data.optJSONArray("logs")?.let { arr ->
+                for (i in 0 until arr.length()) logs += arr.optString(i)
+            }
+            return ScriptRunLogPage(
+                logs = logs,
+                cursor = data.optLong("cursor"),
+                totalLines = data.optInt("log_count", logs.size),
+                done = data.optBoolean("done"),
+                status = data.optString("status"),
+                exitCode = if (data.has("exit_code") && !data.isNull("exit_code")) {
+                    data.optInt("exit_code")
+                } else {
+                    null
+                },
+                error = data.optString("error").takeIf { it.isNotBlank() },
+            )
+        }
+    }
+}
+
+/**
+ * 客户端脚本运行历史条目（C2）。
+ *
+ * Go / 本地面板均无「列出全部 run」端点（Go 存内存 map、本地存 SQLite 但不提供 list），
+ * 因此 run_id 由本设备发起运行时记录到本地（ScriptRunHistoryStore），
+ * 状态 / 日志通过 GET /api/scripts/run/:id/logs 实时拉取；
+ * 「删除记录」= DELETE /api/scripts/run/:id（服务端清日志与进程）+ 移除本地条目。
+ */
+data class ScriptRunRecord(
+    val runId: String = "",
+    val path: String = "",
+    val startedAt: String = "",
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("run_id", runId)
+        .put("path", path)
+        .put("started_at", startedAt)
+
+    companion object {
+        fun fromJson(json: JSONObject): ScriptRunRecord = ScriptRunRecord(
+            runId = json.optString("run_id"),
+            path = json.optString("path"),
+            startedAt = json.optString("started_at"),
+        )
+    }
+}

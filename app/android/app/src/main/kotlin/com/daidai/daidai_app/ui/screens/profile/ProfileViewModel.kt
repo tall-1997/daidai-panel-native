@@ -62,11 +62,32 @@ class ProfileViewModel(
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
     fun consumeNotice() { _notice.value = null }
+    private val _busy = MutableStateFlow(false)
+    val busy = _busy.asStateFlow()
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
+    private fun accountAction(message: String, action: suspend () -> Unit) {
+        if (_busy.value) return
+        _busy.value = true
+        _notice.value = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { action() }
+                _notice.value = message
+                refresh()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _notice.value = "账号操作失败，请检查输入和连接后重试"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
 
     /** 修改自己的登录密码（PUT /api/auth/password）。 */
     fun changePassword(oldPassword: String, newPassword: String) {
-        viewModelScope.launch {
-            try {
+        accountAction("密码已更新") {
+                require(oldPassword.isNotBlank() && newPassword.length >= 6)
                 com.daidai.daidai_app.data.remote.PanelRequests.execute(
                     "PUT",
                     "$normalizedBaseUrl/api/auth/password",
@@ -74,18 +95,13 @@ class ProfileViewModel(
                     accessToken = accessToken,
                     localToken = localToken,
                 )
-                _notice.value = "密码已更新"
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "修改密码失败"
-            }
         }
     }
 
     /** 修改自己的用户名（PUT /api/auth/username）。 */
     fun changeUsername(username: String) {
-        viewModelScope.launch {
-            try {
+        accountAction("用户名已更新") {
+                require(username.isNotBlank())
                 com.daidai.daidai_app.data.remote.PanelRequests.execute(
                     "PUT",
                     "$normalizedBaseUrl/api/auth/username",
@@ -93,18 +109,15 @@ class ProfileViewModel(
                     accessToken = accessToken,
                     localToken = localToken,
                 )
-                _notice.value = "用户名已更新"
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "修改用户名失败"
-            }
         }
     }
 
     /** 上传头像（multipart 字段名 avatar，≤5MB，对齐服务端校验）。 */
-    fun uploadAvatar(bytes: ByteArray, filename: String) {
-        viewModelScope.launch {
-            try {
+    fun uploadAvatar(openStream: () -> java.io.InputStream?) {
+        accountAction("头像已上传") {
+                val bytes = openStream()?.use(::readBoundedAvatar)
+                    ?: throw IllegalArgumentException("无法读取头像")
+                val filename = "avatar"
                 val mediaType = "application/octet-stream".toMediaType()
                 val part = MultipartBody.Part.createFormData(
                     "avatar", filename,
@@ -118,27 +131,16 @@ class ProfileViewModel(
                     val text = response.body?.string().orEmpty()
                     if (!response.isSuccessful) throw com.daidai.daidai_app.data.remote.PanelApiException(response.code, text)
                 }
-                _notice.value = "头像已上传"
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "头像上传失败"
-            }
         }
     }
 
     /** 删除头像（DELETE /api/auth/avatar）。 */
     fun deleteAvatar() {
-        viewModelScope.launch {
-            try {
+        accountAction("头像已删除") {
                 com.daidai.daidai_app.data.remote.PanelRequests.execute(
                     "DELETE", "$normalizedBaseUrl/api/auth/avatar",
                     accessToken = accessToken, localToken = localToken,
                 )
-                _notice.value = "头像已删除"
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "头像删除失败"
-            }
         }
     }
 
@@ -151,8 +153,9 @@ class ProfileViewModel(
 
     /** 重新拉取用户信息与版本。 */
     fun refresh() {
+        refreshJob?.cancel()
         _uiState.value = ProfileUiState.Loading
-        viewModelScope.launch {
+        refreshJob = viewModelScope.launch {
             val hasCredential = accessToken?.isNotBlank() == true || localToken?.isNotBlank() == true
             if (normalizedBaseUrl.isBlank()) {
                 _uiState.value = ProfileUiState.Error(
@@ -161,11 +164,12 @@ class ProfileViewModel(
                 )
                 return@launch
             }
-            val versionDeferred = async { fetchVersion() }
-            val profileDeferred = async { fetchCurrentUser() }
-            val version = runCatching { versionDeferred.await() }.getOrDefault("")
+            val version = try { fetchVersion() } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                ""
+            }
             val user = try {
-                profileDeferred.await()
+                fetchCurrentUser()
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 // 未登录或拉取失败：回退到登录态展示。
@@ -200,14 +204,14 @@ class ProfileViewModel(
 
     /** 拉取当前登录用户（GET /api/v1/auth/user）。 */
     private suspend fun fetchCurrentUser(): ProfileInfo = withContext(Dispatchers.IO) {
-        val body = execute("GET", "$normalizedBaseUrl/api/v1/auth/user")
+        val body = execute("GET", "$normalizedBaseUrl/api/auth/user")
         val json = JSONObject(body)
         ProfileInfo.fromAuthUser(json.optJSONObject("user"), version = "")
     }
 
     /** 拉取面板版本（GET /api/v1/system/public-version，公开端点）。 */
     private suspend fun fetchVersion(): String = withContext(Dispatchers.IO) {
-        val body = execute("GET", "$normalizedBaseUrl/api/v1/system/public-version")
+        val body = execute("GET", "$normalizedBaseUrl/api/system/public-version")
         ProfileInfo.extractVersion(body)
     }
 

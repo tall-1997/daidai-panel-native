@@ -57,6 +57,12 @@ import com.daidai.daidai_app.ui.screens.openapi.OpenApiListScreen
 import com.daidai.daidai_app.ui.screens.profile.ProfileScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptListScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptViewScreen
+import com.daidai.daidai_app.ui.screens.platformtokens.PlatformTokensScreen
+import com.daidai.daidai_app.ui.screens.terminal.TerminalScreen
+import com.daidai.daidai_app.ui.screens.system.ConfigScriptScreen
+import com.daidai.daidai_app.ui.screens.system.PanelLogScreen
+import com.daidai.daidai_app.ui.screens.settings.PanelSettingsScreen
+import com.daidai.daidai_app.ui.screens.settings.AboutScreen
 import com.daidai.daidai_app.ui.screens.security.SecurityScreen
 import com.daidai.daidai_app.ui.screens.security.SshKeysScreen
 import com.daidai.daidai_app.ui.screens.settings.SettingsEntry
@@ -112,6 +118,12 @@ object Routes {
     const val OPENAPI_CREATE = "openapi/create"
     const val OPENAPI_DETAIL = "openapi/detail"
     const val SECURITY_SSH_KEYS = "security/ssh-keys"
+    const val PLATFORM_TOKENS = "platform-tokens"
+    const val TERMINAL = "terminal"
+    const val PANEL_LOG = "panel-log"
+    const val CONFIG_SCRIPT = "config-script"
+    const val PANEL_SETTINGS = "panel-settings"
+    const val ABOUT = "about"
 }
 
 /**
@@ -261,6 +273,24 @@ fun AppNavHost(modifier: Modifier = Modifier) {
         composable(Routes.BACKUP) {
             BackupScreen()
         }
+        composable(Routes.PANEL_LOG) {
+            PanelLogScreen()
+        }
+        composable(Routes.CONFIG_SCRIPT) {
+            ConfigScriptScreen()
+        }
+        composable(Routes.PLATFORM_TOKENS) {
+            PlatformTokensScreen()
+        }
+        composable(Routes.TERMINAL) {
+            TerminalScreen()
+        }
+        composable(Routes.PANEL_SETTINGS) {
+            PanelSettingsScreen()
+        }
+        composable(Routes.ABOUT) {
+            AboutScreen()
+        }
         composable(Routes.HEALTH_CHECK) {
             HealthCheckScreen()
         }
@@ -333,6 +363,8 @@ private fun settingsRouteFor(entry: SettingsEntry): String? = when (entry) {
     SettingsEntry.THEME -> Routes.SETTINGS_THEME
     SettingsEntry.SYSTEM_SETTINGS -> Routes.SETTINGS_SYSTEM
     SettingsEntry.LOGS -> Routes.LOGS
+    SettingsEntry.PANEL_SETTINGS -> Routes.PANEL_SETTINGS
+    SettingsEntry.ABOUT -> Routes.ABOUT
     else -> null
 }
 

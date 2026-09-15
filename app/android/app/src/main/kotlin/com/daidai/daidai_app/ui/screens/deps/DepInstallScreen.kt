@@ -58,14 +58,7 @@ fun DepInstallScreen(
 ) {
     val context = LocalContext.current
     val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
-        val resolved = repository ?: run {
-            val config = AppServices.configRepository(context).config.value
-            DepsRepository(
-                baseUrl = config.serverUrl,
-                accessToken = config.accessToken,
-                localToken = config.localToken,
-            )
-        }
+        val resolved = repository ?: DepsRepository(context)
         DepsViewModel(resolved)
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()

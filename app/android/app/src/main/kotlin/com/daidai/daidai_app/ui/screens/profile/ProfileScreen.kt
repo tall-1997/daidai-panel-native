@@ -71,6 +71,26 @@ fun ProfileScreen(
         )
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    val busy by screenViewModel.busy.collectAsStateWithLifecycle()
+    val notice by screenViewModel.notice.collectAsStateWithLifecycle()
+    var edit by remember { mutableStateOf<String?>(null) }
+    val resolver = context.applicationContext.contentResolver
+    val picker = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { screenViewModel.uploadAvatar { resolver.openInputStream(it) } }
+    }
+    edit?.let { action ->
+        AccountValueDialog(
+            title = if (action == "password") "修改密码" else "修改用户名",
+            fields = if (action == "password") listOf("原密码" to true, "新密码（至少 6 位）" to true, "确认新密码" to true)
+                else listOf("新用户名" to false),
+            onDismiss = { edit = null },
+            onConfirm = { values ->
+                if (action == "password") screenViewModel.changePassword(values[0], values[1])
+                else screenViewModel.changeUsername(values[0].trim())
+                edit = null
+            },
+        )
+    }
 
     Box(
         modifier = modifier
@@ -84,6 +104,14 @@ fun ProfileScreen(
                 canLogout = s.canLogout,
                 onRetry = screenViewModel::refresh,
                 onLogout = onLogout,
+                actions = {
+                    notice?.let { Text(it) }
+                    Button(onClick = { edit = "username" }, enabled = !busy) { Text("修改用户名") }
+                    Button(onClick = { edit = "password" }, enabled = !busy) { Text("修改密码") }
+                    Button(onClick = { picker.launch("image/*") }, enabled = !busy) { Text("上传头像（最大 5MB）") }
+                    OutlinedButton(onClick = screenViewModel::deleteAvatar, enabled = !busy) { Text("删除头像") }
+                    if (busy) Text("正在处理…")
+                },
             )
             is ProfileUiState.Error -> ErrorView(
                 message = s.message,
@@ -99,6 +127,7 @@ private fun ProfileContent(
     canLogout: Boolean,
     onRetry: () -> Unit,
     onLogout: () -> Unit,
+    actions: @Composable () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -146,6 +175,7 @@ private fun ProfileContent(
             InfoRow(label = "面板版本", value = profile.version.ifBlank { "-" })
         }
 
+        actions()
         // 退出登录
         if (canLogout) {
             Button(
@@ -276,7 +306,8 @@ private fun AccountValueDialog(
         confirmButton = {
             androidx.compose.material3.TextButton(
                 onClick = { onConfirm(values.toList()) },
-                enabled = values.all { it.isNotBlank() },
+                enabled = values.all { it.isNotBlank() } &&
+                    (values.size != 3 || (values[1].length >= 6 && values[1] == values[2])),
             ) { Text("确定") }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("取消") } },
