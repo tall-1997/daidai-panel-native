@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,7 +21,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -100,13 +98,12 @@ fun TaskListScreen(
             )
             TasksUiState.Phase.Loaded ->
                 if (state.tasks.isEmpty()) {
-                    EmptyContent(onCreateTask)
+                    EmptyContent()
                 } else {
                     TaskList(
                         tasks = state.tasks,
                         busyTaskId = state.busyTaskId,
                         errorMessage = state.errorMessage,
-                        onCreateTask = onCreateTask,
                         onToggle = screenViewModel::toggleTask,
                         onRun = screenViewModel::runTask,
                         onDelete = screenViewModel::deleteTask,
@@ -115,22 +112,16 @@ fun TaskListScreen(
                     )
                 }
         }
-    }
-}
-
-@Composable
-private fun EmptyContent(onCreateTask: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        EmptyView(
-            title = "暂无任务",
-            description = "还没有创建任何任务，点击下方按钮新建",
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onCreateTask) {
+        // 创建任务 FAB：固定在右下角、始终可见并绑定 onClick。
+        // 旧实现把「新建任务」按钮嵌在列表/空态内部，空态下按钮被 EmptyView 顶到屏幕底部
+        // 且与底部导航/手势区重叠，导致点击无响应；此处改为标准 ExtendedFAB（与
+        // OpenApiListScreen 一致），onClick 直接透传 onCreateTask。
+        androidx.compose.material3.ExtendedFloatingActionButton(
+            onClick = onCreateTask,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp),
+        ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
             Text("新建任务")
@@ -139,11 +130,24 @@ private fun EmptyContent(onCreateTask: () -> Unit, modifier: Modifier = Modifier
 }
 
 @Composable
+private fun EmptyContent(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        EmptyView(
+            title = "暂无任务",
+            description = "还没有创建任何任务，点击右下角新建任务",
+        )
+    }
+}
+
+@Composable
 private fun TaskList(
     tasks: List<Task>,
     busyTaskId: Long?,
     errorMessage: String?,
-    onCreateTask: () -> Unit,
     onToggle: (Long, Boolean) -> Unit,
     onRun: (Long) -> Unit,
     onDelete: (Long) -> Unit,
@@ -175,16 +179,9 @@ private fun TaskList(
         }
         LazyColumn(
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(20.dp),
+            contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                Button(onClick = onCreateTask, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("新建任务")
-                }
-            }
             items(tasks, key = { it.id }) { task ->
                 TaskCard(
                     task = task,

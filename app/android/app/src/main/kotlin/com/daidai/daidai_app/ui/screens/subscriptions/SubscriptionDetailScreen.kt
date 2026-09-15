@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,10 +47,17 @@ import com.daidai.daidai_app.ui.theme.AppColors
 /**
  * 订阅详情 / 新建编辑表单（Compose 原生，阶段 3-5）。
  *
- * 可编辑关键字段：名称 / 地址(Git URL) / 目标路径 / 是否启用。提交后经
+ * 可编辑字段：名称 / 地址(Git URL) / 目标路径 / 是否启用，以及规则字段：
+ * 分支(branch) / 定时同步(schedule cron) / 白名单(whitelist) / 黑名单(blacklist) /
+ * 依赖规则(depend_on) / 仓库子路径(sub_path) / 别名(alias) / 鉴权方式
+ * （auth_type + 用户名 + SSH 密钥 ID 或访问令牌）。提交后经
  * [SubscriptionsRepository] 写入后端：
  *  - [subscription] 为 null 时为新建（POST /api/subscriptions）
  *  - [subscription] 非 null 时为更新（PUT /api/subscriptions/:id）
+ *
+ * 规则语义与 Go 后端 panel/server/service/subscription.go 对齐：`,` 或 `|`
+ * 分隔、子串包含匹配；白名单空 = 全部命中；黑名单对白名单与依赖规则都生效；
+ * 依赖规则（depend_on）参与检出并落盘但不建任务。
  *
  * 不接导航：与列表页共享同一个 [SubscriptionsViewModel]（保持单一数据源），
  * 保存成功后经 [onSaved] 回调交回列表页；顶部 [onBack] 用于返回。
@@ -73,6 +81,17 @@ fun SubscriptionDetailScreen(
     var name by remember { mutableStateOf(subscription?.name ?: "") }
     var url by remember { mutableStateOf(subscription?.url ?: "") }
     var targetPath by remember { mutableStateOf(subscription?.targetPath ?: "") }
+    var branch by remember { mutableStateOf(subscription?.branch ?: "") }
+    var schedule by remember { mutableStateOf(subscription?.schedule ?: "") }
+    var whitelist by remember { mutableStateOf(subscription?.whitelist ?: "") }
+    var blacklist by remember { mutableStateOf(subscription?.blacklist ?: "") }
+    var dependOn by remember { mutableStateOf(subscription?.dependOn ?: "") }
+    var subPath by remember { mutableStateOf(subscription?.subPath ?: "") }
+    var alias by remember { mutableStateOf(subscription?.alias ?: "") }
+    var authType by remember { mutableStateOf(subscription?.authType ?: "") }
+    var authUsername by remember { mutableStateOf(subscription?.authUsername ?: "") }
+    var sshKeyId by remember { mutableStateOf(subscription?.sshKeyId) }
+    var authToken by remember { mutableStateOf("") }
     var enabled by remember { mutableStateOf(subscription?.enabled ?: true) }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -150,6 +169,130 @@ fun SubscriptionDetailScreen(
                 supportingText = { Text("更新内容落地到面板的目录（save_dir）") },
             )
 
+            OutlinedTextField(
+                value = branch,
+                onValueChange = { branch = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("分支") },
+                placeholder = { Text("可选，例如：main") },
+                supportingText = { Text("检出仓库分支；留空使用仓库默认分支") },
+            )
+
+            OutlinedTextField(
+                value = schedule,
+                onValueChange = { schedule = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("定时同步") },
+                placeholder = { Text("可选，例如：0 */6 * * *") },
+                supportingText = { Text("cron 表达式；留空表示不自动同步。标准 5 段格式") },
+            )
+
+            OutlinedTextField(
+                value = whitelist,
+                onValueChange = { whitelist = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("白名单") },
+                placeholder = { Text("例如：scripts/utils, txt；`,` 或 `|` 分隔") },
+                supportingText = { Text("命中规则的文件参与检出并建任务；留空 = 全部命中。子串包含匹配，非正则") },
+            )
+
+            OutlinedTextField(
+                value = blacklist,
+                onValueChange = { blacklist = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("黑名单") },
+                placeholder = { Text("例如：node_modules, test") },
+                supportingText = { Text("命中规则的文件被排除，对白名单与依赖规则都生效") },
+            )
+
+            OutlinedTextField(
+                value = dependOn,
+                onValueChange = { dependOn = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("依赖规则") },
+                placeholder = { Text("例如：utils, sendNotify") },
+                supportingText = { Text("命中规则的文件参与检出并落盘，但不会据此建定时任务") },
+            )
+
+            OutlinedTextField(
+                value = subPath,
+                onValueChange = { subPath = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("仓库子路径") },
+                placeholder = { Text("可选，例如：scripts/") },
+                supportingText = { Text("只检出仓库内的子目录（sub_path）") },
+            )
+
+            OutlinedTextField(
+                value = alias,
+                onValueChange = { alias = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("别名") },
+                placeholder = { Text("可选") },
+                supportingText = { Text("订阅显示别名") },
+            )
+
+            Text(
+                text = "仓库鉴权",
+                style = MaterialTheme.typography.titleSmall,
+                color = AppColors.slate700,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.FilterChip(
+                    selected = authType.isEmpty(),
+                    onClick = { authType = "" },
+                    label = { Text("无") },
+                )
+                Spacer(Modifier.width(8.dp))
+                androidx.compose.material3.FilterChip(
+                    selected = authType == "token",
+                    onClick = { authType = if (authType == "token") "" else "token" },
+                    label = { Text("Token") },
+                )
+                Spacer(Modifier.width(8.dp))
+                androidx.compose.material3.FilterChip(
+                    selected = authType == "ssh",
+                    onClick = { authType = if (authType == "ssh") "" else "ssh" },
+                    label = { Text("SSH") },
+                )
+            }
+            if (authType == "token") {
+                OutlinedTextField(
+                    value = authUsername,
+                    onValueChange = { authUsername = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("令牌用户名") },
+                    placeholder = { Text("可选") },
+                )
+                OutlinedTextField(
+                    value = authToken,
+                    onValueChange = { authToken = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("访问令牌") },
+                    supportingText = {
+                        if (subscription?.hasAuthToken == true && authToken.isBlank()) {
+                            Text("已保存一个令牌；留空保持原值，填写则覆盖")
+                        } else {
+                            Text("保存时写入后端加密存储，不回读明文")
+                        }
+                    },
+                    singleLine = false,
+                    minLines = 2,
+                )
+            }
+            if (authType == "ssh") {
+                OutlinedTextField(
+                    value = sshKeyId?.toString() ?: "",
+                    onValueChange = { input ->
+                        sshKeyId = input.trim().toLongOrNull()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("SSH 密钥 ID") },
+                    placeholder = { Text("例如：1") },
+                    supportingText = { Text("引用“安全 > SSH 密钥”中已录入密钥的 ID（ssh_key_id）；留空表示不使用") },
+                )
+            }
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "启用订阅",
@@ -193,6 +336,20 @@ fun SubscriptionDetailScreen(
                         errorMessage = "请输入仓库地址"
                         return@Button
                     }
+                    val trimmedAuthType = when (authType.trim().lowercase()) {
+                        "token" -> "token"
+                        "ssh" -> "ssh"
+                        else -> ""
+                    }
+                    if (trimmedAuthType == "token" && authToken.trim().isEmpty() && subscription?.hasAuthToken != true) {
+                        errorMessage = "选择 Token 鉴权时请填写访问令牌"
+                        return@Button
+                    }
+                    val currentSshKeyId = sshKeyId
+                    if (trimmedAuthType == "ssh" && (currentSshKeyId == null || currentSshKeyId <= 0L)) {
+                        errorMessage = "选择 SSH 鉴权时请填写 SSH 密钥 ID"
+                        return@Button
+                    }
                     saving = true
                     errorMessage = null
                     val payload = SubscriptionWritePayload(
@@ -200,6 +357,17 @@ fun SubscriptionDetailScreen(
                         url = trimmedUrl,
                         targetPath = targetPath.trim(),
                         enabled = enabled,
+                        branch = branch.trim(),
+                        schedule = schedule.trim(),
+                        whitelist = whitelist.trim(),
+                        blacklist = blacklist.trim(),
+                        dependOn = dependOn.trim(),
+                        subPath = subPath.trim(),
+                        alias = alias.trim(),
+                        authType = trimmedAuthType,
+                        authUsername = authUsername.trim(),
+                        authToken = authToken.trim(),
+                        sshKeyId = sshKeyId,
                     )
                     if (subscription == null) {
                         screenViewModel.create(payload)

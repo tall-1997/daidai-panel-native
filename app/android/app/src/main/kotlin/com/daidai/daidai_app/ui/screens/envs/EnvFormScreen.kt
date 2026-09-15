@@ -2,6 +2,7 @@ package com.daidai.daidai_app.ui.screens.envs
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,14 +10,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,13 +43,13 @@ import com.daidai.daidai_app.di.AppServices
 import com.daidai.daidai_app.ui.theme.AppColors
 
 /**
- * 环境变量编辑表单（Compose 原生，阶段 3-2）。
+ * 环境变量编辑表单（Compose 原生，阶段 3-2 + F5 增强）。
  *
  * 支持「新建」与「编辑」两种模式：新建传入 [EnvVar] 缺省空对象并调用
  * [onCreateFromValue]（缺省走 [EnvsViewModel.create]）；编辑传入现有 [env] 预填
  * 字段并调用 [onUpdateFromValue]（缺省走 [EnvsViewModel.update]）。
  *
- * 表单字段：名称 / 值 / 备注 / 是否加密。其中「是否加密」([EnvVar.secret]) 为
+ * 表单字段：名称 / 值 / 备注 / 分组 / 是否加密。其中「是否加密」([EnvVar.secret]) 为
  * 纯 UI 掩码开关——开启后值输入框以密文占位显示、不落库（后端不持久化该字段）。
  *
  * **未接导航**，保存成功后经 [onSaved] 回调交由调用方关闭/跳转，本组件自包含可编译。
@@ -77,7 +83,11 @@ fun EnvFormScreen(
     var remark by remember(env.id) { mutableStateOf(env.remark) }
     var secret by remember(env.id) { mutableStateOf(env.secret) }
     var enabled by remember(env.id) { mutableStateOf(env.enabled) }
+    var group by remember(env.id) { mutableStateOf(env.primaryGroup()) }
     var saving by remember { mutableStateOf(false) }
+    var groupMenuExpanded by remember { mutableStateOf(false) }
+    var customGroupVisible by remember { mutableStateOf(false) }
+    var customGroup by remember { mutableStateOf("") }
 
     val isEditing = env.id > 0L
 
@@ -152,6 +162,78 @@ fun EnvFormScreen(
                 }
                 Switch(checked = secret, onCheckedChange = { secret = it })
             }
+            // 分组选择：下拉展示现有分组 + 「默认分组」+「自定义新分组」。
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "分组",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = AppColors.slate500,
+                )
+                Spacer(Modifier.height(4.dp))
+                Box {
+                    OutlinedButton(
+                        onClick = { groupMenuExpanded = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = if (group.isEmpty()) "默认分组" else group,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = groupMenuExpanded,
+                        onDismissRequest = { groupMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("默认分组") },
+                            onClick = {
+                                group = ""
+                                groupMenuExpanded = false
+                            },
+                        )
+                        state.groups.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item) },
+                                onClick = {
+                                    group = item
+                                    groupMenuExpanded = false
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("+ 自定义新分组") },
+                            onClick = {
+                                customGroupVisible = true
+                                groupMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+                if (customGroupVisible) {
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = customGroup,
+                        onValueChange = { customGroup = it },
+                        label = { Text("新分组名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row {
+                        TextButton(onClick = {
+                            val name = customGroup.trim()
+                            if (name.isNotEmpty()) {
+                                group = name
+                                customGroupVisible = false
+                                customGroup = ""
+                            }
+                        }) { Text("使用", color = AppColors.primary) }
+                        TextButton(onClick = {
+                            customGroupVisible = false
+                            customGroup = ""
+                        }) { Text("取消") }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = remark,
                 onValueChange = { remark = it },
@@ -193,9 +275,15 @@ fun EnvFormScreen(
                         value = value,
                         remark = remark,
                         enabled = enabled,
+                        groups = if (group.isEmpty()) emptyList() else listOf(group),
                     )
                 } else {
-                    screenViewModel.create(name = trimmedName, value = value, remark = remark)
+                    screenViewModel.create(
+                        name = trimmedName,
+                        value = value,
+                        remark = remark,
+                        groups = if (group.isEmpty()) emptyList() else listOf(group),
+                    )
                 }
             },
             enabled = !saving,

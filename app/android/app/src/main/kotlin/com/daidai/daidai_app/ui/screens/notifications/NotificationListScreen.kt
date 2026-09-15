@@ -20,10 +20,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daidai.daidai_app.data.model.NotificationChannel
@@ -52,19 +55,52 @@ fun NotificationListScreen(
         NotificationsViewModel(repo)
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    var showPushConfig by remember { mutableStateOf(false) }
 
-    when {
-        state.isLoading -> LoadingContent(modifier)
-        state.errorMessage != null -> ErrorContent(
-            message = state.errorMessage.orEmpty(),
-            onRetry = { screenViewModel.load() },
+    if (showPushConfig) {
+        PushConfigScreen(
             modifier = modifier,
+            repository = repository,
+            onBack = { showPushConfig = false },
         )
-        state.channels.isEmpty() -> EmptyContent(modifier)
-        else -> ChannelList(
-            channels = state.channels,
-            modifier = modifier,
-        )
+        return
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "通知渠道",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "服务端推送渠道配置见「推送配置」；本机系统通知开关在本页之外。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(onClick = { showPushConfig = true }) {
+                Text("推送配置")
+            }
+        }
+        when {
+            state.isLoading -> LoadingContent(Modifier.fillMaxSize())
+            state.errorMessage != null -> ErrorContent(
+                message = state.errorMessage.orEmpty(),
+                onRetry = { screenViewModel.load() },
+                modifier = Modifier.fillMaxSize(),
+            )
+            state.channels.isEmpty() -> EmptyContent(Modifier.fillMaxSize())
+            else -> ChannelList(
+                channels = state.channels,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -179,16 +215,14 @@ private fun ChannelCard(channel: NotificationChannel) {
     }
 }
 
-private fun typeName(type: String): String = when (type.lowercase()) {
-    "email" -> "邮件"
-    "webhook" -> "Webhook"
-    "discord" -> "Discord"
-    "slack" -> "Slack"
-    "telegram" -> "Telegram"
-    "wecom", "wechat", "qywx" -> "企业微信"
-    "dingtalk", "ding" -> "钉钉"
-    "" -> "未知类型"
-    else -> "类型：$type"
+private fun typeName(type: String): String {
+    if (type.isBlank()) return "未知类型"
+    com.daidai.daidai_app.data.model.NotificationChannelSchemas.byType(type)?.let { return it.name }
+    return when (type.lowercase()) {
+        "wechat", "qywx" -> "企业微信"
+        "ding" -> "钉钉"
+        else -> "类型：$type"
+    }
 }
 
 /**

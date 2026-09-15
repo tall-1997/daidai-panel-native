@@ -1,6 +1,7 @@
 package com.daidai.daidai_app.data.repository
 
 import com.daidai.daidai_app.data.model.EnvVar
+import com.daidai.daidai_app.data.model.QlEnvItem
 import com.daidai.daidai_app.data.model.parseEnvVars
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,11 +10,12 @@ import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * 环境变量数据源契约（阶段 3-2）。
+ * 环境变量数据源契约（阶段 3-2 + F5 增强）。
  *
  * 与既有 `PanelHttpClient` 认证约定保持一致：
  *  - 远程面板使用 `Authorization: Bearer <accessToken>`
@@ -27,6 +29,9 @@ interface EnvsRepository {
     /** 新建环境变量；返回新记录 ID。 */
     suspend fun create(name: String, value: String, remark: String): Long
 
+    /** 新建环境变量并指定分组；返回新记录 ID。 */
+    suspend fun createWithGroups(name: String, value: String, remark: String, groups: List<String>): Long
+
     /** 更新指定环境变量；返回更新后的记录。 */
     suspend fun update(
         id: Long,
@@ -34,6 +39,7 @@ interface EnvsRepository {
         value: String,
         remark: String,
         enabled: Boolean,
+        groups: List<String>,
     ): EnvVar
 
     /** 删除指定环境变量。 */
@@ -41,20 +47,33 @@ interface EnvsRepository {
 
     /** 启用 / 禁用指定环境变量。 */
     suspend fun setEnabled(id: Long, enabled: Boolean): EnvVar
+
+    /** 拉取分组列表（含默认组「默认分组」，未分组 env 归入其中）。 */
+    suspend fun listGroups(): List<String>
+
+    /** 批量导入环境变量；返回导入结果（成功数/错误信息）。 */
+    suspend fun import(envs: List<QlEnvItem>, mode: String): EnvImportResult
+
+    /** 调整排序：调用 /envs/sort 将 sourceId 的 sort_order 设为 targetId（目标排序值）。 */
+    suspend fun sort(sourceId: Long, targetId: Long)
+
+    /** 置顶环境变量。 */
+    suspend fun moveTop(id: Long)
+
+    /** 更新指定环境变量的分组（全量覆盖）。 */
+    suspend fun setGroups(id: Long, groups: List<String>)
 }
 
+/** 批量导入结果。 */
+data class EnvImportResult(
+    val imported: Int,
+    val skipped: Int,
+    val errors: List<String>,
+)
+
 /**
- * 读写 `GET/POST /api/envs`、`PUT/DELETE /api/envs/:id` 与
- * `PUT /api/envs/:id/enable|disable` 的默认实现（自包含 OkHttp 客户端）。
- *
- * 与后端 `serveEnvs` 契约一致：
- *   GET    /api/envs                -> { data:[...], total, page, page_size }
- *   POST   /api/envs                -> 201 { data:{ id } }
- *   PUT    /api/envs/:id            -> { data: envRow }
- *   DELETE /api/envs/:id            -> { data:{ id } }
- *   PUT    /api/envs/:id/enable|disable -> { data:{ id, enabled } }
- *
- * 字段映射：请求体使用后端 `remarks` 键；`secret` 为纯 UI 掩码提示，不下发。
+ * 基于 OkHttp 的默认实现：全部请求走 [PanelRequests.execute]，
+ * 复用进程级 token 会话与 401 刷新重试。
  */
 class PanelEnvsRepository(
     baseUrl: String,
@@ -81,15 +100,23 @@ class PanelEnvsRepository(
     }
 
     override suspend fun create(name: String, value: String, remark: String): Long =
-        withContext(Dispatchers.IO) {
-            val json = JSONObject()
-                .put("name", name)
-                .put("value", value)
-                .put("remarks", remark)
-                .put("enabled", true)
-            val body = execute("POST", "$baseUrl/api/envs", json.toString())
-            JSONObject(body).optJSONObject("data")?.optLong("id") ?: 0L
-        }
+        createWithGroups(name = name, value = value, remark = remark, groups = emptyList())
+
+    override suspend fun createWithGroups(
+        name: String,
+        value: String,
+        remark: String,
+        groups: List<String>,
+    ): Long = withContext(Dispatchers.IO) {
+        val json = JSONObject()
+            .put("name", name)
+            .put("value", value)
+            .put("remarks", remark)
+            .put("enabled", true)
+            .put("groups", JSONArray(groups))
+        val body = execute("POST", "$baseUrl/api/envs", json.toString())
+        JSONObject(body).optJSONObject("data")?.optLong("id") ?: 0L
+    }
 
     override suspend fun update(
         id: Long,
@@ -97,12 +124,14 @@ class PanelEnvsRepository(
         value: String,
         remark: String,
         enabled: Boolean,
+        groups: List<String>,
     ): EnvVar = withContext(Dispatchers.IO) {
         val json = JSONObject()
             .put("name", name)
             .put("value", value)
             .put("remarks", remark)
             .put("enabled", enabled)
+            .put("groups", JSONArray(groups))
         val body = execute("PUT", "$baseUrl/api/envs/$id", json.toString())
         val data = JSONObject(body).optJSONObject("data")
         if (data != null) EnvVar.fromJson(data) else EnvVar(id = id)
@@ -120,6 +149,82 @@ class PanelEnvsRepository(
             val data = JSONObject(body).optJSONObject("data")
             data?.let { EnvVar.fromJson(it) } ?: EnvVar(id = id, enabled = enabled)
         }
+
+    override suspend fun listGroups(): List<String> = withContext(Dispatchers.IO) {
+        val body = execute("GET", "$baseUrl/api/envs/groups")
+        val raw = runCatching { JSONArray(body) }.getOrNull()
+        if (raw != null) return@withContext normalizeGroupNames(raw)
+        val data = runCatching { JSONObject(body).opt("data") }.getOrNull()
+        when (data) {
+            is JSONArray -> normalizeGroupNames(data)
+            is JSONObject -> data.optJSONArray("groups")?.let { normalizeGroupNames(it) }.orEmpty()
+            else -> emptyList()
+        }
+    }
+
+    override suspend fun import(envs: List<QlEnvItem>, mode: String): EnvImportResult =
+        withContext(Dispatchers.IO) {
+            val array = JSONArray()
+            for (item in envs) {
+                array.put(
+                    JSONObject()
+                        .put("name", item.name)
+                        .put("value", item.value)
+                        .put("remarks", item.remark)
+                        .put("enabled", true)
+                )
+            }
+            val json = JSONObject()
+                .put("envs", array)
+                .put("mode", mode)
+            val body = execute("POST", "$baseUrl/api/envs/import", json.toString())
+            val parsed = runCatching { JSONObject(body) }.getOrNull()
+            val imported = parsed?.optInt("imported")
+                ?: parsed?.optJSONObject("data")?.optInt("imported")
+                ?: envs.size
+            val errors = mutableListOf<String>()
+            parsed?.optJSONArray("errors")?.let { arr ->
+                for (i in 0 until arr.length()) errors += arr.optString(i)
+            }
+            parsed?.optJSONObject("data")?.optJSONArray("errors")?.let { arr ->
+                if (errors.isEmpty()) for (i in 0 until arr.length()) errors += arr.optString(i)
+            }
+            EnvImportResult(
+                imported = imported,
+                skipped = (envs.size - imported).coerceAtLeast(0),
+                errors = errors,
+            )
+        }
+
+    override suspend fun sort(sourceId: Long, targetId: Long) = withContext(Dispatchers.IO) {
+        val json = JSONObject()
+            .put("source_id", sourceId)
+            .put("target_id", targetId)
+        execute("PUT", "$baseUrl/api/envs/sort", json.toString())
+        Unit
+    }
+
+    override suspend fun moveTop(id: Long) = withContext(Dispatchers.IO) {
+        execute("PUT", "$baseUrl/api/envs/$id/move-top")
+        Unit
+    }
+
+    override suspend fun setGroups(id: Long, groups: List<String>) = withContext(Dispatchers.IO) {
+        val json = JSONObject()
+            .put("id", id)
+            .put("groups", JSONArray(groups))
+        execute("PUT", "$baseUrl/api/envs/batch/group", json.toString())
+        Unit
+    }
+
+    private fun normalizeGroupNames(raw: JSONArray): List<String> {
+        val result = linkedSetOf<String>()
+        for (i in 0 until raw.length()) {
+            val value = raw.optString(i).trim()
+            if (value.isNotEmpty()) result += value
+        }
+        return result.toList()
+    }
 
     private fun execute(method: String, url: String, json: String? = null): String =
         PanelRequests.execute(method, url, json, accessToken = accessToken, localToken = localToken)

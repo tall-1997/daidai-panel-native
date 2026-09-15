@@ -1370,21 +1370,34 @@ class LocalPanelStore(
         put("created_at", cursor.string("created_at")); put("updated_at", cursor.string("updated_at"))
     }
 
-    private fun notificationTypes(): NanoHTTPD.Response = ok(JSONObject().put("data", JSONArray()
-        .put(JSONObject().put("type", "android_local").put("name", "Android 本地通知"))
-        .put(JSONObject().put("type", "webhook").put("name", "Webhook"))
-        .put(JSONObject().put("type", "telegram").put("name", "Telegram"))
-        .put(JSONObject().put("type", "dingtalk").put("name", "钉钉"))
-        .put(JSONObject().put("type", "feishu").put("name", "飞书"))
-        .put(JSONObject().put("type", "bark").put("name", "Bark"))
-        .put(JSONObject().put("type", "pushplus").put("name", "PushPlus"))
-        .put(JSONObject().put("type", "serverchan").put("name", "Server酱"))
-        .put(JSONObject().put("type", "pushdeer").put("name", "PushDeer"))
-        .put(JSONObject().put("type", "discord").put("name", "Discord"))
-        .put(JSONObject().put("type", "slack").put("name", "Slack"))
-        .put(JSONObject().put("type", "ntfy").put("name", "ntfy"))
-        .put(JSONObject().put("type", "gotify").put("name", "Gotify"))
-        .put(JSONObject().put("type", "wxpusher").put("name", "WxPusher"))))
+    private fun notificationTypes(): NanoHTTPD.Response {
+        val arr = JSONArray()
+        for (channel in com.daidai.daidai_app.data.model.NotificationChannelSchemas.allChannels) {
+            val fields = JSONArray()
+            for (f in channel.fields) {
+                val fieldJson = JSONObject()
+                    .put("key", f.key)
+                    .put("label", f.label)
+                    .put("placeholder", f.placeholder)
+                    .put("widget", f.widget)
+                    .put("required", f.required)
+                if (f.default.isNotEmpty()) fieldJson.put("default", f.default)
+                if (f.options.isNotEmpty()) {
+                    val opts = JSONArray()
+                    for (o in f.options) opts.put(JSONObject().put("value", o.value).put("label", o.label))
+                    fieldJson.put("options", opts)
+                }
+                f.showWhen?.let { cond ->
+                    val values = JSONArray()
+                    for (v in cond.values) values.put(v)
+                    fieldJson.put("show_when", JSONObject().put("key", cond.key).put("values", values))
+                }
+                fields.put(fieldJson)
+            }
+            arr.put(JSONObject().put("type", channel.type).put("name", channel.name).put("icon", channel.icon).put("fields", fields))
+        }
+        return ok(JSONObject().put("data", arr))
+    }
 
     private fun configString(json: JSONObject): String {
         val value = json.opt("config")
@@ -1428,6 +1441,18 @@ class LocalPanelStore(
     private fun sendNotificationRequest(json: JSONObject): NanoHTTPD.Response {
         val title = json.optString("title").trim(); val content = json.optString("content").trim()
         if (title.isEmpty() || content.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "标题和正文不能为空")
+        // 草稿测试：带 type + config 时按类型直接发送（不落库），用于推送配置页的「发送测试」。
+        val draftType = json.optString("type").trim()
+        if (draftType.isNotEmpty()) {
+            if (draftType !in supportedNotificationTypes) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "不支持的通知渠道类型")
+            val draftConfig = json.optJSONObject("config") ?: JSONObject()
+            return try {
+                sendChannel(draftType, draftConfig, title, content)
+                ok(JSONObject().put("message", "测试通知已发送（类型：$draftType）").put("sent", 1).put("failures", JSONArray()))
+            } catch (e: Exception) {
+                error(NanoHTTPD.Response.Status.BAD_REQUEST, "发送失败: ${e.message ?: "未知错误"}")
+            }
+        }
         val ids = when {
             json.has("channel_id") -> setOf(json.optLong("channel_id"))
             json.optJSONArray("channel_ids") != null -> json.optJSONArray("channel_ids")!!.let { a -> (0 until a.length()).map { a.optLong(it) }.toSet() }
@@ -1504,11 +1529,47 @@ class LocalPanelStore(
             }
             "gotify" -> httpPost(config.optString("server").trimEnd('/') + "/message?token=" + java.net.URLEncoder.encode(config.optString("token"), "UTF-8"), JSONObject().put("title", title).put("message", content).put("priority", 5), emptyMap())
             "wxpusher" -> requireBusinessSuccess("wxpusher", httpPost(config.optString("server", "https://wxpusher.zjiecode.com").trimEnd('/') + "/api/send/message", JSONObject().put("appToken", config.optString("app_token")).put("summary", title).put("content", content).put("contentType", 1).put("uids", JSONArray(config.optString("uids").split(',').map(String::trim).filter(String::isNotEmpty))), emptyMap()))
+            "email" -> throw IllegalArgumentException("Kotlin fallback 暂不支持 SMTP 发送（email），请使用完整 Go Core")
+            "wecom" -> {
+                val msgType = config.optString("msg_type", "text").lowercase()
+                val body = when (msgType) {
+                    "markdown", "markdown_v2" -> JSONObject().put("msgtype", msgType).put(msgType, JSONObject().put("content", "**$title**\n$content"))
+                    else -> JSONObject().put("msgtype", "text").put("text", JSONObject().put("content", "$title\n$content"))
+                }
+                requireBusinessSuccess("wecom", httpPost(config.optString("webhook"), body, emptyMap()))
+            }
+            "wecom_app" -> throw IllegalArgumentException("Kotlin fallback 暂不支持企业微信应用（wecom_app），请使用完整 Go Core")
+            "pushme" -> httpPost(config.optString("server", "https://push.i-i.me").trimEnd('/'),
+                "push_key=" + java.net.URLEncoder.encode(config.optString("key"), "UTF-8") +
+                    "&title=" + java.net.URLEncoder.encode(title, "UTF-8") +
+                    "&content=" + java.net.URLEncoder.encode(content, "UTF-8") +
+                    config.optString("message_type").takeIf { it.isNotBlank() }?.let { "&type=" + java.net.URLEncoder.encode(it, "UTF-8") }.orEmpty(),
+                emptyMap(), "application/x-www-form-urlencoded")
+            "chanify" -> httpPost(config.optString("server", "https://api.chanify.net").trimEnd('/') + "/v1/sender/" + config.optString("token"), JSONObject().put("title", title).put("text", content), emptyMap())
+            "igot" -> httpPost("https://push.hellyw.com/" + config.optString("key"), JSONObject().put("title", title).put("content", content), emptyMap())
+            "qmsg" -> requireBusinessSuccess("qmsg", httpPost(
+                "https://qmsg.zendee.cn/" + (if (config.optString("mode", "send") == "group") "group" else "send") + "/" + config.optString("key"),
+                "msg=" + java.net.URLEncoder.encode("$title\n$content", "UTF-8") + config.optString("qq").takeIf { it.isNotBlank() }?.let { "&qq=" + java.net.URLEncoder.encode(it, "UTF-8") }.orEmpty(),
+                emptyMap(), "application/x-www-form-urlencoded"))
+            "pushover" -> httpPost("https://api.pushover.net/1/messages.json", JSONObject().put("token", config.optString("token")).put("user", config.optString("user")).put("title", title).put("message", content), emptyMap())
+            "custom" -> {
+                val url = config.optString("url")
+                if (url.isBlank()) throw IllegalArgumentException("自定义渠道 URL 为空")
+                val method = config.optString("method", "POST").uppercase()
+                val contentType = config.optString("content_type", "application/json")
+                val rawTemplate = config.optString("body").ifBlank { "{\"title\":\"{{title}}\",\"content\":\"{{content}}\"}" }
+                val body = rawTemplate.replace("{{title}}", title).replace("{{content}}", content)
+                val headers = runCatching { JSONObject(config.optString("headers")) }.getOrElse { JSONObject() }
+                val headerMap = HashMap<String, String>()
+                val keys = headers.keys()
+                while (keys.hasNext()) { val k = keys.next(); headerMap[k] = headers.optString(k) }
+                httpSend(method, url, body, headerMap, contentType)
+            }
             else -> throw IllegalArgumentException("不支持的通知类型")
         }
     }
 
-    private val supportedNotificationTypes = setOf("android_local", "webhook", "telegram", "dingtalk", "feishu", "bark", "pushplus", "serverchan", "pushdeer", "discord", "slack", "ntfy", "gotify", "wxpusher")
+    private val supportedNotificationTypes = com.daidai.daidai_app.data.model.NotificationChannelSchemas.allTypeSet
 
     private fun requireBusinessSuccess(type: String, responseBody: String) {
         val response = runCatching { JSONObject(responseBody) }.getOrElse { throw IllegalStateException("$type 返回无效 JSON") }
@@ -1521,18 +1582,23 @@ class LocalPanelStore(
             "serverchan" -> response.optInt("code", response.optInt("errno", -1)) == 0
             "pushdeer" -> response.optInt("code", -1) == 0
             "wxpusher" -> response.optInt("code", -1) in setOf(0, 1000)
+            "qmsg" -> response.optBoolean("success", false)
+            "wecom" -> response.optInt("errcode", -1) == 0
             else -> true
         }
         if (!success) throw IllegalStateException(response.optString("msg").ifBlank { response.optString("errmsg").ifBlank { "$type 业务响应失败" } })
     }
 
-    private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8"): String {
+    private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8"): String =
+        httpSend("POST", url, payload, headers, contentType)
+
+    private fun httpSend(method: String, url: String, payload: Any, headers: Map<String, String>, contentType: String): String {
         val uri = URI(url); if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) throw IllegalArgumentException("仅支持 HTTP(S) 地址")
         if (InetAddress.getAllByName(uri.host).any(::isPrivateNotificationTarget)) throw IllegalArgumentException("拒绝 localhost/private 通知目标")
         val connection = uri.toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = 5000; connection.readTimeout = 10000; connection.instanceFollowRedirects = false; connection.requestMethod = "POST"; connection.doOutput = true
+        connection.connectTimeout = 5000; connection.readTimeout = 10000; connection.instanceFollowRedirects = false; connection.requestMethod = method
         connection.setRequestProperty("Content-Type", contentType); headers.forEach(connection::setRequestProperty)
-        connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+        if (method != "GET") { connection.doOutput = true; connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) } }
         val code = connection.responseCode
         val responseBody = (if (code in 200..299) connection.inputStream else connection.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()

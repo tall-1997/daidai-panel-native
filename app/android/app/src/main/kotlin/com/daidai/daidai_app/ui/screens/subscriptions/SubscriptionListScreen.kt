@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daidai.daidai_app.data.model.Subscription
+import com.daidai.daidai_app.data.model.SubscriptionRules
 import com.daidai.daidai_app.data.repository.SubscriptionsRepository
 import com.daidai.daidai_app.di.AppServices
 import com.daidai.daidai_app.ui.components.EmptyView
@@ -308,6 +309,8 @@ private fun SubscriptionCard(
             color = AppColors.slate400,
         )
 
+        SubscriptionRuleSummary(subscription = subscription)
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -346,6 +349,54 @@ private fun SubscriptionCard(
                 modifier = Modifier.size(36.dp),
             ) {
                 Icon(Icons.Filled.Delete, contentDescription = "删除", tint = AppColors.errorColor)
+            }
+        }
+    }
+}
+
+/**
+ * 订阅规则摘要：展示已配置的分支 / 定时 / 白名单 / 黑名单 / 依赖规则。
+ * 白名单、黑名单、依赖规则按后端语义（`,` 或 `|` 分段）压缩为规则段数。
+ */
+@Composable
+private fun SubscriptionRuleSummary(subscription: Subscription, modifier: Modifier = Modifier) {
+    val entries = buildList {
+        if (subscription.branch.isNotBlank()) add("分支 ${subscription.branch}")
+        if (subscription.schedule.isNotBlank()) add("定时 ${subscription.schedule}")
+        if (subscription.whitelist.isNotBlank()) {
+            val n = SubscriptionRules.split(subscription.whitelist).size
+            add("白名单 $n 段")
+        }
+        if (subscription.blacklist.isNotBlank()) {
+            val n = SubscriptionRules.split(subscription.blacklist).size
+            add("黑名单 $n 段")
+        }
+        if (subscription.dependOn.isNotBlank()) {
+            val n = SubscriptionRules.split(subscription.dependOn).size
+            add("依赖 $n 段")
+        }
+        if (subscription.alias.isNotBlank()) add("别名 ${subscription.alias}")
+    }
+    if (entries.isEmpty()) return
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        entries.forEach { entry ->
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(AppColors.slate100)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = entry,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppColors.slate600,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
