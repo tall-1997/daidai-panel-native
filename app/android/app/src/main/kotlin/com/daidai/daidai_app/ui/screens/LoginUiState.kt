@@ -7,6 +7,9 @@ data class LoginUiState(
     val totpCode: String = "",
     val phase: Phase = Phase.CheckingInitialization,
     val errorMessage: String? = null,
+    val captchaChallenge: CaptchaChallenge? = null,
+    val captchaPayload: GeetestCaptchaPayload? = null,
+    val captchaNotice: String? = null,
 ) {
     enum class Phase {
         CheckingInitialization,
@@ -16,4 +19,14 @@ data class LoginUiState(
         Success,
         Error,
     }
+
+    val requiresCaptcha: Boolean
+        get() = captchaChallenge != null && captchaPayload == null
+
+    val readyToSubmit: Boolean
+        get() = phase != Phase.Loading
+            && phase != Phase.Success
+            && username.isNotBlank()
+            && password.isNotBlank()
+            && (!requiresCaptcha || captchaPayload?.isCompleted == true)
 }

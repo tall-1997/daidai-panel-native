@@ -34,14 +34,43 @@ data class LogEntry(
             id = json.optLong("id"),
             taskId = json.optLong("task_id"),
             taskName = json.optString("task_name").takeIf { it.isNotEmpty() },
-            content = json.optString("content"),
+            content = json.optString("content").takeLast(LOG_TEXT_LIMIT),
             status = LogStatus.fromCode(
                 if (json.has("status") && !json.isNull("status")) json.optInt("status", -1) else null
             ),
             duration = if (json.has("duration") && !json.isNull("duration")) json.optDouble("duration") else null,
             logPath = json.optString("log_path").takeIf { it.isNotEmpty() },
-            createdAt = json.optString("created_at").takeIf { it.isNotEmpty() },
+            createdAt = json.optString("started_at").takeIf { it.isNotEmpty() && it != "null" }
+                ?: json.optString("created_at").takeIf { it.isNotEmpty() && it != "null" },
         )
+    }
+}
+
+const val LOG_TEXT_LIMIT = 256 * 1024
+
+fun appendLogText(current: String, incoming: String): String =
+    (current.takeLast((LOG_TEXT_LIMIT - incoming.length).coerceAtLeast(0)) + incoming.takeLast(LOG_TEXT_LIMIT))
+
+data class TaskLogFile(val filename: String, val path: String, val logId: Long, val size: Long, val createdAt: String) {
+    companion object {
+        fun fromJson(json: JSONObject) = TaskLogFile(json.getString("filename"), json.optString("path"),
+            json.optLong("log_id"), json.optLong("size"), json.optString("created_at"))
+    }
+}
+
+data class LiveLogChunk(val content: String, val cursor: Long, val logId: Long, val done: Boolean) {
+    companion object {
+        fun fromJson(json: JSONObject) = LiveLogChunk(json.optString("content").takeLast(LOG_TEXT_LIMIT),
+            json.getLong("cursor"), json.optLong("log_id"), json.optBoolean("done"))
+    }
+}
+
+data class LogStreamEvent(val content: String = "", val cursor: Long? = null, val done: String? = null)
+
+data class LogDownloadTicket(val url: String, val filename: String, val size: Long, val expiresAt: String) {
+    companion object {
+        fun fromJson(json: JSONObject) = LogDownloadTicket(json.getString("url"), json.getString("filename"),
+            json.optLong("size"), json.optString("expires_at"))
     }
 }
 

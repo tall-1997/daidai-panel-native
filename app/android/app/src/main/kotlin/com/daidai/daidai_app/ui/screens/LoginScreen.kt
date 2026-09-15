@@ -19,7 +19,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -52,6 +54,21 @@ fun LoginScreen(
         LoginViewModel(repository ?: AppServices.loginRepository(context))
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    var showCaptchaDialog by remember { mutableStateOf(false) }
+
+    if (showCaptchaDialog && state.requiresCaptcha) {
+        GeetestCaptchaDialog(
+            captchaId = state.captchaChallenge?.captchaId.orEmpty(),
+            onVerified = { payload ->
+                showCaptchaDialog = false
+                screenViewModel.onCaptchaCompleted(payload)
+            },
+            onDismiss = {
+                showCaptchaDialog = false
+                screenViewModel.onCaptchaDismissed()
+            },
+        )
+    }
 
     Column(
         modifier = modifier
@@ -116,7 +133,7 @@ fun LoginScreen(
         Button(
             onClick = { screenViewModel.submit(onContinue ?: {}) },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isBusy(state.phase),
+            enabled = !isBusy(state.phase) && state.readyToSubmit,
         ) {
             if (state.phase == LoginUiState.Phase.Loading) {
                 CircularProgressIndicator(
@@ -126,6 +143,27 @@ fun LoginScreen(
                 Spacer(Modifier.size(8.dp))
             }
             Text(buttonLabel(state.phase))
+        }
+
+        if (state.requiresCaptcha) {
+            Text(
+                "需要人机验证：${state.captchaNotice ?: "请点击下方按钮完成验证"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Button(
+                onClick = { showCaptchaDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isBusy(state.phase),
+            ) {
+                Text("完成人机验证")
+            }
+            TextButton(
+                onClick = { screenViewModel.onCaptchaDismissed() },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Text("暂不验证（需与服务端策略一致）")
+            }
         }
 
         // 状态异常或失败时，允许重新检查初始化状态。

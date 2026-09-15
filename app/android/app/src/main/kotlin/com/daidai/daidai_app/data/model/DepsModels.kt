@@ -45,7 +45,8 @@ data class DepItem(
     val isPython: Boolean get() = type.equals("python", ignoreCase = true)
 
     /** 安装类型英文标签（可用于筛选/展示）。 */
-    val typeLabel: String get() = if (isPython) "Python" else "Node"
+    val typeLabel: String get() = if (isPython) "Python" else if (type == "linux") "Linux" else "Node"
+    val active: Boolean get() = status in setOf("queued", "installing", "removing")
 
     companion object {
         fun fromJson(json: JSONObject): DepItem {
@@ -55,7 +56,7 @@ data class DepItem(
             return DepItem(
                 id = json.optLong("id"),
                 name = json.optString("name"),
-                type = if (rawType.equals("python", ignoreCase = true)) "python" else "node",
+                type = when (rawType.lowercase()) { "python" -> "python"; "linux" -> "linux"; else -> "node" },
                 version = runtime.takeIf { it.isNotBlank() }
                     ?: statusLabel(rawStatus),
                 runtime = runtime,

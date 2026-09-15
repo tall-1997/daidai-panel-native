@@ -74,6 +74,7 @@ fun SubscriptionListScreen(
 SubscriptionsViewModel(repository ?: SubscriptionsRepository(context))
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
+    SubscriptionLogDialog(state, screenViewModel)
 
     // 本地导航状态：编辑/新建目标；null 表示在列表模式。
     var editing by remember { mutableStateOf<Subscription?>(null) }
@@ -105,6 +106,7 @@ SubscriptionsViewModel(repository ?: SubscriptionsRepository(context))
                 onEdit = { editing = it },
                 onDelete = { pendingDelete = it },
                 onPull = screenViewModel::pull,
+                onLogs = { screenViewModel.openLogs(it) },
                 onRetry = screenViewModel::refresh,
                 onClearError = screenViewModel::clearError,
             )
@@ -143,6 +145,7 @@ private fun SubscriptionListContent(
     onEdit: (Subscription) -> Unit,
     onDelete: (Subscription) -> Unit,
     onPull: (Long) -> Unit,
+    onLogs: (Long) -> Unit,
     onRetry: () -> Unit,
     onClearError: () -> Unit,
     modifier: Modifier = Modifier,
@@ -216,6 +219,7 @@ private fun SubscriptionListContent(
                         onEdit = onEdit,
                         onDelete = onDelete,
                         onPull = onPull,
+                        onLogs = onLogs,
                     )
                 }
         }
@@ -230,6 +234,7 @@ private fun SubscriptionList(
     onEdit: (Subscription) -> Unit,
     onDelete: (Subscription) -> Unit,
     onPull: (Long) -> Unit,
+    onLogs: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -245,6 +250,7 @@ private fun SubscriptionList(
                 onEdit = { onEdit(sub) },
                 onDelete = { onDelete(sub) },
                 onPull = { onPull(sub.id) },
+                onLogs = { onLogs(sub.id) },
             )
         }
     }
@@ -258,6 +264,7 @@ private fun SubscriptionCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onPull: () -> Unit,
+    onLogs: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -310,6 +317,7 @@ private fun SubscriptionCard(
         )
 
         SubscriptionRuleSummary(subscription = subscription)
+        TextButton(onClick = onLogs) { Text("实时日志 / 历史 / 中止") }
 
         Row(
             modifier = Modifier.fillMaxWidth(),

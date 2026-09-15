@@ -66,14 +66,7 @@ fun DepListScreen(
 ) {
     val context = LocalContext.current
     val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
-        val resolved = repository ?: run {
-            val config = AppServices.configRepository(context).config.value
-            DepsRepository(
-                baseUrl = config.serverUrl,
-                accessToken = config.accessToken,
-                localToken = config.localToken,
-            )
-        }
+        val resolved = repository ?: DepsRepository(context)
         DepsViewModel(resolved)
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
@@ -100,6 +93,8 @@ fun DepListScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        Column(Modifier.fillMaxSize().padding(bottom = 80.dp)) {
+        DepsCapabilityControls(state, screenViewModel)
         when {
             state.phase == DepsUiState.Phase.Loading -> LoadingView()
             state.phase == DepsUiState.Phase.Error -> ErrorView(
@@ -114,7 +109,10 @@ fun DepListScreen(
                 state = state,
                 onUninstall = { id -> pendingUninstallId = id },
                 onReinstall = screenViewModel::reinstall,
+                onLog = screenViewModel::watch,
+                onSelect = screenViewModel::select,
             )
+        }
         }
 
         InstallEntryBar(
@@ -132,6 +130,8 @@ private fun DepList(
     state: DepsUiState,
     onUninstall: (Long) -> Unit,
     onReinstall: (Long) -> Unit,
+    onLog: (Long) -> Unit,
+    onSelect: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -140,12 +140,19 @@ private fun DepList(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(state.deps, key = { it.id }) { dep ->
+            Column {
+            Row {
+                androidx.compose.material3.Checkbox(checked = dep.id in state.selected,
+                    onCheckedChange = { onSelect(dep.id) }, enabled = !dep.active && !state.actionBusy)
+                TextButton(onClick = { onLog(dep.id) }) { Text("状态 / 日志 · ${DepItem.statusLabel(dep.status)}") }
+            }
             DepCard(
                 dep = dep,
                 operating = state.operatingId == dep.id,
                 onUninstall = { onUninstall(dep.id) },
                 onReinstall = { onReinstall(dep.id) },
             )
+            }
         }
     }
 }
@@ -220,7 +227,7 @@ private fun DepCard(
                 strokeWidth = 2.dp,
                 color = AppColors.primary,
             )
-        } else {
+        } else if (!dep.active) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 ActionPill(
                     text = "重装",

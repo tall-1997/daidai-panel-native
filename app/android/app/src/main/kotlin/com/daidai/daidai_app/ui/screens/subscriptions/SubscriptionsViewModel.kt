@@ -10,6 +10,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
+import com.daidai.daidai_app.data.model.SubscriptionLogPage
+import com.daidai.daidai_app.data.repository.boundedCapabilityLog
+import org.json.JSONObject
 
 /**
  * 订阅列表 / 详情共享的可观察状态（阶段 3-5）。
@@ -28,6 +33,13 @@ data class SubscriptionsUiState(
     val pullingId: Long? = null,
     /** 最近一次 新建/更新 是否成功（表单据此在成功后回关闭详情）。 */
     val mutationSucceeded: Boolean = false,
+    val logId: Long? = null,
+    val logText: String = "",
+    val logStatus: String = "",
+    val streaming: Boolean = false,
+    val history: SubscriptionLogPage? = null,
+    val historyLoading: Boolean = false,
+    val stopping: Boolean = false,
 ) {
     enum class Phase {
         Loading,
@@ -51,6 +63,91 @@ class SubscriptionsViewModel(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SubscriptionsUiState())
     val uiState: StateFlow<SubscriptionsUiState> = _uiState.asStateFlow()
+    private var streamJob: Job? = null
+    private var historyJob: Job? = null
+    private var cursor = ""
+    private var operation = ""
+    private var streamGeneration = 0
+
+    fun closeLogs() {
+        streamGeneration++
+        streamJob?.cancel()
+        historyJob?.cancel()
+        _uiState.update { it.copy(logId = null, streaming = false, historyLoading = false) }
+    }
+
+    fun openLogs(id: Long, resume: Boolean = false) {
+        val repo = repository ?: return
+        val same = _uiState.value.logId == id
+        closeLogs()
+        val generation = streamGeneration
+        if (!resume || !same) { cursor = ""; operation = "" }
+        _uiState.update { it.copy(logId = id, logText = if (resume && same) it.logText else "", history = null,
+            streaming = true, logStatus = "连接中", errorMessage = null) }
+        streamJob = viewModelScope.launch {
+            try {
+                repo.pullStream(id, cursor, operation).collect { event ->
+                    when (event.type) {
+                        "operation" -> {
+                            if (operation.isNotEmpty() && operation != event.data) {
+                                cursor = ""
+                                _uiState.update { it.copy(logText = "") }
+                            }
+                            operation = event.data
+                        }
+                        "done" -> _uiState.update { it.copy(logStatus = "日志流结束：${event.data}") }
+                        else -> {
+                            val next = event.id.toLongOrNull()
+                            if (next == null || next > (cursor.toLongOrNull() ?: 0L)) {
+                                val text = if (event.data.startsWith("{")) runCatching {
+                                    JSONObject(event.data).optString("message", event.data)
+                                }.getOrDefault(event.data) else event.data
+                                _uiState.update { it.copy(logText = boundedCapabilityLog(it.logText, text + "\n"), logStatus = "接收日志") }
+                                if (next != null) cursor = event.id
+                            }
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = friendly(error, "日志连接失败")) }
+            } finally {
+                if (generation == streamGeneration) _uiState.update { it.copy(streaming = false) }
+            }
+        }
+        history(1)
+    }
+
+    fun history(page: Int) {
+        val repo = repository ?: return
+        val id = _uiState.value.logId ?: return
+        historyJob?.cancel()
+        _uiState.update { it.copy(historyLoading = true) }
+        historyJob = viewModelScope.launch {
+            try {
+                val result = repo.logs(id, page)
+                _uiState.update { it.copy(history = result) }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = friendly(error, "历史日志加载失败")) }
+            } finally { _uiState.update { it.copy(historyLoading = false) } }
+        }
+    }
+
+    fun stopPull(id: Long) {
+        val repo = repository ?: return
+        if (_uiState.value.stopping) return
+        _uiState.update { it.copy(stopping = true) }
+        viewModelScope.launch {
+            try {
+                repo.stopPull(id)
+                _uiState.update { it.copy(logStatus = "已提交中止请求，请核对后续日志") }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = friendly(error, "中止失败")) }
+            } finally { _uiState.update { it.copy(stopping = false) } }
+        }
+    }
 
     init {
         refresh()
@@ -140,10 +237,12 @@ class SubscriptionsViewModel(
     /** 触发指定订阅的拉取更新。 */
     fun pull(id: Long) {
         val repo = repository ?: return
+        if (_uiState.value.pullingId != null) return
         _uiState.update { it.copy(pullingId = id, errorMessage = null) }
         viewModelScope.launch {
             try {
                 repo.pull(id)
+                openLogs(id)
                 reloadAfterMutation()
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error

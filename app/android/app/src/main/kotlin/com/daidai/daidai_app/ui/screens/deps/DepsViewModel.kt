@@ -10,6 +10,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import com.daidai.daidai_app.data.model.DepStatus
+import com.daidai.daidai_app.data.model.DepMirrors
+import com.daidai.daidai_app.data.repository.boundedCapabilityLog
+import android.content.ContentResolver
+import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 依赖列表页 + 安装表单的可观察状态（内存态）。
@@ -26,6 +36,12 @@ data class DepsUiState(
     val operatingId: Long? = null,
     val submittingInstall: Boolean = false,
     val notice: String? = null,
+    val selected: Set<Long> = emptySet(),
+    val detail: DepStatus? = null,
+    val log: String = "",
+    val watching: Boolean = false,
+    val actionBusy: Boolean = false,
+    val mirrors: DepMirrors? = null,
 ) {
     enum class Phase {
         Loading,
@@ -48,6 +64,85 @@ class DepsViewModel(
     val uiState: StateFlow<DepsUiState> = _uiState.asStateFlow()
 
     private var refreshGeneration = 0
+    private var watchJob: Job? = null
+
+    fun select(id: Long) {
+        _uiState.update { it.copy(selected = if (id in it.selected) it.selected - id else it.selected + id) }
+    }
+
+    fun closeLog() {
+        watchJob?.cancel()
+        _uiState.update { it.copy(detail = null, watching = false, log = "") }
+    }
+
+    fun watch(id: Long) {
+        val repo = repository ?: return
+        closeLog()
+        _uiState.update { it.copy(detail = DepStatus(id, "", ""), watching = true, errorMessage = null) }
+        watchJob = viewModelScope.launch {
+            try {
+                var latest = repo.status(id)
+                _uiState.update { it.copy(detail = latest) }
+                repo.logStream(id).collect { event ->
+                    if (event.type != "done") _uiState.update { it.copy(log = boundedCapabilityLog(it.log, event.data + "\n")) }
+                }
+                // Local snapshots and queued Go operations finish their SSE before the operation finishes.
+                do {
+                    latest = repo.status(id)
+                    _uiState.update { state -> state.copy(detail = latest, log = latest.log,
+                        deps = state.deps.map { if (it.id == id) it.copy(status = latest.status) else it }) }
+                    if (latest.active) delay(1500)
+                } while (latest.active)
+                refresh()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message ?: "日志读取失败") }
+            } finally { _uiState.update { it.copy(watching = false) } }
+        }
+    }
+
+    private fun action(block: suspend (DepsRepository) -> Unit) {
+        val repo = repository ?: return
+        if (_uiState.value.actionBusy) return
+        _uiState.update { it.copy(actionBusy = true, errorMessage = null) }
+        viewModelScope.launch {
+            try { block(repo) }
+            catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message ?: "操作失败") }
+            } finally { _uiState.update { it.copy(actionBusy = false) } }
+        }
+    }
+
+    fun cancel(id: Long) = action { repo ->
+        repo.cancel(id)
+        _uiState.update { it.copy(notice = "取消请求已提交") }
+        watch(id)
+    }
+
+    fun batch(delete: Boolean) {
+        val ids = _uiState.value.selected.toSet()
+        if (ids.isEmpty()) return
+        action { repo ->
+            if (delete) repo.batchDelete(ids) else repo.batchReinstall(ids)
+            _uiState.update { it.copy(selected = emptySet(), notice = "批量请求已提交，请以刷新后的状态为准") }
+            refresh()
+        }
+    }
+
+    fun loadMirrors() = action { repo -> _uiState.update { it.copy(mirrors = repo.mirrors()) } }
+    fun closeMirrors() { _uiState.update { it.copy(mirrors = null) } }
+    fun saveMirrors(value: DepMirrors) = action { repo ->
+        repo.saveMirrors(value)
+        _uiState.update { it.copy(mirrors = null, notice = "镜像源已保存") }
+    }
+
+    fun export(resolver: ContentResolver, uri: Uri, type: String, version: String) = action { repo ->
+        withContext(Dispatchers.IO) {
+            (resolver.openOutputStream(uri, "wt") ?: error("无法打开导出文件")).use { repo.export(type, version, it) }
+        }
+        _uiState.update { it.copy(notice = "依赖清单已导出") }
+    }
 
     init {
         refresh()
@@ -70,7 +165,7 @@ class DepsViewModel(
                 val items = repo.list()
                 if (generation != refreshGeneration) return@launch
                 _uiState.update {
-                    it.copy(deps = items, phase = DepsUiState.Phase.Loaded, errorMessage = null)
+                    it.copy(deps = items, selected = it.selected.intersect(items.map { item -> item.id }.toSet()), phase = DepsUiState.Phase.Loaded, errorMessage = null)
                 }
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
@@ -98,11 +193,11 @@ class DepsViewModel(
                 repo.uninstall(id)
                 _uiState.update { state ->
                     state.copy(
-                        deps = state.deps.filterNot { it.id == id },
                         operatingId = null,
                         notice = "卸载请求已提交",
                     )
                 }
+                refresh()
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 _uiState.update {
@@ -176,4 +271,5 @@ class DepsViewModel(
     fun consumeNotice() {
         _uiState.update { it.copy(notice = null) }
     }
+    fun clearError() { _uiState.update { it.copy(errorMessage = null) } }
 }

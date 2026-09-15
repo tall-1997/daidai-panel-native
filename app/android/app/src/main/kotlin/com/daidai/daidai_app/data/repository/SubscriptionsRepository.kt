@@ -15,6 +15,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import com.daidai.daidai_app.data.model.SubscriptionLogPage
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
  * 订阅模块（阶段 3-5）数据源仓库。
@@ -47,10 +51,18 @@ class SubscriptionsRepository(
 
     // ---------------------------------------------------------------- CRUD API
 
-    /** 拉取全部订阅列表。 */
     suspend fun list(): List<Subscription> = withContext(Dispatchers.IO) {
-        val body = execute("GET", "/api/subscriptions", conn = resolveConnection())
-        parseSubscriptions(body)
+        val all = mutableListOf<Subscription>()
+        var page = 1
+        while (true) {
+            val body = execute("GET", "/api/subscriptions?page=$page&page_size=100", conn = resolveConnection())
+            val batch = parseSubscriptions(body)
+            if (batch.isEmpty()) break
+            all.addAll(batch)
+            if (batch.size < 100) break
+            page++
+        }
+        all
     }
 
     /** 新建订阅，返回后端返回的订阅 id（不可解析时回退 0）。 */
@@ -82,6 +94,22 @@ class SubscriptionsRepository(
         execute("PUT", "/api/subscriptions/$id/pull", conn = resolveConnection())
     }
 
+    suspend fun stopPull(id: Long) = execute("PUT", "/api/subscriptions/$id/pull/stop", conn = resolveConnection())
+
+    suspend fun logs(id: Long, page: Int = 1): SubscriptionLogPage {
+        require(page > 0)
+        return SubscriptionLogPage.parse(execute("GET", "/api/subscriptions/$id/logs?page=$page&page_size=20",
+            conn = resolveConnection()), page)
+    }
+
+    internal fun pullStream(id: Long, cursor: String = "", operationId: String = "") = flow {
+        val conn = resolveConnection()
+        val url = (conn.baseUrl + "/api/subscriptions/$id/pull-stream").toHttpUrl().newBuilder()
+        if (cursor.isNotBlank()) url.addQueryParameter("cursor", cursor)
+        if (operationId.isNotBlank()) url.addQueryParameter("operation_id", operationId)
+        emitAll(CapabilityRequests(httpClient, conn.accessToken, conn.localToken).events(url.build().toString()))
+    }
+
     // ---------------------------------------------------------------- Connection
 
     private suspend fun resolveConnection(): Connection {
@@ -108,20 +136,14 @@ class SubscriptionsRepository(
     // ---------------------------------------------------------------- HTTP helper
 
     /** 执行 HTTP 请求并返回响应体字符串；非 2xx 抛 [SubscriptionsApiException]。 */
-    private fun execute(
+    private suspend fun execute(
         method: String,
         path: String,
         json: String?,
         conn: Connection,
-    ): String = PanelRequests.execute(
-        method,
-        conn.baseUrl + path,
-        json,
-        accessToken = conn.accessToken,
-        localToken = conn.localToken,
-    )
+    ): String = CapabilityRequests(httpClient, conn.accessToken, conn.localToken).text(method, conn.baseUrl + path, json)
 
-    private fun execute(method: String, path: String, conn: Connection) =
+    private suspend fun execute(method: String, path: String, conn: Connection) =
         execute(method, path, null, conn)
 
     private companion object {

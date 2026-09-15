@@ -1,28 +1,32 @@
 package com.daidai.daidai_app.data.repository
 
+import android.content.Context
+import com.daidai.daidai_app.data.localcore.PanelCoreController
 import com.daidai.daidai_app.data.model.DepInstallRequest
 import com.daidai.daidai_app.data.model.DepItem
 import com.daidai.daidai_app.data.model.DepManager
+import com.daidai.daidai_app.data.model.DepStatus
+import com.daidai.daidai_app.data.model.DepMirrors
 import com.daidai.daidai_app.data.model.parseDepItems
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
 import com.daidai.daidai_app.data.remote.PanelRequests
+import com.daidai.daidai_app.di.AppServices
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.TimeUnit
+import java.io.OutputStream
 
 /**
  * 阶段 3-4 依赖包的数据源（自包含 OkHttp 实现，不改动既有网络层）。
  *
  * 与 `PanelHttpClient` 认证约定保持一致：远程面板使用
  * `Authorization: Bearer <accessToken>`，托管本地面板使用
- * `X-Daidai-Local-Token: <localToken>`。baseUrl 应已去掉尾部斜杠。
+ * `X-Daidai-Local-Token: <localToken>`。每请求重新解析连接（本地模式启动后
+ * URL/token 可能变化），与 [SubscriptionsRepository] 约定一致。
  *
  * 契约与后端 Go handler 对齐：
  *   GET  /api/deps?type=python|nodejs|linux   -> {data:[...], total:N}
@@ -34,20 +38,78 @@ import java.util.concurrent.TimeUnit
  * 以提供完整全量列表。
  */
 class DepsRepository(
-    baseUrl: String,
-    private val accessToken: String? = null,
-    private val localToken: String? = null,
+    private val context: Context,
     private val httpClient: OkHttpClient = defaultHttpClient(),
 ) {
-    private val baseUrl: String = baseUrl.trim().trimEnd('/')
+    private val configRepo = AppServices.configRepository(context)
 
-    /** 拉取全量依赖列表（合并 python/nodejs/linux，按 id 去重）。 */
+    /** 单次请求的连接描述：baseUrl + 认证头参数。 */
+    private data class Connection(
+        val baseUrl: String,
+        val accessToken: String?,
+        val localToken: String?,
+    )
+
+    private suspend fun resolveConnection(): Connection {
+        val config = configRepo.getConfig()
+        return when (config.mode) {
+            PanelConnectionMode.REMOTE -> {
+                val baseUrl = config.serverUrl.trim().trimEnd('/')
+                if (baseUrl.isBlank()) {
+                    throw IllegalStateException("尚未配置远程服务地址，请先在“配置服务器”页面填写")
+                }
+                Connection(baseUrl, config.accessToken, null)
+            }
+            PanelConnectionMode.MANAGED_LOCAL -> {
+                val status = PanelCoreController.ensureStarted()
+                val baseUrl = status.baseUrl?.trim()?.trimEnd('/')
+                if (baseUrl.isNullOrBlank()) {
+                    throw IllegalStateException("本地服务未能启动：${status.message ?: "未知原因"}")
+                }
+                Connection(baseUrl, null, status.localToken)
+            }
+        }
+    }
+
+    suspend fun status(id: Long): DepStatus = DepStatus.parse(execute("GET", "/api/deps/$id/status"))
+
+    internal fun logStream(id: Long): Flow<CapabilityEvent> = flow {
+        val conn = resolveConnection()
+        emitAll(
+            CapabilityRequests(httpClient, conn.accessToken, conn.localToken)
+                .events(conn.baseUrl + "/api/deps/$id/log-stream"),
+        )
+    }
+
+    suspend fun cancel(id: Long) = execute("PUT", "/api/deps/$id/cancel")
+
+    suspend fun batchReinstall(ids: Set<Long>) = batch("batch-reinstall", ids)
+    suspend fun batchDelete(ids: Set<Long>) = batch("batch-delete", ids)
+
+    private suspend fun batch(action: String, ids: Set<Long>): String {
+        require(ids.isNotEmpty() && ids.all { it > 0 }) { "请选择有效依赖" }
+        return execute("POST", "/api/deps/$action", JSONObject().put("ids", JSONArray(ids.toList())).toString())
+    }
+
+    suspend fun mirrors(): DepMirrors = DepMirrors.parse(execute("GET", "/api/deps/mirrors"))
+    suspend fun saveMirrors(mirrors: DepMirrors) = execute("PUT", "/api/deps/mirrors", mirrors.payload())
+
+    suspend fun export(type: String, pythonVersion: String, output: OutputStream) {
+        require(type in setOf("python", "nodejs", "linux"))
+        val query = buildString {
+            append("?type=").append(type)
+            if (type == "python" && pythonVersion.isNotBlank()) {
+                append("&python_version=").append(java.net.URLEncoder.encode(pythonVersion.trim(), "UTF-8"))
+            }
+        }
+        val conn = resolveConnection()
+        CapabilityRequests(httpClient, conn.accessToken, conn.localToken).download(conn.baseUrl + "/api/deps/export$query", output)
+    }
+
     suspend fun list(): List<DepItem> = withContext(Dispatchers.IO) {
-        val backendTypes = listOf("python", "nodejs", "linux")
         val byId = LinkedHashMap<Long, DepItem>()
-        for (backendType in backendTypes) {
-            val url = buildListUrl(backendType)
-            val body = execute("GET", url)
+        for (backendType in listOf("python", "nodejs", "linux")) {
+            val body = execute("GET", "/api/deps?type=$backendType")
             for (item in parseDepItems(body)) {
                 byId[item.id] = item
             }
@@ -55,12 +117,6 @@ class DepsRepository(
         byId.values.toList()
     }
 
-    /**
-     * 安装依赖。映射到后端 POST /api/deps：
-     *  - manager pip -> type "python"，npm -> type "nodejs"
-     *  - packageName -> names[0]
-     *  - version     -> python_version（仅 Python 回传）
-     */
     suspend fun install(request: DepInstallRequest) = withContext(Dispatchers.IO) {
         val payload = JSONObject()
             .put("type", request.manager.backendType)
@@ -68,38 +124,23 @@ class DepsRepository(
         if (request.manager == DepManager.Pip && request.version.isNotBlank()) {
             payload.put("python_version", request.version.trim())
         }
-        execute("POST", "$baseUrl/api/deps", payload.toString())
+        execute("POST", "/api/deps", payload.toString())
     }
 
-    /** 卸载依赖。后端 DELETE /api/deps/:id（异步执行卸载任务）。 */
     suspend fun uninstall(id: Long) = withContext(Dispatchers.IO) {
-        execute("DELETE", "$baseUrl/api/deps/$id")
+        execute("DELETE", "/api/deps/$id")
     }
 
-    /** 重装依赖。后端 PUT /api/deps/:id/reinstall。 */
     suspend fun reinstall(id: Long) = withContext(Dispatchers.IO) {
-        execute("PUT", "$baseUrl/api/deps/$id/reinstall")
+        execute("PUT", "/api/deps/$id/reinstall")
     }
 
-    private fun buildListUrl(backendType: String): String {
-        val builder = ("$baseUrl/api/deps").toHttpUrlOrNull()?.newBuilder()
-            ?: defaultUrl().newBuilder()
-        builder.addQueryParameter("type", backendType)
-        return builder.build().toString()
+    private suspend fun execute(method: String, path: String, json: String? = null): String {
+        val conn = resolveConnection()
+        return CapabilityRequests(httpClient, conn.accessToken, conn.localToken).text(method, conn.baseUrl + path, json)
     }
-
-    private fun defaultUrl(): HttpUrl = HttpUrl.Builder()
-        .scheme("https")
-        .host("localhost")
-        .addPathSegment("api")
-        .addPathSegment("deps")
-        .build()
-
-    private fun execute(method: String, url: String, json: String? = null): String =
-        PanelRequests.execute(method, url, json, accessToken = accessToken, localToken = localToken)
 
     private companion object {
-        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
     }
 }

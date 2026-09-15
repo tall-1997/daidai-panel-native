@@ -1,15 +1,20 @@
 package com.daidai.daidai_app.ui.screens.system
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daidai.daidai_app.data.model.BackupRecord
 import com.daidai.daidai_app.data.model.HealthCheckResult
+import com.daidai.daidai_app.data.model.RestoreProgress
 import com.daidai.daidai_app.data.repository.BackupRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 /** 系统管理（备份 + 健康检查）的可观察状态。 */
 data class SystemUiState(
@@ -26,6 +31,20 @@ data class SystemUiState(
     val health: HealthCheckResult? = null,
     /** 健康检查是否运行中。 */
     val healthRunning: Boolean = false,
+    /** SAF 导入备份：上传中标记与文件名。 */
+    val uploading: Boolean = false,
+    val uploadFileName: String = "",
+    /** 上传进度 0..1；null 表示总量未知（不确定进度）。 */
+    val uploadProgress: Float? = null,
+    /** SAF 导出备份：下载中标记与目标缓存文件（供 CreateDocument 选择器接续）。 */
+    val downloadingName: String? = null,
+    val downloadProgress: Float? = null,
+    val pendingDownloadFile: File? = null,
+    val pendingDownloadName: String = "",
+    /** 恢复进行中（危险操作，UI 先二次确认）。 */
+    val restoring: Boolean = false,
+    /** 最近一次恢复进度快照。 */
+    val restore: RestoreProgress? = null,
 ) {
     enum class BackupPhase {
         Loading,
@@ -158,6 +177,175 @@ class SystemViewModel(
     /** 清除一次性反馈文案。 */
     fun consumeActionMessage() {
         _uiState.update { it.copy(actionMessage = null) }
+    }
+
+    // ---- C8 备份上传 / 下载 / 恢复 ----
+
+    /**
+     * 从 SAF [uri] 上传备份。
+     * 服务端限制 512MB；先复制到缓存文件再 multipart 上传，带进度回调。
+     */
+    fun uploadBackupFromUri(uri: Uri, displayName: String? = null) {
+        if (_uiState.value.uploading) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    uploading = true,
+                    uploadFileName = displayName.orEmpty(),
+                    uploadProgress = 0f,
+                    errorMessage = null,
+                )
+            }
+            try {
+                val staged = repository.stageUriToCache(uri, displayName)
+                _uiState.update { it.copy(uploadFileName = staged.name) }
+                val result = repository.uploadBackup(staged) { written, total ->
+                    val progress = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else null
+                    _uiState.update { it.copy(uploadProgress = progress) }
+                }
+                _uiState.update {
+                    it.copy(
+                        uploading = false,
+                        uploadProgress = null,
+                        actionMessage = result.message.ifBlank { "备份上传成功" },
+                    )
+                }
+                refreshBackups()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update {
+                    it.copy(
+                        uploading = false,
+                        uploadProgress = null,
+                        errorMessage = friendly(error, "上传备份失败"),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 下载备份到缓存文件。完成后把 [SystemUiState.pendingDownloadFile] 交给 UI，
+     * UI 通过 SAF CreateDocument 选择器把文件转存到用户指定位置。
+     */
+    fun downloadBackup(record: BackupRecord) {
+        if (_uiState.value.downloadingName != null) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    downloadingName = record.name,
+                    downloadProgress = 0f,
+                    errorMessage = null,
+                )
+            }
+            try {
+                val target = File(
+                    repository.downloadCacheDir(),
+                    "${System.currentTimeMillis()}-${record.name.substringAfterLast('/')}",
+                )
+                repository.downloadBackup(record.name, target) { written, total ->
+                    val progress = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else null
+                    _uiState.update { it.copy(downloadProgress = progress) }
+                }
+                _uiState.update {
+                    it.copy(
+                        downloadingName = null,
+                        downloadProgress = null,
+                        pendingDownloadFile = target,
+                        pendingDownloadName = record.name,
+                    )
+                }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update {
+                    it.copy(
+                        downloadingName = null,
+                        downloadProgress = null,
+                        errorMessage = friendly(error, "下载备份失败"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** UI 通过 SAF 选择器拿到目标 [uri] 后调用，把缓存文件转存并清理。 */
+    fun finishDownload(target: Uri) {
+        val file = _uiState.value.pendingDownloadFile ?: return
+        val name = _uiState.value.pendingDownloadName
+        viewModelScope.launch {
+            val ok = repository.copyFileToUri(file, target)
+            _uiState.update {
+                it.copy(
+                    pendingDownloadFile = null,
+                    pendingDownloadName = "",
+                    actionMessage = if (ok) "已保存备份「$name」" else null,
+                    errorMessage = if (ok) null else "保存到所选位置失败",
+                )
+            }
+            runCatching { file.delete() }
+        }
+    }
+
+    /** 用户取消 SAF 保存对话框时清理。 */
+    fun cancelPendingDownload() {
+        val file = _uiState.value.pendingDownloadFile
+        _uiState.update { it.copy(pendingDownloadFile = null, pendingDownloadName = "") }
+        runCatching { file?.delete() }
+    }
+
+    /**
+     * 恢复备份（危险操作，UI 必须先弹二次确认）。
+     * 后端 409 表示仍有活跃任务；恢复期间轮询进度。
+     */
+    private var restorePollJob: Job? = null
+
+    fun restoreBackup(record: BackupRecord, password: String = "") {
+        if (_uiState.value.restoring) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    restoring = true,
+                    errorMessage = null,
+                    restore = RestoreProgress(active = true, status = "running", filename = record.name, stage = "requesting"),
+                )
+            }
+            restorePollJob = launch { pollRestoreProgress() }
+            try {
+                val result = repository.restoreBackup(record.name, password)
+                _uiState.update {
+                    it.copy(
+                        restoring = false,
+                        actionMessage = result.message.ifBlank { "恢复完成" },
+                        restore = it.restore?.copy(active = false, status = "completed", percent = 100),
+                    )
+                }
+                refreshBackups()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update {
+                    it.copy(
+                        restoring = false,
+                        errorMessage = friendly(error, "恢复失败"),
+                        restore = it.restore?.copy(active = false, status = "failed", error = error.message.orEmpty()),
+                    )
+                }
+            } finally {
+                restorePollJob?.cancel()
+                restorePollJob = null
+            }
+        }
+    }
+
+    private suspend fun pollRestoreProgress() {
+        val deadline = System.currentTimeMillis() + 120_000L
+        while (System.currentTimeMillis() < deadline) {
+            val progress = runCatching { repository.restoreProgress() }.getOrNull()
+            if (progress != null) {
+                _uiState.update { it.copy(restore = progress) }
+                if (progress.finished) return
+            }
+            delay(1000)
+        }
     }
 
     private fun friendly(error: Throwable, fallback: String): String =
