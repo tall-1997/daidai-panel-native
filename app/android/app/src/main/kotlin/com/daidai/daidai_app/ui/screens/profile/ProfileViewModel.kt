@@ -7,9 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.asRequestBody
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -106,10 +104,10 @@ class ProfileViewModel(
     fun uploadAvatar(bytes: ByteArray, filename: String) {
         viewModelScope.launch {
             try {
-                val mediaType = "application/octet-stream".toMediaType()
+                val mediaType = okhttp3.MediaType.parse("application/octet-stream")
                 val part = MultipartBody.Part.createFormData(
                     "avatar", filename,
-                    bytes.asRequestBody(mediaType),
+                    okhttp3.RequestBody.create(mediaType, bytes),
                 )
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM).addPart(part).build()
                 val builder = okhttp3.Request.Builder().url("$normalizedBaseUrl/api/auth/avatar").post(body)
