@@ -4,13 +4,9 @@ import com.daidai.daidai_app.data.model.NotificationChannel
 import com.daidai.daidai_app.data.model.NotificationChannelType
 import com.daidai.daidai_app.data.model.parseNotificationChannels
 import com.daidai.daidai_app.data.model.parseNotificationChannelTypes
-import com.daidai.daidai_app.data.remote.PanelApiException
+import com.daidai.daidai_app.data.remote.PanelRequests
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 /**
@@ -19,29 +15,26 @@ import org.json.JSONObject
  * 调用 `GET /api/tasks/notification-channels` 拉取渠道列表，
  * `GET /api/notifications/types` 拉取渠道类型 schema，
  * `POST /api/notifications/send` 发送测试通知。
- * 网络访问保持独立于 Compose 屏幕（对齐阶段 0 的 [OkHttpClient] 惯例），
- * 通过注入的 baseUrl + accessToken 拼装请求，不修改既有网络/存储模块。
+ * 网络访问统一走 [PanelRequests]（进程级共享 OkHttp、Origin 头与 401 单飞刷新），
+ * 与其余自包含仓库保持同一传输层。
  *
  * @param baseUrl 面板服务地址（不含结尾斜杠，会自动规整）
  * @param accessToken 登录后取得的访问令牌，用于 `Authorization: Bearer`
- * @param httpClient 可注入的 OkHttp 客户端，便于测试
  */
 class NotificationsRepository(
     baseUrl: String,
     private val accessToken: String? = null,
-    private val httpClient: OkHttpClient = OkHttpClient(),
 ) {
     private val baseUrl: String = baseUrl.trim().trimEnd('/')
 
     /** 拉取全部通知渠道。HTTP 失败时抛出 [PanelApiException]。 */
     suspend fun getChannels(): List<NotificationChannel> = withContext(Dispatchers.IO) {
-        val builder = Request.Builder().url(baseUrl + "/api/tasks/notification-channels")
-        accessToken?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
-        httpClient.newCall(builder.get().build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw PanelApiException(response.code, body)
-            parseNotificationChannels(body)
-        }
+        val body = PanelRequests.execute(
+            "GET",
+            baseUrl + "/api/tasks/notification-channels",
+            accessToken = accessToken,
+        )
+        parseNotificationChannels(body)
     }
 
     /**
@@ -49,13 +42,12 @@ class NotificationsRepository(
      * HTTP 失败时抛出 [PanelApiException]。
      */
     suspend fun getChannelTypes(): List<NotificationChannelType> = withContext(Dispatchers.IO) {
-        val builder = Request.Builder().url(baseUrl + "/api/notifications/types")
-        accessToken?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
-        httpClient.newCall(builder.get().build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw PanelApiException(response.code, body)
-            parseNotificationChannelTypes(body)
-        }
+        val body = PanelRequests.execute(
+            "GET",
+            baseUrl + "/api/notifications/types",
+            accessToken = accessToken,
+        )
+        parseNotificationChannelTypes(body)
     }
 
     /**
@@ -71,20 +63,14 @@ class NotificationsRepository(
             .put("content", "通知渠道配置正常（类型：$type）")
             .put("type", type)
             .put("config", JSONObject(config))
-        val builder = Request.Builder().url(baseUrl + "/api/notifications/send")
-        accessToken?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
-        builder.post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-        httpClient.newCall(builder.build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw PanelApiException(response.code, body)
-            runCatching {
-                val json = JSONObject(body)
-                json.optString("message").takeIf { it.isNotBlank() }
-            }.getOrNull() ?: "测试通知已发送"
-        }
-    }
-
-    private companion object {
-        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        val body = PanelRequests.execute(
+            "POST",
+            baseUrl + "/api/notifications/send",
+            json = payload.toString(),
+            accessToken = accessToken,
+        )
+        return runCatching {
+            JSONObject(body).optString("message").takeIf { it.isNotBlank() }
+        }.getOrNull() ?: "测试通知已发送"
     }
 }

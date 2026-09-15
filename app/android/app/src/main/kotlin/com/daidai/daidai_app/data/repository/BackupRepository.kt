@@ -8,11 +8,8 @@ import com.daidai.daidai_app.data.model.HealthCheckResult
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
 import com.daidai.daidai_app.data.remote.PanelRequests
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +29,6 @@ import java.util.concurrent.TimeUnit
  */
 class BackupRepository(
     context: Context,
-    private val httpClient: OkHttpClient = defaultHttpClient(),
 ) {
     private val appContext = context.applicationContext
 
@@ -144,25 +140,18 @@ class BackupRepository(
         }
     }
 
-    private fun execute(method: String, conn: Connection, path: String, body: String?): String {
-        val builder = Request.Builder().url(conn.baseUrl + path)
-        conn.accessToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("Authorization", "Bearer $it") }
-        conn.localToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("x-daidai-local-token", it) }
-        when (method) {
-            "GET" -> builder.get()
-            "POST" -> builder.post((body ?: "{}").toRequestBody(JSON_MEDIA_TYPE))
-            "DELETE" -> builder.delete()
+    private fun execute(method: String, conn: Connection, path: String, body: String?): String =
+        try {
+            PanelRequests.execute(
+                method,
+                conn.baseUrl + path,
+                json = body,
+                accessToken = conn.accessToken,
+                localToken = conn.localToken,
+            )
+        } catch (failure: PanelApiException) {
+            throw BackupRepositoryException(failure.statusCode, failure.responseBody)
         }
-        httpClient.newCall(builder.build()).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw BackupRepositoryException(response.code, raw)
-            }
-            return raw
-        }
-    }
 
     /** 后端成功响应的通用载体（备份创建/删除）。 */
     data class JsonResult(
@@ -176,8 +165,4 @@ class BackupRepository(
         val rawBody: String = "",
     ) : Exception("系统操作请求失败（HTTP $code${if (rawBody.isBlank()) "" else ": $rawBody"}）")
 
-    private companion object {
-        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        fun defaultHttpClient(): OkHttpClient = PanelRequests.sharedClient
-    }
 }

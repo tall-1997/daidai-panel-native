@@ -7,7 +7,8 @@ import com.daidai.daidai_app.data.model.SystemInfo
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
+import com.daidai.daidai_app.data.remote.PanelApiException
+import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.Request
 import org.json.JSONObject
 
@@ -27,7 +28,6 @@ import org.json.JSONObject
  */
 class DashboardRepository(
     context: Context,
-    private val httpClient: OkHttpClient = OkHttpClient(),
 ) {
     private val appContext = context.applicationContext
     private val configRepo = AppServices.configRepository(context)
@@ -79,21 +79,17 @@ class DashboardRepository(
         return data
     }
 
-    private fun get(conn: Connection, path: String): String {
-        val builder = Request.Builder().url(conn.baseUrl + path)
-        conn.accessToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("Authorization", "Bearer $it") }
-        conn.localToken?.takeIf { it.isNotBlank() }
-            ?.let { builder.header("x-daidai-local-token", it) }
-        builder.get()
-        httpClient.newCall(builder.build()).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw DashboardRepositoryException(response.code, body)
-            }
-            return body
+    private fun get(conn: Connection, path: String): String =
+        try {
+            PanelRequests.execute(
+                "GET",
+                conn.baseUrl + path,
+                accessToken = conn.accessToken,
+                localToken = conn.localToken,
+            )
+        } catch (failure: PanelApiException) {
+            throw DashboardRepositoryException(failure.statusCode, failure.responseBody)
         }
-    }
 }
 
 /** 阶段 2-1 仓库的聚合结果。 */
