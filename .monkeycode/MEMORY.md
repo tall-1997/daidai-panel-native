@@ -140,3 +140,5 @@ Entries discovered by the Agent during task execution should follow this format:
   - CI（ci.yml / android-release.yml）已去 Flutter：Kotlin 单测直接 `gradle -p android :app:testReleaseUnitTest`，release 构建循环 `ANDROID_RUNTIME_ABIS=<abi> gradle -p android :app:assembleRelease ...`，并对 APK 强制校验不包含 `libflutter.so`。
   - `app/ios/` 残留未删（跨端决策另行评估，见 docs/ios-residue-assessment.md）；`app/assets`（Panel Web 本地资源）保留，与 Flutter 引擎无关。
   - 旧的 flutter_miuix 主题类记忆（2026-09-11 条目）为历史记录：`app/pubspec.yaml` 已删除，不再有 Flutter/Dart 依赖配置；MIUIX 视觉风格现由 Compose 侧 `top.yukonga.miuix.kmp:miuix-android` 提供。
+  - Android 客户端 `material-icons-core` 只含基础图标集：`Star` 可用，`ContentCopy` 等 extended 图标不可 import（编译失败），需要时用 TextButton 文字按钮替代。
+  - Kotlin 正则插入 data class 属性时勿用「替换第一个 `)`」的脚本手法（会命中字段默认值里的 `emptyList()`）；okhttp 5 起 `MediaType.parse` 为 error 级弃用，须用 `"mime".toMediaType()`。
