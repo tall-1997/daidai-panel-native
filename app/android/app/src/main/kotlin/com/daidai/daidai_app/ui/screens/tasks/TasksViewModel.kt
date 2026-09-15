@@ -165,6 +165,46 @@ class TasksViewModel(
     }
 
     /** 清除一次性错误提示与暂态成功标记。 */
+    fun setPinned(id: Long, pinned: Boolean) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            try {
+                repo.setPinned(id, pinned)
+                reloadAfterMutation()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message?.takeIf(String::isNotBlank) ?: "置顶操作失败") }
+            }
+        }
+    }
+
+    fun copyTask(id: Long) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            try {
+                repo.copyTask(id)
+                reloadAfterMutation()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message?.takeIf(String::isNotBlank) ?: "复制任务失败") }
+            }
+        }
+    }
+
+    fun batchRun(ids: List<Long>, onDone: (Int) -> Unit = {}) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            try {
+                val count = repo.batchRun(ids)
+                reloadAfterMutation()
+                onDone(count)
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message?.takeIf(String::isNotBlank) ?: "批量运行失败") }
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null, busyTaskId = null, mutationSucceeded = false) }
     }

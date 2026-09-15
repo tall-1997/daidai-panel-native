@@ -56,6 +56,7 @@ fun NotificationListScreen(
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
     var showPushConfig by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<com.daidai.daidai_app.data.model.NotificationChannel?>(null) }
 
     if (showPushConfig) {
         PushConfigScreen(
@@ -90,7 +91,7 @@ fun NotificationListScreen(
         }
         when {
             state.isLoading -> LoadingContent(Modifier.fillMaxSize())
-            state.errorMessage != null -> ErrorContent(
+            state.errorMessage != null && state.channels.isEmpty() -> ErrorContent(
                 message = state.errorMessage.orEmpty(),
                 onRetry = { screenViewModel.load() },
                 modifier = Modifier.fillMaxSize(),
@@ -98,9 +99,26 @@ fun NotificationListScreen(
             state.channels.isEmpty() -> EmptyContent(Modifier.fillMaxSize())
             else -> ChannelList(
                 channels = state.channels,
+                onToggle = { screenViewModel.setChannelEnabled(it.id, !it.enabled) },
+                onTest = { screenViewModel.testChannel(it) },
+                onDelete = { pendingDelete = it },
                 modifier = Modifier.fillMaxSize(),
             )
         }
+    }
+
+    pendingDelete?.let { channel ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除通知渠道") },
+            text = { Text("确定删除渠道“${channel.name.ifBlank { "渠道 #" + channel.id }}”？") },
+            confirmButton = {
+                TextButton(onClick = { screenViewModel.deleteChannel(channel.id); pendingDelete = null }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
     }
 }
 
@@ -162,20 +180,33 @@ private fun EmptyContent(modifier: Modifier = Modifier) {
 @Composable
 private fun ChannelList(
     channels: List<NotificationChannel>,
+    onToggle: (NotificationChannel) -> Unit = {},
+    onTest: (NotificationChannel) -> Unit = {},
+    onDelete: (NotificationChannel) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(channels) { channel ->
-            ChannelCard(channel)
+        items(channels, key = { it.id }) { channel ->
+            ChannelCard(
+                channel = channel,
+                onToggle = { onToggle(channel) },
+                onTest = { onTest(channel) },
+                onDelete = { onDelete(channel) },
+            )
         }
     }
 }
 
 @Composable
-private fun ChannelCard(channel: NotificationChannel) {
+private fun ChannelCard(
+    channel: NotificationChannel,
+    onToggle: () -> Unit = {},
+    onTest: () -> Unit = {},
+    onDelete: () -> Unit = {},
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -204,12 +235,18 @@ private fun ChannelCard(channel: NotificationChannel) {
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    if (channel.enabled) "已启用" else "已停用",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (channel.enabled) AppColors.successColor else AppColors.slate500,
-                )
-                Switch(checked = channel.enabled, onCheckedChange = null)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (channel.enabled) "已启用" else "已停用",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (channel.enabled) AppColors.successColor else AppColors.slate500,
+                    )
+                    Switch(checked = channel.enabled, onCheckedChange = { onToggle() })
+                }
+                Row {
+                    TextButton(onClick = onTest) { Text("测试") }
+                    TextButton(onClick = onDelete) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                }
             }
         }
     }

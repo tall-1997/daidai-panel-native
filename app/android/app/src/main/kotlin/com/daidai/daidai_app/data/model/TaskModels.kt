@@ -33,7 +33,9 @@ data class Task(
     val name: String = "",
     val scriptPath: String = "",
     val schedule: String = "",
-    val schedules: List<String> = emptyList(),
+    val schedules: List<String> = emptyList(,
+    val pinned: Boolean = false,
+),
     val type: String = "cron",
     val status: Double = 0.0,
     val createdAt: String = "",
@@ -97,6 +99,7 @@ data class Task(
                 }
             },
             type = json.optString("task_type").takeIf { it.isNotEmpty() } ?: "cron",
+            pinned = json.optBoolean("pinned"),
             status = json.optDouble("status", 0.0),
             createdAt = json.optString("created_at").takeIf { it.isNotEmpty() && it != "null" } ?: "",
             updatedAt = json.optString("updated_at").takeIf { it.isNotEmpty() && it != "null" } ?: "",

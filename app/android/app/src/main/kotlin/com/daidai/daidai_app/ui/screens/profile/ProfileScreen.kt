@@ -22,6 +22,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -242,4 +245,40 @@ private fun InfoRow(label: String, value: String) {
             color = AppColors.slate800,
         )
     }
+}
+
+
+@Composable
+private fun AccountValueDialog(
+    title: String,
+    fields: List<Pair<String, Boolean>>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit,
+) {
+    val values = remember { androidx.compose.runtime.mutableStateListOf(*fields.map { "" }.toTypedArray()) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                fields.forEachIndexed { index, (label, secret) ->
+                    androidx.compose.material3.OutlinedTextField(
+                        value = values[index],
+                        onValueChange = { values[index] = it },
+                        label = { Text(label) },
+                        singleLine = true,
+                        visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation()
+                        else androidx.compose.ui.text.input.VisualTransformation.None,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = { onConfirm(values.toList()) },
+                enabled = values.all { it.isNotBlank() },
+            ) { Text("确定") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }

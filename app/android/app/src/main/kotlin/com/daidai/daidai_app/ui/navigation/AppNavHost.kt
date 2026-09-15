@@ -58,6 +58,7 @@ import com.daidai.daidai_app.ui.screens.profile.ProfileScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptListScreen
 import com.daidai.daidai_app.ui.screens.scripts.ScriptViewScreen
 import com.daidai.daidai_app.ui.screens.security.SecurityScreen
+import com.daidai.daidai_app.ui.screens.security.SshKeysScreen
 import com.daidai.daidai_app.ui.screens.settings.SettingsEntry
 import com.daidai.daidai_app.ui.screens.settings.SettingsScreen
 import com.daidai.daidai_app.ui.screens.settings.SystemSettingsScreen
@@ -227,6 +228,9 @@ fun AppNavHost(modifier: Modifier = Modifier) {
         composable(Routes.SECURITY) {
             SecurityScreen()
         }
+        composable(Routes.SECURITY_SSH_KEYS) {
+            SshKeysScreen()
+        }
         composable(Routes.APPLOCK) {
             AppLockSettingsScreen()
         }
@@ -344,6 +348,7 @@ fun MoreEntryListScreen(onOpen: (String) -> Unit, modifier: Modifier = Modifier)
         Triple(Routes.PROFILE, "个人中心", "账号资料与退出登录"),
         Triple(Routes.SETTINGS, "设置", "应用与面板的各项设置入口"),
         Triple(Routes.SECURITY, "安全", "登录日志、在线会话与审计"),
+        Triple(Routes.SECURITY_SSH_KEYS, "SSH 密钥", "订阅拉取与部署用的私钥管理"),
         Triple(Routes.APPLOCK, "应用锁", "密码 / 图案 / 生物识别锁"),
         Triple(Routes.USERS, "用户", "面板本地用户与权限管理"),
         Triple(Routes.SETTINGS_SYSTEM, "系统设置", "时区、语言、代理与更新"),

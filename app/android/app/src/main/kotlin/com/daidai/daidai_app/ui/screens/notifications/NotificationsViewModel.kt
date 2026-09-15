@@ -34,6 +34,42 @@ class NotificationsViewModel(
     }
 
     /** 拉取渠道列表（重试/刷新入口）。成功时填充 channels，失败时写 errorMessage。 */
+    fun setChannelEnabled(id: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                repository.setChannelEnabled(id, enabled)
+                load()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message ?: "启停失败") }
+            }
+        }
+    }
+
+    fun testChannel(channel: com.daidai.daidai_app.data.model.NotificationChannel) {
+        viewModelScope.launch {
+            try {
+                repository.testChannel(channel.id)
+                _uiState.update { it.copy(errorMessage = null) }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message ?: "测试发送失败") }
+            }
+        }
+    }
+
+    fun deleteChannel(id: Long) {
+        viewModelScope.launch {
+            try {
+                repository.deleteChannel(id)
+                load()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(errorMessage = error.message ?: "删除失败") }
+            }
+        }
+    }
+
     fun load() {
         if (_uiState.value.isLoading) return
         _uiState.update { it.copy(isLoading = true, errorMessage = null) }

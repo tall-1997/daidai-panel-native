@@ -9,6 +9,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,6 +58,90 @@ class ProfileViewModel(
     private val localToken: String? = null,
 ) : ViewModel() {
     private val normalizedBaseUrl: String = baseUrl.trim().trimEnd('/')
+
+    /** 账号操作结果提示（UI 消费后经 consumeNotice 复位）。 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+    fun consumeNotice() { _notice.value = null }
+
+    /** 修改自己的登录密码（PUT /api/auth/password）。 */
+    fun changePassword(oldPassword: String, newPassword: String) {
+        viewModelScope.launch {
+            try {
+                com.daidai.daidai_app.data.remote.PanelRequests.execute(
+                    "PUT",
+                    "$normalizedBaseUrl/api/auth/password",
+                    json = JSONObject().put("old_password", oldPassword).put("new_password", newPassword).toString(),
+                    accessToken = accessToken,
+                    localToken = localToken,
+                )
+                _notice.value = "密码已更新"
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "修改密码失败"
+            }
+        }
+    }
+
+    /** 修改自己的用户名（PUT /api/auth/username）。 */
+    fun changeUsername(username: String) {
+        viewModelScope.launch {
+            try {
+                com.daidai.daidai_app.data.remote.PanelRequests.execute(
+                    "PUT",
+                    "$normalizedBaseUrl/api/auth/username",
+                    json = JSONObject().put("username", username).toString(),
+                    accessToken = accessToken,
+                    localToken = localToken,
+                )
+                _notice.value = "用户名已更新"
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "修改用户名失败"
+            }
+        }
+    }
+
+    /** 上传头像（multipart 字段名 avatar，≤5MB，对齐服务端校验）。 */
+    fun uploadAvatar(bytes: ByteArray, filename: String) {
+        viewModelScope.launch {
+            try {
+                val mediaType = "application/octet-stream".toMediaType()
+                val part = MultipartBody.Part.createFormData(
+                    "avatar", filename,
+                    bytes.asRequestBody(mediaType),
+                )
+                val body = MultipartBody.Builder().setType(MultipartBody.FORM).addPart(part).build()
+                val builder = okhttp3.Request.Builder().url("$normalizedBaseUrl/api/auth/avatar").post(body)
+                accessToken?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
+                localToken?.takeIf { it.isNotBlank() }?.let { builder.header("x-daidai-local-token", it) }
+                com.daidai.daidai_app.data.remote.PanelRequests.sharedClient.newCall(builder.build()).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw com.daidai.daidai_app.data.remote.PanelApiException(response.code, text)
+                }
+                _notice.value = "头像已上传"
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "头像上传失败"
+            }
+        }
+    }
+
+    /** 删除头像（DELETE /api/auth/avatar）。 */
+    fun deleteAvatar() {
+        viewModelScope.launch {
+            try {
+                com.daidai.daidai_app.data.remote.PanelRequests.execute(
+                    "DELETE", "$normalizedBaseUrl/api/auth/avatar",
+                    accessToken = accessToken, localToken = localToken,
+                )
+                _notice.value = "头像已删除"
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _notice.value = error.message?.takeIf(String::isNotBlank) ?: "头像删除失败"
+            }
+        }
+    }
 
     private val _uiState = MutableStateFlow<ProfileUiState>(ProfileUiState.Loading)
     val uiState: StateFlow<ProfileUiState> = _uiState.asStateFlow()

@@ -9,6 +9,7 @@ import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +33,6 @@ interface TasksRepository {
     /** 删除指定任务。 */
     suspend fun deleteTask(id: Long)
 
-    /** 立即运行指定任务（PUT /api/tasks/:id/run）。 */
     suspend fun runTask(id: Long)
 
     /** 启停切换：启用走 /enable，禁用走 /disable。 */
@@ -73,6 +73,23 @@ class PanelTasksRepository(
         withContext(Dispatchers.IO) {
             execute("DELETE", "$baseUrl/api/tasks/$id")
         }
+    }
+
+    override suspend fun setPinned(id: Long, pinned: Boolean) = withContext(Dispatchers.IO) {
+        execute("PUT", "$baseUrl/api/tasks/$id/${if (pinned) "pin" else "unpin"}")
+    }
+
+    override suspend fun copyTask(id: Long): Long = withContext(Dispatchers.IO) {
+        val body = execute("POST", "$baseUrl/api/tasks/$id/copy")
+        JSONObject(body).optJSONObject("data")?.optLong("id") ?: 0L
+    }
+
+    override suspend fun batchRun(ids: List<Long>): Int = withContext(Dispatchers.IO) {
+        require(ids.isNotEmpty()) { "请选择要运行的任务" }
+        require(ids.size <= 10) { "批量运行最多 10 个任务" }
+        val payload = JSONObject().put("task_ids", JSONArray(ids))
+        val body = execute("POST", "$baseUrl/api/tasks/batch/run", payload.toString())
+        JSONObject(body).optInt("count", ids.size)
     }
 
     override suspend fun runTask(id: Long) {

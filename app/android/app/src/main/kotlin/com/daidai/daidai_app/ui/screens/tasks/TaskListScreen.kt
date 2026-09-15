@@ -19,7 +19,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,6 +110,9 @@ fun TaskListScreen(
                         onRun = screenViewModel::runTask,
                         onDelete = screenViewModel::deleteTask,
                         onEdit = onEditTask,
+                        onPin = screenViewModel::setPinned,
+                        onCopy = screenViewModel::copyTask,
+                        onBatchRun = { ids -> screenViewModel.batchRun(ids) },
                         onClearError = screenViewModel::clearError,
                     )
                 }
@@ -152,10 +157,40 @@ private fun TaskList(
     onRun: (Long) -> Unit,
     onDelete: (Long) -> Unit,
     onEdit: (Task) -> Unit,
+    onPin: (Long, Boolean) -> Unit,
+    onCopy: (Long) -> Unit,
+    onBatchRun: (List<Long>) -> Unit,
     onClearError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selecting by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
     Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selecting) {
+                Text(
+                    "已选 ${selectedIds.size}/10",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { selecting = false; selectedIds = emptySet() }) { Text("取消") }
+                Button(
+                    onClick = {
+                        onBatchRun(selectedIds.toList())
+                        selecting = false
+                        selectedIds = emptySet()
+                    },
+                    enabled = selectedIds.isNotEmpty() && selectedIds.size <= 10,
+                ) { Text("运行所选") }
+            } else {
+                TextButton(onClick = { selecting = true }) { Text("批量运行") }
+            }
+        }
         if (errorMessage != null) {
             Row(
                 modifier = Modifier
@@ -186,10 +221,17 @@ private fun TaskList(
                 TaskCard(
                     task = task,
                     busy = busyTaskId == task.id,
+                    selected = selecting && task.id in selectedIds,
+                    selecting = selecting,
+                    onSelectToggle = {
+                        selectedIds = if (task.id in selectedIds) selectedIds - task.id else selectedIds + task.id
+                    },
                     onToggle = { onToggle(task.id, !task.enabled) },
                     onRun = { onRun(task.id) },
                     onDelete = { onDelete(task.id) },
                     onEdit = { onEdit(task) },
+                    onPin = { onPin(task.id, !task.pinned) },
+                    onCopy = { onCopy(task.id) },
                 )
             }
         }
@@ -200,10 +242,15 @@ private fun TaskList(
 private fun TaskCard(
     task: Task,
     busy: Boolean,
+    selected: Boolean,
+    selecting: Boolean,
+    onSelectToggle: () -> Unit,
     onToggle: () -> Unit,
     onRun: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
+    onPin: () -> Unit,
+    onCopy: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -290,6 +337,31 @@ private fun TaskCard(
                     Icons.Filled.PlayArrow,
                     contentDescription = "运行",
                     tint = AppColors.primary,
+                )
+            }
+            if (selecting) {
+                androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { onSelectToggle() })
+            }
+            IconButton(
+                onClick = onPin,
+                enabled = !busy,
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Star,
+                    contentDescription = if (task.pinned) "取消置顶" else "置顶",
+                    tint = if (task.pinned) AppColors.primary else AppColors.slate500,
+                )
+            }
+            IconButton(
+                onClick = onCopy,
+                enabled = !busy,
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    Icons.Filled.ContentCopy,
+                    contentDescription = "复制任务",
+                    tint = AppColors.slate600,
                 )
             }
             IconButton(
