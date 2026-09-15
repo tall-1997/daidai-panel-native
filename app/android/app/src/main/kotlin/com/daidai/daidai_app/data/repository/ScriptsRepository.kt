@@ -232,7 +232,7 @@ class PanelScriptsRepository(
     override suspend fun getVersion(versionId: Long): ScriptVersion? =
         withContext(Dispatchers.IO) {
             try {
-                val body = execute("GET", "$baseUrl/api/scripts/versions/$versionId")
+                val body = execute("GET", "$baseUrl/api/scripts/versions/$versionId", null)
                 val raw = dataOrBody(body)
                 if (raw is JSONObject) ScriptVersion.fromJson(raw) else null
             } catch (error: PanelApiException) {
@@ -243,7 +243,7 @@ class PanelScriptsRepository(
 
     override suspend fun rollbackVersion(versionId: Long): Int? =
         withContext(Dispatchers.IO) {
-            val body = execute("PUT", "$baseUrl/api/scripts/versions/$versionId/rollback")
+            val body = execute("PUT", "$baseUrl/api/scripts/versions/$versionId/rollback", null)
             val raw = dataOrBody(body)
             val obj = if (raw is JSONObject) raw else JSONObject()
             obj.optInt("version").let { if (it > 0) it else null }

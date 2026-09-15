@@ -161,5 +161,5 @@ private class GeetestWebViewBridge(
     }
 
     @JavascriptInterface
-    fun onError(message: String) = onError(message)
+    fun reportError(message: String) = onError(message)
 }

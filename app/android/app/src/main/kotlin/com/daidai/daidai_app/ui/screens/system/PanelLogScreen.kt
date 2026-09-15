@@ -148,13 +148,13 @@ fun PanelLogScreen(
             when {
                 loading -> LoadingView()
                 error != null -> ErrorView(message = error ?: "加载失败", onRetry = { lines = lines })
-                page == null || page.lines.isEmpty() -> EmptyView(title = "暂无日志", description = "调整筛选条件或稍后重试")
+                page == null || page!!.lines.isEmpty() -> EmptyView(title = "暂无日志", description = "调整筛选条件或稍后重试")
                 else -> SelectionContainer {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        items(page.lines.size) { index ->
+                        items(page!!.lines.size) { index ->
                             val text = page.lines[index]
                             Text(
                                 text = text,

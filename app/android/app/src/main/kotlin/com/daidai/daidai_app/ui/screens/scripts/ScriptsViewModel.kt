@@ -234,18 +234,6 @@ class ScriptsViewModel(
             }
         }
     }
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                _uiState.update {
-                    it.copy(
-                        runningPath = null,
-                        actionError = error.message?.takeIf(String::isNotBlank)
-                            ?: "运行脚本失败",
-                    )
-                }
-            }
-        }
-    }
 
     fun stopScript(runId: String) {
         val repo = repository ?: return

@@ -27,6 +27,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.daidai.daidai_app.data.repository.BackupRepository
 import com.daidai.daidai_app.ui.components.ErrorView
@@ -205,11 +207,11 @@ private fun Row(
 private fun IconPlaceholder(label: String) {
     androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.foundation.layout.Box(
-            modifier = androidx.compose.foundation.layout.size(16.dp)
+            modifier = Modifier.size(16.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(AppColors.slate300),
         ) {}
-        androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.foundation.layout.size(6.dp))
+        androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(6.dp))
         Text(label, color = AppColors.slate500, style = MaterialTheme.typography.bodySmall)
     }
 }

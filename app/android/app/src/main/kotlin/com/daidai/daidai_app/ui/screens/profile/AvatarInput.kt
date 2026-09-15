@@ -6,7 +6,7 @@ import kotlinx.coroutines.ensureActive
 
 internal const val MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
-internal suspend fun readBoundedAvatar(input: InputStream): ByteArray {
+internal fun readBoundedAvatar(input: InputStream): ByteArray {
     val output = java.io.ByteArrayOutputStream()
     val buffer = ByteArray(8192)
     while (true) {
