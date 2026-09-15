@@ -1,6 +1,7 @@
 package com.daidai.daidai_app.ui.screens.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
