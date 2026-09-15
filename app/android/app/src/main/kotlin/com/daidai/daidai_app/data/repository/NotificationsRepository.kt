@@ -69,7 +69,7 @@ class NotificationsRepository(
             json = payload.toString(),
             accessToken = accessToken,
         )
-        return runCatching {
+        runCatching {
             JSONObject(body).optString("message").takeIf { it.isNotBlank() }
         }.getOrNull() ?: "测试通知已发送"
     }

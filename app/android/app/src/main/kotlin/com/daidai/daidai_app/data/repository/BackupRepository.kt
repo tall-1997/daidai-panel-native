@@ -8,6 +8,7 @@ import com.daidai.daidai_app.data.model.HealthCheckResult
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.daidai.daidai_app.data.remote.PanelApiException
 import com.daidai.daidai_app.data.remote.PanelRequests
 import okhttp3.Request
 import org.json.JSONObject
