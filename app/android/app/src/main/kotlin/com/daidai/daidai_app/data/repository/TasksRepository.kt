@@ -33,6 +33,15 @@ interface TasksRepository {
     /** 删除指定任务。 */
     suspend fun deleteTask(id: Long)
 
+    /** 置顶/取消置顶（PUT /api/tasks/:id/pin|unpin）。 */
+    suspend fun setPinned(id: Long, pinned: Boolean)
+
+    /** 复制任务（POST /api/tasks/:id/copy），返回新任务 id。 */
+    suspend fun copyTask(id: Long): Long
+
+    /** 批量运行（POST /api/tasks/batch/run，最多 10 个）。 */
+    suspend fun batchRun(ids: List<Long>): Int
+
     suspend fun runTask(id: Long)
 
     /** 启停切换：启用走 /enable，禁用走 /disable。 */

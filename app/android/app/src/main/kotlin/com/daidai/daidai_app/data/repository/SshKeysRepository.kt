@@ -35,11 +35,6 @@ class SshKeysRepository(
 ) {
     private val baseUrl: String = baseUrl.trim().trimEnd('/')
 
-    private fun execute(method: String, path: String, json: String? = null): String =
-        withContext(Dispatchers.IO) {
-            PanelRequests.execute(method, baseUrl + path, json, accessToken = accessToken)
-        }
-
     suspend fun list(): List<SshKey> = withContext(Dispatchers.IO) {
         val body = PanelRequests.execute("GET", "$baseUrl/api/ssh-keys", accessToken = accessToken)
         val data = runCatching { JSONObject(body).optJSONArray("data") }.getOrNull() ?: JSONArray()

@@ -73,4 +73,22 @@ class NotificationsRepository(
             JSONObject(body).optString("message").takeIf { it.isNotBlank() }
         }.getOrNull() ?: "测试通知已发送"
     }
+
+    suspend fun setChannelEnabled(id: Long, enabled: Boolean) = withContext(Dispatchers.IO) {
+        PanelRequests.execute(
+            "PUT", baseUrl + "/api/notifications/$id/" + if (enabled) "enable" else "disable",
+            accessToken = accessToken,
+        )
+    }
+
+    suspend fun deleteChannel(id: Long) = withContext(Dispatchers.IO) {
+        PanelRequests.execute("DELETE", baseUrl + "/api/notifications/$id", accessToken = accessToken)
+    }
+
+    suspend fun testChannel(id: Long): String = withContext(Dispatchers.IO) {
+        val body = PanelRequests.execute(
+            "POST", baseUrl + "/api/notifications/$id/test", json = "{}", accessToken = accessToken,
+        )
+        runCatching { JSONObject(body).optString("message").takeIf { it.isNotBlank() } }.getOrNull() ?: "测试通知已发送"
+    }
 }
