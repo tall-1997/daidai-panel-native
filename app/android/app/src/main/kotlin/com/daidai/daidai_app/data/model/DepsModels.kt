@@ -15,10 +15,11 @@ import org.json.JSONObject
  * 的 type + names + python_version。
  */
 
-/** 安装包管理器：pip = Python，npm = Node.js。 */
+/** 安装包管理器：pip = Python，npm = Node.js，system = Linux 系统包。 */
 enum class DepManager(val id: String, val label: String, val backendType: String) {
     Pip("pip", "pip (Python)", "python"),
-    Npm("npm", "npm (Node.js)", "nodejs");
+    Npm("npm", "npm (Node.js)", "nodejs"),
+    System("system", "系统包", "system");
 
     companion object {
         fun fromId(id: String?): DepManager =
@@ -63,19 +64,29 @@ data class DepItem(
                 status = rawStatus,
             )
         }
+    }
 
-        /** 后端状态字 → 面向用户的中文文案；未知状态原样返回。 */
-        fun statusLabel(status: String): String = when (status) {
-            "installed" -> "已安装"
-            "installing" -> "安装中"
-            "queued" -> "排队中"
-            "failed" -> "失败"
-            "removing" -> "卸载中"
-            "cancelled" -> "已取消"
-            else -> status.ifEmpty { "-" }
-        }
+    /** 后端状态字 → 面向用户的中文文案；未知状态原样返回。 */
+    fun statusLabel(status: String): String = when (status) {
+        "installed" -> "已安装"
+        "installing" -> "安装中"
+        "queued" -> "排队中"
+        "failed" -> "失败"
+        "removing" -> "卸载中"
+        "cancelled" -> "已取消"
+        else -> status.ifEmpty { "-" }
     }
 }
+
+/**
+ * 系统包信息（对应系统包管理器）。
+ */
+data class SystemPackage(
+    val name: String = "",
+    val version: String = "",
+    val description: String = "",
+    val source: String = "", // apk/apt/dnf/yum/microdnf/zypper
+)
 
 /**
  * 安装依赖的请求载体（提交表单）。
@@ -91,6 +102,12 @@ data class DepInstallRequest(
     val isValid: Boolean get() = packageName.isNotBlank()
 }
 
+/** 系统包安装结果 */
+data class SystemPackageInstallResult(val success: Boolean = false, val message: String = "")
+
+/** 系统包卸载结果 */
+data class SystemPackageUninstallResult(val success: Boolean = false, val message: String = "")
+
 /** 解析后端列表响应 `{data:[...], total:N}`，取 data 数组映射为 [DepItem]。 */
 fun parseDepItems(rawBody: String): List<DepItem> {
     val array: JSONArray = try {
@@ -102,6 +119,26 @@ fun parseDepItems(rawBody: String): List<DepItem> {
     for (i in 0 until array.length()) {
         val element = array.optJSONObject(i) ?: continue
         result.add(DepItem.fromJson(element))
+    }
+    return result
+}
+
+/** 解析后端系统包列表响应 `{data:[...]}`，取 data 数组映射为 [SystemPackage]。 */
+fun parseSystemPackages(rawBody: String): List<SystemPackage> {
+    val array: JSONArray = try {
+        JSONObject(rawBody).optJSONArray("data") ?: JSONArray()
+    } catch (_: Exception) {
+        JSONArray()
+    }
+    val result = ArrayList<SystemPackage>(array.length())
+    for (i in 0 until array.length()) {
+        val obj = array.optJSONObject(i) ?: continue
+        result.add(SystemPackage(
+            name = obj.optString("name"),
+            version = obj.optString("version"),
+            description = obj.optString("description"),
+            source = obj.optString("source"),
+        ))
     }
     return result
 }

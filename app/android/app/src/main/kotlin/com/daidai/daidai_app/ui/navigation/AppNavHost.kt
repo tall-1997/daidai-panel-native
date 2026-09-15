@@ -45,7 +45,7 @@ import com.daidai.daidai_app.ui.screens.ServerConfigScreen
 import com.daidai.daidai_app.ui.screens.applock.AppLockGateScreen
 import com.daidai.daidai_app.ui.screens.applock.AppLockSettingsScreen
 import com.daidai.daidai_app.ui.screens.deps.DepInstallScreen
-import com.daidai.daidai_app.ui.screens.deps.DepListScreen
+import com.daidai.daidai_app.ui.screens.deps.DepsScreen
 import com.daidai.daidai_app.ui.screens.envs.EnvFormScreen
 import com.daidai.daidai_app.ui.screens.envs.EnvListScreen
 import com.daidai.daidai_app.ui.screens.logs.LogListScreen
@@ -328,7 +328,7 @@ fun AppNavHost(modifier: Modifier = Modifier) {
             ScriptViewScreen(path = NavSelections.task?.scriptPath ?: "", onBack = { navController.popBackStack() })
         }
         composable(Routes.DEPS) {
-            DepListScreen(onNavigateToInstall = { navController.navigate(Routes.DEPS_INSTALL) })
+            DepsScreen(onNavigateToInstall = { navController.navigate(Routes.DEPS_INSTALL) })
         }
         composable(Routes.DEPS_INSTALL) {
             DepInstallScreen(onAfterSubmit = { navController.popBackStack() })

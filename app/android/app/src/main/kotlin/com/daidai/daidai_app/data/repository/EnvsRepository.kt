@@ -62,6 +62,9 @@ interface EnvsRepository {
 
     /** 更新指定环境变量的分组（全量覆盖）。 */
     suspend fun setGroups(id: Long, groups: List<String>)
+
+    /** 持久化分组排序：把分组 ID 按新顺序提交到后端。 */
+    suspend fun reorderGroups(groupIds: List<Long>)
 }
 
 /** 批量导入结果。 */
@@ -214,6 +217,13 @@ class PanelEnvsRepository(
             .put("id", id)
             .put("groups", JSONArray(groups))
         execute("PUT", "$baseUrl/api/envs/batch/group", json.toString())
+        Unit
+    }
+
+    override suspend fun reorderGroups(groupIds: List<Long>) = withContext(Dispatchers.IO) {
+        val json = JSONObject()
+            .put("group_ids", JSONArray(groupIds))
+        execute("PUT", "$baseUrl/api/envs/groups/reorder", json.toString())
         Unit
     }
 

@@ -50,7 +50,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daidai.daidai_app.data.model.AuditLog
 import com.daidai.daidai_app.data.model.IpWhitelistEntry
@@ -132,6 +135,10 @@ private fun SecurityLoaded(
     onAddIpWhitelist: (String, String) -> Unit,
     onRemoveIpWhitelist: (Long) -> Unit,
     onSavePolicy: (Int, Int) -> Unit,
+    onEnable2fa: () -> Unit,
+    onDisable2fa: (String) -> Unit,
+    onVerify2fa: (String) -> Unit,
+    onForceLogout: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -150,16 +157,23 @@ private fun SecurityLoaded(
             SecurityUiState.SecurityTab.Sessions -> SessionsContent(
                 sessions = state.sessions,
                 error = state.sessionsError,
-                busy = state.actionBusy,
+                busy = state.actionBusy || state.forceLogoutLoading,
                 onRetry = onRetry,
                 onRevokeSession = onRevokeSession,
                 onRevokeOthers = onRevokeOthers,
+                onForceLogout = onForceLogout,
+                forceLogoutLoading = state.forceLogoutLoading,
             )
             SecurityUiState.SecurityTab.AuditLogs -> AuditLogsContent(state.auditLogs, state.auditLogsError, onRetry)
             SecurityUiState.SecurityTab.TwoFactor -> TwoFactorContent(
                 status = state.twoFactor,
+                setup = state.twoFactorSetup,
+                setupError = state.twoFactorSetupError,
                 error = state.twoFactorError,
                 onRetry = onRetry,
+                onEnable2fa = onEnable2fa,
+                onDisable2fa = onDisable2fa,
+                onVerify2fa = onVerify2fa,
             )
             SecurityUiState.SecurityTab.IpWhitelist -> IpWhitelistContent(
                 entries = state.ipWhitelist,

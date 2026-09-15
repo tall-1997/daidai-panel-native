@@ -16,41 +16,47 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.daidai.daidai_app.data.model.LogChannel
 import com.daidai.daidai_app.data.model.LogEntry
 import com.daidai.daidai_app.data.model.LogStatus
 import com.daidai.daidai_app.data.repository.LogsRepository
 import com.daidai.daidai_app.di.AppServices
+import com.daidai.daidai_app.ui.components.LoadingView
+import com.daidai.daidai_app.ui.components.ErrorView
+import com.daidai.daidai_app.ui.components.EmptyView
 import com.daidai.daidai_app.ui.theme.AppColors
 
-/**
- * 运行日志列表页（Compose 原生，阶段 2-2）。
- *
- * 展示任务日志条目卡片（任务名 / 状态 / 耗时 / 时间 / 内容预览），覆盖
- * 加载中 / 空态 / 错误重试 / 分页上拉加载 / 单条删除。
- *
- * 依赖通过参数注入（repository / viewModel）；不传时默认用
- * [AppServices.configRepository] 读到的连接信息装配 [LogsRepository]。
- * **未接线导航**，本组件自包含可编译，集成阶段再接入 AppNavHost。
- */
 @Composable
 fun LogListScreen(
     modifier: Modifier = Modifier,
@@ -58,7 +64,7 @@ fun LogListScreen(
     viewModel: LogsViewModel? = null,
 ) {
     val context = LocalContext.current
-    val screenViewModel = viewModel ?: androidx.lifecycle.viewmodel.compose.viewModel(initializer = {
+    val screenViewModel = viewModel ?: viewModel(initializer = {
         val resolved = repository ?: run {
             val config = AppServices.configRepository(context).config.value
             LogsRepository(
@@ -69,51 +75,218 @@ fun LogListScreen(
         }
         LogsViewModel(resolved)
     })
+    
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
-
-    Box(
+    val listState = rememberLazyListState()
+    
+    // 自动滚动到最新
+    LaunchedEffect(state.logs) {
+        if (state.followMode) {
+            listState.animateScrollToItem(state.logs.size - 1)
+        }
+    }
+    
+    Column(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        // 搜索和控制区
+        SearchAndControls(
+            keyword = state.keyword,
+            followMode = state.followMode,
+            onKeywordChange = { screenViewModel.setSearchKeyword(it) },
+            onFollowModeChange = screenViewModel::setFollowMode,
+        )
+        
+        // Tab 行
+        TabRow(
+            channels = LogChannel.values().toList(),
+            selectedChannel = state.selectedChannel,
+            onChannelSelected = screenViewModel::selectChannel,
+        )
+        
+        // 日志列表
         when {
-            state.loading && state.logs.isEmpty() -> LoadingContent()
-            state.errorMessage != null && state.logs.isEmpty() -> ErrorContent(
-                message = state.errorMessage,
-                onRetry = screenViewModel::refresh,
+            state.loading && state.logs.isEmpty() -> {
+                LoadingView(modifier = Modifier.weight(1f))
+            }
+            state.errorMessage != null && state.logs.isEmpty() -> {
+                ErrorView(
+                    message = state.errorMessage,
+                    onRetry = screenViewModel::refresh,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            state.logs.isEmpty() -> {
+                EmptyView(
+                    message = "暂无日志",
+                    hint = "该分类下暂无日志",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            else -> {
+                LogList(
+                    state = state,
+                    listState = listState,
+                    onLoadMore = screenViewModel::loadMore,
+                    onDelete = screenViewModel::deleteLog,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        
+        // 清理配置区
+        CleanupConfigSection(
+            config = state.cleanupConfig,
+            onConfigChange = screenViewModel::updateCleanupConfig,
+            onCleanup = { screenViewModel.cleanupLogs(state.selectedChannel, config = state.cleanupConfig) },
+        )
+    }
+}
+
+@Composable
+private fun SearchAndControls(
+    keyword: String,
+    followMode: Boolean,
+    onKeywordChange: (String) -> Unit,
+    onFollowModeChange: (Boolean) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
+                value = keyword,
+                onValueChange = onKeywordChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                decorationBox = { innerTextField ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "搜索",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AppColors.slate400,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                        innerTextField()
+                    }
+                },
             )
-            state.logs.isEmpty() -> EmptyContent()
-            else -> LogList(
-                state = state,
-                onLoadMore = screenViewModel::loadMore,
-                onDelete = screenViewModel::deleteLog,
-            )
+            Spacer(Modifier.width(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .clickable { onFollowModeChange(!followMode) },
+            ) {
+                Text(
+                    text = if (followMode) "跟随" else "暂停",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (followMode) AppColors.success else AppColors.slate400,
+                )
+            }
         }
     }
 }
 
 @Composable
+private fun TabRow(
+    channels: List<LogChannel>,
+    selectedChannel: LogChannel,
+    onChannelSelected: (LogChannel) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        channels.forEach { channel ->
+            val isSelected = channel == selectedChannel
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (isSelected) AppColors.skyBlue else AppColors.slate100)
+                    .clickable { onChannelSelected(channel) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = channel.displayName,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (isSelected) FontWeight.W700 else FontWeight.W400,
+                    color = if (isSelected) AppColors.white else AppColors.slate700,
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
 private fun LogList(
     state: LogsUiState,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onLoadMore: () -> Unit,
     onDelete: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val filteredLogs = remember(state.logs, state.keyword) {
+        if (state.keyword.isBlank()) {
+            state.logs
+        } else {
+            state.logs.filter { log ->
+                log.content.contains(state.keyword, ignoreCase = true) ||
+                log.taskName?.contains(state.keyword, ignoreCase = true) == true
+            }
+        }
+    }
+    
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        state = listState,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(state.logs, key = { it.id }) { log ->
-            LogEntryCard(
-                log = log,
-                deleting = state.deletingId == log.id,
-                onDelete = { onDelete(log.id) },
-            )
+        items(filteredLogs, key = { it.id }) { log ->
+                LogEntryCard(
+                    log = log,
+                    keyword = state.keyword,
+                    deleting = state.deletingId == log.id,
+                    onDelete = { onDelete(log.id) },
+                )
         }
         if (state.loadingMore || state.hasMore) {
-            item(key = "footer") {
-                LoadMoreFooter(loading = state.loadingMore, hasMore = state.hasMore, onLoadMore = onLoadMore)
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (state.loadingMore) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp))
+                    } else if (state.hasMore) {
+                        Text(
+                            text = "加载更多",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.slate400,
+                            modifier = Modifier.clickable { onLoadMore() },
+                        )
+                    }
+                }
             }
         }
     }
@@ -122,64 +295,98 @@ private fun LogList(
 @Composable
 private fun LogEntryCard(
     log: LogEntry,
+    keyword: String,
     deleting: Boolean,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val statusColor = statusColor(log.status)
+    val logText = log.content
+    
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top,
     ) {
         Box(
             modifier = Modifier
-                .size(12.dp)
+                .size(8.dp)
                 .clip(CircleShape)
-                .background(statusColor),
+                .background(statusColor)
+                .align(Alignment.CenterVertically),
         )
         Spacer(Modifier.width(12.dp))
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = log.taskName ?: "任务 #${log.taskId}",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.W700,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = log.status?.label ?: "未知状态",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = log.status?.label ?: "未知",
+                    style = MaterialTheme.typography.labelSmall,
                     color = statusColor,
                 )
             }
-            if (log.content.isNotBlank()) {
+            
+            // 高亮搜索关键词
+            if (logText.isNotBlank()) {
+                val highlightedText = buildAnnotatedString {
+                    val keyword = searchKeyword.trim()
+                    if (keyword.isEmpty()) {
+                        append(logText)
+                    } else {
+                        var startIndex = 0
+                        val lowerText = logText.lowercase()
+                        val lowerKeyword = keyword.lowercase()
+                        var index = lowerText.indexOf(lowerKeyword, startIndex)
+                        while (index >= 0) {
+                            append(logText.substring(startIndex, index))
+                            withStyle(
+                                SpanStyle(
+                                    backgroundColor = AppColors.amber200,
+                                    fontWeight = FontWeight.W700,
+                                ),
+                            ) {
+                                append(logText.substring(index, index + keyword.length))
+                            }
+                            startIndex = index + keyword.length
+                            index = lowerText.indexOf(lowerKeyword, startIndex)
+                        }
+                        append(logText.substring(startIndex))
+                    }
+                }
+                
                 Text(
-                    text = log.content.replace('\n', ' '),
+                    text = highlightedText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            
+            Row {
                 Text(
                     text = formatCreatedAt(log.createdAt),
                     style = MaterialTheme.typography.labelSmall,
                     color = AppColors.slate400,
                 )
                 if (log.duration != null) {
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = "耗时 ${formatDuration(log.duration)}",
                         style = MaterialTheme.typography.labelSmall,
@@ -188,114 +395,147 @@ private fun LogEntryCard(
                 }
             }
         }
+        
         if (deleting) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            CircularProgressIndicator(modifier = Modifier.size(20.dp))
         } else {
             Text(
                 text = "删除",
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
                 color = AppColors.red500,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(AppColors.red50)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .clickable(onClick = onDelete),
+                modifier = Modifier.clickable(onClick = onDelete),
             )
         }
     }
 }
 
 @Composable
-private fun LoadMoreFooter(
-    loading: Boolean,
-    hasMore: Boolean,
-    onLoadMore: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun CleanupConfigSection(
+    config: LogCleanupConfig?,
+    onConfigChange: (LogCleanupConfig) -> Unit,
+    onCleanup: () -> Unit,
 ) {
-    Box(
-        modifier = modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
+    var expanded by remember { mutableStateOf(false) }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
     ) {
-        if (loading) {
-            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-        } else if (hasMore) {
-            Button(onClick = onLoadMore) {
-                Text("加载更多")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "日志清理配置",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.W700,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppColors.slate400,
+            )
+        }
+        
+        if (expanded && config != null) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "自动清理",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = config.autoClean,
+                    onCheckedChange = {
+                        onConfigChange(config.copy(autoClean = it))
+                    },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            RetentionDaysSelector(
+                days = config.retentionDays,
+                onDaysChange = { days ->
+                    onConfigChange(config.copy(retentionDays = days))
+                },
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "立即清理",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.primary,
+                modifier = Modifier.clickable { onCleanup() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RetentionDaysSelector(
+    days: Int,
+    onDaysChange: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf(7, 15, 30, 60, 90, 180, 365)
+    
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        BasicTextField(
+            value = "$days 天",
+            onValueChange = {},
+            modifier = Modifier
+                .menuAnchor()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.background)
+                .padding(12.dp),
+            readOnly = true,
+            decorationBox = { innerTextField ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(text = "保留", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(8.dp))
+                    innerTextField()
+                }
+            },
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                Text(
+                    text = "$option 天",
+                    modifier = Modifier
+                        .clickable {
+                            onDaysChange(option)
+                            expanded = false
+                        }
+                        .padding(12.dp),
+                )
             }
         }
     }
 }
 
-@Composable
-private fun LoadingContent(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
-    }
-}
-
-@Composable
-private fun ErrorContent(message: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = "日志加载失败",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.W700,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = message ?: "未知错误，请重试",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = onRetry) {
-            Text("重试")
-        }
-    }
-}
-
-@Composable
-private fun EmptyContent(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = "暂无日志",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.W700,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "运行中的任务日志会显示在这里",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
 private fun statusColor(status: LogStatus?): Color = when (status) {
-    LogStatus.Success -> AppColors.primary
+    LogStatus.Success -> AppColors.green600
     LogStatus.Failed -> AppColors.red500
-    LogStatus.Aborted -> AppColors.warningColor
-    LogStatus.Running -> AppColors.miuixBlue
+    LogStatus.Failed,
+    LogStatus.Running -> AppColors.skyBlue
+    LogStatus.Aborted -> AppColors.slate400
     null -> AppColors.slate400
 }
 
-/** 把 ISO 时间字符串（如 "2026-09-14T10:30:45Z"）格式化为 "yyyy-MM-dd HH:mm"。 */
 private fun formatCreatedAt(raw: String?): String {
     if (raw.isNullOrBlank()) return "-"
     val t = raw.replace('T', ' ')
@@ -307,7 +547,6 @@ private fun formatCreatedAt(raw: String?): String {
     return if (time.length == 5) "$date $time" else raw
 }
 
-/** 耗时展示：<1s 显示 ms，<60s 显示 s，否则显示 XmYs。 */
 private fun formatDuration(seconds: Double): String {
     if (seconds < 0) return "-"
     if (seconds < 1) return "${(seconds * 1000).toInt()}ms"

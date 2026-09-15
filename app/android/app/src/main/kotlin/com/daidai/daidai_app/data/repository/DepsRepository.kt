@@ -7,7 +7,9 @@ import com.daidai.daidai_app.data.model.DepItem
 import com.daidai.daidai_app.data.model.DepManager
 import com.daidai.daidai_app.data.model.DepStatus
 import com.daidai.daidai_app.data.model.DepMirrors
+import com.daidai.daidai_app.data.model.SystemPackage
 import com.daidai.daidai_app.data.model.parseDepItems
+import com.daidai.daidai_app.data.model.parseSystemPackages
 import com.daidai.daidai_app.data.remote.PanelRequests
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +35,9 @@ import java.io.OutputStream
  *   POST /api/deps                            -> {type,names:[...],python_version?}
  *   DELETE /api/deps/:id                      -> {message}
  *   PUT  /api/deps/:id/reinstall               -> {message}
+ *   GET  /api/system/packages                 -> [{name,version,description,source}]
+ *   POST /api/system/packages/install         -> {message}
+ *   DELETE /api/system/packages/:name         -> {message}
  *
  * 说明：后端列表按 type 过滤，本仓库合并拉取 python/nodejs/linux 三档并按 id 去重，
  * 以提供完整全量列表。
@@ -133,6 +138,26 @@ class DepsRepository(
 
     suspend fun reinstall(id: Long) = withContext(Dispatchers.IO) {
         execute("PUT", "/api/deps/$id/reinstall")
+    }
+
+    // System packages
+    suspend fun listSystemPackages(): List<SystemPackage> = withContext(Dispatchers.IO) {
+        val body = execute("GET", "/api/system/packages")
+        parseSystemPackages(body)
+    }
+
+    suspend fun installSystemPackages(packages: List<String>): String = withContext(Dispatchers.IO) {
+        val payload = JSONObject().put("names", JSONArray(packages))
+        execute("POST", "/api/system/packages/install", payload.toString())
+    }
+
+    suspend fun uninstallSystemPackage(name: String): String = withContext(Dispatchers.IO) {
+        val enc = java.net.URLEncoder.encode(name.trim(), "UTF-8")
+        execute("DELETE", "/api/system/packages/$enc")
+    }
+
+    suspend fun restoreCache(): String = withContext(Dispatchers.IO) {
+        execute("POST", "/api/system/packages/restore-cache")
     }
 
     private suspend fun execute(method: String, path: String, json: String? = null): String {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaType
 import com.daidai.daidai_app.data.remote.PanelApiException
 import com.daidai.daidai_app.data.remote.PanelRequests
@@ -46,6 +47,29 @@ interface ScriptsRepository {
     suspend fun deleteScript(path: String, isDirectory: Boolean)
 
     // ------------------------------------------------------------------
+    // 文件操作：重命名、复制、上传、下载
+    // ------------------------------------------------------------------
+
+    /** 重命名文件或目录。 */
+    suspend fun renameScript(oldPath: String, newPath: String)
+
+    /** 复制文件或目录到目标路径。 */
+    suspend fun copyScript(sourcePath: String, targetPath: String)
+
+    /** 上传文件内容到指定目录。 */
+    suspend fun uploadScript(dirPath: String, fileName: String, content: String)
+
+    /** 下载文件内容。 */
+    suspend fun downloadScript(path: String): String
+
+    // ------------------------------------------------------------------
+    // 带参数运行
+    // ------------------------------------------------------------------
+
+    /** 带参数运行脚本。 */
+    suspend fun runScriptWithParams(path: String, params: Map<String, String>): String?
+
+    // ------------------------------------------------------------------
     // C2：运行历史 / 删除记录 / 版本查看与回滚
     // ------------------------------------------------------------------
 
@@ -82,6 +106,10 @@ interface ScriptsRepository {
  *   POST   /api/scripts/run              -> { run_id }
  *   PUT    /api/scripts/run/{runId}/stop -> 停止
  *   DELETE /api/scripts?path=            -> 删除文件 / 目录
+ *   PUT    /api/scripts/rename           -> {old_path, new_name}
+ *   POST   /api/scripts/copy             -> {source_path, target_dir, new_name}
+ *   POST   /api/scripts/upload           -> multipart {file, dir}
+ *   GET    /api/scripts/download?path=   -> raw file content
  */
 class PanelScriptsRepository(
     baseUrl: String,
@@ -181,6 +209,74 @@ class PanelScriptsRepository(
             execute("DELETE", url, null)
         }
     }
+
+    override suspend fun renameScript(oldPath: String, newPath: String) {
+        withContext(Dispatchers.IO) {
+            val payload = JSONObject()
+                .put("old_path", oldPath)
+                .put("new_path", newPath)
+            execute("PUT", "$baseUrl/api/scripts/rename", payload)
+        }
+    }
+
+    override suspend fun copyScript(sourcePath: String, targetPath: String) {
+        withContext(Dispatchers.IO) {
+            val payload = JSONObject()
+                .put("source_path", sourcePath)
+                .put("target_path", targetPath)
+            execute("POST", "$baseUrl/api/scripts/copy", payload)
+        }
+    }
+
+    override suspend fun uploadScript(dirPath: String, fileName: String, content: String) {
+        withContext(Dispatchers.IO) {
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("dir", dirPath)
+                .addFormDataPart(
+                    "file", fileName,
+                    content.toRequestBody("text/plain; charset=utf-8".toMediaType()),
+                )
+                .build()
+            val request = Request.Builder()
+                .url("$baseUrl/api/scripts/upload")
+                .post(requestBody)
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw PanelApiException(response.code, body)
+                }
+            }
+        }
+    }
+
+    override suspend fun downloadScript(path: String): String = withContext(Dispatchers.IO) {
+        val url = ("$baseUrl/api/scripts/download")
+            .toHttpUrlOrNull()
+            ?.newBuilder()
+            ?.addQueryParameter("path", path)
+            ?.build()
+            ?.toString()
+            ?: "$baseUrl/api/scripts/download?path=${encodePath(path)}"
+        execute("GET", url, null)
+    }
+
+    override suspend fun runScriptWithParams(path: String, params: Map<String, String>): String? = withContext(Dispatchers.IO) {
+        val payload = JSONObject().put("path", path)
+        if (params.isNotEmpty()) {
+            val paramsObj = JSONObject()
+            params.forEach { (k, v) -> paramsObj.put(k, v) }
+            payload.put("params", paramsObj)
+        }
+        val body = execute("POST", "$baseUrl/api/scripts/run", payload)
+        val raw = dataOrBody(body) as? JSONObject
+        raw
+            ?.opt("run_id")
+            ?.toString()
+            ?.takeIf { it.isNotBlank() }
+    }
+
 
     // ------------------------------------------------------------------
     // C2：运行历史 / 删除记录 / 版本查看与回滚

@@ -3,18 +3,35 @@ package com.daidai.daidai_app.data.model
 import org.json.JSONObject
 
 /**
- * 运行日志状态：0=成功 1=失败 2=运行中 3=已终止。
+ * 运行日志状态：0=成功 1=失败 2=运行中 3=已终止 4=超时。
  * 与 Flutter `app/lib/shared/models/task_log.dart` 的状态约定一致。
  */
 enum class LogStatus(val code: Int, val label: String) {
     Success(0, "成功"),
     Failed(1, "失败"),
     Running(2, "运行中"),
-    Aborted(3, "已终止");
+    Aborted(3, "已终止"),
+    Timeout(4, "超时");
 
     companion object {
         fun fromCode(code: Int?): LogStatus? =
             if (code == null) null else values().firstOrNull { it.code == code }
+    }
+}
+
+/**
+ * 日志频道类型
+ */
+enum class LogChannel(val value: String, val displayName: String) {
+    Web("web", "Web"),
+    System("system", "系统"),
+    Script("script", "脚本"),
+    Cron("cron", "定时任务"),
+    SSH("ssh", "SSH"),
+    Subscription("subscription", "订阅");
+
+    companion object {
+        fun fromValue(value: String): LogChannel? = values().firstOrNull { it.value == value }
     }
 }
 
@@ -73,6 +90,13 @@ data class LogDownloadTicket(val url: String, val filename: String, val size: Lo
             json.optLong("size"), json.optString("expires_at"))
     }
 }
+
+/** 日志自动清理配置 */
+data class LogCleanupConfig(
+    val retentionDays: Int,
+    val autoClean: Boolean,
+    val channel: String
+)
 
 /** 分页响应，兼容后端 response.Paginated() 格式 {data:[...], total:N, page:N, page_size:N}。 */
 data class LogPage(

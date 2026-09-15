@@ -11,6 +11,7 @@ import com.daidai.daidai_app.data.model.MachineCode
 import com.daidai.daidai_app.data.model.PanelLogPage
 import com.daidai.daidai_app.data.model.PanelSettingsSnapshot
 import com.daidai.daidai_app.data.model.RestoreProgress
+import com.daidai.daidai_app.data.model.BackupSchedule
 import com.daidai.daidai_app.data.model.panelErrorDetail
 import com.daidai.daidai_app.di.AppServices
 import kotlinx.coroutines.Dispatchers
@@ -82,13 +83,38 @@ class BackupRepository(
         records.sortedByDescending { it.createdAt }
     }
 
-    /** 新建一份备份（写操作）。name 可选，password 留空表示无密码。 */
-    suspend fun createBackup(name: String? = null): JsonResult = withContext(Dispatchers.IO) {
+    /** 新建一份备份（写操作）。name 可选，type 为备份类型："full"（全量）或 "incremental"（增量）。 */
+    suspend fun createBackup(name: String? = null, type: String = "full"): JsonResult = withContext(Dispatchers.IO) {
+        val effectiveType = if (type in listOf("full", "incremental")) type else "full"
         val payload = JSONObject().apply {
             put("password", "")
+            put("type", effectiveType)
             name?.takeIf { it.isNotBlank() }?.let { put("name", it) }
         }.toString()
         val body = execute("POST", resolveConnection(), "/api/system/backup", payload)
+        parseCommon(body)
+    }
+
+    /** 读取当前定时备份计划配置。 */
+    suspend fun getBackupSchedule(): BackupSchedule? = withContext(Dispatchers.IO) {
+        val body = execute("GET", resolveConnection(), "/api/system/backup/schedule", null)
+        val obj = jsonObject(body, "data") ?: return@withContext null
+        return@withContext BackupSchedule(
+            enabled = obj.optBoolean("enabled", false),
+            frequency = obj.optString("frequency", "daily").takeIf { it in listOf("daily", "weekly", "monthly") } ?: "daily",
+            time = obj.optString("time", "03:00"),
+        )
+    }
+
+    /** 保存定时备份计划配置。 */
+    suspend fun setBackupSchedule(frequency: String, time: String, enabled: Boolean): JsonResult = withContext(Dispatchers.IO) {
+        val effectiveFreq = if (frequency in listOf("daily", "weekly", "monthly")) frequency else "daily"
+        val payload = JSONObject()
+            .put("frequency", effectiveFreq)
+            .put("time", time)
+            .put("enabled", enabled)
+            .toString()
+        val body = execute("POST", resolveConnection(), "/api/system/backup/schedule", payload)
         parseCommon(body)
     }
 

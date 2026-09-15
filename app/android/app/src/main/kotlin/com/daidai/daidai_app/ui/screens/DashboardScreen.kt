@@ -1,6 +1,7 @@
 package com.daidai.daidai_app.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,7 +20,10 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -32,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -42,7 +46,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -125,7 +128,7 @@ fun DashboardScreen(
             modifier = Modifier.padding(innerPadding),
         ) {
             composable("overview") {
-                DashboardOverviewPage()
+                DashboardOverviewPage(navTo = navTo)
             }
             composable("tasks") {
                 TaskListScreen(
@@ -158,6 +161,7 @@ fun DashboardScreen(
  */
 @Composable
 private fun DashboardOverviewPage(
+    navTo: (String) -> Unit,
     viewModel: DashboardViewModel? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -207,6 +211,7 @@ private fun DashboardOverviewPage(
             DashboardContent(
                 systemInfo = s.systemInfo,
                 stats = s.stats,
+                navTo = navTo,
                 onRefresh = screenViewModel::refresh,
                 modifier = modifier,
             )
@@ -218,6 +223,7 @@ private fun DashboardOverviewPage(
 private fun DashboardContent(
     systemInfo: SystemInfo,
     stats: DashboardStats,
+    navTo: (String) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -234,6 +240,22 @@ private fun DashboardContent(
         // 资源卡片（CPU / 内存 / 磁盘）
         Text("系统资源", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
         ResourceCards(systemInfo)
+
+        // 网络流量（上行 / 下行速度）
+        NetworkTrafficCard(systemInfo)
+
+        // 系统负载（1m / 5m / 15m）
+        if (systemInfo.loadAverage.any { it > 0 }) {
+            SystemLoadCard(systemInfo.loadAverage)
+        }
+
+        // 用户统计（登录 / 活跃 / 在线）
+        if (systemInfo.userCount > 0 || systemInfo.activeCount > 0 || systemInfo.onlineCount > 0) {
+            UserStatsCard(systemInfo)
+        }
+
+        // 快捷操作网格（6 个常用入口）
+        QuickActionGrid(navTo)
 
         // 任务统计卡片
         Text("任务运行", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
@@ -370,6 +392,126 @@ private fun ProgressTrack(ratios: List<Float>) {
                     cap = StrokeCap.Round,
                 )
             }
+        }
+    }
+}
+
+// --- 网络流量卡片 -----------------------------------------------------------
+
+@Composable
+private fun NetworkTrafficCard(systemInfo: SystemInfo) {
+    DashboardCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("网络流量", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatCell("上行", systemInfo.networkUp, color = AppColors.primary)
+                StatCell("下行", systemInfo.networkDown, color = AppColors.accent)
+            }
+        }
+    }
+}
+
+// --- 系统负载卡片 -----------------------------------------------------------
+
+@Composable
+private fun SystemLoadCard(loadAverage: List<Double>) {
+    DashboardCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("系统负载", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatCell("1 分钟", "%.2f".format(loadAverage.getOrElse(0) { 0.0 }))
+                StatCell("5 分钟", "%.2f".format(loadAverage.getOrElse(1) { 0.0 }))
+                StatCell("15 分钟", "%.2f".format(loadAverage.getOrElse(2) { 0.0 }))
+            }
+        }
+    }
+}
+
+// --- 用户统计卡片 -----------------------------------------------------------
+
+@Composable
+private fun UserStatsCard(systemInfo: SystemInfo) {
+    DashboardCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("用户统计", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatCell("登录", systemInfo.userCount.toString())
+                StatCell("活跃", systemInfo.activeCount.toString(), color = AppColors.successColor)
+                StatCell("在线", systemInfo.onlineCount.toString(), color = AppColors.accent)
+            }
+        }
+    }
+}
+
+// --- 快捷操作网格 -----------------------------------------------------------
+
+private data class ActionItem(
+    val route: String,
+    val label: String,
+    val icon: ImageVector,
+    val description: String,
+)
+
+private val quickActions = listOf(
+    ActionItem(Routes.TASKS, "任务", Icons.Filled.List, "查看和管理定时任务"),
+    ActionItem(Routes.SCRIPTS, "脚本", Icons.Filled.PlayArrow, "浏览和运行脚本"),
+    ActionItem(Routes.LOGS, "日志", Icons.Filled.Info, "查看运行日志"),
+    ActionItem(Routes.ENVS, "环境", Icons.Filled.Settings, "管理环境变量"),
+    ActionItem(Routes.TERMINAL, "终端", Icons.Filled.Terminal, "在线终端连接"),
+    ActionItem(Routes.USERS, "用户", Icons.Filled.People, "管理本地用户"),
+)
+
+@Composable
+private fun QuickActionGrid(navTo: (String) -> Unit) {
+    Text("快捷操作", style = MaterialTheme.typography.titleMedium, color = AppColors.primary)
+    DashboardCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            quickActions.forEach { action ->
+                QuickActionButton(action, navTo)
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickActionButton(action: ActionItem, navTo: (String) -> Unit) {
+    androidx.compose.foundation.clickable(
+        onClick = { navTo(action.route) },
+        modifier = Modifier
+            .weight(1f)
+            .padding(vertical = 4.dp),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = action.icon,
+                contentDescription = action.label,
+                tint = AppColors.primary,
+                modifier = Modifier.size(24.dp),
+            )
+            Text(
+                text = action.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

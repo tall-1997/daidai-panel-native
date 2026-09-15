@@ -142,3 +142,20 @@ Entries discovered by the Agent during task execution should follow this format:
   - 旧的 flutter_miuix 主题类记忆（2026-09-11 条目）为历史记录：`app/pubspec.yaml` 已删除，不再有 Flutter/Dart 依赖配置；MIUIX 视觉风格现由 Compose 侧 `top.yukonga.miuix.kmp:miuix-android` 提供。
   - Android 客户端 `material-icons-core` 只含基础图标集：`Star` 可用，`ContentCopy` 等 extended 图标不可 import（编译失败），需要时用 TextButton 文字按钮替代。
   - Kotlin 正则插入 data class 属性时勿用「替换第一个 `)`」的脚本手法（会命中字段默认值里的 `emptyList()`）；okhttp 5 起 `MediaType.parse` 为 error 级弃用，须用 `"mime".toMediaType()`。
+
+[后端面板能力对齐核查]
+- Date: 2026-09-15
+- Context: 逐模块比对 Android 客户端与 daidai-panel 后端（github.com/linzixuanzz/daidai-panel v3.2.7）功能一致性
+- Category: Troubleshooting & Debugging | Workflow & Collaboration
+- Instructions:
+  - 后端 Docker 运行时为 **Alpine 3.22（musl）**，非 Ubuntu；x86_64 与 arm64 均使用 Alpine，Debian 12 为替代基础系统。
+  - Magisk 模块仅支持 arm64（Alpine 3.18 或 Debian 12）；x86_64 设备安装时被明确拦截（rurima 只有 aarch64 构建）。
+  - Python 运行时：Alpine 为独立构建的 3.10/3.11/3.12（/opt/daidai-python），Debian 用系统 Python 3.12 + venv；Android 客户端的 Deps 模块支持 pip/npm/system 三类包管理，后端 API 端点已就位。
+  - Node.js：后端 Dockerfile 用 node:20.19.0 构建前端，Alpine 运行时装 nodejs+npm；.mjs 脚本在 Android 客户端的 ScriptCompatibility.kt 中已识别并以 Node 方式归类。
+  - 22 种通知渠道在 Android 端已完整对齐（NotificationChannelSchemas.kt serverChannels 列表含 webhook/email/telegram/dingtalk/wecom/wecom_app/bark/pushplus/serverchan/feishu/gotify/pushdeer/pushme/chanify/igot/qmsg/pushover/discord/slack/ntfy/wxpusher/custom），另加 android_local 本地通知。
+  - 任务依赖/前后置钩子/重试/超时/定时停止/多实例并发：TaskModels.kt 与 TaskFormScreen.kt 均已实现，字段对齐后端 task.go。
+  - 订阅白名单/黑名单/依赖规则：SubscriptionModels.kt 使用子串包含匹配（非正则），逗号和竖线均可作分隔符，黑名单对两者都生效，白名单留空时视为全部命中——与后端 semantics 一致。
+  - 会话策略支持分别设置 web/app 最大会话数（SecurityModels.kt SessionPolicy），与后端 max_web_sessions/max_app_sessions 对齐。
+  - 任务执行趋势统计：DashboardScreen 的 TrendSection 用 Canvas 绘制 7 日 success/failed/aborted 三条折线。
+   - 3 项缺失能力已补齐：脚本 Create/Rename/Copy/Upload/Download（ScriptsRepository + ScriptsViewModel）、日志自动清理配置 UI（LogCleanupConfig + CleanupConfigSection）、定时备份配置 UI（daily/weekly/monthly + 全量/增量）。OpenApiApp 新增 `type` 字段（script/subscribe/system）。剩余小差异（Dashboard 快捷操作导航、Terminal 多会话标签页）为低优先级增强项。
+  - Android 客户端通过 /api/terminal/sessions REST 端点提供终端会话（非 WebSocket），功能等价后端系统命令行但交互方式不同。

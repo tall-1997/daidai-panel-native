@@ -2,9 +2,9 @@ package com.daidai.daidai_app.ui.screens.logs
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.daidai.daidai_app.data.model.LogChannel
+import com.daidai.daidai_app.data.model.LogCleanupConfig
 import com.daidai.daidai_app.data.model.LogEntry
-import com.daidai.daidai_app.data.model.LogStatus
-import com.daidai.daidai_app.data.repository.LogFilter
 import com.daidai.daidai_app.data.repository.LogsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,146 +12,263 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** 日志列表页 UI 状态。 */
-data class LogsUiState(
-    val logs: List<LogEntry> = emptyList(),
-    val total: Int = 0,
-    val page: Int = 1,
-    val pageSize: Int = 20,
-    val loading: Boolean = false,
-    val loadingMore: Boolean = false,
-    val deletingId: Long? = null,
-    val errorMessage: String? = null,
-    val keyword: String = "",
-    val taskId: String = "",
-    val status: LogStatus? = null,
-) {
-    val hasMore: Boolean get() = logs.isNotEmpty() && logs.size < total
-}
-
 /**
- * 日志列表的 ViewModel：拉取 /api/logs 分页列表、筛选、上拉加载、删除单条。
+ * 运行日志页逻辑模型（ViewModel）。
+ * 复用 Flutter `app/lib/features/logs/log_list_page.dart` 的交互逻辑：分页、筛选、实时流、关注模式、关键字搜索。
  *
- * 默认 repository 未装配时（未接入 di）走“未装配”错误桩，便于布局预览且不谎报成功，
- * 与 LoginViewModel 的缺省实现风格保持一致。集成阶段由 AppServices 注入真实实现。
+ * 主要实现要点：
+ * - 尊重会话隔离：通过 LogsRepository 与 PanelRequests 完成 API 调用
+ * - 未知状态映射：LogStatus 枚举覆盖后端 0/1/2/3/4（成功/失败/运行中/终止/超时）
+ * - 分页与搜索：支持关键词搜索
  */
 class LogsViewModel(
-    private val repository: LogsRepository? = null,
+    private val repository: LogsRepository,
 ) : ViewModel() {
+
     private val _uiState = MutableStateFlow(LogsUiState())
     val uiState: StateFlow<LogsUiState> = _uiState.asStateFlow()
 
-    private var loadGeneration = 0
+    private var currentPage = 1
+    private var currentChannel: String? = null
 
-    init {
-        loadFirstPage()
+init {
+        // 默认加载 Web 日志
+        setChannel(LogChannel.Web.value, refresh = true)
     }
 
-    /** 更新筛选并回到第一页。 */
-    fun setFilters(keyword: String = _uiState.value.keyword, taskId: String = _uiState.value.taskId, status: LogStatus? = _uiState.value.status) {
-        if (keyword == _uiState.value.keyword &&
-            taskId == _uiState.value.taskId &&
-            status == _uiState.value.status
-        ) return
-        _uiState.update {
-            it.copy(keyword = keyword, taskId = taskId, status = status)
+    fun setChannel(channel: String, refresh: Boolean = false) {
+        viewModelScope.launch {
+            val trimmedChannel = channel.trim()
+            if (currentChannel != trimmedChannel || refresh) {
+                currentChannel = trimmedChannel
+                currentPage = 1
+                _uiState.update {
+                    it.copy(
+                        channels = it.channels,
+                        selectedChannel = trimmedChannel,
+                        logs = emptyList(),
+                        total = 0,
+                        currentPage = 1,
+                        hasMore = true,
+                    )
+                }
+                loadLogs(refresh = true)
+            }
         }
-        loadFirstPage()
     }
 
-    fun clearFilters() {
-        if (_uiState.value.keyword.isEmpty() && _uiState.value.taskId.isEmpty() && _uiState.value.status == null) return
-        _uiState.update { it.copy(keyword = "", taskId = "", status = null) }
-        loadFirstPage()
-    }
-
-    fun refresh() = loadFirstPage()
-
-    fun loadMore() {
-        val state = _uiState.value
-        if (state.loading || state.loadingMore || !state.hasMore) return
-        loadPage(targetPage = state.page + 1, refresh = false)
-    }
-
-    fun deleteLog(id: Long) {
-        if (_uiState.value.deletingId != null) return
-        val repository = repository ?: run {
-            _uiState.update { it.copy(errorMessage = "日志后端未装配") }
-            return
-        }
-        _uiState.update { it.copy(deletingId = id, errorMessage = null) }
+    fun loadLogs(refresh: Boolean = false) {
         viewModelScope.launch {
             try {
-                repository.deleteLog(id)
+                if (refresh) {
+                    currentPage = 1
+                    _uiState.update { it.copy(loading = true, error = null) }
+                } else {
+                    if (_uiState.value.loading || !_uiState.value.hasMore) return@launch
+                    _uiState.update { it.copy(loadingMore = true, error = null) }
+                }
+
+                val channel = currentChannel ?: return@launch
+                val result = repository.getLogs(
+                    page = currentPage,
+                    pageSize = _uiState.value.pageSize,
+                    channel = channel,
+                    keyword = _uiState.value.keyword,
+                )
+
+                if (result.success) {
+                    val logs = result.data?.logs ?: emptyList()
+                    val isRefresh = currentPage == 1
+                    val merged = if (isRefresh) logs else _uiState.value.logs + logs
+                    val total = result.data?.total ?: 0
+
+                    _uiState.update {
+                        it.copy(
+                            logs = merged,
+                            total = total,
+                            currentPage = currentPage,
+                            hasMore = logs.size == it.pageSize,
+                            loading = false,
+                            loadingMore = false,
+                            error = null,
+                        )
+                    }
+                    if (logs.isNotEmpty()) currentPage++
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            loading = false,
+                            loadingMore = false,
+                            error = result.error ?: "获取日志失败"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        loading = false,
+                        loadingMore = false,
+                        error = e.message ?: "未知错误"
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadMore() {
+        if (!_uiState.value.loading && !_uiState.value.loadingMore && _uiState.value.hasMore) {
+            loadLogs()
+        }
+    }
+
+    fun deleteLog(logId: Long) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(deletingId = logId) }
+            try {
+                repository.deleteLog(logId)
                 _uiState.update { state ->
-                    val remaining = state.logs.filterNot { it.id == id }
                     state.copy(
-                        logs = remaining,
-                        total = maxOf(0, state.total - 1),
+                        logs = state.logs.filter { it.id != logId },
                         deletingId = null,
                     )
                 }
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
+            } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(deletingId = null, errorMessage = error.message?.takeIf(String::isNotBlank) ?: "删除失败，请重试")
+                    it.copy(
+                        deletingId = null,
+                        error = e.message ?: "删除日志失败"
+                    )
                 }
             }
         }
     }
 
-    private fun loadFirstPage() {
-        loadPage(targetPage = 1, refresh = true)
+    fun selectChannel(channel: String) {
+        setChannel(channel, refresh = true)
     }
 
-    private fun loadPage(targetPage: Int, refresh: Boolean) {
-        val repository = repository ?: run {
-            _uiState.update { it.copy(loading = false, errorMessage = "日志后端未装配") }
-            return
-        }
-        val generation = ++loadGeneration
-        val state = _uiState.value
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
+    }
 
-        _uiState.update {
-            it.copy(
-                loading = if (refresh) true else it.loading,
-                loadingMore = if (refresh) false else it.loadingMore || (targetPage > 1),
-                errorMessage = null,
-            )
+    fun search(keyword: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(keyword = keyword) }
+            // 清空现有日志并重新加载
+            currentPage = 1
+            _uiState.update { it.copy(logs = emptyList(), total = 0) }
+            loadLogs(refresh = true)
         }
+    }
+
+    fun toggleFollowMode() {
+        _uiState.update { it.copy(followMode = !it.followMode) }
+    }
+
+    fun setFollowMode(enabled: Boolean) {
+        _uiState.update { it.copy(followMode = enabled) }
+    }
+
+    fun setSearchKeyword(keyword: String) {
+        search(keyword)
+    }
+
+    fun startStreamLogs() {
+        val channel = currentChannel ?: return
         viewModelScope.launch {
             try {
-                val page = repository.getLogs(
-                    filter = LogFilter(
-                        keyword = state.keyword,
-                        taskId = state.taskId,
-                        status = state.status,
-                    ),
-                    page = targetPage,
-                    pageSize = state.pageSize,
-                )
-                if (generation != loadGeneration) return@launch
+                repository.streamLogs(channel).collect { entry ->
+                    _uiState.update { state ->
+                        val logs = state.logs.toMutableList()
+                        // 在顶部插入新日志
+                        logs.add(0, entry)
+                        // 限制内存占用
+                        val limited = if (logs.size > 1000) logs.takeLast(1000) else logs
+                        state.copy(logs = limited)
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message ?: "流式日志错误") }
+            }
+        }
+    }
+
+    fun cleanupLogs(channel: String, config: LogCleanupConfig? = null) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(loading = true, error = null) }
+                val retentionDays = config?.retentionDays ?: 30
+                val olderThan = java.time.Instant.now().minusSeconds(retentionDays.toLong() * 86400).toString()
+                val count = repository.cleanLogs(channel, olderThan)
                 _uiState.update {
-                    val existing = if (refresh) emptyList() else it.logs
                     it.copy(
-                        logs = existing + page.items,
-                        total = page.total,
-                        page = page.page,
                         loading = false,
-                        loadingMore = false,
+                        showCleanupSuccess = true,
                     )
                 }
-            } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                if (generation != loadGeneration) return@launch
+            } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         loading = false,
-                        loadingMore = false,
-                        errorMessage = error.message?.takeIf(String::isNotBlank) ?: "加载日志失败，请重试",
+                        error = e.message ?: "清理失败"
                     )
                 }
             }
         }
     }
+
+    fun updateCleanupConfig(channel: String, retentionDays: Int, autoClean: Boolean) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(loading = true, error = null) }
+                repository.updateCleanupConfig(
+                    LogCleanupConfig(
+                        retentionDays = retentionDays,
+                        autoClean = autoClean,
+                        channel = channel,
+                    )
+                )
+                _uiState.update { it.copy(cleanupConfig = it.cleanupConfig?.copy(retentionDays = retentionDays, autoClean = autoClean)) }
+                _uiState.update { it.copy(loading = false) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        loading = false,
+                        error = e.message ?: "保存配置失败"
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Logs 页面 UI 状态。 */
+data class LogsUiState(
+    val channels: List<String> = listOf(
+        LogChannel.Web.value,
+        LogChannel.System.value,
+        LogChannel.Script.value,
+        LogChannel.Cron.value,
+        LogChannel.SSH.value,
+        LogChannel.Subscription.value,
+    ),
+    val selectedChannel: String = LogChannel.Web.value,
+    val logs: List<LogEntry> = emptyList(),
+    val total: Int = 0,
+    val currentPage: Int = 1,
+    val pageSize: Int = 20,
+    val loading: Boolean = false,
+    val loadingMore: Boolean = false,
+    val error: String? = null,
+    val hasMore: Boolean = true,
+    val followMode: Boolean = false,
+    val keyword: String = "",
+    val deletingId: Long? = null,
+    val cleanupConfig: LogCleanupConfig? = null,
+    val showCleanupSuccess: Boolean = false,
+)
+
+/** 空的 AbortSignal 实现，用于 ViewModel 中。 */
+private object emptyAbortSignal {
+    fun cancel() {}
 }

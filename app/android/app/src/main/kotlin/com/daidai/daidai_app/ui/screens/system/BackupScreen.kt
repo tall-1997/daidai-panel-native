@@ -62,6 +62,15 @@ import com.daidai.daidai_app.ui.components.EmptyView
 import com.daidai.daidai_app.ui.components.ErrorView
 import com.daidai.daidai_app.ui.components.LoadingView
 import com.daidai.daidai_app.ui.theme.AppColors
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerState
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.runtime.LaunchedEffect
+import com.daidai.daidai_app.data.model.BackupSchedule
 
 /**
  * 备份管理页（Compose 原生，阶段 4-5；C8 扩展上传/下载/恢复）。
@@ -91,6 +100,29 @@ fun BackupScreen(
     var pendingRestore by remember { mutableStateOf<BackupRecord?>(null) }
     var restorePassword by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // 创建备份对话框状态
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var createBackupName by remember { mutableStateOf("") }
+    var createBackupType by remember { mutableStateOf("full") }
+    // 定时备份对话框状态
+    var showScheduleDialog by remember { mutableStateOf(false) }
+    var scheduleFreq by remember { mutableStateOf("daily") }
+    var scheduleTime by remember { mutableStateOf("03:00") }
+    var scheduleEnabled by remember { mutableStateOf(false) }
+    // 加载定时备份计划
+    LaunchedEffect(Unit) {
+        screenViewModel.loadBackupSchedule()
+    }
+    // 打开定时备份配置时同步当前计划值
+    LaunchedEffect(showScheduleDialog) {
+        if (showScheduleDialog) {
+            val current = state.backupSchedule
+            scheduleFreq = current?.frequency ?: "daily"
+            scheduleTime = current?.time ?: "03:00"
+            scheduleEnabled = current?.enabled ?: false
+        }
+    }
 
     // SAF：导入备份（任意类型，服务端按扩展名白名单校验）
     val uploadLauncher = rememberLauncherForActivityResult(
@@ -140,7 +172,7 @@ fun BackupScreen(
         bottomBar = {
             BackupCreateBar(
                 creating = state.creatingBackup,
-                onCreate = { if (!state.creatingBackup) screenViewModel.createBackup() },
+                onCreate = { if (!state.creatingBackup) showCreateDialog = true },
                 onUpload = { uploadLauncher.launch(arrayOf("*/*")) },
                 uploading = state.uploading,
                 uploadProgress = state.uploadProgress,
@@ -158,6 +190,12 @@ fun BackupScreen(
                     onRetry = screenViewModel::refreshBackups,
                 )
                 SystemUiState.BackupPhase.Loaded -> {
+                    BackupScheduleSection(
+                        schedule = state.backupSchedule,
+                        loading = state.scheduleLoading,
+                        saving = state.scheduleSaving,
+                        onConfigure = { showScheduleDialog = true },
+                    )
                     if (state.backups.isEmpty()) {
                         EmptyView(
                             title = "暂无备份",
@@ -227,6 +265,105 @@ fun BackupScreen(
             },
             dismissButton = {
                 Button(onClick = { pendingRestore = null }) { Text("取消") }
+            },
+        )
+    }
+
+    // 新建备份对话框（含备份类型选择）
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = { Text("新建备份") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = createBackupName,
+                        onValueChange = { createBackupName = it },
+                        label = { Text("备份名称（可选）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("备份类型", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        RadioButton(
+                            selected = createBackupType == "full",
+                            onClick = { createBackupType = "full" },
+                        )
+                        Text("全量备份")
+                        RadioButton(
+                            selected = createBackupType == "incremental",
+                            onClick = { createBackupType = "incremental" },
+                        )
+                        Text("增量备份")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        screenViewModel.createBackup(name = createBackupName, type = createBackupType)
+                        showCreateDialog = false
+                        createBackupName = ""
+                    },
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    // 定时备份配置对话框
+    if (showScheduleDialog) {
+        val timeState = rememberTimePickerState(
+            initialHour = scheduleTime.split(":")[0].toIntOrNull() ?: 3,
+            initialMinute = scheduleTime.split(":")[1].toIntOrNull() ?: 0,
+        )
+        AlertDialog(
+            onDismissRequest = { showScheduleDialog = false },
+            title = { Text("定时备份配置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Checkbox(
+                        checked = scheduleEnabled,
+                        onCheckedChange = { scheduleEnabled = it },
+                        label = { Text("启用定时备份") },
+                    )
+                    Text("执行频率", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        RadioButton(
+                            selected = scheduleFreq == "daily",
+                            onClick = { scheduleFreq = "daily" },
+                        )
+                        Text("每天")
+                        RadioButton(
+                            selected = scheduleFreq == "weekly",
+                            onClick = { scheduleFreq = "weekly" },
+                        )
+                        Text("每周")
+                        RadioButton(
+                            selected = scheduleFreq == "monthly",
+                            onClick = { scheduleFreq = "monthly" },
+                        )
+                        Text("每月")
+                    }
+                    if (scheduleEnabled) {
+                        TimePicker(state = timeState)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val hour = timeState.hour.toString().padStart(2, '0')
+                        val minute = timeState.minute.toString().padStart(2, '0')
+                        screenViewModel.saveBackupSchedule(scheduleFreq, "$hour:$minute", scheduleEnabled)
+                        showScheduleDialog = false
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScheduleDialog = false }) { Text("取消") }
             },
         )
     }
@@ -434,5 +571,49 @@ private fun formatSize(bytes: Long): String {
         "${value.toLong()} ${units[unit]}"
     } else {
         String.format(java.util.Locale.CHINA, "%.1f %s", value, units[unit])
+    }
+}
+
+/** 定时备份配置区域（只读摘要 + 配置入口）。 */
+@Composable
+private fun BackupScheduleSection(
+    schedule: BackupSchedule?,
+    loading: Boolean,
+    saving: Boolean,
+    onConfigure: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        HorizontalDivider(color = AppColors.slate200)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text(
+                    text = "定时备份",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColors.slate900,
+                )
+                Text(
+                    text = if (schedule == null) {
+                        if (loading) "加载中…" else "加载失败"
+                    } else {
+                        "${if (schedule.enabled) "已启用" else "已关闭"} · ${schedule.frequency} · ${schedule.time}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.slate500,
+                )
+            }
+            IconButton(onClick = onConfigure, enabled = !loading && !saving) {
+                Icon(Icons.Filled.Settings, contentDescription = "配置定时备份", tint = AppColors.primaryDark)
+            }
+        }
     }
 }

@@ -28,6 +28,8 @@ data class EnvsUiState(
     val groups: List<String> = emptyList(),
     /** 当前分组筛选；null 表示全部，空串表示默认分组（未分组）。 */
     val selectedGroup: String? = null,
+    /** 搜索关键字；按环境变量名称过滤（忽略大小写）。 */
+    val searchQuery: String = "",
     /** 批量导入结果提示；消费后经 [consumeImportResult] 复位。 */
     val importResult: EnvImportFeedback? = null,
     /** 导出文本提示（复制到剪贴板后由页面消费）。 */
@@ -227,6 +229,37 @@ class EnvsViewModel(
     /** 选择分组筛选；null 表示全部，空串表示默认分组。 */
     fun selectGroup(group: String?) {
         _uiState.update { it.copy(selectedGroup = group) }
+    }
+
+    /** 设置搜索关键字；按环境变量名称过滤（忽略大小写）。 */
+    fun setSearchQuery(query: String) {
+        _uiState.update { it.copy(searchQuery = query) }
+    }
+
+    /** 拖拽重排分组：把 [fromIndex] 处分组移动到 [toIndex] 位置，更新 UI 并持久化。 */
+    fun moveGroup(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        val currentGroups = _uiState.value.groups
+        if (fromIndex !in currentGroups.indices || toIndex !in currentGroups.indices) return
+        val reordered = currentGroups.toMutableList()
+        reordered.add(toIndex, reordered.removeAt(fromIndex))
+        _uiState.update { it.copy(groups = reordered) }
+        repository?.let { repo ->
+            val groupIds = reordered.mapIndexed { index, _ -> index.toLong() }
+            viewModelScope.launch {
+                try {
+                    repo.reorderGroups(groupIds)
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    _uiState.update {
+                        it.copy(
+                            errorMessage = error.message?.takeIf(String::isNotBlank)
+                                ?: "调整分组顺序失败，请重试",
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /** 更新指定环境变量的分组；成功后刷新列表。 */

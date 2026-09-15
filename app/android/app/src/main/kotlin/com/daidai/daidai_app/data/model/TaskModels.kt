@@ -56,6 +56,7 @@ data class Task(
     val randomDelaySeconds: Int? = null,
     val labels: List<String> = emptyList(),
     val subscriptionLocked: Boolean = false,
+    val lastRunStatus: String? = null,
 ) {
     /** status == 1 视为已启用（与 Flutter Task.isEnabled 一致）。 */
     val enabled: Boolean get() = status == 1.0
@@ -133,6 +134,7 @@ data class Task(
                     emptyList()
                 }
             },
+            lastRunStatus = json.optString("last_run_status").takeIf { it.isNotEmpty() && it != "null" },
         )
 
         /** 解析后端 Paginated() 列表响应 {data:[...], total:N} 或直接 {data:[...]}。 */
@@ -181,14 +183,45 @@ data class TaskView(
     }
 }
 
-data class TaskStats(val days: Int, val total: Int, val success: Int, val failed: Int,
-    val aborted: Int, val successRate: Double, val averageDuration: Double) {
+/** 执行状态枚举。 */
+enum class RunStatus(val code: String, val label: String, val colorHex: Long) {
+    SUCCESS("success", "成功", 0xFF4CAF50),
+    FAILED("failed", "失败", 0xFFF44336),
+    TIMEOUT("timeout", "超时", 0xFFFF9800),
+    ABORTED("aborted", "手动终止", 0xFF9E9E9E),
+    RUNNING("running", "运行中", 0xFF2196F3);
+
+    companion object {
+        fun fromCode(code: String?): RunStatus? = values().find { it.code.equals(code, ignoreCase = true) }
+    }
+}
+
+data class TaskStats(
+    val days: Int,
+    val total: Int,
+    val success: Int,
+    val failed: Int,
+    val aborted: Int,
+    val successRate: Double,
+    val averageDuration: Double,
+    val avgDuration: Double = averageDuration,
+    val failCount: Int = failed,
+    val timeoutCount: Int = 0,
+    val abortCount: Int = aborted,
+) {
     companion object {
         fun fromJson(data: JSONObject): TaskStats {
             val stats = data.getJSONObject("stats")
-            return TaskStats(data.optInt("period_days", 7), stats.optInt("total_runs"),
-                stats.optInt("success_runs"), stats.optInt("failed_runs"), stats.optInt("aborted_runs"),
-                stats.optDouble("success_rate", 0.0), stats.optDouble("avg_duration", 0.0))
+            return TaskStats(
+                days = data.optInt("period_days", 7),
+                total = stats.optInt("total_runs", 0),
+                success = stats.optInt("success_runs", 0),
+                failed = stats.optInt("failed_runs", stats.optInt("failures", 0)),
+                aborted = stats.optInt("aborted_runs", 0),
+                successRate = stats.optDouble("success_rate", 0.0),
+                averageDuration = stats.optDouble("avg_duration", 0.0),
+                timeoutCount = stats.optInt("timeout_runs", 0),
+            )
         }
     }
 }

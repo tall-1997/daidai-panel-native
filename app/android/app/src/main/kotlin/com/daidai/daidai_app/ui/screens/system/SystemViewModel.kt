@@ -4,9 +4,15 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daidai.daidai_app.data.model.BackupRecord
+import com.daidai.daidai_app.data.model.BackupSchedule
 import com.daidai.daidai_app.data.model.HealthCheckResult
 import com.daidai.daidai_app.data.model.RestoreProgress
 import com.daidai.daidai_app.data.repository.BackupRepository
+import com.daidai.daidai_app.data.repository.SystemRepository
+import com.daidai.daidai_app.data.repository.SystemRepository.AppInfo
+import com.daidai.daidai_app.data.repository.SshKey
+import com.daidai.daidai_app.data.model.PlatformTokenInfo
+import com.daidai.daidai_app.data.model.User
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,12 +51,34 @@ data class SystemUiState(
     val restoring: Boolean = false,
     /** 最近一次恢复进度快照。 */
     val restore: RestoreProgress? = null,
+    /** 当前定时备份计划配置（由 loadBackupSchedule 加载）。 */
+    val backupSchedule: BackupSchedule? = null,
+    /** 是否正在加载定时备份计划。 */
+    val scheduleLoading: Boolean = false,
+    /** 是否正在保存定时备份计划。 */
+    val scheduleSaving: Boolean = false,
 ) {
     enum class BackupPhase {
         Loading,
         Loaded,
         Error,
     }
+    val users: List<User> = emptyList(),
+    val usersLoading: Boolean = false,
+    val usersErrorMessage: String? = null,
+    val sshKeys: List<SshKey> = emptyList(),
+    val sshKeysLoading: Boolean = false,
+    val sshKeysErrorMessage: String? = null,
+    val platformTokens: List<PlatformTokenInfo> = emptyList(),
+    val platformTokensLoading: Boolean = false,
+    val platformTokensErrorMessage: String? = null,
+    val apps: List<AppInfo> = emptyList(),
+    val appsLoading: Boolean = false,
+    val appsErrorMessage: String? = null,
+    val smtpConfig: Map<String, Any> = emptyMap(),
+    val smtpTesting: Boolean = false,
+    val smtpTestResult: String? = null,
+
 }
 
 /**
@@ -61,6 +89,7 @@ data class SystemUiState(
  */
 class SystemViewModel(
     private val repository: BackupRepository,
+    private val systemRepository: SystemRepository? = null,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SystemUiState())
     val uiState: StateFlow<SystemUiState> = _uiState.asStateFlow()
@@ -90,13 +119,13 @@ class SystemViewModel(
         }
     }
 
-    /** 新建备份（默认全量、无密码）。成功后自动刷新列表。 */
-    fun createBackup() {
+    /** 新建备份（type 为备份类型："full" 全量或 "incremental" 增量）。成功后自动刷新列表。 */
+    fun createBackup(name: String? = null, type: String = "full") {
         if (_uiState.value.creatingBackup) return
         viewModelScope.launch {
             _uiState.update { it.copy(creatingBackup = true, errorMessage = null) }
             try {
-                val result = repository.createBackup(name = null)
+                val result = repository.createBackup(name = name, type = type)
                 _uiState.update {
                     it.copy(
                         creatingBackup = false,
@@ -110,6 +139,47 @@ class SystemViewModel(
                     it.copy(
                         creatingBackup = false,
                         errorMessage = friendly(error, "创建备份失败"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 加载定时备份计划配置。 */
+    fun loadBackupSchedule() {
+        if (_uiState.value.scheduleLoading) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(scheduleLoading = true) }
+            try {
+                val schedule = repository.getBackupSchedule()
+                _uiState.update { it.copy(backupSchedule = schedule, scheduleLoading = false) }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update { it.copy(scheduleLoading = false) }
+            }
+        }
+    }
+
+    /** 保存定时备份计划配置。 */
+    fun saveBackupSchedule(frequency: String, time: String, enabled: Boolean) {
+        if (_uiState.value.scheduleSaving) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(scheduleSaving = true, errorMessage = null) }
+            try {
+                val result = repository.setBackupSchedule(frequency, time, enabled)
+                _uiState.update {
+                    it.copy(
+                        scheduleSaving = false,
+                        actionMessage = result.message.ifBlank { "定时备份设置已保存" },
+                    )
+                }
+                loadBackupSchedule()
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update {
+                    it.copy(
+                        scheduleSaving = false,
+                        errorMessage = friendly(error, "保存定时备份设置失败"),
                     )
                 }
             }
@@ -350,4 +420,154 @@ class SystemViewModel(
 
     private fun friendly(error: Throwable, fallback: String): String =
         error.message?.takeIf(String::isNotBlank) ?: fallback
+}
+
+    private val systemRepository: SystemRepository by lazy {
+        SystemRepository(application)
+    }
+
+    fun loadUsers() = viewModelScope.launch {
+        _uiState.update { it.copy(loading = true, error = null) }
+        runCatching {
+            systemRepository.loadUsers()
+        }.onSuccess {
+            loadUsersState.value = it
+        }.onFailure {
+            _uiState.update { state -> state.copy(loading = false, error = it.localizedMessage ?: "加载用户失败") }
+        }
+    }
+
+    fun addUser(username: String, password: String, role: String) = viewModelScope.launch {
+        runCatching {
+            systemRepository.addUser(username, password, role)
+        }.onSuccess {
+            loadUsers()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "添加用户失败") }
+        }
+    }
+
+    fun deleteUser(userId: Long) = viewModelScope.launch {
+        runCatching {
+            systemRepository.deleteUser(userId)
+        }.onSuccess {
+            loadUsers()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "删除用户失败") }
+        }
+    }
+
+    fun loadSshKeys() = viewModelScope.launch {
+        runCatching {
+            systemRepository.loadSshKeys()
+        }.onSuccess {
+            _sshKeysState.value = it
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "加载 SSH 密钥失败") }
+        }
+    }
+
+    fun addSshKey(name: String, key: String) = viewModelScope.launch {
+        runCatching {
+            systemRepository.addSshKey(name, key)
+        }.onSuccess {
+            loadSshKeys()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "添加 SSH 密钥失败") }
+        }
+    }
+
+    fun deleteSshKey(keyId: Long) = viewModelScope.launch {
+        runCatching {
+            systemRepository.deleteSshKey(keyId)
+        }.onSuccess {
+            loadSshKeys()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "删除 SSH 密钥失败") }
+        }
+    }
+
+    fun loadPlatformTokens() = viewModelScope.launch {
+        runCatching {
+            systemRepository.loadPlatformTokens()
+        }.onSuccess {
+            _platformTokensState.value = it
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "加载平台令牌失败") }
+        }
+    }
+
+    fun addPlatformToken(name: String, token: String) = viewModelScope.launch {
+        runCatching {
+            systemRepository.addPlatformToken(name, token)
+        }.onSuccess {
+            loadPlatformTokens()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "添加平台令牌失败") }
+        }
+    }
+
+    fun deletePlatformToken(tokenId: Long) = viewModelScope.launch {
+        runCatching {
+            systemRepository.deletePlatformToken(tokenId)
+        }.onSuccess {
+            loadPlatformTokens()
+        }.onFailure {
+            _uiState.update { state -> state.copy(error = it.localizedMessage ?: "删除平台令牌失败") }
+        }
+    }
+
+    fun updateSmtpConfig(host: String, port: Int, ssl: Boolean, username: String, password: String) = viewModelScope.launch {
+        _uiState.update { it.copy(loading = true, error = null) }
+        runCatching {
+            systemRepository.updateSmtpConfig(host, port, ssl, username, password)
+        }.onSuccess {
+            _uiState.update { it.copy(loading = false) }
+        }.onFailure {
+            _uiState.update { state -> state.copy(loading = false, error = it.localizedMessage ?: "更新 SMTP 配置失败") }
+        }
+    }
+
+    fun testSmtpConfig() = viewModelScope.launch {
+        _uiState.update { it.copy(loading = true, error = null) }
+        runCatching {
+            systemRepository.testSmtpConfig()
+        }.onSuccess { msg ->
+            _uiState.update { it.copy(loading = false) }
+        }.onFailure {
+            _uiState.update { state -> state.copy(loading = false, error = it.localizedMessage ?: "SMTP 测试失败") }
+        }
+    }
+
+    fun loadApps() = viewModelScope.launch {
+        val repo = systemRepository ?: return@launch
+        _uiState.update { it.copy(appsLoading = true, appsErrorMessage = null) }
+        runCatching {
+            val data = repo.loadApps()
+            _uiState.update { it.copy(apps = data, appsLoading = false) }
+        }.onFailure {
+            _uiState.update { state -> state.copy(appsLoading = false, appsErrorMessage = it.localizedMessage ?: "加载应用失败") }
+        }
+    }
+
+    fun updateAppEnabled(appId: Long, enabled: Boolean) = viewModelScope.launch {
+        val repo = systemRepository ?: return@launch
+        runCatching {
+            repo.updateAppEnabled(appId, enabled)
+            _uiState.update { it.copy(actionMessage = if (enabled) "应用已启用" else "应用已禁用") }
+        }.onFailure {
+            _uiState.update { state -> state.copy(errorMessage = it.localizedMessage ?: "更新应用状态失败") }
+        }
+    }
+
+    private var loadUsersState = MutableStateFlow<List<com.daidai.daidai_app.data.model.User>>(emptyList())
+    private var _sshKeysState = MutableStateFlow<List<com.daidai.daidai_app.data.model.SshKey>>(emptyList())
+    private var _platformTokensState = MutableStateFlow<List<com.daidai.daidai_app.data.model.PlatformTokenInfo>>(emptyList())
+}
+    }
+
+    private var loadUsersState = MutableStateFlow<List<com.daidai.daidai_app.data.model.User>>(emptyList())
+    private var _sshKeysState = MutableStateFlow<List<com.daidai.daidai_app.data.model.SshKey>>(emptyList())
+    private var _platformTokensState = MutableStateFlow<List<com.daidai.daidai_app.data.model.PlatformTokenInfo>>(emptyList())
+
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -80,6 +81,11 @@ fun ScriptListScreen(
     })
     val state by screenViewModel.uiState.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<ScriptFile?>(null) }
+    var pendingRename by remember { mutableStateOf<ScriptFile?>(null) }
+    var pendingCopy by remember { mutableStateOf<ScriptFile?>(null) }
+    var pendingDownload by remember { mutableStateOf<String?>(null) }
+    var pendingRunParams by remember { mutableStateOf<String?>(null) }
+    var runParams by remember { mutableStateOf("") }
     pendingDelete?.let { file ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pendingDelete = null },
@@ -148,6 +154,7 @@ fun ScriptListScreen(
                                 onToggleExpand = screenViewModel::toggleExpanded,
                                 onRun = screenViewModel::runScript,
                                 onDelete = { f -> pendingDelete = f },
+                                onDownload = screenViewModel::downloadScript,
                             )
                         }
                     }
@@ -184,6 +191,7 @@ private fun buildRows(
     return result
 }
 
+
 @Composable
 private fun TreeHeader(onRefresh: () -> Unit) {
     Row(
@@ -198,16 +206,25 @@ private fun TreeHeader(onRefresh: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        IconButton(onClick = onRefresh) {
-            Icon(
-                imageVector = Icons.Filled.Refresh,
-                contentDescription = "刷新",
-                tint = AppColors.primary,
-            )
+        Row {
+            TextButton(onClick = { /* todo: 新建文件 */ }) {
+                Text("新建文件")
+            }
+            TextButton(onClick = { /* todo: 上传文件 */ }) {
+                Text("上传")
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = "刷新",
+                    tint = AppColors.primary,
+                )
+            }
         }
     }
     HorizontalDivider(color = AppColors.glassDivider)
 }
+
 
 /**
  * 单个脚本节点行：按 [depth] 缩进，目录展示折叠箭头，脚本展示打开 / 运行 / 删除入口。
@@ -221,6 +238,9 @@ private fun ScriptNodeRow(
     onToggleExpand: (String) -> Unit,
     onRun: (String) -> Unit,
     onDelete: (ScriptFile) -> Unit,
+    onRename: (String) -> Unit = {},
+    onCopy: (String) -> Unit = {},
+    onDownload: (String) -> Unit = {},
 ) {
     val isDir = file.isDirectory
     Row(
@@ -274,7 +294,7 @@ private fun ScriptNodeRow(
                 )
                 Spacer(Modifier.width(8.dp))
             } else {
-                TextButton(onClick = { onRun(file.path) }) {
+                TextButton(onClick = { onRunFile(file.path) }) {
                     Text("运行", color = AppColors.primary)
                 }
             }

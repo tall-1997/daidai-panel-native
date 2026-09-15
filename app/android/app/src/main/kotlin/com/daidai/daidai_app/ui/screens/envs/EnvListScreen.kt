@@ -18,6 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.DraggableState
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.pointerInput
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,10 +44,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlin.math.roundToInt
 import com.daidai.daidai_app.data.model.EnvVar
 import com.daidai.daidai_app.data.model.parseQlEnvText
 import com.daidai.daidai_app.data.repository.EnvsRepository
@@ -189,12 +197,14 @@ fun EnvListScreen(
         )
     }
 
-    val filteredEnvs = remember(state.envs, state.selectedGroup) {
-        when (state.selectedGroup) {
+    val filteredEnvs = remember(state.envs, state.selectedGroup, state.searchQuery) {
+        val base = when (state.selectedGroup) {
             null -> state.envs
             "" -> state.envs.filter { it.primaryGroup().isEmpty() }
             else -> state.envs.filter { it.primaryGroup() == state.selectedGroup }
         }
+        if (state.searchQuery.isBlank()) base
+        else base.filter { it.name.contains(state.searchQuery, ignoreCase = true) }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -209,6 +219,16 @@ fun EnvListScreen(
             groups = state.groups,
             selectedGroup = state.selectedGroup,
             onSelect = { screenViewModel.selectGroup(it) },
+            onMoveGroup = { from, to -> screenViewModel.moveGroup(from, to) },
+        )
+        OutlinedTextField(
+            value = state.searchQuery,
+            onValueChange = { screenViewModel.setSearchQuery(it) },
+            label = { Text("搜索变量名") },
+            placeholder = { Text("按名称筛选环境变量") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         )
         Box(
             modifier = Modifier
@@ -242,14 +262,18 @@ fun EnvListScreen(
     }
 }
 
-/** 分组筛选栏：全部 / 默认分组 / 各分组。 */
+/** 分组筛选栏：全部 / 默认分组 / 各分组。支持拖拽排序。 */
 @Composable
 private fun GroupFilterBar(
     groups: List<String>,
     selectedGroup: String?,
     onSelect: (String?) -> Unit,
+    onMoveGroup: (fromIndex: Int, toIndex: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val density = LocalDensity.current
+    var draggedIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableStateOf(0f) }
     val labels = buildList {
         add(null to "全部")
         add("" to "默认分组")
@@ -263,11 +287,40 @@ private fun GroupFilterBar(
             .padding(horizontal = 20.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        labels.forEach { (group, label) ->
+        labels.forEachIndexed { index, (group, label) ->
+            val isDragged = draggedIndex == index
             FilterChip(
                 selected = selectedGroup == group,
                 onClick = { onSelect(group) },
                 label = { Text(label) },
+                modifier = Modifier
+                    .offset(
+                        x = with(density) { if (isDragged) dragOffset.dp else 0.dp },
+                        y = 0.dp,
+                    )
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = {
+                                draggedIndex = index
+                                dragOffset = 0f
+                            },
+                            onDrag = { _, dragAmount -> dragOffset += dragAmount.x },
+                            onDragEnd = {
+                                val avgChipWidthPx = 100f
+                                val targetIndex = (index + (dragOffset / avgChipWidthPx).roundToInt())
+                                    .coerceIn(0 until labels.size)
+                                if (targetIndex != index) {
+                                    onMoveGroup(index, targetIndex)
+                                }
+                                draggedIndex = null
+                                dragOffset = 0f
+                            },
+                            onDragCancel = {
+                                draggedIndex = null
+                                dragOffset = 0f
+                            },
+                        )
+                    },
             )
         }
     }

@@ -9,6 +9,9 @@ import com.daidai.daidai_app.data.model.SecurityOverview
 import com.daidai.daidai_app.data.model.Session
 import com.daidai.daidai_app.data.model.SessionPolicy
 import com.daidai.daidai_app.data.model.TwoFactorStatus
+import com.daidai.daidai_app.data.model.TwoFactorSetupResult
+import com.daidai.daidai_app.data.model.TwoFactorVerifyResult
+import com.daidai.daidai_app.data.model.LoginLogFilter
 import com.daidai.daidai_app.data.model.SecurityLoadResult
 import com.daidai.daidai_app.data.repository.SecurityDataSource
 import kotlinx.coroutines.async
@@ -30,6 +33,7 @@ import kotlinx.coroutines.launch
  * 保留独立 error 字段，单分区失败不拖垮整页（历史缺陷：HTTP 400 冒泡导致
  * 主线程 FATAL）。
  */
+
 data class SecurityUiState(
     val tab: SecurityTab = SecurityTab.Overview,
     val overview: SecurityOverview = SecurityOverview(),
@@ -41,6 +45,10 @@ data class SecurityUiState(
     val auditLogs: List<AuditLog> = emptyList(),
     val auditLogsError: String? = null,
     val twoFactor: TwoFactorStatus = TwoFactorStatus(),
+    val twoFactorSetup: TwoFactorSetupResult = TwoFactorSetupResult(),
+    val twoFactorSetupError: String? = null,
+    val twoFactorCode: String = "",
+    val twoFactorVerificationResult: TwoFactorVerifyResult? = null,
     val twoFactorError: String? = null,
     val ipWhitelist: List<IpWhitelistEntry> = emptyList(),
     val ipWhitelistError: String? = null,
@@ -52,6 +60,7 @@ data class SecurityUiState(
     val actionMessage: String? = null,
     /** 写操作进行中，用于禁用按钮避免重复提交。 */
     val actionBusy: Boolean = false,
+    val forceLogoutLoading: Boolean = false,
 ) {
     enum class Phase { Loading, Loaded, Error }
 
@@ -303,6 +312,119 @@ class SecurityViewModel(
                     sessionPolicy = fresh?.data ?: it.sessionPolicy,
                     sessionPolicyError = if (result.isSuccess) fresh?.error ?: it.sessionPolicyError else result.error,
                     actionMessage = if (result.isSuccess) "会话策略已保存" else result.error,
+                    actionBusy = false,
+                )
+            }
+        }
+    }
+
+    /** 启用 2FA（POST /api/security/2fa/setup）。 */
+    fun enable2fa() {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(actionBusy = true, actionMessage = null) }
+            val result = try {
+                repo.enable2fa()
+            } catch (error: Exception) {
+                SecurityLoadResult<TwoFactorSetupResult>(TwoFactorSetupResult(), error.message ?: "启用 2FA 失败")
+            }
+            _uiState.update {
+                it.copy(
+                    twoFactorSetup = result.data,
+                    twoFactorSetupError = if (result.isSuccess) null else result.error,
+                    actionMessage = if (result.isSuccess) "2FA 启用请求已发送" else result.error,
+                    actionBusy = false,
+                )
+            }
+        }
+    }
+
+    /** 禁用 2FA（POST /api/security/2fa/disable）。 */
+    fun disable2fa(code: String) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(actionBusy = true, actionMessage = null) }
+            val result = try {
+                repo.disable2fa(code)
+            } catch (error: Exception) {
+                SecurityLoadResult<Unit>(Unit, error.message ?: "禁用 2FA 失败")
+            }
+            _uiState.update {
+                it.copy(
+                    twoFactor = TwoFactorStatus(enabled = false, supported = it.twoFactor.supported),
+                    twoFactorError = if (result.isSuccess) null else result.error,
+                    actionMessage = if (result.isSuccess) "2FA 已禁用" else result.error,
+                    actionBusy = false,
+                )
+            }
+        }
+    }
+
+    /** 验证 2FA 验证码。 */
+    fun verify2fa(code: String) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(actionBusy = true, actionMessage = null) }
+            val result = try {
+                repo.verify2fa(code)
+            } catch (error: Exception) {
+                SecurityLoadResult<Boolean>(false, error.message ?: "验证 2FA 验证码失败")
+            }
+            _uiState.update {
+                val verified = result.data
+                it.copy(
+                    twoFactor = if (verified) TwoFactorStatus(enabled = true, supported = it.twoFactor.supported) else it.twoFactor,
+                    twoFactorVerificationResult = TwoFactorVerifyResult(success = verified, message = result.error ?: ""),
+                    actionMessage = if (result.isSuccess) "2FA 验证码验证成功" else result.error,
+                    actionBusy = false,
+                )
+            }
+        }
+    }
+
+    /** 强制下线指定会话。 */
+    fun forceLogout(sessionId: Long) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(forceLogoutLoading = true, actionBusy = true, actionMessage = null) }
+            val result = try {
+                repo.forceLogout(sessionId)
+            } catch (error: Exception) {
+                SecurityLoadResult<Unit>(Unit, error.message ?: "强制下线失败")
+            }
+            val fresh = if (result.isSuccess) {
+                try {
+                    repo.getSessions()
+                } catch (error: Exception) {
+                    SecurityLoadResult(emptyList(), error.message ?: "刷新会话列表失败")
+                }
+            } else null
+            _uiState.update {
+                it.copy(
+                    sessions = fresh?.data ?: it.sessions,
+                    forceLogoutLoading = false,
+                    actionBusy = false,
+                    actionMessage = if (result.isSuccess) "已强制下线" else result.error ?: "强制下线失败",
+                )
+            }
+            }
+        }
+    }
+
+    /** 获取筛选后的登录日志。 */
+    fun fetchFilteredLoginLogs(filter: LoginLogFilter) {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(actionBusy = true) }
+            val result = try {
+                repo.getLoginLogs(filter)
+            } catch (error: Exception) {
+                SecurityLoadResult<List<LoginLog>>(emptyList(), error.message ?: "获取登录日志失败")
+            }
+            _uiState.update {
+                it.copy(
+                    loginLogs = result.data,
+                    loginLogsError = result.error,
                     actionBusy = false,
                 )
             }

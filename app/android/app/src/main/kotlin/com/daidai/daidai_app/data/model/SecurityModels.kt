@@ -158,6 +158,37 @@ data class TwoFactorStatus(
     }
 }
 
+
+
+/** 2FA 启用结果（POST /api/security/2fa/setup 响应）。 */
+data class TwoFactorSetupResult(
+    val secret: String = "",
+    val qrCodeUri: String = "",
+    val backupCodes: List<String> = emptyList(),
+) {
+    companion object {
+        fun fromJson(json: JSONObject): TwoFactorSetupResult = TwoFactorSetupResult(
+            secret = json.optString("secret"),
+            qrCodeUri = json.optString("qr_code_uri").ifBlank { json.optString("otpauth_url", "") },
+            backupCodes = json.optJSONArray("backup_codes")
+                ?.let { arr -> (0 until arr.length()).map { arr.optString(it) } }
+                ?: emptyList(),
+        )
+    }
+}
+
+/** 2FA 验证结果（POST /api/security/2fa/verify 响应）。 */
+data class TwoFactorVerifyResult(
+    val success: Boolean = false,
+    val message: String = "",
+) {
+    companion object {
+        fun fromJson(json: JSONObject): TwoFactorVerifyResult = TwoFactorVerifyResult(
+            success = json.optBoolean("success", false),
+            message = json.optString("message"),
+        )
+    }
+}
 /** IP 白名单单条。与 Go / 本地 `GET /api/security/ip-whitelist` 对齐。 */
 data class IpWhitelistEntry(
     val id: Long = 0L,
@@ -201,6 +232,16 @@ internal object SecurityJson {
     }.getOrNull()
 }
 
+
+
+/** 登录日志筛选条件（与后端 GET /api/security/login-logs 查询参数对齐）。 */
+data class LoginLogFilter(
+    val startTime: String = "",
+    val endTime: String = "",
+    val success: Boolean? = null,
+    val ip: String = "",
+    val username: String = "",
+)
 /** 解析登录日志数组（容忍空/非法）。 */
 fun parseLoginLogs(raw: String): List<LoginLog> {
     val array = SecurityJson.dataArray(raw)
@@ -262,4 +303,16 @@ fun parseIpWhitelist(raw: String): List<IpWhitelistEntry> {
 fun parseConfigValue(raw: String): String? {
     val node = SecurityJson.dataObject(raw) ?: return null
     return node.optString("value").takeIf { it.isNotBlank() }
+}
+
+/** 解析 2FA 启用结果（data 为对象）。 */
+fun parseTwoFactorSetupResult(raw: String): TwoFactorSetupResult {
+    val node = SecurityJson.dataObject(raw) ?: return TwoFactorSetupResult()
+    return TwoFactorSetupResult.fromJson(node)
+}
+
+/** 解析 2FA 验证结果（data 为对象）。 */
+fun parseTwoFactorVerifyResult(raw: String): TwoFactorVerifyResult {
+    val node = SecurityJson.dataObject(raw) ?: return TwoFactorVerifyResult()
+    return TwoFactorVerifyResult.fromJson(node)
 }

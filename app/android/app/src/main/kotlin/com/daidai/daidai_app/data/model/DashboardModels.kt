@@ -32,6 +32,18 @@ data class SystemInfo(
     val numCpu: Int = 0,
     val netRxBytes: Long = 0,
     val netTxBytes: Long = 0,
+    /** 网络上行速率（已格式化的可读字符串，如 "1.2MB/s"）。 */
+    val networkUp: String = "-",
+    /** 网络下行速率（已格式化的可读字符串，如 "3.5MB/s"）。 */
+    val networkDown: String = "-",
+    /** 系统负载均值 [1分钟, 5分钟, 15分钟]，后端缺失时为 0。 */
+    val loadAverage: List<Double> = listOf(0.0, 0.0, 0.0),
+    /** 登录用户数。 */
+    val userCount: Int = 0,
+    /** 活跃用户数。 */
+    val activeCount: Int = 0,
+    /** 在线会话数。 */
+    val onlineCount: Int = 0,
 ) {
     companion object {
         fun fromData(json: JSONObject): SystemInfo = SystemInfo(
@@ -54,6 +66,20 @@ data class SystemInfo(
             numCpu = json.optInt("num_cpu", 0),
             netRxBytes = json.optLong("net_rx_bytes", 0),
             netTxBytes = json.optLong("net_tx_bytes", 0),
+            networkUp = json.optString("network_up").takeIf { it.isNotEmpty() } ?: "-",
+            networkDown = json.optString("network_down").takeIf { it.isNotEmpty() } ?: "-",
+            loadAverage = runCatching {
+                val arr = json.optJSONArray("load_average")
+                if (arr == null || arr.length() < 3) listOf(0.0, 0.0, 0.0)
+                else listOf(
+                    arr.optDouble(0).takeIf { it > 0 } ?: 0.0,
+                    arr.optDouble(1).takeIf { it > 0 } ?: 0.0,
+                    arr.optDouble(2).takeIf { it > 0 } ?: 0.0,
+                )
+            }.getOrElse { listOf(0.0, 0.0, 0.0) },
+            userCount = json.optInt("user_count", 0),
+            activeCount = json.optInt("active_count", 0),
+            onlineCount = json.optInt("online_count", 0),
         )
     }
 }
@@ -124,3 +150,11 @@ data class DashboardStats(
         }
     }
 }
+
+/** 仪表盘快捷操作数据模型。 */
+data class QuickAction(
+    val route: String,
+    val label: String,
+    val icon: String,
+    val description: String,
+)

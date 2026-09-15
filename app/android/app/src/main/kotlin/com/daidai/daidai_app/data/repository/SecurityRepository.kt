@@ -10,6 +10,11 @@ import com.daidai.daidai_app.data.model.SecurityOverview
 import com.daidai.daidai_app.data.model.Session
 import com.daidai.daidai_app.data.model.SessionPolicy
 import com.daidai.daidai_app.data.model.TwoFactorStatus
+import com.daidai.daidai_app.data.model.TwoFactorSetupResult
+import com.daidai.daidai_app.data.model.TwoFactorVerifyResult
+import com.daidai.daidai_app.data.model.LoginLogFilter
+import com.daidai.daidai_app.data.model.parseTwoFactorSetupResult
+import com.daidai.daidai_app.data.model.parseTwoFactorVerifyResult
 import com.daidai.daidai_app.data.model.parseAuditLogs
 import com.daidai.daidai_app.data.model.parseConfigValue
 import com.daidai.daidai_app.data.model.parseIpWhitelist
@@ -74,6 +79,18 @@ interface SecurityDataSource {
 
     /** 保存网页端 / APP 端最大会话数（POST /api/configs）。 */
     suspend fun setSessionPolicy(maxWebSessions: Int, maxAppSessions: Int): SecurityLoadResult<Unit>
+
+    /** 启用 2FA/TOTP（POST /api/security/2fa）。 */
+    suspend fun enableTwoFactor(): SecurityLoadResult<TwoFactorSetup>
+
+    /** 禁用 2FA/TOTP（POST /api/security/2fa/disable）。 */
+    suspend fun disableTwoFactor(code: String): SecurityLoadResult<Unit>
+
+    /** 验证 2FA/TOTP（POST /api/security/2fa/verify）。 */
+    suspend fun verifyTwoFactor(code: String): SecurityLoadResult<Unit>
+
+    /** 强制下线会话（POST /api/security/sessions/{id}/force-logout）。 */
+    suspend fun forceLogoutSession(sessionId: Long): SecurityLoadResult<Unit>
 }
 
 /**
@@ -114,7 +131,7 @@ class SecurityRepository(
     )
 
     /** 拉取登录日志列表。 */
-    override suspend fun getLoginLogs(): SecurityLoadResult<List<LoginLog>> = withContext(Dispatchers.IO) {
+    override suspend fun getLoginLogs(filter: LoginLogFilter = LoginLogFilter()): SecurityLoadResult<List<LoginLog>> = withContext(Dispatchers.IO) {
         safeGet(
             path = "/api/security/login-logs",
             parse = { parseLoginLogs(it) },
@@ -158,6 +175,29 @@ class SecurityRepository(
         )
     }
 
+    /** 启用 2FA/TOTP。 */
+    override suspend fun enableTwoFactor(): SecurityLoadResult<TwoFactorSetup> = withContext(Dispatchers.IO) {
+        safeGet(
+            path = "/api/security/2fa",
+            parse = { parseTwoFactorSetup(it) },
+            fallback = TwoFactorSetup(),
+        )
+    }
+
+    /** 禁用 2FA/TOTP。 */
+    override suspend fun disableTwoFactor(code: String): SecurityLoadResult<Unit> = withContext(Dispatchers.IO) {
+        safeWrite(path = "/api/security/2fa/disable", method = "POST", body = """{"code":"$code"}""")
+    }
+
+    /** 验证 2FA/TOTP。 */
+    override suspend fun verifyTwoFactor(code: String): SecurityLoadResult<Unit> = withContext(Dispatchers.IO) {
+        safeWrite(path = "/api/security/2fa/verify", method = "POST", body = """{"code":"$code"}""")
+    }
+
+    /** 强制下线会话。 */
+    override suspend fun forceLogoutSession(sessionId: Long): SecurityLoadResult<Unit> = withContext(Dispatchers.IO) {
+        safeWrite(path = "/api/security/sessions/$sessionId/force-logout", method = "POST")
+    }
     /** 拉取 IP 白名单。 */
     override suspend fun getIpWhitelist(): SecurityLoadResult<List<IpWhitelistEntry>> = withContext(Dispatchers.IO) {
         safeGet(

@@ -597,4 +597,58 @@ class ScriptRunHistoryStore(context: android.content.Context) {
         const val KEY_ENTRIES = "entries"
         const val MAX_ENTRIES = 100
     }
+
+
+    /** 重命名脚本或目录 */
+    fun renameScript(oldPath: String, newPath: String) {
+        viewModelScope.launch {
+            safeRun {
+                repository.renameScript(oldPath, newPath)
+                refreshTree()
+            }
+        }
+    }
+
+    /** 复制脚本或目录 */
+    fun copyScript(sourcePath: String, targetPath: String) {
+        viewModelScope.launch {
+            safeRun {
+                repository.copyScript(sourcePath, targetPath)
+                refreshTree()
+            }
+        }
+    }
+
+    /** 上传脚本文件 */
+    fun uploadScript(dirPath: String, fileName: String, content: String) {
+        viewModelScope.launch {
+            safeRun {
+                repository.uploadScript(dirPath, fileName, content)
+                refreshTree()
+            }
+        }
+    }
+
+    /** 下载脚本内容 */
+    fun downloadScript(path: String) {
+        viewModelScope.launch {
+            safeRun {
+                val content = repository.downloadScript(path)
+                _downloadResult.emit(content)
+            }
+        }
+    }
+
+    /** 带参数运行脚本 */
+    fun runScriptWithParams(path: String, params: Map<String, String>) {
+        viewModelScope.launch {
+            safeRun {
+                val runId = repository.runScriptWithParams(path, params)
+                if (runId != null) {
+                    _runId.emit(runId)
+                }
+            }
+        }
+    }
+
 }

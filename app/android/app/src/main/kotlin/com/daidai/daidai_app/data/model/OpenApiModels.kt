@@ -14,21 +14,19 @@ data class OpenApiApp(
     val id: Long = 0L,
     val name: String = "",
     val appKey: String = "",
+    val type: String = "script",
     val scopes: List<String> = emptyList(),
     val enabled: Boolean = true,
     val rateLimit: Int = 0,
     val createdAt: String = "",
 ) {
-    /** 密钥前缀：展示用截断（前 8 位），避免全文泄漏到列表界面。 */
-    val appKeyPrefix: String
-        get() = appKey.take(8)
-
     companion object {
         /** 从单个应用 JSON 对象解析。scopes 为逗号分隔字符串。 */
         fun fromJson(json: JSONObject): OpenApiApp = OpenApiApp(
             id = json.optLong("id"),
             name = json.optString("name"),
             appKey = json.optString("app_key"),
+            type = json.optString("type", "script"),
             scopes = json.optString("scopes")
                 .split(',')
                 .map { it.trim() }
