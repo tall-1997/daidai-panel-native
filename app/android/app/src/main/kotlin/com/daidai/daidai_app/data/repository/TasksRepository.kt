@@ -84,8 +84,10 @@ class PanelTasksRepository(
         }
     }
 
-    override suspend fun setPinned(id: Long, pinned: Boolean) = withContext(Dispatchers.IO) {
-        execute("PUT", "$baseUrl/api/tasks/$id/${if (pinned) "pin" else "unpin"}")
+    override suspend fun setPinned(id: Long, pinned: Boolean) {
+        withContext(Dispatchers.IO) {
+            execute("PUT", "$baseUrl/api/tasks/$id/${if (pinned) "pin" else "unpin"}")
+        }
     }
 
     override suspend fun copyTask(id: Long): Long = withContext(Dispatchers.IO) {

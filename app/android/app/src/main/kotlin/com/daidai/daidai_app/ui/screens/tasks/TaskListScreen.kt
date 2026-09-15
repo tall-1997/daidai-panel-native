@@ -19,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.PlayArrow
@@ -32,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -353,17 +354,7 @@ private fun TaskCard(
                     tint = if (task.pinned) AppColors.primary else AppColors.slate500,
                 )
             }
-            IconButton(
-                onClick = onCopy,
-                enabled = !busy,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    Icons.Filled.ContentCopy,
-                    contentDescription = "复制任务",
-                    tint = AppColors.slate600,
-                )
-            }
+            TextButton(onClick = onCopy, enabled = !busy) { Text("复制") }
             IconButton(
                 onClick = onEdit,
                 enabled = !busy,
