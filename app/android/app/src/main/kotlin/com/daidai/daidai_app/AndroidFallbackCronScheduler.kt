@@ -51,6 +51,9 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
             store.scheduledTaskStops()
                 .filter { task -> task.stopSchedule.lineSequence().map(String::trim).filter(String::isNotEmpty).any { CronExpression.matchesTick(it, now, unprocessedMinutes) } }
                 .forEach { store.stopScheduledTask(it.id) }
+            store.enabledScheduledSubscriptions()
+                .filter { sub -> CronExpression.matchesTick(sub.schedule, now, unprocessedMinutes) }
+                .forEach { sub -> submitSubscription(sub.id) }
         } catch (error: Exception) {
             store.appLog("Cron", error.message ?: error.javaClass.simpleName)
         }
@@ -93,6 +96,16 @@ internal class AndroidFallbackCronScheduler(private val store: LocalPanelStore) 
                 store.appLog("Cron", "Task $taskId deferred: fallback queue is full")
                 if (started.get()) runCatching { ticker.schedule({ submitTask(taskId) }, 10, TimeUnit.SECONDS) }
             }
+        }
+    }
+
+    private fun submitSubscription(subscriptionId: Long) {
+        if (!started.get()) return
+        try {
+            workers.execute { store.runScheduledSubscriptionPull(subscriptionId) }
+        } catch (_: RejectedExecutionException) {
+            store.appLog("Cron", "subscription $subscriptionId deferred: queue is full")
+            if (started.get()) runCatching { ticker.schedule({ submitSubscription(subscriptionId) }, 10, TimeUnit.SECONDS) }
         }
     }
 
@@ -219,6 +232,60 @@ internal object CronExpression {
                 field.split(',').all { parseSelection(it, ranges[fieldIndex]) != null }
         }
     }
+
+    
+    fun nextRunTimes(expression: String, count: Int = 5, from: ZonedDateTime = ZonedDateTime.now()): List<ZonedDateTime> {
+        if (count <= 0 || !isValid(expression)) return emptyList()
+        val fields = expression.trim().split(Regex("\\s+"))
+        val sixField = fields.size == 6
+        var cursor = from.withNano(0).plusSeconds(1)
+        if (!sixField && cursor.second != 0) {
+            cursor = cursor.plusMinutes(1).withSecond(0)
+        }
+        val results = ArrayList<ZonedDateTime>(count)
+        val maxSteps = if (sixField) 40L * 24 * 3600 else 400L * 24 * 60
+        var steps = 0L
+        while (results.size < count && steps < maxSteps) {
+            if (matches(expression, cursor)) results += cursor
+            cursor = if (sixField) cursor.plusSeconds(1) else cursor.plusMinutes(1)
+            steps++
+        }
+        return results
+    }
+
+    fun describe(expression: String): String {
+        val fields = expression.trim().split(Regex("\\s+"))
+        if (!isValid(expression)) return "无效 cron 表达式"
+        val hasSecond = fields.size == 6
+        val second = if (hasSecond) fields[0] else "0"
+        val minute = fields[if (hasSecond) 1 else 0]
+        val hour = fields[if (hasSecond) 2 else 1]
+        val day = fields[if (hasSecond) 3 else 2]
+        val month = fields[if (hasSecond) 4 else 3]
+        val week = fields[if (hasSecond) 5 else 4]
+        fun every(field: String) = field == "*" || field == "?"
+        if (hasSecond && second.startsWith("*/") && every(minute) && every(hour) && every(day) && every(month) && every(week)) {
+            return "每${second.removePrefix("*/")}秒执行一次"
+        }
+        if ((second == "0" || !hasSecond) && minute.startsWith("*/") && every(hour) && every(day) && every(month) && every(week)) {
+            return "每${minute.removePrefix("*/")}分钟执行一次"
+        }
+        if ((second == "0" || !hasSecond) && minute == "*" && every(hour) && every(day) && every(month) && every(week)) {
+            return "每分钟执行一次"
+        }
+        if ((second == "0" || !hasSecond) && minute == "0" && hour.startsWith("*/") && every(day) && every(month) && every(week)) {
+            return "每${hour.removePrefix("*/")}小时执行一次"
+        }
+        if ((second == "0" || !hasSecond) && minute == "0" && hour == "*" && every(day) && every(month) && every(week)) {
+            return "每小时整点执行"
+        }
+        if ((second == "0" || !hasSecond) && minute == "0" && hour.matches(Regex("\\d+")) && every(day) && every(month) && every(week)) {
+            return "每天 ${hour.padStart(2, '0')}:00 执行"
+        }
+        return "自定义 cron 表达式"
+    }
+
+    fun fieldCount(expression: String): Int = expression.trim().split(Regex("\\s+")).size
 
     fun matches(expression: String, time: ZonedDateTime): Boolean {
         val fields = expression.trim().split(Regex("\\s+"))

@@ -7,8 +7,10 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -57,17 +59,26 @@ class LocalPanelHttpServer(
 
         internal fun isOpenApiTokenCapabilityEnabled(): Boolean = true
 
-        internal fun isPublicAuthRoute(method: Method, uri: String): Boolean = when (uri.substringBefore('?').trimEnd('/')) {
+        internal fun isPublicAuthRoute(method: Method, uri: String): Boolean = when (LocalPanelStore.normalizeApiPath(uri)) {
             "/api/auth/check-init" -> method == Method.GET
             "/api/auth/init", "/api/auth/login", "/api/auth/refresh" -> method == Method.POST
             "/api/auth/captcha-config" -> method == Method.GET
             else -> false
         }
 
-        internal fun isPublicApiRoute(method: Method, uri: String): Boolean = when (uri.substringBefore('?').trimEnd('/')) {
-            "/api/health", "/api/v1/health", "/api/local/capabilities", "/api/system/public-version",
+        internal fun isRawLogDownloadRoute(method: Method, uri: String): Boolean {
+            if (method != Method.GET) return false
+            val segs = LocalPanelStore.normalizeApiPath(uri).removePrefix("/api").trim('/').split('/').filter { it.isNotEmpty() }
+            if (segs.size == 3 && segs[0] == "logs" && segs[1].toLongOrNull() != null && segs[2] == "raw") return true
+            if (segs.size >= 5 && segs[0] == "tasks" && segs[1].toLongOrNull() != null && segs[2] == "log-files" && segs.last() == "raw") return true
+            return false
+        }
+
+        internal fun isPublicApiRoute(method: Method, uri: String): Boolean = when (LocalPanelStore.normalizeApiPath(uri)) {
+            "/api/health", "/api/local/capabilities", "/api/system/public-version",
             "/api/android/recovery-metadata" -> method == Method.GET
             "/api/system/health-check" -> method == Method.GET || method == Method.POST
+            "/api/system/panel-settings" -> method == Method.GET
             else -> false
         }
 
@@ -180,7 +191,11 @@ class LocalPanelHttpServer(
                 return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")
             }
             if (isPublicApiRoute(session.method, session.uri)) return servePublicApi(session)
-            if (session.uri.startsWith("/api/auth")) {
+            if (isRawLogDownloadRoute(session.method, session.uri)) {
+                val path = (session.uri ?: "").substringBefore('?')
+                return if (path.contains("/tasks/")) store.serveTasks(session) else store.serveLogs(session)
+            }
+            if (session.uri.startsWith("/api/auth") || session.uri.startsWith("/api/v1/auth")) {
                 if (!isPublicAuthRoute(session.method, session.uri) && !store.isAuthorized(session)) {
                     return jsonError(Response.Status.UNAUTHORIZED, "登录态已失效，请重新登录")
                 }
@@ -199,57 +214,38 @@ class LocalPanelHttpServer(
             if (session.uri.startsWith("/api/security") || session.uri.startsWith("/api/v1/security")) {
                 return store.serveSecurity(session)
             }
-            // Route dispatch for all store-backed endpoints
             val uri = session.uri ?: ""
-            if (uri.startsWith("/api/users") || uri.startsWith("/api/v1/users")) return store.serveUsers(session, if (uri.startsWith("/api/v1")) "/api/v1/users" else "/api/users")
-            if (listOf("/api/ssh-keys","/api/v1/ssh-keys","/api/platform-tokens","/api/v1/platform-tokens","/api/open-api","/api/v1/open-api","/api/sponsors","/api/v1/sponsors").any(uri::startsWith)) return store.serveManagement(session)
-            if (uri.startsWith("/api/notifications") || uri.startsWith("/api/v1/notifications")) return store.serveNotifications(session)
-            if (uri.startsWith("/api/tasks")) return store.serveTasks(session)
-            if (uri.startsWith("/api/v1/tasks")) return store.serveTasks(session)
-            if (uri.startsWith("/api/envs")) return store.serveEnvs(session)
-            if (uri.startsWith("/api/v1/envs")) return store.serveEnvs(session)
-            if (uri.startsWith("/api/deps")) return store.serveDependencies(session)
-            if (uri.startsWith("/api/v1/deps")) return store.serveDependencies(session)
-            if (uri.startsWith("/api/configs")) return store.serveConfigs(session)
-            if (uri.startsWith("/api/v1/configs")) return store.serveConfigs(session)
-            if (uri.startsWith("/api/scripts")) return store.serveScripts(session)
-            if (uri.startsWith("/api/terminal") || uri.startsWith("/api/v1/terminal")) return store.serveTerminal(session)
-            if (uri.startsWith("/api/subscriptions")) return store.serveSubscriptions(session)
-            if (uri.startsWith("/api/logs")) return store.serveLogs(session)
-            if (uri.startsWith("/api/v1/logs")) return store.serveLogs(session)
-            if (uri.startsWith("/api/system/dashboard")) return store.serveDashboard(session)
-            if (uri.startsWith("/api/system/stats")) return jsonResponse(systemStats())
-            if (uri.startsWith("/api/system/panel-log")) return store.serveLogs(session)
+            val api = LocalPanelStore.normalizeApiPath(uri)
+            if (api.startsWith("/api/users")) return store.serveUsers(session, if (uri.startsWith("/api/v1")) "/api/v1/users" else "/api/users")
+            if (listOf("/api/ssh-keys", "/api/platform-tokens", "/api/open-api", "/api/sponsors").any(api::startsWith)) return store.serveManagement(session)
+            if (api.startsWith("/api/notifications")) return store.serveNotifications(session)
+            if (api.startsWith("/api/tasks")) return store.serveTasks(session)
+            if (api.startsWith("/api/envs")) return store.serveEnvs(session)
+            if (api.startsWith("/api/deps")) return store.serveDependencies(session)
+            if (api.startsWith("/api/configs")) return store.serveConfigs(session)
+            if (api.startsWith("/api/scripts")) return store.serveScripts(session)
+            if (api.startsWith("/api/terminal")) return store.serveTerminal(session)
+            if (api.startsWith("/api/subscriptions")) return store.serveSubscriptions(session)
+            if (api.startsWith("/api/logs")) return store.serveLogs(session)
+            if (api.startsWith("/api/system/dashboard")) return store.serveDashboard(session)
+            if (api.startsWith("/api/system/stats")) return jsonResponse(systemStats())
+            if (api.startsWith("/api/system/panel-log")) return store.panelLog(session)
             if (LocalPanelStore.isRecoveryRequest(session.method, uri)) return store.serveBackup(session)
-            if (uri.startsWith("/api/system/panel-settings")) return store.serveConfigs(session)
-            if (uri == "/api/system/config-script" || uri == "/api/v1/system/config-script") return store.serveConfigScript(session)
-            if (uri.startsWith("/api/android-runtime") || uri.startsWith("/api/v1/android-runtime")) return androidRuntime(session)
-            if (uri.endsWith("/system/update-status") || uri.endsWith("/system/update") || uri.endsWith("/system/restart")) return systemLifecycle(session)
-            if (uri.startsWith("/api/system/machine-code")) return jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-local")).put("status", "ok"))
-            if (uri.startsWith("/api/system/check-update")) return jsonResponse(
-                JSONObject()
-                    .put("data", JSONObject()
-                        .put("latest", "3.0.6")
-                        .put("current", "3.0.6")
-                        .put("source", "linzixuanzz/daidai-panel"))
-                    .put("status", "ok")
-            )
+            if (api.startsWith("/api/system/panel-settings")) return store.servePanelSettings(session)
+            if (api == "/api/system/config-script") return store.serveConfigScript(session)
+            if (api.startsWith("/api/android-runtime")) return androidRuntime(session)
+            if (api.endsWith("/system/update-status") || api.endsWith("/system/update") || api.endsWith("/system/restart")) return systemLifecycle(session)
+            if (api.startsWith("/api/system/machine-code")) return jsonResponse(JSONObject().put("data", JSONObject().put("machine_code", "android-local")).put("status", "ok"))
+            if (api.startsWith("/api/system/check-update")) return jsonResponse(checkUpdatePayload())
             when {
-                session.method == Method.GET && session.uri == "/api/system/version" ->
+                session.method == Method.GET && api == "/api/system/version" ->
                     jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName()).put("mode", "diagnostic")))
 
-                session.method == Method.GET && session.uri == "/api/system/info" ->
+                session.method == Method.GET && api == "/api/system/info" ->
                     jsonResponse(systemInfo())
 
-                session.uri.startsWith("/api/tasks") -> store.serveTasks(session)
-                session.uri.startsWith("/api/envs") -> store.serveEnvs(session)
-                session.uri.startsWith("/api/deps") -> store.serveDependencies(session)
-                session.uri.startsWith("/api/configs") -> store.serveConfigs(session)
-                session.uri.startsWith("/api/scripts") -> store.serveScripts(session)
-                session.uri.startsWith("/api/subscriptions") -> store.serveSubscriptions(session)
-                session.uri.startsWith("/api/logs") -> store.serveLogs(session)
-                session.uri.startsWith("/api/events") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
-                session.uri.startsWith("/api/sse") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
+                api.startsWith("/api/events") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
+                api.startsWith("/api/sse") -> jsonResponse(JSONObject().put("status", "ok").put("message", "SSE not supported"))
 
                 LocalPanelStore.isRecoveryRequest(session.method, session.uri) -> store.serveBackup(session)
                 else -> jsonError(Response.Status.NOT_FOUND, "本地核心接口不存在")
@@ -264,13 +260,20 @@ class LocalPanelHttpServer(
         }
     }
 
-    private fun servePublicApi(session: IHTTPSession): Response = when (session.uri.substringBefore('?').trimEnd('/')) {
-        "/api/health", "/api/v1/health" -> jsonResponse(JSONObject().put("status", "ok").put("mode", "android_local"))
-        "/api/local/capabilities" -> jsonResponse(capabilities())
-        "/api/system/public-version" -> jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName())))
-        "/api/system/health-check" -> jsonResponse(systemHealth())
-        "/api/android/recovery-metadata" -> jsonResponse(recoveryMetadata())
-        else -> jsonError(Response.Status.NOT_FOUND, "公开接口不存在")
+    private fun servePublicApi(session: IHTTPSession): Response {
+        val api = LocalPanelStore.normalizeApiPath(session.uri ?: "")
+        return when {
+            session.method == Method.GET && api == "/api/health" ->
+                jsonResponse(JSONObject().put("status", "ok").put("mode", "android_local"))
+            session.method == Method.GET && api == "/api/local/capabilities" -> jsonResponse(capabilities())
+            session.method == Method.GET && api == "/api/system/public-version" ->
+                jsonResponse(JSONObject().put("data", JSONObject().put("version", appVersionName())))
+            session.method == Method.GET && api == "/api/system/health-check" -> jsonResponse(systemHealth(force = false))
+            session.method == Method.POST && api == "/api/system/health-check" -> jsonResponse(systemHealth(force = true))
+            session.method == Method.GET && api == "/api/android/recovery-metadata" -> jsonResponse(recoveryMetadata())
+            session.method == Method.GET && api == "/api/system/panel-settings" -> store.servePanelSettings(session)
+            else -> jsonError(Response.Status.NOT_FOUND, "公开接口不存在")
+        }
     }
 
     private fun androidRuntime(session:IHTTPSession):Response {
@@ -371,7 +374,7 @@ class LocalPanelHttpServer(
                 .put("open_api_token", isOpenApiTokenCapabilityEnabled())
                 .put("security", true)
                 .put("ip_whitelist_management", true)
-                .put("two_factor_auth", false)
+                .put("two_factor_auth", true)
                 .put("multi_device_sessions", true)
                 .put("backup", true)
                 .put("backup_schedule", true)
@@ -381,7 +384,7 @@ class LocalPanelHttpServer(
                 .put("pip", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/pip3"))
                 .put("node", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/node"))
                 .put("npm", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/npm"))
-                .put("typescript", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc"))
+                .put("typescript", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc") || File(context.filesDir, "deps/nodejs/node_modules/typescript").isDirectory)
                 .put("shell", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
                 .put("git", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
                 .put("ssh", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/ssh"))
@@ -397,10 +400,15 @@ class LocalPanelHttpServer(
         .put(
             "limits",
             JSONObject()
-                .put("max_log_buffer_bytes", 0)
-                .put("max_concurrent_tasks", 0)
+                .put("max_log_buffer_bytes", 2L * 1024 * 1024)
+                .put("max_concurrent_tasks", 2)
+                .put("max_task_logs", DependencyStorage.MAX_TASK_LOGS)
+                .put("max_script_runs", DependencyStorage.MAX_SCRIPT_RUNS)
+                .put("max_backups", DependencyStorage.MAX_BACKUPS)
                 .put("runtime_quota_bytes", 0)
-                .put("dependency_quota_bytes", 0)
+                .put("dependency_quota_bytes", DependencyStorage.MAX_CACHE_BYTES)
+                .put("fallback_queue_capacity", 32)
+                .put("max_debug_run_seconds", 7200)
         )
 
     private fun systemInfo(): JSONObject {
@@ -433,9 +441,14 @@ class LocalPanelHttpServer(
         return JSONObject().put("data", dashData)
     }
 
-    private fun systemHealth(): JSONObject {
+    private fun systemHealth(force: Boolean = false): JSONObject {
         val now = System.currentTimeMillis()
         val cached = cachedHealth
+        if (!force) {
+            return cached ?: JSONObject()
+                .put("items", JSONArray())
+                .put("last_checked_at", JSONObject.NULL)
+        }
         if (cached != null && now - cachedHealthAtMillis < HEALTH_CHECK_TTL_MILLIS) {
             return cached
         }
@@ -533,6 +546,66 @@ class LocalPanelHttpServer(
     }
 
     private fun hasNativeRuntime(name: String): Boolean = java.io.File(context.applicationInfo.nativeLibraryDir.orEmpty(), name).isFile
+
+    private fun checkUpdatePayload(): JSONObject {
+        val current = appVersionName().removePrefix("v")
+        val source = "linzixuanzz/daidai-panel"
+        return try {
+            val url = URL("https://api.github.com/repos/$source/releases/latest")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
+            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("User-Agent", "daidai-android-local")
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            connection.disconnect()
+            val release = JSONObject(body)
+            val latest = release.optString("tag_name").removePrefix("v").ifBlank { current }
+            JSONObject()
+                .put("status", "ok")
+                .put(
+                    "data",
+                    JSONObject()
+                        .put("current", current)
+                        .put("latest", latest)
+                        .put("has_update", compareVersionLabels(current, latest) < 0)
+                        .put("release_name", release.optString("name"))
+                        .put("release_url", release.optString("html_url"))
+                        .put("release_notes", release.optString("body"))
+                        .put("published_at", release.optString("published_at"))
+                        .put("auto_update_supported", false)
+                        .put("update_disabled_reason", "Android APK 不可热更新，请通过 GitHub Release 安装")
+                        .put("update_target", JSONObject().put("deployment_type", "android_apk"))
+                        .put("source", source),
+                )
+        } catch (error: Exception) {
+            JSONObject()
+                .put("status", "ok")
+                .put(
+                    "data",
+                    JSONObject()
+                        .put("current", current)
+                        .put("latest", current)
+                        .put("has_update", false)
+                        .put("auto_update_supported", false)
+                        .put("update_disabled_reason", "检查更新失败: ${error.message ?: error.javaClass.simpleName}")
+                        .put("update_target", JSONObject().put("deployment_type", "android_apk"))
+                        .put("source", source),
+                )
+        }
+    }
+
+    private fun compareVersionLabels(current: String, latest: String): Int {
+        val left = current.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+        val right = latest.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+        val size = maxOf(left.size, right.size)
+        for (index in 0 until size) {
+            val l = left.getOrElse(index) { 0 }
+            val r = right.getOrElse(index) { 0 }
+            if (l != r) return l.compareTo(r)
+        }
+        return 0
+    }
 
     private fun appVersionName(): String = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)

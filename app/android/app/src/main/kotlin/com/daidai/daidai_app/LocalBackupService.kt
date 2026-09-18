@@ -68,6 +68,7 @@ internal class LocalBackupService(
         val notifications = if (selection.optBoolean("configs")) portableNotificationRows(db) else JSONArray()
         val openApps = if (selection.optBoolean("configs")) portableOpenAppRows(db) else JSONArray()
         val ipWhitelists = if (selection.optBoolean("configs")) rows(db, "security_ip_whitelist") else JSONArray()
+        val twoFactorAuths = if (selection.optBoolean("configs")) runCatching { rows(db, "two_factor_auths") }.getOrDefault(JSONArray()) else JSONArray()
         val sshKeys = if (selection.optBoolean("subscriptions")) rows(db, "ssh_keys") else JSONArray()
         val taskLogs = if (selection.optBoolean("logs")) portableTaskLogRows(db) else JSONArray()
         val taskViews = if (selection.optBoolean("task_views")) rows(db, "task_views") else JSONArray()
@@ -87,7 +88,7 @@ internal class LocalBackupService(
                 .put("notify_channels", notifications)
                 .put("ip_whitelists", ipWhitelists)
                 .put("users", JSONArray())
-                .put("two_factor_auths", JSONArray())
+                .put("two_factor_auths", twoFactorAuths)
                 .put("dependency_mirrors", dependencyMirrors(systemConfigs)))
 
         val manifest = JSONObject()
@@ -145,7 +146,14 @@ internal class LocalBackupService(
 
     fun restore(request: JSONObject): JSONObject = restoreLock.withLock {
         recoverPendingRestoreLocked()
-        restoreLocked(request)
+        try {
+            restoreLocked(request)
+        } catch (error: Exception) {
+            if (error !is SimulatedRestoreProcessDeath) {
+                RestoreProgressTracker.fail(error.message ?: error.javaClass.simpleName, request.optString("filename"))
+            }
+            throw error
+        }
     }
 
     fun hasPendingRestore(): Boolean = restoreJournalFile.isFile
@@ -156,14 +164,17 @@ internal class LocalBackupService(
 
     private fun restoreLocked(request: JSONObject): JSONObject {
         val filename = request.optString("filename")
+        RestoreProgressTracker.begin(filename)
         val file = resolve(filename) ?: throw NoSuchElementException("备份文件不存在")
         require(file.length() in 1..MAX_BACKUP_BYTES.toLong()) { "备份文件为空或过大" }
         // Authentication, decompression and complete validation happen before staging, DB
         // transactions, or live script changes, preserving data on wrong password/format.
+        RestoreProgressTracker.publish(true, "running", "decrypting", "正在解密并校验备份", 15, "", filename)
         val prepared = prepareBytes(file.readBytes(), file.name, request.optString("password"))
         val requested = request.optJSONObject("selection")
         val selected = if (requested == null) prepared.selection else intersectSelection(prepared.selection, normalizedSelection(requested))
         require(selected.keys().asSequence().any { selected.optBoolean(it) }) { "没有可恢复的选中项" }
+        RestoreProgressTracker.publish(true, "running", "prepared", "备份已校验，正在准备脚本", 35, "", filename, selected)
 
         // Decode and write every script into an isolated tree before touching live state.
         val restoreID = UUID.randomUUID().toString()
@@ -181,6 +192,7 @@ internal class LocalBackupService(
             }
         }
 
+        RestoreProgressTracker.publish(true, "running", RestoreStage.PREPARED.wireName, "脚本已暂存，正在写入数据库", 55, "", filename, selected)
         val db = database()
         ensureRestoreMarkerTable(db)
         var journal = RestoreJournal(restoreID, RestoreStage.PREPARED, staging.name, rollback.name, scriptsSelected, hadScripts)
@@ -199,6 +211,7 @@ internal class LocalBackupService(
                 }
                 journal = journal.copy(stage = RestoreStage.SCRIPTS_SWITCHED)
                 writeJournal(journal)
+                RestoreProgressTracker.publish(true, "running", RestoreStage.SCRIPTS_SWITCHED.wireName, "正在切换脚本目录", 75, "", filename, selected)
                 faultInjector.afterStage(RestoreCheckpoint.SCRIPTS_SWITCHED)
                 db.delete(RESTORE_MARKER_TABLE, null, null)
                 db.insertOrThrow(RESTORE_MARKER_TABLE, null, ContentValues().apply {
@@ -213,6 +226,7 @@ internal class LocalBackupService(
             faultInjector.afterStage(RestoreCheckpoint.DATABASE_COMMIT_VERIFIED)
             journal = journal.copy(stage = RestoreStage.DATABASE_COMMITTED)
             writeJournal(journal)
+            RestoreProgressTracker.publish(true, "running", RestoreStage.DATABASE_COMMITTED.wireName, "数据库已提交，正在收尾", 90, "", filename, selected)
             faultInjector.afterStage(RestoreCheckpoint.DATABASE_COMMITTED)
             completeRestore(journal)
         } catch (error: SimulatedRestoreProcessDeath) {
@@ -232,6 +246,8 @@ internal class LocalBackupService(
             .put("task_logs", if (selected.optBoolean("logs")) prepared.taskLogs.length() else 0)
             .put("task_views", if (selected.optBoolean("task_views")) prepared.taskViews.length() else 0)
             .put("scripts", if (selected.optBoolean("scripts")) prepared.scripts.size else 0)
+            .put("two_factor_auths", if (selected.optBoolean("configs")) prepared.twoFactorAuths.length() else 0)
+        RestoreProgressTracker.complete(filename, selected)
         return JSONObject().put("status", "completed").put("stage", "atomic_restore").put("filename", filename).put("selection", selected).put("counts", counts)
     }
 
@@ -249,6 +265,7 @@ internal class LocalBackupService(
             db.delete("open_api_tokens", null, null)
             replace(db, "open_api_apps", prepared.openApps, openAppColumns, mapOf("name" to "", "app_key" to "", "secret" to ""))
             replace(db, "security_ip_whitelist", prepared.ipWhitelists, ipWhitelistColumns, mapOf("ip" to ""))
+            restoreTwoFactorAuths(db, prepared.twoFactorAuths)
         }
         if (selected.optBoolean("subscriptions")) restoreSubscriptions(db, prepared.subscriptions, sshKeyIDMap)
         if (selected.optBoolean("dependencies")) replace(db, "dependencies", prepared.dependencies, dependencyColumns, mapOf("name" to "", "type" to ""))
@@ -381,6 +398,7 @@ internal class LocalBackupService(
         val taskViews: JSONArray,
         val openApps: JSONArray,
         val ipWhitelists: JSONArray,
+        val twoFactorAuths: JSONArray,
         val scripts: List<Pair<String, ByteArray>>,
     )
 
@@ -502,6 +520,7 @@ internal class LocalBackupService(
         val taskViews = array("task_views")
         val openApps = configBundle?.optJSONArray("open_apps") ?: JSONArray()
         val ipWhitelists = configBundle?.optJSONArray("ip_whitelists") ?: JSONArray()
+        val twoFactorAuths = configBundle?.optJSONArray("two_factor_auths") ?: JSONArray()
         val scriptArray = array("scripts")
         requireObjects(tasks, "tasks", "name")
         requireObjects(envs, "env_vars", "name")
@@ -527,7 +546,7 @@ internal class LocalBackupService(
         }
         normalizeImportedRows(tasks, envs, subscriptions, openApps)
         val selection = selectionFromManifest(manifest, tasks, envs, configs, subscriptions, dependencies, taskLogs, scriptArray, taskViews)
-        return Prepared(selection, tasks, envs, configs, subscriptions, notifications, dependencies, sshKeys, taskLogs, taskViews, openApps, ipWhitelists, scripts)
+        return Prepared(selection, tasks, envs, configs, subscriptions, notifications, dependencies, sshKeys, taskLogs, taskViews, openApps, ipWhitelists, twoFactorAuths, scripts)
     }
 
     private fun selectionFromManifest(manifest: JSONObject, vararg arrays: JSONArray): JSONObject {
@@ -708,6 +727,40 @@ internal class LocalBackupService(
         }
     }
 
+    private fun restoreTwoFactorAuths(db: SQLiteDatabase, items: JSONArray) {
+        if (items.length() == 0) return
+        if (!tableExists(db, "two_factor_auths")) return
+        val userIds = mutableSetOf<Long>()
+        db.query("local_users", arrayOf("id"), null, null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) userIds += cursor.getLong(0)
+        }
+        val now = Instant.now().toString()
+        for (i in 0 until items.length()) {
+            val row = items.optJSONObject(i) ?: continue
+            val userId = row.optLong("user_id")
+            if (userId !in userIds) continue
+            val secret = row.optString("secret").trim()
+            if (secret.isBlank()) continue
+            val enabled = when (val value = if (row.has("enabled") && !row.isNull("enabled")) row.get("enabled") else 0) {
+                is Boolean -> value
+                is Number -> value.toInt() != 0
+                else -> value.toString() in setOf("1", "true", "TRUE")
+            }
+            val values = ContentValues().apply {
+                put("user_id", userId)
+                put("secret", secret)
+                put("enabled", if (enabled) 1 else 0)
+                put("created_at", row.optString("created_at").ifBlank { now })
+                put("updated_at", row.optString("updated_at").ifBlank { now })
+            }
+            val updated = db.update("two_factor_auths", values, "user_id=?", arrayOf(userId.toString()))
+            if (updated == 0) db.insert("two_factor_auths", null, values)
+        }
+    }
+
+    private fun tableExists(db: SQLiteDatabase, name: String): Boolean =
+        db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", arrayOf(name)).use { it.moveToFirst() }
+
     private fun replace(db: SQLiteDatabase, table: String, source: JSONArray, columns: Set<String>, defaults: Map<String, String>) {
         db.delete(table, null, null)
         for (i in 0 until source.length()) {
@@ -875,6 +928,67 @@ internal class LocalBackupService(
         private val taskViewColumns = setOf("id", "name", "filters", "sort_rules", "hidden", "sort_order", "created_at", "updated_at")
         private val openAppColumns = setOf("id", "name", "app_key", "secret", "scopes", "enabled", "rate_limit", "created_at", "updated_at")
         private val ipWhitelistColumns = setOf("id", "ip", "remarks", "enabled", "created_at", "updated_at")
+    }
+}
+
+internal object RestoreProgressTracker {
+    private val lock = Any()
+    private var snapshot: JSONObject = JSONObject()
+        .put("active", false)
+        .put("status", "idle")
+        .put("stage", "idle")
+        .put("message", "")
+        .put("percent", 100)
+        .put("error", JSONObject.NULL)
+        .put("filename", "")
+        .put("source", "android_portable_envelope")
+
+    fun snapshot(): JSONObject = synchronized(lock) { JSONObject(snapshot.toString()) }
+
+    fun idle(): JSONObject = JSONObject()
+        .put("active", false)
+        .put("status", "idle")
+        .put("stage", "idle")
+        .put("message", "")
+        .put("percent", 100)
+        .put("error", JSONObject.NULL)
+        .put("filename", "")
+        .put("source", "android_portable_envelope")
+
+    fun begin(filename: String) {
+        publish(true, "running", "starting", "开始恢复", 8, "", filename)
+    }
+
+    fun fail(error: String, filename: String) {
+        publish(false, "failed", "failed", error, 100, error, filename)
+    }
+
+    fun complete(filename: String, selection: JSONObject?) {
+        publish(false, "completed", "completed", "恢复完成", 100, "", filename, selection)
+    }
+
+    fun publish(
+        active: Boolean,
+        status: String,
+        stage: String,
+        message: String,
+        percent: Int,
+        error: String,
+        filename: String,
+        selection: JSONObject? = null,
+    ) {
+        synchronized(lock) {
+            snapshot = JSONObject()
+                .put("active", active)
+                .put("status", status)
+                .put("stage", stage)
+                .put("message", message)
+                .put("percent", percent.coerceIn(0, 100))
+                .put("error", if (error.isBlank()) JSONObject.NULL else error)
+                .put("filename", filename)
+                .put("source", "android_portable_envelope")
+            if (selection != null) snapshot.put("selection", JSONObject(selection.toString()))
+        }
     }
 }
 

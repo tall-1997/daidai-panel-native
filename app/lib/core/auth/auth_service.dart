@@ -93,6 +93,10 @@ class AuthService {
     // 登录接口只要返回 4xx，就先交给上层显示明确原因，避免后续误进入首页再变成“网络错误”。
     final statusCode = response.statusCode ?? 0;
     if (statusCode >= 400) {
+      final challenge = loginChallengePayload(response.data);
+      if (challenge != null) {
+        return challenge;
+      }
       throw DioException.badResponse(
         statusCode: statusCode,
         requestOptions: response.requestOptions,
@@ -278,4 +282,13 @@ class AuthService {
     }
   }
 
+}
+
+Map<String, dynamic>? loginChallengePayload(dynamic data) {
+  if (data is! Map) return null;
+  final map = Map<String, dynamic>.from(data);
+  if (map['two_factor_required'] == true) {
+    return map;
+  }
+  return null;
 }

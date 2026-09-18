@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -311,6 +312,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       }
     } catch (e) {
       if (!mounted) return;
+      final challenge = e is DioException
+          ? loginChallengePayload(e.response?.data)
+          : null;
+      if (challenge != null) {
+        setState(() {
+          _needsTotp = true;
+          _error = challenge['error']?.toString() ?? '请输入两步验证码';
+        });
+        return;
+      }
       setState(() {
         _error = e is _LoginFlowMessage
             ? e.message

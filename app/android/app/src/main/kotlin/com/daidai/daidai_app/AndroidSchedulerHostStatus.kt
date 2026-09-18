@@ -27,6 +27,7 @@ object AndroidSchedulerHostStatus {
                 "available_memory_bytes" to snapshot.availableMemoryBytes,
                 "available_storage_bytes" to snapshot.availableStorageBytes,
             ),
+            "platform_capabilities" to platformCapabilities(guarantee).toString(),
         )
     }
 
@@ -46,6 +47,15 @@ object AndroidSchedulerHostStatus {
             "system_restart",
             "backup_mutation",
             "notification_dispatch",
+            "task_views",
+            "panel_settings",
+            "system_version",
+            "python_runtimes",
+            "health_check",
+            "platform_tokens",
+            "config_script",
+            "android_runtime",
+            "installed_packages",
         ).forEach { id ->
             capabilities.put(
                 id,

@@ -181,3 +181,41 @@ String panelTimezoneLabel(dynamic raw) {
       ? '执行时区：由面板设置决定'
       : '执行时区：$timezone';
 }
+
+String formatCronParseResult(dynamic data) {
+  if (data is String && data.trim().isNotEmpty) {
+    return data.trim();
+  }
+  if (data is List) {
+    final values = data.take(5).map((item) => item.toString()).toList();
+    return values.isEmpty ? '表达式有效' : '接下来执行：${values.join('、')}';
+  }
+  if (data is Map) {
+    final map = Map<String, dynamic>.from(data);
+    final lines = <String>[];
+    final description = map['description']?.toString().trim();
+    if (description != null && description.isNotEmpty) {
+      lines.add(description);
+    }
+    final format = map['format']?.toString().trim();
+    if (format != null && format.isNotEmpty) {
+      lines.add(format);
+    }
+    final valid = map['is_valid'] ?? map['valid'];
+    if (valid is bool) {
+      lines.add(valid ? '表达式有效' : '表达式无效');
+    }
+    final next = map['next_run_times'] ??
+        map['next_runs'] ??
+        map['next_times'] ??
+        map['next'] ??
+        map['next_run'];
+    if (next is List && next.isNotEmpty) {
+      lines.add('接下来执行：${next.take(5).join('、')}');
+    } else if (next != null && next.toString().trim().isNotEmpty) {
+      lines.add('下次执行：$next');
+    }
+    return lines.isEmpty ? '表达式有效' : lines.join('\n');
+  }
+  return '表达式有效';
+}

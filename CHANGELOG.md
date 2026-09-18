@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.0.1 - 2026-09-18
+
+### Android 本地 fallback
+
+- Git 订阅支持 `ssh_key_id`：私钥写入应用私有目录并注入 `GIT_SSH_COMMAND`，拉取结束后删除临时钥。
+- 新增 `PUT /subscriptions/{id}/refresh`；定时调度按 cron 拉取已启用订阅，进行中的拉取会被跳过。
+- `pull/stop` 会强制结束正在运行的 git 进程。
+- 备份恢复进度按解密、校验、切脚本、提交数据库、收尾上报 `active/status/stage/message/percent`。
+- `capabilities.limits` 改为真实上限（任务日志 500、脚本运行 200、备份 5、并发 2、队列 32、缓存 64MiB、调试 7200 秒）。
+- 脚本/任务运行签发 2 小时会话 token 注入 `DAIDAI_TOKEN`，结束后撤销。
+- TypeScript 优先使用 ts-node，其次 tsc，最后才回退 `transpileModule`。
+- 格式化工具缺失时返回 `warning`/`message`，不再静默保持原文。
+- `/api/system/check-update` 读取 GitHub `linzixuanzz/daidai-panel` latest；失败时软降级。
+- `/sponsors` 拉取公开赞助源并缓存 10 分钟，失败返回 `unavailable`。
+- 登录仅在 `two_factor_required=true` 时进入 TOTP 流程，补齐本地 RFC 6238 实现。
+
+### Flutter
+
+- 登录挑战响应识别两步验证，避免 4xx 被误报成网络错误。
+- 任务表单与 cron 模板展示下次执行时间和解析结果。
+- 调度器宿主状态补充 task views、panel settings、health check 等平台能力声明。
+
 ## v2.0.0 - 2026-09-11
 
 ### 稳定性与并发修复

@@ -13,6 +13,7 @@ import android.util.Base64
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -32,8 +33,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 class LocalPanelStore(
     private val appContext: Context,
@@ -50,6 +53,8 @@ class LocalPanelStore(
     }
     private val runningTaskIds = ConcurrentHashMap.newKeySet<Long>()
     private val taskProcesses = ConcurrentHashMap<Long, Process>()
+    private val subscriptionPullProcesses = ConcurrentHashMap<Long, Process>()
+    private val subscriptionStopRequested = ConcurrentHashMap.newKeySet<Long>()
     private val taskAbortRequested = ConcurrentHashMap.newKeySet<Long>()
     private val taskRetrySignals = ConcurrentHashMap<Long, CountDownLatch>()
     private val taskRunLogIds = ConcurrentHashMap<Long, Long>()
@@ -76,6 +81,10 @@ class LocalPanelStore(
     private val localBackupService by lazy { LocalBackupService(appContext, { writableDatabase }, SCHEMA_VERSION) }
     private val terminalSessions = AndroidTerminalSessions()
     @Volatile private var lastScheduledBackupKey = ""
+    @Volatile private var cachedSponsors: JSONObject? = null
+    @Volatile private var cachedSponsorsAtMillis = 0L
+    private data class IssuedRawLogTicket(val resource: String, val expiresAtMillis: Long)
+    private val issuedRawLogTickets = ConcurrentHashMap<String, IssuedRawLogTicket>()
 
     internal data class LocalScriptResult(
         val logs: JSONArray,
@@ -85,7 +94,8 @@ class LocalPanelStore(
     )
 
     companion object {
-        const val SCHEMA_VERSION = 19
+        const val SCHEMA_VERSION = 20
+        private const val RAW_LOG_TICKET_TTL_SECONDS = 120
         internal val LOCAL_USERS_CREATE_SQL = """CREATE TABLE local_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
@@ -123,6 +133,7 @@ class LocalPanelStore(
         private const val LOGIN_LOCK_DURATION_SECONDS = 15 * 60L
         private const val OPEN_API_TOKEN_TTL_SECONDS = 24L * 60 * 60
         private const val ACCESS_TOKEN_TTL_SECONDS = 24L * 60 * 60
+        private const val SCRIPT_TOKEN_TTL_SECONDS = 2L * 60 * 60
         private const val REFRESH_TOKEN_TTL_SECONDS = 30L * 24 * 60 * 60
         private const val OPEN_API_LOG_RETENTION_SECONDS = 30L * 24 * 60 * 60
         private const val SECURITY_LOG_RETENTION_SECONDS = 90L * 24 * 60 * 60
@@ -172,7 +183,7 @@ class LocalPanelStore(
         internal fun dashboardDailyStat(date: String, success: Long, failed: Long, aborted: Long): JSONObject =
             JSONObject().put("date", date).put("success", success).put("failed", failed).put("aborted", aborted)
 
-        internal fun isSupportedUserRole(role: String): Boolean = role in setOf("admin", "operator")
+        internal fun isSupportedUserRole(role: String): Boolean = role in setOf("admin", "operator", "viewer")
 
         internal fun validatedBatchTaskIds(json: JSONObject, maximum: Int = Int.MAX_VALUE): List<Long>? {
             val values = json.optJSONArray("task_ids") ?: return null
@@ -267,7 +278,7 @@ class LocalPanelStore(
         }
 
         fun isRecoveryRequest(method: NanoHTTPD.Method, uri: String): Boolean {
-            val base = uri.substringBefore("?").trimEnd('/')
+            val base = normalizeApiPath(uri)
             return when (method) {
                 NanoHTTPD.Method.GET -> base == "/api/system/backups" || base == "/api/system/backup/download" || base == "/api/system/restore/progress"
                 NanoHTTPD.Method.POST -> base == "/api/system/backup" || base == "/api/system/backup/upload" || base == "/api/system/restore"
@@ -279,6 +290,9 @@ class LocalPanelStore(
         internal fun isSelfServiceSecurityRoute(method: NanoHTTPD.Method, uri: String): Boolean {
             val path = normalizeApiPath(uri)
             if (method == NanoHTTPD.Method.GET && path == "/api/security/sessions") return true
+            if (method == NanoHTTPD.Method.GET && path == "/api/security/2fa/status") return true
+            if (method == NanoHTTPD.Method.POST && path in setOf("/api/security/2fa/setup", "/api/security/2fa/verify")) return true
+            if (method == NanoHTTPD.Method.DELETE && path == "/api/security/2fa") return true
             if (method != NanoHTTPD.Method.DELETE) return false
             if (path == "/api/security/sessions/others") return true
             return path.removePrefix("/api/security/sessions/").toLongOrNull() != null
@@ -465,6 +479,7 @@ class LocalPanelStore(
             )
             migrateIdentitySessions(db)
         }
+        if (oldVersion < 20) createTwoFactorTable(db)
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, declaration: String) {
@@ -502,6 +517,18 @@ class LocalPanelStore(
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
         db.execSQL("""CREATE TABLE IF NOT EXISTS security_login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL DEFAULT 0, locked_at TEXT NOT NULL DEFAULT '', expires_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_login_attempts_identity ON security_login_attempts(ip, username)")
+        createTwoFactorTable(db)
+    }
+
+    private fun createTwoFactorTable(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS two_factor_auths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                secret TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""")
     }
 
     private fun migrateIdentitySessions(db: SQLiteDatabase) {
@@ -701,17 +728,23 @@ class LocalPanelStore(
 
     private fun listUsers(): NanoHTTPD.Response {
         val rows = JSONArray()
+        val usernames = ArrayList<String>()
         readableDatabase.query("local_users", arrayOf("id", "username", "role", "enabled", "created_at", "updated_at"), null, null, null, null, "id ASC").use { cursor ->
             while (cursor.moveToNext()) {
+                val username = cursor.string("username")
+                usernames += username
                 rows.put(JSONObject().apply {
                     put("id", cursor.long("id"))
-                    put("username", cursor.string("username"))
+                    put("username", username)
                     put("created_at", cursor.string("created_at"))
                     put("updated_at", cursor.string("updated_at"))
                     put("role", cursor.string("role"))
                     put("enabled", cursor.int("enabled") != 0)
                 })
             }
+        }
+        for (index in 0 until rows.length()) {
+            rows.getJSONObject(index).put("last_login_at", lastLoginAtValue(usernames[index]))
         }
         return ok(JSONObject().put("data", rows).put("total", rows.length()))
     }
@@ -736,28 +769,29 @@ class LocalPanelStore(
     fun readAppLog(): String = appLogFile.readText()
 
     fun serveAuth(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val uri = normalizeApiPath(session.uri)
         return when {
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/check-init" ->
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/check-init" ->
                 ok(JSONObject().put("need_init", needsInitialization(count(readableDatabase, "local_users"))))
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/init" ->
+            session.method == NanoHTTPD.Method.POST && uri == "/api/auth/init" ->
                 initializeAdmin(body(session))
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/login" ->
+            session.method == NanoHTTPD.Method.POST && uri == "/api/auth/login" ->
                 login(session, body(session))
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/refresh" ->
+            session.method == NanoHTTPD.Method.POST && uri == "/api/auth/refresh" ->
                 refresh(session)
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user" ->
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/user" ->
                 authenticated(session) { userId -> ok(JSONObject().put("user", userJson(userId))) }
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/logout" ->
+            session.method == NanoHTTPD.Method.POST && uri == "/api/auth/logout" ->
                 authenticated(session) { _ -> revokeAccessToken(bearerToken(session), "logout"); ok(JSONObject().put("message", "ok")) }
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/captcha-config" ->
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/captcha-config" ->
                 ok(JSONObject().put("enabled", false).put("configured", true).put("implemented", false).put("required", false).put("captcha_id", "").put("require_after_failures", 0).put("message", ""))
-            session.uri.startsWith("/api/auth/users") -> serveUsers(session, "/api/auth/users")
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/user-list" -> requireAdmin(session) { listUsers() }
-            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/password" -> authenticated(session) { userId -> changeOwnPassword(userId, body(session)) }
-            session.method == NanoHTTPD.Method.PUT && session.uri == "/api/auth/username" -> authenticated(session) { userId -> changeOwnUsername(userId, body(session)) }
-            session.method == NanoHTTPD.Method.POST && session.uri == "/api/auth/avatar" -> authenticated(session) { userId -> uploadAvatar(session, userId) }
-            session.method == NanoHTTPD.Method.DELETE && session.uri == "/api/auth/avatar" -> authenticated(session) { userId -> deleteAvatar(userId) }
-            session.method == NanoHTTPD.Method.GET && session.uri == "/api/auth/avatar/file" -> authenticated(session) { userId -> serveAvatar(userId) }
+            uri.startsWith("/api/auth/users") -> serveUsers(session, "/api/auth/users")
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/user-list" -> requireAdmin(session) { listUsers() }
+            session.method == NanoHTTPD.Method.PUT && uri == "/api/auth/password" -> authenticated(session) { userId -> changeOwnPassword(userId, body(session)) }
+            session.method == NanoHTTPD.Method.PUT && uri == "/api/auth/username" -> authenticated(session) { userId -> changeOwnUsername(userId, body(session)) }
+            session.method == NanoHTTPD.Method.POST && uri == "/api/auth/avatar" -> authenticated(session) { userId -> uploadAvatar(session, userId) }
+            session.method == NanoHTTPD.Method.DELETE && uri == "/api/auth/avatar" -> authenticated(session) { userId -> deleteAvatar(userId) }
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/avatar/file" -> authenticated(session) { userId -> serveAvatar(userId) }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
@@ -771,6 +805,10 @@ class LocalPanelStore(
                 when {
                     session.method == NanoHTTPD.Method.GET && uri == "/api/security/sessions" -> listSecuritySessions(session)
                     session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/sessions/others" -> revokeOtherSessions(session)
+                    session.method == NanoHTTPD.Method.GET && uri == "/api/security/2fa/status" -> twoFaStatus(it)
+                    session.method == NanoHTTPD.Method.POST && uri == "/api/security/2fa/setup" -> twoFaSetup(it)
+                    session.method == NanoHTTPD.Method.POST && uri == "/api/security/2fa/verify" -> twoFaVerify(it, body(session))
+                    session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/2fa" -> twoFaDisable(it, body(session))
                     else -> revokeSession(session, parts[1].toLong())
                 }
             }
@@ -794,9 +832,10 @@ class LocalPanelStore(
             parts.firstOrNull() == "ip-whitelist" && parts.getOrNull(1)?.toLongOrNull() != null -> mutateIpWhitelist(session, parts[1].toLong(), parts.getOrNull(2))
             session.method == NanoHTTPD.Method.GET && uri == "/api/security/login-stats" -> loginStats()
             session.method == NanoHTTPD.Method.GET && uri == "/api/security/audit-logs" -> listSecurityLogs(session, "security_audit_logs")
-            session.method == NanoHTTPD.Method.GET && uri == "/api/security/2fa/status" -> twoFaUnsupported()
-            (session.method == NanoHTTPD.Method.POST && (uri == "/api/security/2fa/setup" || uri == "/api/security/2fa/verify" || uri == "/api/security/2fa")) ||
-                (session.method == NanoHTTPD.Method.DELETE && uri == "/api/security/2fa") -> twoFaUnavailable()
+            session.method == NanoHTTPD.Method.GET && uri == "/api/security/2fa/status" -> {
+                val user = currentUser(session) ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+                twoFaStatus(user.id)
+            }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "安全接口不存在")
         }
     }
@@ -913,8 +952,82 @@ class LocalPanelStore(
         return ok(JSONObject().put("data", JSONObject().put("total", n("1=1")).put("success", n("status=0")).put("failed", n("status<>0")).put("today", n("date(created_at)=date('now')")).put("today_success", n("status=0 AND date(created_at)=date('now')")).put("today_failed", n("status<>0 AND date(created_at)=date('now')"))))
     }
 
-    private fun twoFaUnsupported(): NanoHTTPD.Response = ok(JSONObject().put("data", JSONObject().put("enabled", false).put("supported", false).put("reason", "Kotlin fallback 尚未实现真实 TOTP；不会报告为已启用")))
-    private fun twoFaUnavailable(): NanoHTTPD.Response = NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.CONFLICT, "application/json; charset=utf-8", JSONObject().put("error", "当前 Kotlin fallback 不支持真实 TOTP").put("supported", false).put("enabled", false).toString())
+    private data class TwoFaRecord(val secret: String, val enabled: Boolean)
+
+    private fun twoFaRecord(userId: Long): TwoFaRecord? =
+        readableDatabase.rawQuery(
+            "SELECT secret, enabled FROM two_factor_auths WHERE user_id=? LIMIT 1",
+            arrayOf(userId.toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else TwoFaRecord(cursor.string("secret"), cursor.int("enabled") == 1)
+        }
+
+    private fun twoFaStatus(userId: Long): NanoHTTPD.Response {
+        val record = twoFaRecord(userId)
+        return ok(
+            JSONObject().put(
+                "data",
+                JSONObject()
+                    .put("enabled", record?.enabled == true)
+                    .put("supported", true),
+            ),
+        )
+    }
+
+    private fun twoFaSetup(userId: Long): NanoHTTPD.Response {
+        val username = readableDatabase.rawQuery("SELECT username FROM local_users WHERE id=? LIMIT 1", arrayOf(userId.toString())).use {
+            if (!it.moveToFirst()) "" else it.string("username")
+        }
+        if (username.isBlank()) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        val secret = Totp.generateSecret()
+        val now = Instant.now().toString()
+        val values = ContentValues().apply {
+            put("secret", secret)
+            put("enabled", 0)
+            put("updated_at", now)
+        }
+        if (twoFaRecord(userId) == null) {
+            values.put("user_id", userId)
+            values.put("created_at", now)
+            writableDatabase.insertOrThrow("two_factor_auths", null, values)
+        } else {
+            writableDatabase.update("two_factor_auths", values, "user_id=?", arrayOf(userId.toString()))
+        }
+        return ok(
+            JSONObject().put(
+                "data",
+                JSONObject().put("secret", secret).put("uri", Totp.uri(username, secret)),
+            ),
+        )
+    }
+
+    private fun twoFaVerify(userId: Long, json: JSONObject): NanoHTTPD.Response {
+        val code = json.optString("code").trim()
+        if (code.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请输入验证码")
+        val record = twoFaRecord(userId) ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请先获取两步验证密钥")
+        if (!Totp.validate(record.secret, code)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "验证码错误")
+        writableDatabase.update(
+            "two_factor_auths",
+            ContentValues().apply {
+                put("enabled", 1)
+                put("updated_at", Instant.now().toString())
+            },
+            "user_id=?",
+            arrayOf(userId.toString()),
+        )
+        return ok(JSONObject().put("message", "两步验证已启用").put("data", JSONObject().put("enabled", true)))
+    }
+
+    private fun twoFaDisable(userId: Long, json: JSONObject): NanoHTTPD.Response {
+        val record = twoFaRecord(userId)
+        if (record?.enabled == true) {
+            val code = json.optString("code").trim()
+            if (code.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请输入当前验证码")
+            if (!Totp.validate(record.secret, code)) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "验证码错误")
+        }
+        writableDatabase.delete("two_factor_auths", "user_id=?", arrayOf(userId.toString()))
+        return ok(JSONObject().put("message", "两步验证已关闭").put("data", JSONObject().put("enabled", false)))
+    }
 
     private fun audit(session: NanoHTTPD.IHTTPSession, action: String, detail: String) {
         val username = currentUsername(session)
@@ -1022,7 +1135,7 @@ class LocalPanelStore(
 
     fun serveUsers(session: NanoHTTPD.IHTTPSession, prefix: String = "/api/users"): NanoHTTPD.Response {
         return requireAdmin(session) {
-            val tail = session.uri.removePrefix(prefix).trim('/')
+            val tail = normalizeApiPath(session.uri).removePrefix(normalizeApiPath(prefix)).trim('/')
             val parts = if (tail.isBlank()) emptyList() else tail.split('/')
             val id = parts.firstOrNull()?.toLongOrNull()
             when {
@@ -1041,13 +1154,13 @@ class LocalPanelStore(
         if (username.isBlank() || password.length !in 6..128) return error(NanoHTTPD.Response.Status.BAD_REQUEST,"用户名不能为空且密码需为 6-128 位")
         val salt=ByteArray(16).also(SecureRandom()::nextBytes); val now=Instant.now().toString()
         val role = json.optString("role", "operator")
-        if (!isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin 或 operator")
+        if (!isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin、operator 或 viewer")
         val id=try { writableDatabase.insertOrThrow("local_users",null,ContentValues().apply { put("username",username);put("password_hash",hashPassword(password,salt));put("password_salt",Base64.encodeToString(salt,Base64.NO_WRAP));put("role",role);put("enabled",1);put("created_at",now);put("updated_at",now) }) } catch (_: Exception) { return error(NanoHTTPD.Response.Status.CONFLICT,"用户名已存在") }
         return ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",id).put("username",username)))
     }
     private fun updateUser(id: Long, json: JSONObject): NanoHTTPD.Response {
         val role = json.optString("role").takeIf { json.has("role") }
-        if (role != null && !isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin 或 operator")
+        if (role != null && !isSupportedUserRole(role)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "角色仅支持 admin、operator 或 viewer")
         val enabled = json.optBoolean("enabled").takeIf { json.has("enabled") }
         val values = ContentValues().apply {
             if (role != null) put("role", role)
@@ -1137,7 +1250,7 @@ class LocalPanelStore(
                 uri.startsWith("/ssh-keys") -> serveSimpleSecretCrud(session,uri,"/ssh-keys","ssh_keys","private_key")
                 uri.startsWith("/platform-tokens") -> servePlatformTokens(session,uri)
                 uri.startsWith("/open-api/apps") -> serveOpenApiSecretContract(session, uri) ?: serveOpenApi(session,uri)
-                uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> ok(JSONObject().put("data",JSONObject().put("sponsors",JSONArray()).put("count",0).put("total_amount",0).put("updated_at",JSONObject.NULL)))
+                uri=="/sponsors" && session.method==NanoHTTPD.Method.GET -> listSponsors()
                 else -> error(NanoHTTPD.Response.Status.NOT_FOUND,"管理接口不存在")
             }
         }
@@ -1484,12 +1597,11 @@ class LocalPanelStore(
             "webhook" -> httpPost(config.optString("url").ifBlank { config.optString("webhook") }, JSONObject().put("title", title).put("content", content), emptyMap())
             "telegram" -> requireBusinessSuccess("telegram", httpPost(config.optString("api_host", "https://api.telegram.org").trimEnd('/') + "/bot" + config.optString("token") + "/sendMessage", JSONObject().put("chat_id", config.optString("chat_id")).put("text", "$title\n$content"), emptyMap()))
             "dingtalk" -> {
-                require(config.optString("secret").isBlank()) { "Kotlin fallback 暂不支持钉钉加签，请使用完整 Go Core 或移除 secret" }
-                requireBusinessSuccess("dingtalk", httpPost(config.optString("webhook"), JSONObject().put("msgtype", "markdown").put("markdown", JSONObject().put("title", title).put("text", "### $title\n$content")), emptyMap()))
+                val webhook = signedDingTalkWebhook(config.optString("webhook"), config.optString("secret"))
+                requireBusinessSuccess("dingtalk", httpPost(webhook, JSONObject().put("msgtype", "markdown").put("markdown", JSONObject().put("title", title).put("text", "### $title\n$content")), emptyMap()))
             }
             "feishu" -> {
-                require(config.optString("secret").isBlank()) { "Kotlin fallback 暂不支持飞书加签，请使用完整 Go Core 或移除 secret" }
-                requireBusinessSuccess("feishu", httpPost(config.optString("webhook"), JSONObject().put("msg_type", "text").put("content", JSONObject().put("text", "$title\n$content")), emptyMap()))
+                requireBusinessSuccess("feishu", httpPost(config.optString("webhook"), signedFeishuBody(title, content, config.optString("secret")), emptyMap()))
             }
             "bark" -> requireBusinessSuccess("bark", httpPost(config.optString("server", "https://api.day.app").trimEnd('/') + "/push", JSONObject().put("device_key", config.optString("key")).put("title", title).put("body", content), emptyMap()))
             "pushplus" -> requireBusinessSuccess("pushplus", httpPost("https://www.pushplus.plus/send", JSONObject().put("token", config.optString("token")).put("title", title).put("content", content).put("topic", config.optString("topic")).put("template", config.optString("template", "html")), emptyMap()))
@@ -1524,6 +1636,35 @@ class LocalPanelStore(
             else -> true
         }
         if (!success) throw IllegalStateException(response.optString("msg").ifBlank { response.optString("errmsg").ifBlank { "$type 业务响应失败" } })
+    }
+
+    private fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key, "HmacSHA256"))
+        return mac.doFinal(message)
+    }
+
+    private fun signedDingTalkWebhook(webhook: String, secret: String): String {
+        if (secret.isBlank()) return webhook
+        val timestamp = System.currentTimeMillis().toString()
+        val stringToSign = "$timestamp\n$secret"
+        val sign = java.net.URLEncoder.encode(
+            Base64.encodeToString(hmacSha256(secret.toByteArray(), stringToSign.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP),
+            "UTF-8",
+        )
+        val sep = if ("?" in webhook) "&" else "?"
+        return "$webhook${sep}timestamp=$timestamp&sign=$sign"
+    }
+
+    private fun signedFeishuBody(title: String, content: String, secret: String): JSONObject {
+        val body = JSONObject().put("msg_type", "text").put("content", JSONObject().put("text", "$title\n$content"))
+        if (secret.isBlank()) return body
+        val timestamp = (System.currentTimeMillis() / 1000).toString()
+        val stringToSign = "$timestamp\n$secret"
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(stringToSign.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val sign = Base64.encodeToString(mac.doFinal(ByteArray(0)), Base64.NO_WRAP)
+        return body.put("timestamp", timestamp).put("sign", sign)
     }
 
     private fun httpPost(url: String, payload: Any, headers: Map<String, String>, contentType: String = "application/json; charset=utf-8"): String {
@@ -1607,7 +1748,7 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/export" -> exportTasks()
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/import" -> importTasks(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/tasks/batch/") -> serveTaskBatch(session, action)
-            session.method == NanoHTTPD.Method.GET && id == null -> paginated("tasks", taskRows())
+            session.method == NanoHTTPD.Method.GET && id == null -> listTasks(session)
             session.method == NanoHTTPD.Method.POST && id == null -> createTask(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action == null -> updateTask(id, try { body(session) } catch (_: Exception) { JSONObject() })
             id != null && session.method == NanoHTTPD.Method.DELETE && action == null -> delete("tasks", id)
@@ -1616,6 +1757,18 @@ class LocalPanelStore(
             id != null && session.method == NanoHTTPD.Method.GET && (action == "latest-log" || action == "log") -> latestTaskLogResponse(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "live-logs" -> liveTaskLogResponse(id, session)
             id != null && session.method == NanoHTTPD.Method.GET && action == "stats" -> taskStats(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "log-files" && segments.lastOrNull() == "raw-ticket" && segments.size >= 5 -> {
+                val locator = taskLogFileLocator(session, segments)
+                val target = resolveTaskLogFileRaw(id, locator) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "日志文件不存在")
+                val extra = locator.takeIf { it.isNotBlank() && it != segments.getOrNull(3) }
+                issueRawLogTicket(session, "task-log-file:$id:$locator", target.first, target.second.size.toLong(), extra)
+            }
+            id != null && session.method == NanoHTTPD.Method.GET && action == "log-files" && segments.lastOrNull() == "raw" && segments.size >= 5 -> {
+                val locator = taskLogFileLocator(session, segments)
+                verifyRawLogTicket(session, "task-log-file:$id:$locator")?.let { return it }
+                val target = resolveTaskLogFileRaw(id, locator) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "日志文件不存在")
+                streamRawLogBytes(target.first, target.second)
+            }
             id != null && session.method == NanoHTTPD.Method.GET && action == "log-files" -> taskLogFiles(id)
             id != null && session.method == NanoHTTPD.Method.POST && action == "copy" -> copyTask(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == null -> taskDetail(id)
@@ -1630,6 +1783,15 @@ class LocalPanelStore(
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         return when {
+            session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "raw-ticket" -> {
+                val target = resolveTaskLogRecordRaw(id) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
+                issueRawLogTicket(session, "task-log-record:$id", target.first, target.second.size.toLong())
+            }
+            session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "raw" -> {
+                verifyRawLogTicket(session, "task-log-record:$id")?.let { return it }
+                val target = resolveTaskLogRecordRaw(id) ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
+                streamRawLogBytes(target.first, target.second)
+            }
             session.method == NanoHTTPD.Method.GET && id != null && segments.getOrNull(2) == "stream" -> taskLogStream(id, session)
             session.method == NanoHTTPD.Method.GET && id != null -> taskLogByIdJson(id)?.let(::ok)
                 ?: error(NanoHTTPD.Response.Status.NOT_FOUND, "日志不存在")
@@ -1662,7 +1824,7 @@ class LocalPanelStore(
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
-        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort")
+        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort", "by-name")
         return when {
             segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
             id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
@@ -1673,7 +1835,8 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/import" -> importEnvs(bodyOrUploadedJson(session))
             normalizedUri.startsWith("/envs/batch") -> serveEnvBatch(session, action)
             session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/sort" -> sortEnvs(body(session))
-            session.method == NanoHTTPD.Method.GET && id == null -> paginated("envs", envRows())
+            session.method == NanoHTTPD.Method.PUT && normalizedUri == "/envs/by-name" -> upsertEnvByName(body(session))
+            session.method == NanoHTTPD.Method.GET && id == null -> listEnvs(session)
             session.method == NanoHTTPD.Method.POST && id == null -> createEnv(body(session))
             session.method == NanoHTTPD.Method.GET && id != null && action == null ->
                 envRow(id)?.let { ok(JSONObject().put("data", it)) }
@@ -1795,6 +1958,33 @@ class LocalPanelStore(
             id != null && session.method == NanoHTTPD.Method.DELETE -> deleteDependency(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖接口尚未实现")
         }
+    }
+
+    fun servePanelSettings(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        return when (session.method) {
+            NanoHTTPD.Method.GET -> ok(JSONObject().put("data", panelSettingsPayload()))
+            NanoHTTPD.Method.PUT -> {
+                val json = body(session)
+                for (key in listOf("panel_title", "panel_icon", "editor_background_color", "log_background_color", "log_background_image")) {
+                    if (json.has(key)) upsertConfig(key, json.optString(key).trim())
+                }
+                ok(JSONObject().put("message", "面板设置已保存").put("data", panelSettingsPayload()))
+            }
+            else -> error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED, "仅支持 GET/PUT")
+        }
+    }
+
+    private fun panelSettingsPayload(): JSONObject {
+        val title = configValue("panel_title", "呆呆面板").ifBlank { "呆呆面板" }
+        return JSONObject()
+            .put("panel_title", title)
+            .put("panel_icon", configValue("panel_icon", ""))
+            .put("editor_background_color", configValue("editor_background_color", ""))
+            .put("log_background_color", configValue("log_background_color", ""))
+            .put("log_background_image", configValue("log_background_image", ""))
+            .put("panel_runtime_mode", "android_local")
+            .put("panel_service_manager", configValue("panel_service_manager", "android"))
+            .put("panel_service_name", configValue("panel_service_name", "daidai-local"))
     }
 
     fun serveConfigs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
@@ -1925,7 +2115,7 @@ class LocalPanelStore(
     }
 
     fun serveBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val uri = (session.uri ?: "").substringBefore("?").trimEnd('/')
+        val uri = normalizeApiPath(session.uri)
         return try {
             when {
                 session.method == NanoHTTPD.Method.GET && uri == "/api/system/backups" ->
@@ -1962,7 +2152,9 @@ class LocalPanelStore(
     }
 
     private fun restoreWithMaintenance(json: JSONObject): NanoHTTPD.Response {
+        RestoreProgressTracker.publish(true, "waiting", "waiting", "等待任务退出", 5, "", json.optString("filename"), json.optJSONObject("selection"))
         if (!maintenanceGate.beginMaintenance(TimeUnit.SECONDS.toMillis(10))) {
+            RestoreProgressTracker.fail("仍有活跃任务，恢复操作暂未开始", json.optString("filename"))
             return NanoHTTPD.newFixedLengthResponse(
                 NanoHTTPD.Response.Status.CONFLICT,
                 "application/json; charset=utf-8",
@@ -1971,6 +2163,9 @@ class LocalPanelStore(
         }
         return try {
             ok(JSONObject().put("data", localBackupService.restore(json)))
+        } catch (error: Exception) {
+            RestoreProgressTracker.fail(error.message ?: error.javaClass.simpleName, json.optString("filename"))
+            throw error
         } finally {
             maintenanceGate.endMaintenance()
         }
@@ -2184,10 +2379,12 @@ fun serveDashboardStats(): JSONObject {
         return when {
             session.method == NanoHTTPD.Method.GET && normalized == "/subscriptions" -> listSubscriptions()
             session.method == NanoHTTPD.Method.POST && normalized == "/subscriptions" -> addSubscription(readBody(session))
+            session.method == NanoHTTPD.Method.DELETE && normalized == "/subscriptions/batch" -> batchDeleteSubscriptions(body(session))
             id != null && session.method == NanoHTTPD.Method.PUT && action.isBlank() -> updateSubscription(id, body(session))
             id != null && session.method == NanoHTTPD.Method.DELETE && action.isBlank() -> deleteSubscription(normalized)
             id != null && session.method == NanoHTTPD.Method.PUT && action in setOf("enable", "disable") -> enableSubscription(id, action == "enable")
             id != null && session.method == NanoHTTPD.Method.PUT && action == "pull" -> pullSubscription(id)
+            id != null && session.method == NanoHTTPD.Method.PUT && action == "refresh" -> pullSubscription(id)
             id != null && session.method == NanoHTTPD.Method.PUT && action == "pull/stop" -> stopSubscriptionPull(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "logs" -> subscriptionLogs(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id)
@@ -2241,6 +2438,24 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
+    private fun batchDeleteSubscriptions(json: JSONObject): NanoHTTPD.Response {
+        val ids = json.optJSONArray("ids") ?: JSONArray()
+        var deleted = 0
+        writableDatabase.beginTransaction()
+        try {
+            for (index in 0 until ids.length()) {
+                val id = ids.optLong(index)
+                if (id <= 0) continue
+                deleted += writableDatabase.delete("local_subscriptions", "id=?", arrayOf(id.toString()))
+                runCatching { writableDatabase.delete("subscription_logs", "subscription_id=?", arrayOf(id.toString())) }
+            }
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+        }
+        return ok(JSONObject().put("message", "已删除 $deleted 个订阅").put("data", JSONObject().put("deleted", deleted)))
+    }
+
     private fun deleteSubscription(uri: String): NanoHTTPD.Response {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
         if (id <= 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
@@ -2281,17 +2496,30 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun pullSubscription(id: Long): NanoHTTPD.Response {
-        val record = readableDatabase.query("local_subscriptions", arrayOf("url", "name", "type", "branch", "save_dir"), "id=?", arrayOf(id.toString()), null, null, null).use { c ->
-            if (!c.moveToFirst()) null else listOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
+        val record = readableDatabase.query("local_subscriptions", arrayOf("url", "name", "type", "branch", "save_dir", "ssh_key_id", "auth_type"), "id=?", arrayOf(id.toString()), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else object {
+                val url = c.string("url")
+                val name = c.string("name")
+                val type = c.string("type")
+                val branch = c.string("branch")
+                val saveDir = c.string("save_dir")
+                val sshKeyId = if (c.isNull(c.getColumnIndexOrThrow("ssh_key_id"))) null else c.long("ssh_key_id")
+                val authType = c.string("auth_type")
+            }
+        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        val sshKeyId = record.sshKeyId
+        if (record.authType.equals("ssh", ignoreCase = true) && (sshKeyId == null || sshKeyId <= 0L)) {
+            recordSubscriptionLog(id, "error", "已配置 SSH 鉴权，但未找到可用 SSH 密钥")
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "已配置 SSH 鉴权，但未找到可用 SSH 密钥")
         }
-            ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
-        if (record[2] == "git-repo" || record[0].endsWith(".git")) return pullGitSubscription(id, record[0], record[1], record[3], record[4])
+        val gitRemote = record.type == "git-repo" || record.url.endsWith(".git") || record.url.startsWith("git@") || record.url.startsWith("ssh://")
+        if (gitRemote) return pullGitSubscription(id, record.url, record.name, record.branch, record.saveDir, sshKeyId)
         return try {
-            val connection = java.net.URL(record[0]).openConnection() as HttpURLConnection
+            val connection = java.net.URL(record.url).openConnection() as HttpURLConnection
             connection.connectTimeout = 15000; connection.readTimeout = 30000; connection.instanceFollowRedirects = true
             val code = connection.responseCode
             if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            val filename = (record[1].ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
+            val filename = (record.name.ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
             val output = File(scriptsRoot(), filename)
             connection.inputStream.use { input -> output.outputStream().use { input.copyTo(it) } }
             connection.disconnect()
@@ -2304,7 +2532,7 @@ fun serveDashboardStats(): JSONObject {
         }
     }
 
-    private fun pullGitSubscription(id: Long, url: String, name: String, branch: String, saveDir: String): NanoHTTPD.Response {
+    private fun pullGitSubscription(id: Long, url: String, name: String, branch: String, saveDir: String, sshKeyId: Long?): NanoHTTPD.Response {
         val directoryName = saveDir.ifBlank { name.ifBlank { "subscription-$id" } }.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val target = File(scriptsRoot(), directoryName).apply { mkdirs() }
         val guest = if (File(target, ".git").isDirectory) {
@@ -2315,15 +2543,62 @@ fun serveDashboardStats(): JSONObject {
             args += listOf(url, "/workspace")
             AndroidLinuxRuntime.guestCommand(appContext, target, args)
         } ?: return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "Git runtime unavailable for ${AndroidLinuxRuntime.currentAbi()}")
-        val result = runLocalProcess(guest, target, JSONArray().put("Pulling Git subscription $url"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
-        val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-        recordSubscriptionLog(id, if (result.exitCode == 0) "info" else "error", log)
-        if (result.exitCode != 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "Git pull failed")
-        writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,last_pull_at=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), Instant.now().toString(), id))
-        return ok(JSONObject().put("data", JSONObject().put("id", id).put("path", directoryName).put("status", "success")))
+        val (sshEnv, cleanup) = try {
+            gitSshEnvironment(sshKeyId)
+        } catch (failure: Exception) {
+            recordSubscriptionLog(id, "error", failure.message ?: failure.javaClass.simpleName)
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, failure.message ?: "SSH 密钥不可用")
+        }
+        return try {
+            val result = runLocalProcess(
+                guest,
+                target,
+                JSONArray().put("Pulling Git subscription $url"),
+                ScriptCompatibility.INSTALL_TIMEOUT_SECONDS,
+                extraEnvironment = sshEnv,
+                subscriptionId = id,
+            )
+            val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
+            recordSubscriptionLog(id, if (result.exitCode == 0) "info" else "error", log)
+            if (result.status == "aborted") return ok(JSONObject().put("data", JSONObject().put("id", id).put("stopped", true).put("status", "stopped")))
+            if (result.exitCode != 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "Git pull failed")
+            writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,last_pull_at=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), Instant.now().toString(), id))
+            ok(JSONObject().put("data", JSONObject().put("id", id).put("path", directoryName).put("status", "success")))
+        } finally {
+            cleanup()
+        }
+    }
+
+    private fun gitSshEnvironment(sshKeyId: Long?): Pair<Map<String, String>, () -> Unit> {
+        if (sshKeyId == null || sshKeyId <= 0L) return emptyMap<String, String>() to {}
+        val privateKey = readableDatabase.query("ssh_keys", arrayOf("private_key"), "id=?", arrayOf(sshKeyId.toString()), null, null, null).use { c ->
+            if (!c.moveToFirst()) null else c.string("private_key")
+        } ?: throw IllegalStateException("已配置 SSH 鉴权，但未找到可用 SSH 密钥")
+        val dir = File(appContext.filesDir, "tmp/ssh-keys").apply { mkdirs() }
+        val keyFile = File(dir, "ssh_key_${sshKeyId}_${System.nanoTime()}")
+        keyFile.writeText(if (privateKey.endsWith("\n")) privateKey else privateKey + "\n")
+        keyFile.setReadable(false, false)
+        keyFile.setWritable(false, false)
+        keyFile.setExecutable(false, false)
+        keyFile.setReadable(true, true)
+        keyFile.setWritable(true, true)
+        val knownHosts = File(dir, "known_hosts").apply { if (!exists()) writeText("") }
+        val guestKey = hostFilesGuestPath(keyFile)
+        val guestKnown = hostFilesGuestPath(knownHosts)
+        val command = "ssh -i '$guestKey' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='$guestKnown' -o GlobalKnownHostsFile=/dev/null"
+        return mapOf("GIT_SSH_COMMAND" to command) to { runCatching { keyFile.delete() } }
+    }
+
+    private fun hostFilesGuestPath(file: File): String {
+        val root = appContext.filesDir.canonicalFile
+        val target = file.canonicalFile
+        val relative = target.relativeTo(root).invariantSeparatorsPath
+        return "/host-files/$relative"
     }
 
     private fun stopSubscriptionPull(id: Long): NanoHTTPD.Response {
+        subscriptionStopRequested.add(id)
+        subscriptionPullProcesses[id]?.let(::terminateTaskProcess)
         recordSubscriptionLog(id, "info", "Pull stop requested")
         return ok(JSONObject().put("data", JSONObject().put("id", id).put("stopped", true)))
     }
@@ -2337,7 +2612,7 @@ fun serveDashboardStats(): JSONObject {
 
     private fun serveTaskViews(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response {
         val id = uri.substringAfter("/tasks/views/", "").toLongOrNull()
-        if (session.method == NanoHTTPD.Method.GET && uri == "/tasks/views") return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/json", taskViewRows().toString())
+        if (session.method == NanoHTTPD.Method.GET && uri == "/tasks/views") return ok(JSONObject().put("data", taskViewRows()))
         val json = if (session.method in setOf(NanoHTTPD.Method.POST, NanoHTTPD.Method.PUT)) body(session) else JSONObject()
         if (session.method == NanoHTTPD.Method.PUT && uri == "/tasks/views/reorder") {
             val views=json.optJSONArray("views")?:JSONArray(); for(i in 0 until views.length()){ val v=views.optJSONObject(i)?:continue; writableDatabase.execSQL("UPDATE task_views SET sort_order=?,hidden=?,updated_at=? WHERE id=?", arrayOf<Any?>(v.optInt("sort_order"),if(v.optBoolean("hidden"))1 else 0,Instant.now().toString(),v.optLong("id"))) }; return ok(JSONObject().put("data", taskViewRows()))
@@ -2352,8 +2627,13 @@ fun serveDashboardStats(): JSONObject {
     private fun taskViewRows(): JSONArray = queryRows("SELECT * FROM task_views ORDER BY sort_order,id") { c -> JSONObject().put("id",c.long("id")).put("name",c.string("name")).put("filters",c.string("filters")).put("sort_rules",c.string("sort_rules")).put("hidden",c.int("hidden")==1).put("sort_order",c.int("sort_order")) }
 
     private fun copyTask(id: Long): NanoHTTPD.Response {
-        val j=readableDatabase.query("tasks",null,"id=?",arrayOf(id.toString()),null,null,null).use { c -> if(!c.moveToFirst()) null else JSONObject().put("name",c.string("name")+" 副本").put("command",c.string("command")).put("cron_expression",c.string("cron_expression")).put("task_type",c.string("task_type")).put("python_version",c.string("python_version")).put("task_before",c.string("task_before")).put("task_after",c.string("task_after")).put("labels",JSONArray(c.string("labels"))) } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND,"task not found")
-        return createTask(j)
+        val json = readableDatabase.query("tasks", null, "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
+            if (!cursor.moveToFirst()) null else taskJson(cursor)
+        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "task not found")
+        json.put("name", json.optString("name") + " 副本")
+        json.remove("id")
+        json.put("is_pinned", false)
+        return createTask(json)
     }
     private fun taskLogFiles(id: Long): NanoHTTPD.Response {
         val rows = queryRows(
@@ -2368,6 +2648,100 @@ fun serveDashboardStats(): JSONObject {
             ))
         }
         return ok(JSONObject().put("data", rows))
+    }
+
+    private fun taskLogFileLocator(session: NanoHTTPD.IHTTPSession, segments: List<String>): String {
+        val queryPath = session.parms["path"]?.trim().orEmpty()
+        if (queryPath.isNotEmpty()) return queryPath
+        if (segments.size <= 4) return ""
+        return segments.subList(3, segments.size - 1).joinToString("/")
+    }
+
+    private fun resolveTaskLogRecordRaw(logId: Long, expectedTaskId: Long? = null): Pair<String, ByteArray>? {
+        return readableDatabase.rawQuery(
+            "SELECT id, task_id, content FROM task_logs_local WHERE id=?",
+            arrayOf(logId.toString()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val taskId = cursor.long("task_id")
+            if (expectedTaskId != null && taskId != expectedTaskId) return@use null
+            val bytes = cursor.string("content").toByteArray(Charsets.UTF_8)
+            Pair("task-$taskId-$logId.log", bytes)
+        }
+    }
+
+    private fun resolveTaskLogFileRaw(taskId: Long, locator: String): Pair<String, ByteArray>? {
+        if (locator.isBlank()) return null
+        val name = locator.substringAfterLast('/').substringAfterLast('\\')
+        val prefix = "task-$taskId-"
+        val logId = when {
+            name.startsWith(prefix) && name.endsWith(".log") ->
+                name.removePrefix(prefix).removeSuffix(".log").toLongOrNull()
+            else -> name.toLongOrNull()
+        } ?: return null
+        return resolveTaskLogRecordRaw(logId, expectedTaskId = taskId)
+    }
+
+    private fun issueRawLogTicket(
+        session: NanoHTTPD.IHTTPSession,
+        resource: String,
+        filename: String,
+        size: Long,
+        extraPath: String? = null,
+    ): NanoHTTPD.Response {
+        purgeExpiredRawLogTickets()
+        val tokenBytes = ByteArray(24)
+        SecureRandom().nextBytes(tokenBytes)
+        val token = tokenBytes.joinToString("") { "%02x".format(it) }
+        val expiresAtMillis = System.currentTimeMillis() + RAW_LOG_TICKET_TTL_SECONDS * 1000L
+        issuedRawLogTickets[token] = IssuedRawLogTicket(resource, expiresAtMillis)
+        val downloadPath = session.uri.substringBefore('?').trimEnd('/').removeSuffix("-ticket")
+        val query = StringBuilder("ticket=").append(java.net.URLEncoder.encode(token, "UTF-8"))
+        if (!extraPath.isNullOrBlank()) query.append("&path=").append(java.net.URLEncoder.encode(extraPath, "UTF-8"))
+        return ok(
+            JSONObject().put(
+                "data",
+                JSONObject()
+                    .put("url", "$downloadPath?$query")
+                    .put("filename", filename)
+                    .put("size", size)
+                    .put("expires_at", Instant.ofEpochMilli(expiresAtMillis).toString())
+                    .put("expires_in", RAW_LOG_TICKET_TTL_SECONDS),
+            ),
+        )
+    }
+
+    private fun verifyRawLogTicket(session: NanoHTTPD.IHTTPSession, resource: String): NanoHTTPD.Response? {
+        val ticket = session.parms["ticket"]?.trim().orEmpty()
+        if (ticket.isEmpty()) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "缺少下载票据")
+        val issued = issuedRawLogTickets[ticket] ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "下载票据无效")
+        if (issued.expiresAtMillis < System.currentTimeMillis()) {
+            issuedRawLogTickets.remove(ticket)
+            return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "下载票据已过期，请重新发起下载")
+        }
+        if (issued.resource != resource) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "下载票据无效")
+        return null
+    }
+
+    private fun purgeExpiredRawLogTickets() {
+        val now = System.currentTimeMillis()
+        issuedRawLogTickets.entries.removeIf { it.value.expiresAtMillis < now }
+    }
+
+    private fun streamRawLogBytes(filename: String, bytes: ByteArray): NanoHTTPD.Response {
+        val safeName = filename.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .ifBlank { "log.txt" }
+        return NanoHTTPD.newFixedLengthResponse(
+            NanoHTTPD.Response.Status.OK,
+            "application/octet-stream",
+            ByteArrayInputStream(bytes),
+            bytes.size.toLong(),
+        ).apply {
+            addHeader("Content-Disposition", "attachment; filename=\"$safeName\"")
+            addHeader("Cache-Control", "no-store")
+            addHeader("X-Content-Type-Options", "nosniff")
+        }
     }
 
     private fun deleteLogs(json: JSONObject): NanoHTTPD.Response { val ids=json.optJSONArray("ids")?:json.optJSONArray("log_ids")?:JSONArray();var n=0;for(i in 0 until ids.length())n+=writableDatabase.delete("task_logs_local","id=?",arrayOf(ids.optLong(i).toString()));return ok(JSONObject().put("data",JSONObject().put("deleted",n))) }
@@ -2422,33 +2796,301 @@ fun serveDashboardStats(): JSONObject {
     private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version",DependencyStorage.PYTHON_VERSION);upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
     private fun exportDependencies(type: String): NanoHTTPD.Response { val lines=mutableListOf<String>();readableDatabase.query("dependencies",arrayOf("name","version"),if(type.isBlank())null else "type=?",if(type.isBlank())null else arrayOf(normalizeDependencyType(type)?:type),null,null,"name").use{c->while(c.moveToNext())lines += c.string("name") + if(c.string("version").isBlank()) "" else if(type=="npm"||type=="nodejs") "@${c.string("version")}" else "==${c.string("version")}"};return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"text/plain; charset=utf-8",lines.joinToString("\n")) }
 
-    private fun taskRows(): JSONArray = queryRows(
-        "SELECT * FROM tasks ORDER BY id DESC"
-    ) { cursor ->
-        JSONObject()
+    private fun taskJson(cursor: Cursor): JSONObject {
+        val labelsRaw = cursor.string("labels").ifBlank { "[]" }
+        val labels = try {
+            JSONArray(labelsRaw)
+        } catch (_: Exception) {
+            JSONArray().also { arr ->
+                labelsRaw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach(arr::put)
+            }
+        }
+        val cron = cursor.string("cron_expression")
+        val cronExpressions = JSONArray()
+        cron.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach(cronExpressions::put)
+        val successRaw = cursor.getColumnIndex("success_exit_codes").takeIf { it >= 0 }?.let { cursor.getString(it) }.orEmpty().ifBlank { "0" }
+        val successCodes = JSONArray()
+        successRaw.split(Regex("[,，\\s]+")).mapNotNull { it.trim().toIntOrNull()?.takeIf { code -> code in 0..255 } }.distinct().forEach { successCodes.put(it) }
+        if (successCodes.length() == 0) successCodes.put(0)
+        val lastRunAtIndex = cursor.getColumnIndex("last_run_at")
+        val lastRunAt = if (lastRunAtIndex >= 0 && !cursor.isNull(lastRunAtIndex) && cursor.getString(lastRunAtIndex).isNotBlank()) {
+            cursor.getString(lastRunAtIndex)
+        } else if (cursor.string("last_run_status").isBlank()) {
+            null
+        } else {
+            cursor.string("updated_at")
+        }
+        val delayIndex = cursor.getColumnIndex("random_delay_seconds")
+        val dependsIndex = cursor.getColumnIndex("depends_on")
+        val runningIndex = cursor.getColumnIndex("last_running_time")
+        return JSONObject()
             .put("id", cursor.long("id"))
             .put("name", cursor.string("name"))
             .put("command", cursor.string("command"))
-            .put("cron_expression", cursor.string("cron_expression"))
+            .put("cron_expression", cron)
+            .put("cron_expressions", cronExpressions)
             .put("task_type", cursor.string("task_type"))
             .put("python_version", cursor.string("python_version"))
             .put("task_before", cursor.string("task_before"))
             .put("task_after", cursor.string("task_after"))
+            .put("timeout", cursor.getColumnIndex("timeout").takeIf { it >= 0 }?.let { cursor.getInt(it) } ?: 0)
+            .put("max_retries", cursor.getColumnIndex("max_retries").takeIf { it >= 0 }?.let { cursor.getInt(it) } ?: 0)
+            .put("retry_interval", cursor.getColumnIndex("retry_interval").takeIf { it >= 0 }?.let { cursor.getInt(it) } ?: 0)
+            .put("success_exit_codes", successCodes)
+            .put("random_delay_seconds", if (delayIndex >= 0 && !cursor.isNull(delayIndex)) cursor.getInt(delayIndex) else JSONObject.NULL)
+            .put("depends_on", if (dependsIndex >= 0 && !cursor.isNull(dependsIndex)) cursor.getLong(dependsIndex) else JSONObject.NULL)
+            .put("stop_schedule", cursor.getColumnIndex("stop_schedule").takeIf { it >= 0 }?.let { cursor.getString(it) }.orEmpty())
+            .put("allow_multiple_instances", cursor.getColumnIndex("allow_multiple_instances").takeIf { it >= 0 }?.let { cursor.getInt(it) != 0 } ?: false)
             .put("notify_on_failure", cursor.int("notify_on_failure") != 0)
             .put("notify_on_success", cursor.int("notify_on_success") != 0)
             .put("notify_on_abort", cursor.int("notify_on_abort") != 0)
             .put("notification_channel_id", if (cursor.isNull(cursor.getColumnIndexOrThrow("notification_channel_id"))) JSONObject.NULL else cursor.long("notification_channel_id"))
             .put("status", cursor.double("status"))
-            .put("labels", JSONArray(cursor.string("labels")))
+            .put("labels", labels)
             .put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
-            .put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
+            .put("last_run_at", lastRunAt ?: JSONObject.NULL)
+            .put("last_running_time", if (runningIndex >= 0 && !cursor.isNull(runningIndex)) cursor.getDouble(runningIndex) else JSONObject.NULL)
             .put("created_at", cursor.string("created_at"))
             .put("updated_at", cursor.string("updated_at"))
+            .put("is_pinned", cursor.getColumnIndex("pinned").takeIf { it >= 0 }?.let { cursor.getInt(it) != 0 } ?: false)
+            .put("sort_order", cursor.getColumnIndex("sort_order").takeIf { it >= 0 }?.let { cursor.getInt(it) } ?: 0)
+    }
+
+    private fun taskCronExpression(json: JSONObject): String {
+        val expressions = json.optJSONArray("cron_expressions")
+        if (expressions != null) {
+            return (0 until expressions.length()).map { expressions.optString(it).trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+        }
+        return json.optString("cron_expression")
+    }
+
+    private fun taskSuccessExitCodesValue(json: JSONObject): String {
+        if (!json.has("success_exit_codes") || json.isNull("success_exit_codes")) return "0"
+        val arr = json.optJSONArray("success_exit_codes")
+        val codes = if (arr != null) {
+            (0 until arr.length()).mapNotNull { arr.optInt(it).takeIf { code -> code in 0..255 } }
+        } else {
+            json.optString("success_exit_codes").split(Regex("[,，\\s]+")).mapNotNull { it.trim().toIntOrNull()?.takeIf { code -> code in 0..255 } }
+        }
+        return codes.distinct().joinToString(",").ifEmpty { "0" }
+    }
+
+    private fun taskRows(): JSONArray = queryRows(
+        "SELECT * FROM tasks ORDER BY id DESC"
+    ) { cursor -> taskJson(cursor) }
+
+    private fun listTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val rows = taskRows()
+        val keyword = session.parms["keyword"]?.trim().orEmpty()
+        val statusStr = session.parms["status"]?.trim().orEmpty()
+        val label = session.parms["label"]?.trim().orEmpty()
+        val filters = parseTaskListFilters(session.parms["filters"].orEmpty())
+        val sortRules = parseTaskListSortRules(session.parms["sort_rules"].orEmpty())
+        val wantAll = session.parms["all"]?.trim()?.lowercase() in setOf("1", "true", "yes")
+        val page = (session.parms["page"]?.toIntOrNull() ?: 1).coerceAtLeast(1)
+        val requestedSize = session.parms["page_size"]?.toIntOrNull() ?: 20
+        val pageSize = if (requestedSize < 1 || requestedSize > 100) 20 else requestedSize
+        val matched = ArrayList<JSONObject>()
+        for (index in 0 until rows.length()) {
+            val item = rows.getJSONObject(index)
+            if (keyword.isNotEmpty()) {
+                val haystack = (item.optString("name") + "\n" + item.optString("command")).lowercase()
+                if (!haystack.contains(keyword.lowercase())) continue
+            }
+            if (statusStr.isNotEmpty()) {
+                val wanted = statusStr.toDoubleOrNull()
+                if (wanted != null && item.optDouble("status") != wanted) continue
+            }
+            if (label.isNotEmpty() && !taskLabelText(item).contains(label)) continue
+            if (filters.isNotEmpty() && !taskMatchesFilters(item, filters)) continue
+            matched += item
+        }
+        if (sortRules.isNotEmpty()) {
+            matched.sortWith { left, right ->
+                for (rule in sortRules) {
+                    val compared = compareTaskField(left, right, rule.first)
+                    if (compared != 0) return@sortWith if (rule.second == "desc") -compared else compared
+                }
+                0
+            }
+        } else {
+            matched.sortWith { left, right ->
+                val pin = right.optBoolean("is_pinned").compareTo(left.optBoolean("is_pinned"))
+                if (pin != 0) return@sortWith pin
+                val rank = taskStatusRank(left.optDouble("status")).compareTo(taskStatusRank(right.optDouble("status")))
+                if (rank != 0) return@sortWith rank
+                val order = left.optInt("sort_order").compareTo(right.optInt("sort_order"))
+                if (order != 0) return@sortWith order
+                val created = right.optString("created_at").compareTo(left.optString("created_at"))
+                if (created != 0) return@sortWith created
+                right.optLong("id").compareTo(left.optLong("id"))
+            }
+        }
+        val total = matched.size
+        val slice = JSONArray()
+        if (wantAll) {
+            val limit = total.coerceAtMost(5000)
+            for (index in 0 until limit) slice.put(matched[index])
+            return ok(JSONObject().put("data", slice).put("total", total).put("page", 1).put("page_size", slice.length()))
+        }
+        val start = ((page - 1) * pageSize).coerceAtMost(total)
+        val end = (start + pageSize).coerceAtMost(total)
+        for (index in start until end) slice.put(matched[index])
+        return ok(JSONObject().put("data", slice).put("total", total).put("page", page).put("page_size", pageSize))
+    }
+
+    private fun parseTaskListFilters(raw: String): List<Triple<String, String, String>> {
+        val text = raw.trim()
+        if (text.isEmpty()) return emptyList()
+        return try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { index ->
+                val obj = arr.optJSONObject(index) ?: return@mapNotNull null
+                val field = obj.optString("field").trim()
+                val operator = obj.optString("operator").trim()
+                val value = obj.optString("value").trim()
+                if (field.isEmpty() || operator.isEmpty() || value.isEmpty()) null
+                else Triple(field, operator, value)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parseTaskListSortRules(raw: String): List<Pair<String, String>> {
+        val text = raw.trim()
+        if (text.isEmpty()) return emptyList()
+        return try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { index ->
+                val obj = arr.optJSONObject(index) ?: return@mapNotNull null
+                val field = obj.optString("field").trim()
+                if (field.isEmpty()) null
+                else Pair(field, obj.optString("direction").trim().lowercase().let { if (it == "desc") "desc" else "asc" })
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun taskMatchesFilters(item: JSONObject, filters: List<Triple<String, String, String>>): Boolean {
+        return filters.all { (field, operator, value) -> matchTaskFilterValues(taskFilterValues(item, field), operator, value) }
+    }
+
+    private fun taskFilterValues(item: JSONObject, field: String): List<String> {
+        return when (field) {
+            "command" -> listOf(item.optString("command"))
+            "name" -> listOf(item.optString("name"))
+            "cron_expression" -> listOf(item.optString("cron_expression")) + item.optString("cron_expression").split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+            "status" -> taskStatusFilterValues(item.optDouble("status"))
+            "labels" -> taskLabelValues(item)
+            else -> emptyList()
+        }
+    }
+
+    private fun taskStatusFilterValues(status: Double): List<String> {
+        val numeric = if (status % 1.0 == 0.0) status.toInt().toString() else status.toString()
+        val alias = when (status) {
+            0.0 -> listOf("禁用中", "已禁用")
+            0.5 -> listOf("排队中")
+            2.0 -> listOf("运行中")
+            else -> listOf("空闲中", "已启用")
+        }
+        return listOf(numeric) + alias
+    }
+
+    private fun taskLabelValues(item: JSONObject): List<String> {
+        val labels = item.optJSONArray("labels") ?: return emptyList()
+        return (0 until labels.length()).map { labels.optString(it).trim() }.filter { it.isNotEmpty() }
+    }
+
+    private fun taskLabelText(item: JSONObject): String = taskLabelValues(item).joinToString(",")
+
+    private fun matchTaskFilterValues(values: List<String>, operator: String, target: String): Boolean {
+        val needle = target.trim().lowercase()
+        if (needle.isEmpty()) return true
+        val normalized = values.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        return when (operator) {
+            "contains" -> normalized.any { it.contains(needle) }
+            "not_contains" -> normalized.none { it.contains(needle) }
+            "equals" -> normalized.any { it == needle }
+            "not_equals" -> normalized.none { it == needle }
+            else -> true
+        }
+    }
+
+    private fun compareTaskField(left: JSONObject, right: JSONObject, field: String): Int {
+        return when (field) {
+            "name", "command", "cron_expression", "created_at", "updated_at" ->
+                left.optString(field).compareTo(right.optString(field), ignoreCase = true)
+            "status" -> left.optDouble("status").compareTo(right.optDouble("status"))
+            "id", "sort_order" -> left.optLong(field).compareTo(right.optLong(field))
+            else -> 0
+        }
+    }
+
+    private fun taskStatusRank(status: Double): Int = when (status) {
+        1.0, 0.5, 2.0 -> 0
+        0.0 -> 1
+        else -> 2
     }
 
     private fun envRows(): JSONArray = queryRows(
         "SELECT * FROM envs ORDER BY sort_order ASC, id DESC"
     ) { envJson(it) }
+
+    private fun listEnvs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        val rows = envRows()
+        val keyword = session.parms["keyword"]?.trim().orEmpty()
+        val groupFilters = buildList {
+            session.parms["groups"]?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.let(::addAll)
+            session.parms["group"]?.trim()?.takeIf { it.isNotEmpty() }?.let(::add)
+        }.distinct()
+        val enabledRaw = session.parms["enabled"]?.trim().orEmpty()
+        val wantAll = session.parms["all"]?.trim()?.lowercase() in setOf("1", "true", "yes")
+        val page = (session.parms["page"]?.toIntOrNull() ?: 1).coerceAtLeast(1)
+        val requestedSize = session.parms["page_size"]?.toIntOrNull() ?: 20
+        val pageSize = if (requestedSize < 1 || requestedSize > 100) 20 else requestedSize
+        val matched = JSONArray()
+        for (index in 0 until rows.length()) {
+            val item = rows.getJSONObject(index)
+            if (keyword.isNotEmpty()) {
+                val haystack = listOf(
+                    item.optString("name"),
+                    item.optString("remarks"),
+                    item.optString("value"),
+                    item.optString("group"),
+                ).joinToString("\n").lowercase()
+                if (!haystack.contains(keyword.lowercase())) continue
+            }
+            if (groupFilters.isNotEmpty()) {
+                val envGroups = item.optString("group").split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                if (groupFilters.none { it in envGroups }) continue
+            }
+            if (enabledRaw.isNotEmpty()) {
+                val enabled = item.optBoolean("enabled")
+                when (enabledRaw.lowercase()) {
+                    "1", "true", "yes" -> if (!enabled) continue
+                    "0", "false", "no" -> if (enabled) continue
+                }
+            }
+            matched.put(item)
+        }
+        val total = matched.length()
+        val slice = JSONArray()
+        if (wantAll) {
+            val limit = total.coerceAtMost(5000)
+            for (index in 0 until limit) slice.put(matched.getJSONObject(index))
+            return ok(JSONObject().put("data", slice).put("total", total).put("page", 1).put("page_size", slice.length()))
+        }
+        val start = (page - 1) * pageSize
+        var index = start
+        while (index < total && slice.length() < pageSize) {
+            slice.put(matched.getJSONObject(index))
+            index++
+        }
+        return ok(JSONObject().put("data", slice).put("total", total).put("page", page).put("page_size", pageSize))
+    }
 
     private fun envJson(cursor: Cursor): JSONObject {
         val groups = JSONArray(cursor.string("groups_json"))
@@ -2610,16 +3252,16 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun restoreProgress(): NanoHTTPD.Response {
-        val active = maintenanceGate.isMaintenanceActive()
-        return ok(
-            JSONObject()
-                .put("active", active)
-                .put("status", if (active) "running" else "idle")
-                .put("stage", if (active) "waiting_or_restoring" else "idle")
-                .put("percent", if (active) 0 else 100)
-                .put("active_task_ids", JSONArray(activeTaskIds()))
-                .put("source", "android_portable_envelope"),
-        )
+        val progress = RestoreProgressTracker.snapshot()
+        progress.put("active_task_ids", JSONArray(activeTaskIds()))
+        if (maintenanceGate.isMaintenanceActive() && progress.optString("status") == "idle") {
+            progress.put("active", true)
+            progress.put("status", "waiting")
+            progress.put("stage", "waiting")
+            progress.put("percent", 5)
+            progress.put("message", "等待任务退出")
+        }
+        return ok(progress)
     }
 
     private fun backupFile(filename: String): File? {
@@ -2826,9 +3468,79 @@ fun serveDashboardStats(): JSONObject {
         return ok(JSONObject().put("message", "删除成功"))
     }
 
-    private fun formatScript(json: JSONObject): NanoHTTPD.Response = ok(
-        JSONObject().put("data", JSONObject().put("content", json.optString("content")).put("formatter", "android-local"))
-    )
+    private fun formatScript(json: JSONObject): NanoHTTPD.Response {
+        val language = json.optString("language").trim().lowercase()
+        val content = json.optString("content")
+        if (language !in setOf("python", "shell", "go", "json")) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "不支持的语言")
+        }
+        val formatted = formatScriptContent(language, content)
+        val warning = when {
+            formatted.second == "none" && language == "python" -> "未找到 black 或 autopep8，已保持原文"
+            formatted.second == "none" && language == "go" -> "未找到 gofmt，已保持原文"
+            formatted.second == "none" && language == "json" -> "JSON 无法解析，已保持原文"
+            formatted.second == "basic" && language == "shell" -> "未找到 shfmt，已做基础去尾空格"
+            formatted.second == "none" -> "未找到对应格式化工具，已保持原文"
+            else -> ""
+        }
+        val data = JSONObject()
+            .put("content", formatted.first)
+            .put("language", language)
+            .put("formatter", formatted.second)
+        if (warning.isNotEmpty()) {
+            data.put("warning", warning)
+            data.put("message", warning)
+        }
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun formatScriptContent(language: String, content: String): Pair<String, String> {
+        return when (language) {
+            "python" -> formatWithGuest(listOf("/usr/bin/env", "black", "--line-length", "88", "--quiet", "-"), content, "black")
+                ?: formatWithGuest(listOf("/usr/bin/python3", "-m", "black", "--line-length", "88", "--quiet", "-"), content, "black")
+                ?: formatWithGuest(listOf("/usr/bin/env", "autopep8", "--max-line-length", "88", "-a", "-"), content, "autopep8")
+                ?: Pair(content, "none")
+            "shell" -> formatWithGuest(listOf("/usr/bin/env", "shfmt", "-i", "2", "-bn", "-ci", "-sr"), content, "shfmt")
+                ?: Pair(content.lineSequence().joinToString("\n") { it.trimEnd() }, "basic")
+            "go" -> formatWithGuest(listOf("/usr/bin/gofmt"), content, "gofmt")
+                ?: formatWithGuest(listOf("/usr/bin/env", "gofmt"), content, "gofmt")
+                ?: Pair(content, "none")
+            "json" -> formatJsonContent(content)
+            else -> Pair(content, "none")
+        }
+    }
+
+    private fun formatJsonContent(content: String): Pair<String, String> {
+        val trimmed = content.trim()
+        return try {
+            val pretty = if (trimmed.startsWith("[")) JSONArray(trimmed).toString(2) else JSONObject(trimmed).toString(2)
+            Pair(pretty, "json")
+        } catch (_: Exception) {
+            Pair(content, "none")
+        }
+    }
+
+    private fun formatWithGuest(argv: List<String>, input: String, formatter: String): Pair<String, String>? {
+        val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, argv) ?: return null
+        return try {
+            val process = ProcessBuilder(command).redirectErrorStream(true).apply {
+                applyProcessEnvironment(command, environment(), appContext.filesDir)
+            }.start()
+            val writer = Thread {
+                runCatching { process.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(input) } }
+            }.also { it.start() }
+            val output = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            val finished = process.waitFor(30, TimeUnit.SECONDS)
+            writer.join(1_000)
+            if (!finished) {
+                process.destroyForcibly()
+                return null
+            }
+            if (process.exitValue() == 0) Pair(output, formatter) else null
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun runCode(json: JSONObject): NanoHTTPD.Response {
         val language = json.optString("language", "python")
@@ -2880,13 +3592,14 @@ fun serveDashboardStats(): JSONObject {
             .put("logs", result.logs).put("done", result.done).put("exit_code", result.exitCode))
 
     private fun executeAsyncScriptRun(runId: String, file: File, displayPath: String, languageHint: String, deleteAfter: Boolean) {
+        val scriptToken = issueScriptAccessToken()
         try {
             appendScriptRunLog(runId, "Android local fallback executing script: $displayPath")
             val workingDir = file.parentFile ?: scriptsRoot()
             ensureQingLongShims(workingDir)
             if (!prepareScriptDependencies(runId, file)) { finishScriptRun(runId, "failed", 2); return }
             val result = executeWithAutoInstall(null, runtimeForFile(file), { line -> appendScriptRunLog(runId, line) }) {
-                runAsyncScriptProcess(runId, file, displayPath, languageHint, workingDir)
+                runAsyncScriptProcess(runId, file, displayPath, languageHint, workingDir, scriptToken)
             }
             if (scriptRunStatus(runId) != "stopped") {
                 finishScriptRun(runId, result.status, result.exitCode ?: 127)
@@ -2894,13 +3607,14 @@ fun serveDashboardStats(): JSONObject {
         } catch (error: Exception) {
             if (scriptRunStatus(runId) != "stopped") { appendScriptRunLog(runId, "Script start failed: ${error.message ?: error.javaClass.simpleName}"); finishScriptRun(runId, "failed", 127) }
         } finally {
+            revokeAccessToken(scriptToken, "script.revoke")
             scriptProcesses.remove(runId); scriptRunLocks.remove(runId); scriptRunLogsMemory.remove(runId)
             scriptRunLogCharacters.remove(runId); scriptRunPendingPersistence.remove(runId)
             if (deleteAfter) runCatching { file.delete() }
         }
     }
 
-    private fun runAsyncScriptProcess(runId: String, file: File, displayPath: String, languageHint: String, workingDir: File): LocalScriptResult {
+    private fun runAsyncScriptProcess(runId: String, file: File, displayPath: String, languageHint: String, workingDir: File, scriptToken: String?): LocalScriptResult {
         val logs = JSONArray()
         val command = scriptCommand(file, displayPath, languageHint)
             ?: return LocalScriptResult(
@@ -2914,19 +3628,34 @@ fun serveDashboardStats(): JSONObject {
         appendScriptRunLog(runId, commandLine)
         return try {
             val process = ProcessBuilder(command).directory(workingDir).redirectErrorStream(true)
-                .apply { applyProcessEnvironment(command, environment(), workingDir) }.start()
+                .apply { applyProcessEnvironment(command, environment(), workingDir, scriptTokenEnv(scriptToken)) }.start()
             scriptProcesses[runId] = process
             if (scriptRunStatus(runId) == "stopped") {
                 process.destroyForcibly()
                 return LocalScriptResult(logs.put("Script stopped before output"), "stopped", true, 130)
             }
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    logs.put(line)
-                    appendScriptRunLog(runId, line)
+            val output = Collections.synchronizedList(mutableListOf<String>())
+            val reader = Thread {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        output += line
+                        appendScriptRunLog(runId, line)
+                    }
                 }
+            }.also { it.start() }
+            val finished = process.waitFor(7_200, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                reader.join(1_000)
+                output.forEach { logs.put(it) }
+                val line = "Process timed out after 7200 seconds"
+                logs.put(line)
+                appendScriptRunLog(runId, line)
+                return LocalScriptResult(logs, "failed", true, 124)
             }
-            val exit = process.waitFor()
+            reader.join(1_000)
+            output.forEach { logs.put(it) }
+            val exit = process.exitValue()
             val finalLine = if (exit == 0) "Script completed successfully" else "Script failed with exit code $exit"
             logs.put(finalLine)
             appendScriptRunLog(runId, finalLine)
@@ -2979,8 +3708,14 @@ fun serveDashboardStats(): JSONObject {
                 127,
             )
 
-        return runLocalProcess(command + args, file.parentFile ?: scriptsRoot(), logs, timeoutSeconds, onLine, taskId, extraEnvironment).also { result ->
-            recordDetectedDependencies(result.logs)
+        val issued = extraEnvironment["DAIDAI_TOKEN"].isNullOrBlank()
+        val token = if (issued) issueScriptAccessToken() else null
+        return try {
+            runLocalProcess(command + args, file.parentFile ?: scriptsRoot(), logs, timeoutSeconds, onLine, taskId, extraEnvironment + scriptTokenEnv(token)).also { result ->
+                recordDetectedDependencies(result.logs)
+            }
+        } finally {
+            if (issued) revokeAccessToken(token, "script.revoke")
         }
     }
 
@@ -2992,12 +3727,13 @@ fun serveDashboardStats(): JSONObject {
             ext in setOf("sh", "bash") || languageHint.equals("shell", ignoreCase = true) || languageHint.equals("bash", ignoreCase = true) -> {
                 val scan = ShellCompatibility.scan(runCatching { file.readText(Charsets.UTF_8) }.getOrDefault(""))
                 val requiresBash = ext == "bash" || languageHint.equals("bash", true) || scan.requiresBash
-                val shell = if (requiresBash) AndroidLinuxRuntime.GuestShell.BASH else AndroidLinuxRuntime.GuestShell.SH
+                val bashAvailable = AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/bin/bash")
+                val shell = if (requiresBash || bashAvailable) AndroidLinuxRuntime.GuestShell.BASH else AndroidLinuxRuntime.GuestShell.SH
                 AndroidLinuxRuntime.shellCommand(appContext, file, file.parentFile ?: scriptsRoot(), shell)
             }
             ext == "py" || languageHint.equals("python", ignoreCase = true) -> {
                 val guestPythonPath = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
-                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "/usr/bin/python3", "/workspace/${file.name}"))
+                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "PYTHONPATH=$guestPythonPath", "PYTHONUNBUFFERED=1", "/usr/bin/python3", "-u", "/workspace/${file.name}"))
                     ?: run {
                     val sysPy = try {
                         val p = ProcessBuilder("which", "python3").redirectErrorStream(true).start()
@@ -3009,8 +3745,7 @@ fun serveDashboardStats(): JSONObject {
             }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) ->
                 AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
-            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) ->
-                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "-e", typeScriptEvalCode(), "/workspace/${file.name}"))
+            ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> typeScriptCommand(file)
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
                 ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/go", "run", "/workspace/${file.name}"))
             else -> null
@@ -3024,34 +3759,62 @@ fun serveDashboardStats(): JSONObject {
         return true
     }
 
+    private fun typeScriptCommand(file: File): List<String>? {
+        val working = file.parentFile ?: scriptsRoot()
+        val nodePath = "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules"
+        val guestFile = "/workspace/${file.name}"
+        val tsNodeDir = File(appContext.filesDir, "deps/nodejs/node_modules/ts-node")
+        return when {
+            tsNodeDir.isDirectory ->
+                AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/node", "--require", "ts-node/register/transpile-only", guestFile))
+            AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/ts-node") ->
+                AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/ts-node", "--transpile-only", guestFile))
+            AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/tsc") -> {
+                val escaped = file.name.replace("'", "'\\''")
+                AndroidLinuxRuntime.guestCommand(
+                    appContext,
+                    working,
+                    listOf("/bin/sh", "-c", "out=/tmp/daidai-ts-\$\$.js; /usr/bin/tsc --pretty false --module commonjs --target es2019 --esModuleInterop --skipLibCheck --outFile \"\$out\" '/workspace/$escaped' && /usr/bin/node \"\$out\""),
+                )
+            }
+            else ->
+                AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/node", "-e", typeScriptEvalCode(), guestFile))
+        }
+    }
+
     private fun typeScriptEvalCode(): String =
         "const fs=require('fs');const vm=require('vm');const ts=require('typescript');" +
             "const file=process.argv[1];const code=fs.readFileSync(file,'utf8');" +
             "const out=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;" +
             "vm.runInThisContext(out,{filename:file});"
 
-    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null, extraEnvironment: Map<String, String> = emptyMap()): LocalScriptResult {
+    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null, extraEnvironment: Map<String, String> = emptyMap(), subscriptionId: Long? = null): LocalScriptResult {
         logs.put("Command: ${command.first().substringAfterLast('/')}")
+        var process: Process? = null
         return try {
-            val process = ProcessBuilder(command)
+            process = ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true)
                 .apply {
                     applyProcessEnvironment(command, environment(), workingDir, extraEnvironment)
                 }
                 .start()
-            if (taskId != null && !registerTaskProcess(taskId, process)) {
+            val started = process!!
+            if (taskId != null && !registerTaskProcess(taskId, started)) {
                 return LocalScriptResult(logs.put("Task aborted before process start"), "aborted", true, 130)
+            }
+            if (subscriptionId != null && !registerSubscriptionProcess(subscriptionId, started)) {
+                return LocalScriptResult(logs.put("Subscription pull aborted"), "aborted", true, 130)
             }
             val output = Collections.synchronizedList(mutableListOf<String>())
             val reader = Thread {
-                process.inputStream.bufferedReader().useLines { lines ->
+                started.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line -> output += line; onLine?.invoke(line) }
                 }
             }.also { it.start() }
-            val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            val finished = started.waitFor(timeoutSeconds, TimeUnit.SECONDS)
             if (!finished) {
-                process.destroyForcibly()
+                started.destroyForcibly()
                 reader.join(1_000)
                 output.forEach { logs.put(it) }
                 logs.put("Process timed out after $timeoutSeconds seconds")
@@ -3059,7 +3822,7 @@ fun serveDashboardStats(): JSONObject {
             } else {
                 reader.join(1_000)
                 output.forEach { logs.put(it) }
-                val exit = process.exitValue()
+                val exit = started.exitValue()
                 if (exit == 0) logs.put("Script completed successfully") else logs.put("Script failed with exit code $exit")
                 LocalScriptResult(logs, if (exit == 0) "success" else "failed", true, exit)
             }
@@ -3068,7 +3831,20 @@ fun serveDashboardStats(): JSONObject {
             LocalScriptResult(logs, "failed", true, 127)
         } finally {
             if (taskId != null) taskProcesses.remove(taskId)
+            if (subscriptionId != null) {
+                process?.let { subscriptionPullProcesses.remove(subscriptionId, it) }
+                subscriptionStopRequested.remove(subscriptionId)
+            }
         }
+    }
+
+    private fun registerSubscriptionProcess(subscriptionId: Long, process: Process): Boolean {
+        subscriptionPullProcesses[subscriptionId] = process
+        if (!subscriptionStopRequested.contains(subscriptionId)) return true
+        terminateTaskProcess(process)
+        subscriptionPullProcesses.remove(subscriptionId, process)
+        subscriptionStopRequested.remove(subscriptionId)
+        return false
     }
 
     private fun registerTaskProcess(taskId: Long, process: Process): Boolean {
@@ -3294,6 +4070,7 @@ fun serveDashboardStats(): JSONObject {
         target["PWD"] = "/workspace"
         target["TMPDIR"] = "/tmp"
         target["PYTHONPATH"] = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages:/workspace"
+        target["PYTHONUNBUFFERED"] = "1"
         target["NODE_PATH"] = "/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules:/workspace"
         target.remove("NODE_OPTIONS")
         AndroidLinuxRuntime.nodeRuntimeOptions(AndroidLinuxRuntime.currentAbi())?.let { target["NODE_OPTIONS"] = it }
@@ -3619,7 +4396,7 @@ fun serveDashboardStats(): JSONObject {
         val values = ContentValues().apply {
             put("name", json.optString("name", "未命名任务"))
             put("command", json.optString("command"))
-            put("cron_expression", json.optString("cron_expression"))
+            put("cron_expression", taskCronExpression(json))
             put("task_type", json.optString("task_type", "manual"))
             put("python_version", json.optString("python_version"))
             put("task_before", json.optString("task_before"))
@@ -3635,6 +4412,10 @@ fun serveDashboardStats(): JSONObject {
             channelId?.let { put("notification_channel_id", it) }
             put("status", json.optDouble("status", 1.0))
             put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
+            put("success_exit_codes", taskSuccessExitCodesValue(json))
+            put("allow_multiple_instances", if (json.optBoolean("allow_multiple_instances")) 1 else 0)
+            if (json.has("sort_order")) put("sort_order", json.optInt("sort_order"))
+            if (json.has("random_delay_seconds") && !json.isNull("random_delay_seconds")) put("random_delay_seconds", json.optInt("random_delay_seconds").coerceAtLeast(0))
             put("created_at", now)
             put("updated_at", now)
         }
@@ -3648,39 +4429,8 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun taskDetailData(id: Long): JSONObject? {
-        val cursor = readableDatabase.query("tasks", null, "id = ?", arrayOf(id.toString()), null, null, null)
-        return if (cursor.moveToFirst()) {
-            val data = JSONObject().apply {
-                put("id", cursor.long("id"))
-                put("name", cursor.string("name"))
-                put("command", cursor.string("command"))
-                put("task_type", cursor.string("task_type"))
-                put("status", cursor.double("status"))
-                put("cron_expression", cursor.string("cron_expression"))
-                put("python_version", cursor.string("python_version"))
-                put("task_before", cursor.string("task_before"))
-                put("task_after", cursor.string("task_after"))
-                put("timeout", cursor.int("timeout"))
-                put("max_retries", cursor.int("max_retries"))
-                put("retry_interval", cursor.int("retry_interval"))
-                put("depends_on", if (cursor.isNull(cursor.getColumnIndexOrThrow("depends_on"))) JSONObject.NULL else cursor.long("depends_on"))
-                put("stop_schedule", cursor.string("stop_schedule"))
-                put("notify_on_failure", cursor.int("notify_on_failure") != 0)
-                put("notify_on_success", cursor.int("notify_on_success") != 0)
-                put("notify_on_abort", cursor.int("notify_on_abort") != 0)
-                put("notification_channel_id", if (cursor.isNull(cursor.getColumnIndexOrThrow("notification_channel_id"))) JSONObject.NULL else cursor.long("notification_channel_id"))
-                put("labels", JSONArray(cursor.string("labels")))
-                put("last_run_status", taskRunStatusCode(cursor.string("last_run_status")))
-                put("last_run_at", if (cursor.string("last_run_status").isBlank()) JSONObject.NULL else cursor.string("updated_at"))
-                put("last_log_id", cursor.long("last_log_id"))
-                put("created_at", cursor.string("created_at"))
-                put("updated_at", cursor.string("updated_at"))
-            }
-            cursor.close()
-            data
-        } else {
-            cursor.close()
-            null
+        return readableDatabase.query("tasks", null, "id = ?", arrayOf(id.toString()), null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) taskJson(cursor) else null
         }
     }
 
@@ -3693,6 +4443,7 @@ fun serveDashboardStats(): JSONObject {
             listOf("name", "command", "cron_expression", "task_type", "python_version", "task_before", "task_after", "stop_schedule").forEach { key ->
                 if (json.has(key)) put(key, json.optString(key))
             }
+            if (json.has("cron_expressions")) put("cron_expression", taskCronExpression(json))
             listOf("notify_on_failure", "notify_on_success", "notify_on_abort").forEach { key ->
                 if (json.has(key)) put(key, if (json.optBoolean(key)) 1 else 0)
             }
@@ -3701,7 +4452,13 @@ fun serveDashboardStats(): JSONObject {
                 else if (channelId == null) putNull("notification_channel_id") else put("notification_channel_id", channelId)
             }
             if (json.has("status")) put("status", json.optDouble("status"))
-            listOf("timeout", "max_retries", "retry_interval").forEach { key -> if (json.has(key)) put(key, json.optInt(key)) }
+            listOf("timeout", "max_retries", "retry_interval", "sort_order").forEach { key -> if (json.has(key)) put(key, json.optInt(key)) }
+            if (json.has("allow_multiple_instances")) put("allow_multiple_instances", if (json.optBoolean("allow_multiple_instances")) 1 else 0)
+            if (json.has("random_delay_seconds")) {
+                if (json.isNull("random_delay_seconds")) putNull("random_delay_seconds")
+                else put("random_delay_seconds", json.optInt("random_delay_seconds").coerceAtLeast(0))
+            }
+            if (json.has("success_exit_codes")) put("success_exit_codes", taskSuccessExitCodesValue(json))
             if (json.has("depends_on")) { if (json.isNull("depends_on")) putNull("depends_on") else put("depends_on", json.optLong("depends_on")) }
             if (json.has("labels")) put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("updated_at", Instant.now().toString())
@@ -3725,7 +4482,7 @@ fun serveDashboardStats(): JSONObject {
             if (writableDatabase.update("tasks", ContentValues().apply { put("pinned", if (action == "pin") 1 else 0); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString())) != 1) {
                 return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
             }
-            return ok(JSONObject().put("data", JSONObject().put("id", id).put("pinned", action == "pin")))
+            return ok(JSONObject().put("data", JSONObject().put("id", id).put("pinned", action == "pin").put("is_pinned", action == "pin")))
         }
         if (action == "stop") {
             val lock = taskRunLocks.computeIfAbsent(id) { Any() }
@@ -3832,6 +4589,25 @@ fun serveDashboardStats(): JSONObject {
 
     internal data class ScheduledTask(val id: Long, val cronExpression: String)
     internal data class ScheduledTaskStop(val id: Long, val stopSchedule: String)
+    internal data class ScheduledSubscription(val id: Long, val schedule: String)
+
+    internal fun enabledScheduledSubscriptions(): List<ScheduledSubscription> {
+        val items = mutableListOf<ScheduledSubscription>()
+        readableDatabase.query("local_subscriptions", arrayOf("id", "schedule"), "enabled=1 AND schedule <> ''", null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) items += ScheduledSubscription(cursor.long("id"), cursor.string("schedule"))
+        }
+        return items
+    }
+
+    internal fun runScheduledSubscriptionPull(id: Long) {
+        if (subscriptionPullProcesses.containsKey(id)) {
+            recordSubscriptionLog(id, "info", "Skip scheduled pull: already running")
+            return
+        }
+        runCatching { pullSubscription(id) }.onFailure { error ->
+            recordSubscriptionLog(id, "error", error.message ?: error.javaClass.simpleName)
+        }
+    }
 
     internal fun enabledScheduledTasks(): List<ScheduledTask> {
         val tasks = mutableListOf<ScheduledTask>()
@@ -4356,6 +5132,16 @@ fun serveDashboardStats(): JSONObject {
             .put("created_at", cursor.string("created_at"))
             .put("cursor", cursor.long("log_cursor"))
             .put("log_id", cursor.long("id"))
+        val logId = cursor.long("id")
+        val taskId = cursor.long("task_id")
+        val logFile = LocalLogQueryContract.logFile(
+            taskId = taskId,
+            logId = logId,
+            size = cursor.string("content").toByteArray(Charsets.UTF_8).size.toLong(),
+            createdAt = cursor.string("created_at"),
+        )
+        payload.put("log_path", logFile["path"])
+        payload.put("has_raw_log", true)
         cursor.getColumnIndex("task_name").takeIf { it >= 0 }?.let { index ->
             payload.put("task_name", cursor.getString(index) ?: "")
         }
@@ -4394,32 +5180,130 @@ fun serveDashboardStats(): JSONObject {
         session.parms["cursor"], session.headers.entries.firstOrNull { it.key.equals("last-event-id", true) }?.value,
     )
 
-    private fun taskStats(id: Long): NanoHTTPD.Response = ok(
-        JSONObject().put(
-            "data",
-            JSONObject()
-                .put("task_id", id)
-                .put("total_runs", 0)
-                .put("success_runs", 0)
-                .put("failed_runs", 0)
+    private fun taskStats(id: Long): NanoHTTPD.Response {
+        val name = readableDatabase.rawQuery("SELECT name FROM tasks WHERE id=? LIMIT 1", arrayOf(id.toString())).use {
+            if (!it.moveToFirst()) null else it.string("name")
+        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "任务不存在")
+        var total = 0
+        var success = 0
+        var failed = 0
+        var aborted = 0
+        var durationSum = 0.0
+        var durationMax = 0.0
+        var durationMin = -1.0
+        readableDatabase.rawQuery(
+            "SELECT status, duration FROM task_logs_local WHERE task_id=?",
+            arrayOf(id.toString()),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                total += 1
+                when (cursor.getInt(0)) {
+                    0 -> success += 1
+                    1 -> failed += 1
+                    3 -> aborted += 1
+                }
+                val duration = cursor.getDouble(1)
+                durationSum += duration
+                if (duration > durationMax) durationMax = duration
+                if (durationMin < 0 || duration < durationMin) durationMin = duration
+            }
+        }
+        val finished = success + failed
+        val rate = if (finished == 0) 0.0 else success.toDouble() * 100.0 / finished.toDouble()
+        val avg = if (total == 0) 0.0 else durationSum / total.toDouble()
+        val min = if (durationMin < 0) 0.0 else durationMin
+        val stats = JSONObject()
+            .put("total_runs", total)
+            .put("success_runs", success)
+            .put("failed_runs", failed)
+            .put("aborted_runs", aborted)
+            .put("success_rate", rate)
+            .put("avg_duration", avg)
+            .put("max_duration", durationMax)
+            .put("min_duration", min)
+        val recent = queryRows(
+            "SELECT * FROM task_logs_local WHERE task_id=? ORDER BY started_at DESC, id DESC LIMIT 10",
+            arrayOf(id.toString()),
+        ) { taskLogJson(it) }
+        return ok(
+            JSONObject().put(
+                "data",
+                JSONObject()
+                    .put("task_id", id)
+                    .put("task_name", name)
+                    .put("total_runs", total)
+                    .put("success_runs", success)
+                    .put("failed_runs", failed)
+                    .put("aborted_runs", aborted)
+                    .put("success_rate", rate)
+                    .put("stats", stats)
+                    .put("recent_logs", recent),
+            ),
         )
-    )
+    }
 
-    private fun cronTemplates(): NanoHTTPD.Response = ok(
-        JSONObject().put(
-            "data",
-            JSONArray()
-                .put(JSONObject().put("name", "每小时").put("expression", "0 * * * *"))
-                .put(JSONObject().put("name", "每天零点").put("expression", "0 0 * * *"))
-                .put(JSONObject().put("name", "每周一零点").put("expression", "0 0 * * 1"))
+    private fun cronTemplates(): NanoHTTPD.Response {
+        val templates = listOf(
+            Triple("每分钟", "0 * * * * *", "高频") to "每分钟执行一次",
+            Triple("每5分钟", "0 */5 * * * *", "高频") to "每5分钟执行一次",
+            Triple("每10分钟", "0 */10 * * * *", "高频") to "每10分钟执行一次",
+            Triple("每15分钟", "0 */15 * * * *", "高频") to "每15分钟执行一次",
+            Triple("每30分钟", "0 */30 * * * *", "常用") to "每30分钟执行一次",
+            Triple("每小时", "0 0 * * * *", "常用") to "每小时整点执行",
+            Triple("每2小时", "0 0 */2 * * *", "常用") to "每2小时执行一次",
+            Triple("每6小时", "0 0 */6 * * *", "常用") to "每6小时执行一次",
+            Triple("每天0点", "0 0 0 * * *", "每天") to "每天凌晨0点执行",
+            Triple("每天6点", "0 0 6 * * *", "每天") to "每天早上6点执行",
+            Triple("每天9点", "0 0 9 * * *", "每天") to "每天上午9点执行",
+            Triple("每天12点", "0 0 12 * * *", "每天") to "每天中午12点执行",
+            Triple("每天18点", "0 0 18 * * *", "每天") to "每天下午6点执行",
+            Triple("工作日9点", "0 0 9 * * 1-5", "工作日") to "工作日上午9点执行",
+            Triple("工作日18点", "0 0 18 * * 1-5", "工作日") to "工作日下午6点执行",
+            Triple("周末10点", "0 0 10 * * 0,6", "周末") to "周末上午10点执行",
+            Triple("每周一0点", "0 0 0 * * 1", "每周") to "每周一凌晨0点执行",
+            Triple("每月1日0点", "0 0 0 1 * *", "每月") to "每月1日凌晨0点执行",
+            Triple("每月15日0点", "0 0 0 15 * *", "每月") to "每月15日凌晨0点执行",
+            Triple("每10秒", "*/10 * * * * *", "秒级") to "每10秒执行一次",
+            Triple("每30秒", "*/30 * * * * *", "秒级") to "每30秒执行一次",
         )
-    )
+        val data = JSONArray()
+        templates.forEach { (meta, description) ->
+            data.put(
+                JSONObject()
+                    .put("name", meta.first)
+                    .put("expression", meta.second)
+                    .put("category", meta.third)
+                    .put("description", description),
+            )
+        }
+        return ok(JSONObject().put("data", data))
+    }
 
     private fun cronParse(json: JSONObject): NanoHTTPD.Response {
         val expression = json.optString("expression", json.optString("cron_expression")).trim()
-        val valid = CronExpression.isValid(expression)
-        if (!valid) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Cron 表达式格式无效")
-        return ok(JSONObject().put("data", JSONObject().put("valid", true).put("expression", expression)))
+        if (expression.isEmpty() || !CronExpression.isValid(expression)) {
+            return ok(
+                JSONObject().put(
+                    "data",
+                    JSONObject().put("is_valid", false).put("valid", false).put("error", "Cron 表达式格式无效"),
+                ),
+            )
+        }
+        val next = JSONArray(CronExpression.nextRunTimes(expression, 5).map { it.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME) })
+        val six = CronExpression.fieldCount(expression) == 6
+        return ok(
+            JSONObject().put(
+                "data",
+                JSONObject()
+                    .put("valid", true)
+                    .put("is_valid", true)
+                    .put("expression", expression)
+                    .put("description", CronExpression.describe(expression))
+                    .put("format", if (six) "扩展格式 (6位含秒)" else "标准格式 (5位)")
+                    .put("next_run_times", next)
+                    .put("next_runs", next),
+            ),
+        )
     }
 
     private fun exportTasks(): NanoHTTPD.Response = ok(JSONObject().put("data", taskRows()))
@@ -4450,13 +5334,21 @@ fun serveDashboardStats(): JSONObject {
         val values = ContentValues().apply {
             put("name", name)
             put("command", json.optString("command"))
-            put("cron_expression", json.optString("cron_expression"))
+            put("cron_expression", taskCronExpression(json))
             put("task_type", json.optString("task_type", "manual"))
             put("python_version", json.optString("python_version"))
             put("task_before", json.optString("task_before"))
             put("task_after", json.optString("task_after"))
             put("status", json.optDouble("status", 1.0))
             put("labels", (json.optJSONArray("labels") ?: JSONArray()).toString())
+            put("timeout", json.optInt("timeout", 0).coerceIn(0, 604800))
+            put("max_retries", json.optInt("max_retries", 0).coerceIn(0, 20))
+            put("retry_interval", json.optInt("retry_interval", 60).coerceIn(0, 86400))
+            put("success_exit_codes", taskSuccessExitCodesValue(json))
+            put("allow_multiple_instances", if (json.optBoolean("allow_multiple_instances")) 1 else 0)
+            if (json.has("sort_order")) put("sort_order", json.optInt("sort_order"))
+            if (json.has("random_delay_seconds") && !json.isNull("random_delay_seconds")) put("random_delay_seconds", json.optInt("random_delay_seconds").coerceAtLeast(0))
+            if (json.has("stop_schedule")) put("stop_schedule", json.optString("stop_schedule"))
             put("updated_at", now)
         }
         val existing = readableDatabase.query("tasks", arrayOf("id"), "name = ?", arrayOf(name), null, null, null).use { cursor ->
@@ -4468,6 +5360,23 @@ fun serveDashboardStats(): JSONObject {
             values.put("created_at", now)
             writableDatabase.insertOrThrow("tasks", null, values)
         }
+    }
+
+    private fun upsertEnvByName(json: JSONObject): NanoHTTPD.Response {
+        val name = json.optString("name").trim()
+        if (name.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名不能为空")
+        if (!name.matches(Regex("^[A-Za-z_][A-Za-z0-9_]*$"))) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名格式无效")
+        val remarks = if (json.has("remarks")) json.optString("remarks") else null
+        val matches = ArrayList<Long>()
+        val rows = envRows()
+        for (index in 0 until rows.length()) {
+            val row = rows.getJSONObject(index)
+            if (row.optString("name") != name) continue
+            if (remarks != null && remarks.isNotEmpty() && row.optString("remarks") != remarks) continue
+            matches += row.optLong("id")
+        }
+        if (matches.size > 1) return error(NanoHTTPD.Response.Status.CONFLICT, "存在多条同名环境变量，无法按名称更新")
+        return if (matches.isEmpty()) createEnv(json) else updateEnv(matches[0], json)
     }
 
     private fun createEnv(json: JSONObject): NanoHTTPD.Response {
@@ -4588,6 +5497,7 @@ fun serveDashboardStats(): JSONObject {
         action: String?
     ): NanoHTTPD.Response {
         val json = body(session)
+        if (action == "rename") return batchRenameEnvs(json)
         val ids = json.optJSONArray("ids") ?: JSONArray()
         writableDatabase.beginTransaction()
         try {
@@ -4595,11 +5505,6 @@ fun serveDashboardStats(): JSONObject {
                 val id = ids.optLong(index)
                 when (action) {
                     "enable", "disable" -> updateEnvEnabledRecord(id, action == "enable")
-                    "rename" -> {
-                        val item = json.optJSONArray("items")?.let { if (index < it.length()) it.optJSONObject(index) else null }
-                        val name = item?.optString("name") ?: json.optString("name")
-                        if (name.isNotBlank()) writableDatabase.update("envs", ContentValues().apply { put("name", name); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString()))
-                    }
                     "group" -> {
                         val values = ContentValues().apply {
                             put("groups_json", normalizeGroups(json).toString())
@@ -4617,6 +5522,65 @@ fun serveDashboardStats(): JSONObject {
             writableDatabase.endTransaction()
         }
         return ok(JSONObject().put("data", JSONObject().put("ids", ids)))
+    }
+
+    private fun batchRenameEnvs(json: JSONObject): NanoHTTPD.Response {
+        val ids = json.optJSONArray("ids") ?: JSONArray()
+        if (ids.length() == 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请选择要改名的环境变量")
+        val namePattern = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
+        val now = Instant.now().toString()
+        val directName = json.optString("name").trim()
+        if (directName.isNotEmpty()) {
+            if (!namePattern.matches(directName)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名 '$directName' 格式无效")
+            writableDatabase.beginTransaction()
+            try {
+                for (index in 0 until ids.length()) {
+                    val id = ids.optLong(index)
+                    if (id <= 0) continue
+                    writableDatabase.update(
+                        "envs",
+                        ContentValues().apply { put("name", directName); put("updated_at", now) },
+                        "id=?",
+                        arrayOf(id.toString()),
+                    )
+                }
+                writableDatabase.setTransactionSuccessful()
+            } finally {
+                writableDatabase.endTransaction()
+            }
+            return ok(JSONObject().put("message", "已将 ${ids.length()} 个变量重命名为 $directName").put("data", JSONObject().put("ids", ids)))
+        }
+        val search = json.optString("search").trim()
+        val replace = json.optString("replace")
+        if (search.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "查找内容不能为空")
+        val updates = ArrayList<Pair<Long, String>>()
+        for (index in 0 until ids.length()) {
+            val id = ids.optLong(index)
+            if (id <= 0) continue
+            val current = readableDatabase.query("envs", arrayOf("name"), "id=?", arrayOf(id.toString()), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.string("name") else null
+            } ?: continue
+            val nextName = current.replace(search, replace)
+            if (nextName == current) continue
+            if (!namePattern.matches(nextName)) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "变量名 '$nextName' 修改后格式无效")
+            updates += id to nextName
+        }
+        if (updates.isEmpty()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "选中的变量名中未找到匹配内容")
+        writableDatabase.beginTransaction()
+        try {
+            for ((id, nextName) in updates) {
+                writableDatabase.update(
+                    "envs",
+                    ContentValues().apply { put("name", nextName); put("updated_at", now) },
+                    "id=?",
+                    arrayOf(id.toString()),
+                )
+            }
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+        }
+        return ok(JSONObject().put("message", "已批量改名 ${updates.size} 个环境变量").put("data", JSONObject().put("ids", ids)))
     }
 
     private fun updateEnvEnabledRecord(id: Long, enabled: Boolean) {
@@ -5350,12 +6314,15 @@ fun serveDashboardStats(): JSONObject {
         json.toString()
     )
 
-    private fun error(status: NanoHTTPD.Response.Status, message: String): NanoHTTPD.Response =
-        NanoHTTPD.newFixedLengthResponse(
-            status,
-            "application/json; charset=utf-8",
-            JSONObject().put("error", message).toString()
-        )
+    private fun error(status: NanoHTTPD.Response.Status, message: String, extra: JSONObject = JSONObject()): NanoHTTPD.Response {
+        val payload = JSONObject().put("error", message)
+        val extraKeys = extra.keys()
+        while (extraKeys.hasNext()) {
+            val key = extraKeys.next().toString()
+            payload.put(key, extra.get(key))
+        }
+        return NanoHTTPD.newFixedLengthResponse(status, "application/json; charset=utf-8", payload.toString())
+    }
 
     private fun newOperationId(kind: String, refId: Long): String =
         "${kind}_${refId}_${System.currentTimeMillis()}_${operationIdCounter.incrementAndGet()}"
@@ -5540,11 +6507,31 @@ fun serveDashboardStats(): JSONObject {
         }
         val valid = user?.second == true
         val now = Instant.now().toString()
-        writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", if (valid) 0 else 1); put("message", if (valid) "登录成功" else "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
         if (!valid) {
+            writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", 1); put("message", "用户名或密码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
             recordFailedLogin(ip, username)
             return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "用户名或密码错误")
         }
+        val totp = twoFaRecord(user!!.first)
+        if (totp?.enabled == true) {
+            val totpCode = json.optString("totp_code", json.optString("totp")).trim()
+            if (totpCode.isEmpty()) {
+                return error(
+                    NanoHTTPD.Response.Status.UNAUTHORIZED,
+                    "请输入两步验证码",
+                    JSONObject().put("code", "two_factor_required").put("two_factor_required", true),
+                )
+            }
+            if (!Totp.validate(totp.secret, totpCode)) {
+                writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", 1); put("message", "两步验证码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
+                return error(
+                    NanoHTTPD.Response.Status.UNAUTHORIZED,
+                    "两步验证码错误",
+                    JSONObject().put("code", "invalid_totp").put("two_factor_required", true),
+                )
+            }
+        }
+        writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", 0); put("message", "登录成功"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
         clearLoginAttempts(ip, username)
         val accessToken = randomToken()
         val refreshToken = randomToken()
@@ -5567,6 +6554,95 @@ fun serveDashboardStats(): JSONObject {
             db.endTransaction()
         }
         return ok(JSONObject().put("message", "登录成功").put("access_token", accessToken).put("refresh_token", refreshToken).put("user", userJson(user.first)))
+    }
+
+    private fun listSponsors(): NanoHTTPD.Response {
+        val now = System.currentTimeMillis()
+        cachedSponsors?.takeIf { now - cachedSponsorsAtMillis < 10 * 60 * 1000L }?.let { return ok(JSONObject().put("data", it)) }
+        return try {
+            val connection = java.net.URL("https://dumblist.linzixuan.top/").openConnection() as HttpURLConnection
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
+            connection.setRequestProperty("User-Agent", "daidai-android-local")
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            connection.disconnect()
+            val parsed = JSONObject(body)
+            val sponsors = parsed.optJSONArray("sponsors") ?: JSONArray()
+            val summary = JSONObject()
+                .put("sponsors", sponsors)
+                .put("count", parsed.optInt("count", sponsors.length()))
+                .put("total_amount", parsed.optDouble("total_amount", 0.0))
+                .put("updated_at", parsed.opt("updated_at") ?: JSONObject.NULL)
+                .put("unavailable", false)
+            cachedSponsors = summary
+            cachedSponsorsAtMillis = now
+            ok(JSONObject().put("data", summary))
+        } catch (error: Exception) {
+            ok(
+                JSONObject().put(
+                    "data",
+                    JSONObject()
+                        .put("sponsors", JSONArray())
+                        .put("count", 0)
+                        .put("total_amount", 0)
+                        .put("updated_at", JSONObject.NULL)
+                        .put("unavailable", true)
+                        .put("message", error.message ?: error.javaClass.simpleName),
+                ),
+            )
+        }
+    }
+
+    private fun issueScriptAccessToken(): String? {
+        val user = readableDatabase.rawQuery(
+            "SELECT id, username FROM local_users WHERE enabled=1 ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, id LIMIT 1",
+            null,
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else cursor.long("id") to cursor.string("username")
+        } ?: return null
+        val accessToken = randomToken()
+        val refreshToken = randomToken()
+        val now = Instant.now()
+        val expires = now.plusSeconds(SCRIPT_TOKEN_TTL_SECONDS).toString()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertOrThrow(
+                "local_sessions",
+                null,
+                ContentValues().apply {
+                    put("user_id", user.first)
+                    put("access_token", accessToken)
+                    put("refresh_token", refreshToken)
+                    put("expires_at", expires)
+                    put("refresh_expires_at", expires)
+                    put("updated_at", now.toString())
+                },
+            )
+            db.insertOrThrow(
+                "security_sessions",
+                null,
+                ContentValues().apply {
+                    put("user_id", user.first)
+                    put("username", user.second)
+                    put("access_token", accessToken)
+                    put("ip", "127.0.0.1")
+                    put("client_name", "script-run")
+                    put("user_agent", "daidai-android-script")
+                    put("created_at", now.toString())
+                    put("expires_at", expires)
+                },
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return accessToken
+    }
+
+    private fun scriptTokenEnv(token: String?): Map<String, String> {
+        if (token.isNullOrBlank()) return emptyMap()
+        return mapOf("DAIDAI_TOKEN" to token, "DAIDAI_NOTIFY_TOKEN" to token)
     }
 
     private fun revokeAccessToken(token: String?, action: String) {
@@ -5626,7 +6702,7 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun userJson(userId: Long): JSONObject {
-        return readableDatabase.rawQuery(
+        val payload = readableDatabase.rawQuery(
             "SELECT id, username, role, enabled, avatar_url, created_at, updated_at FROM local_users WHERE id=?",
             arrayOf(userId.toString())
         ).use { cursor ->
@@ -5640,6 +6716,10 @@ fun serveDashboardStats(): JSONObject {
                 .put("created_at", cursor.string("created_at"))
                 .put("updated_at", cursor.string("updated_at"))
         }
+        if (payload.has("username")) {
+            payload.put("last_login_at", lastLoginAtValue(payload.optString("username")))
+        }
+        return payload
     }
 
     private fun authenticated(
@@ -5699,6 +6779,17 @@ fun serveDashboardStats(): JSONObject {
             while (cursor.moveToNext()) result.put(convert(cursor))
         }
         return result
+    }
+
+    private fun lastLoginAtValue(username: String): Any {
+        if (username.isBlank()) return JSONObject.NULL
+        return readableDatabase.rawQuery(
+            "SELECT created_at FROM security_login_logs WHERE username=? AND status=0 ORDER BY id DESC LIMIT 1",
+            arrayOf(username),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) JSONObject.NULL
+            else cursor.string("created_at").ifBlank { JSONObject.NULL }
+        }
     }
 
     private fun Cursor.string(column: String): String = getString(getColumnIndexOrThrow(column)) ?: ""

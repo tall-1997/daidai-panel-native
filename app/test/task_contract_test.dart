@@ -122,6 +122,19 @@ void main() {
       );
       expect(panelTimezoneLabel({}), '执行时区：由面板设置决定');
     });
+
+    test('formats cron parse payload with is_valid and next_run_times', () {
+      expect(
+        formatCronParseResult({
+          'is_valid': true,
+          'description': '每小时整点执行',
+          'format': '6位（含秒）',
+          'next_run_times': ['2026-01-01 01:00:00', '2026-01-01 02:00:00'],
+        }),
+        '每小时整点执行\n6位（含秒）\n表达式有效\n接下来执行：2026-01-01 01:00:00、2026-01-01 02:00:00',
+      );
+      expect(formatCronParseResult({'valid': false}), '表达式无效');
+    });
   });
 
   group('TaskLog contract', () {

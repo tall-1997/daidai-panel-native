@@ -8,18 +8,18 @@
 
 呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
 
-当前版本：**v2.0.0**
+当前版本：**v2.0.1**（预发行）
 
-Android versionCode：**2000000**
+Android versionCode：**2000010**
 
 默认分支：**main**
 
 ## 下载
 
-- 最新版：[GitHub Releases](https://github.com/tall-1997/daidai-panel-native/releases/latest)（当前 `v2.0.0`）
-- v2.0.0：[发行说明与附件](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.0)
-- ARM64 完整版：`daidai-panel-native-2.0.0-prerelease-arm64.apk`
-- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.0-prerelease-x86_64.apk`
+- 最新预发行：[GitHub Releases v2.0.1](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.1)
+- 当前稳定版：[v2.0.0](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.0)
+- ARM64 完整版：`daidai-panel-native-2.0.1-prerelease-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.1-prerelease-x86_64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -53,7 +53,7 @@ Android versionCode：**2000000**
 | ARM64 完整版 | `arm64-v8a` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
 | x86_64 版 | `x86_64` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | x86_64 模拟器、云手机 |
 
-依赖原生二进制的 Git 仓库拉取、2FA、本地 Open API token 执行链和完整多语言运行时由 Kotlin fallback 提供；Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
+本地 Kotlin fallback 现已覆盖 Git SSH 私钥拉取、订阅 cron 刷新/停止、恢复进度、脚本短时 token、ts-node/tsc、GitHub 检查更新与赞助列表。Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
 
 ## 平台边界
 
@@ -75,6 +75,7 @@ Android versionCode：**2000000**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
+| 当前预发行标签 | `v2.0.1` |
 | 当前稳定标签 | `v2.0.0` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
@@ -235,7 +236,7 @@ Quality 根据改动路径执行：
 | 通道 | 用途 | GitHub Release |
 | --- | --- | --- |
 | `snapshot` | main 日常验证 | 仅 Actions artifact |
-| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v2.0.0` |
+| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v2.0.1` |
 | `stable` | 正式签名稳定版 | 自动创建 Stable Release |
 
 重复运行 `prerelease` 会更新固定版本标签到本次提交，并仅覆盖本轮同名 APK、校验文件、更新清单和证据包；其他 Release 资产保持原样。未来升版只需先明确更新 `VERSION.json`。

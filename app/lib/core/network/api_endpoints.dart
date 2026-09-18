@@ -104,6 +104,7 @@ class ApiEndpoints {
   static const String envsBatchGroup = '$baseApi/envs/batch/group';
   static const String envsSort = '$baseApi/envs/sort';
   static const String envsGroups = '$baseApi/envs/groups';
+  static const String envsByName = '$baseApi/envs/by-name';
   static const String envsExportAll = '$baseApi/envs/export-all';
   static const String envsImport = '$baseApi/envs/import';
 
@@ -120,6 +121,7 @@ class ApiEndpoints {
   static String subscriptionPullStream(int id) =>
       '$baseApiV1/subscriptions/$id/pull-stream';
   static String subscriptionLogs(int id) => '$baseApi/subscriptions/$id/logs';
+  static const String subscriptionsBatch = '$baseApi/subscriptions/batch';
 
   // Notifications
   static const String notifications = '$baseApi/notifications';
