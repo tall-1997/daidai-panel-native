@@ -184,7 +184,7 @@ class LocalPanelFallbackContractTest {
 
     @Test
     fun `identity session migration advances schema`() {
-        assertEquals(19, LocalPanelStore.SCHEMA_VERSION)
+        assertEquals(20, LocalPanelStore.SCHEMA_VERSION)
         assertTrue(LocalPanelStore.requiresIdentitySessionMigration(18))
         assertFalse(LocalPanelStore.requiresIdentitySessionMigration(19))
         assertTrue(LocalPanelStore.needsInitialization(0))
