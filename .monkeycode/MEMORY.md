@@ -119,3 +119,15 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本地 Flutter 工具链位于 `/opt/flutter`（3.44.9），使用前需 `git config --global --add safe.directory /opt/flutter`；pub 下载用 `PUB_HOSTED_URL=https://pub.flutter-io.cn`、`FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` 提速。
   - Flutter 3.44.9 的 `flutter analyze` 默认将 info 级 lint 视为失败；CI analyze 统一使用 `flutter analyze --no-fatal-infos --no-fatal-warnings`（与 `app/.github/workflows/build.yml` 既有约定一致）。
   - 客户端默认视觉风格为 `AppVisualStyle.miuix`，`liquidGlass` 为可选；MIUIX 主题经 `AppMiuixTheme` 在 `MaterialApp.builder` 注入，明暗取自 `MaterialApp.themeMode` 解析后的 `Theme.of(context).brightness`。
+
+[Project Knowledge Summary]
+- Date: 2026-09-19
+- Context: Discovered by Agent while fixing proot libcurl link failure caused by packaged OpenSSL shadowing system libcrypto
+- Category: Build Methods | Troubleshooting & Debugging
+- Instructions:
+  - jniLibs 里打包的第三方库（p4a Python runtime 的 OpenSSL 等）文件名必须与 SONAME 对齐（libcrypto_python.so/libssl_python.so，SONAME 已带 _python 后缀），禁止使用 libcrypto.so/libssl.so 等系统库同名文件：proot 环境的 LD_LIBRARY_PATH=nativeCompatDir:nativeLibraryDir 会按文件名命中 jniLibs 里的同名库并遮蔽系统/rootfs 版本，系统 libcurl 依赖 OpenSSL 1.0 符号 EVP_MD_CTX_create/destroy 时即链接失败。
+  - Python `_ssl`/`_hashlib`（zip 内 lib-dynload）DT_NEEDED 是版本化名字 libcrypto.so.3/libssl.so.3，由 AndroidPythonRuntime.VERSIONED_LIBS 在 runtime home 的 compat-lib 里生成字节副本提供；源键改名后该链路才闭合（此前 jniLibs 文件名 libcrypto.so 匹配不到 libcrypto_python.so 键，副本从未生成）。
+  - doEnsureReady 对 compat-lib 的 copyVersionedLibraries 必须无条件幂等调用（copyVersionedLibraries 内部只补缺失目标）：依赖 `if (!compatLibDir.exists())` 会让升级安装永远缺新增映射的副本。
+  - prepare-android-python-runtime.sh 的 stage-jni 复制段维护 rename 映射（libcrypto.so→libcrypto_python.so、libssl.so→libssl_python.so），CI 重建 python runtime 时产物名与 SONAME 对齐；generate_metadata 的前缀过滤（libcrypto/libssl/libpython/libsqlite）改名后仍匹配。
+  - 改 jniLibs 文件名后必须重新生成 native-runtime-manifest.json 的 artifacts（verifyLinuxRootfsRuntime 断言 manifestNames == packagedElfNames + sha256/size 一致）；重生成时保留手工语义 role（android-shmem-runtime/talloc-runtime/yaegi-go），以 git HEAD 的 role 映射为准。
+  - AndroidNodeRuntime.VERSIONED_LIBS 的 icu/cares/ssl/crypto/z/sqlite/ffi 源键在 node-runtime.zip 与 jniLibs 中均无对应文件（Node 静态链接），属 Termux 时代死条目，copyVersionedLibraries 对缺失源静默跳过。

@@ -281,16 +281,26 @@ PY
 STAGE_JNI_DIR="$WORK_DIR/stage-jni"
 python3 - "$PREFIX_DIR/lib" "$STAGE_JNI_DIR" <<'PY'
 import pathlib, shutil, sys
+
 source, target = map(pathlib.Path, sys.argv[1:])
 shutil.rmtree(target, ignore_errors=True)
 target.mkdir(parents=True, exist_ok=True)
+
+# OpenSSL sonames are libcrypto_python.so/libssl_python.so; staging must keep
+# filenames aligned with the sonames so packaged libs never shadow system
+# libcrypto.so/libssl.so inside the proot LD_LIBRARY_PATH.
+rename = {
+    "libcrypto.so": "libcrypto_python.so",
+    "libssl.so": "libssl_python.so",
+}
 names = {path.name for path in source.glob("*.so*") if path.is_file()}
 for directory in (source / "engines-3", source / "ossl-modules"):
     if directory.is_dir():
         names.update(path.name for path in directory.glob("*.so") if path.is_file())
-for name in names:
+for name in sorted(names):
+    staged = rename.get(name, name)
     candidates = list(source.glob(name)) + list((source / "engines-3").glob(name)) + list((source / "ossl-modules").glob(name))
-    shutil.copy2(candidates[0], target / name)
+    shutil.copy2(candidates[0], target / staged)
 PY
 
 CLANG=""

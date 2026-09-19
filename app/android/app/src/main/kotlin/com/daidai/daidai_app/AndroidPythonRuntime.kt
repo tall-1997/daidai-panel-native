@@ -87,10 +87,7 @@ object AndroidPythonRuntime {
             }
         }
 
-        // Ensure compatLibDir exists even if marker was already set
-        if (!compatLibDir.exists()) {
-            AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
-        }
+        AndroidLinuxRuntime.copyVersionedLibraries(File(nativeDir), compatLibDir, VERSIONED_LIBS)
 
         // Use libpylauncher.so from nativeLibraryDir - it's a PIE executable with exec permission
         val launcherExe = File(nativeDir, "libpylauncher.so")
@@ -144,10 +141,8 @@ object AndroidPythonRuntime {
         }
     }
 
-    private val VERSIONED_LIBS = mapOf(
-        "libssl_v3.so" to listOf("libssl.so.3"),
+    internal val VERSIONED_LIBS = mapOf(
         "libssl_python.so" to listOf("libssl.so.3"),
-        "libcrypto_v3.so" to listOf("libcrypto.so.3"),
         "libcrypto_python.so" to listOf("libcrypto.so.3"),
         "libz.so" to listOf("libz.so.1"),
         "libsqlite3.so" to listOf("libsqlite3.so.0"),

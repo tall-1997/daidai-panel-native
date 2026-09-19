@@ -71,7 +71,7 @@
       "size": 1374336
     },
     {
-      "name": "libcrypto.so",
+      "name": "libcrypto_python.so",
       "role": "packaged-native-library",
       "sha256": "a0dd60d620cd61bac7306a8293bcb82103971a4dcfc8c11fd55be3653beb42c4",
       "size": 4537384
@@ -101,7 +101,7 @@
       "size": 1278752
     },
     {
-      "name": "libssl.so",
+      "name": "libssl_python.so",
       "role": "packaged-native-library",
       "sha256": "123743cc94922308a44a5a7d98854ca51fc708529d73f48ac1a380d7b7f04a2f",
       "size": 955984

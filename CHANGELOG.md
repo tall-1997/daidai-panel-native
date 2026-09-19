@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Android
+
+- Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号（`EVP_MD_CTX_create`/`EVP_MD_CTX_destroy`）导致的链接失败；同时修复 Python `_ssl`/`_hashlib` 所需 `libcrypto.so.3`/`libssl.so.3` 兼容副本未生成的问题。
+
 ## v2.0.1 - 2026-09-18
 
 ### Android 本地 fallback
