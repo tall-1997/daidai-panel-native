@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Android
-
-- Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号（`EVP_MD_CTX_create`/`EVP_MD_CTX_destroy`）导致的链接失败；同时修复 Python `_ssl`/`_hashlib` 所需 `libcrypto.so.3`/`libssl.so.3` 兼容副本未生成的问题。
-
 ## v2.0.2 - 2026-09-22
 
 ### 安全
@@ -20,6 +14,10 @@
 - 终端、脚本、订阅至少需要 operator；备份和 `config.sh` 至少需要 admin。任务、环境变量、依赖、通知和日志的写操作需要 operator。
 - 检查更新改为读取本仓库 `tall-1997/daidai-panel-native` 的已发布版本，更新清单按标签下载，不再依赖 `/releases/latest`。
 - 登录页把链路本地地址和运营商级 NAT 地址按本机地址处理，默认使用 http。
+
+### Android
+
+- Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号导致的链接失败；同时补上 Python `_ssl`/`_hashlib` 需要的 `libcrypto.so.3`/`libssl.so.3` 兼容副本。
 
 ### 依赖
 
