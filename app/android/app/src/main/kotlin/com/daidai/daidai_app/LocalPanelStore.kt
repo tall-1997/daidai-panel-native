@@ -6123,7 +6123,8 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 val target = DependencyStorage.pythonSitePackages(appContext.filesDir).apply { mkdirs() }
                 val importName = LocalTaskFallbackSemantics.pythonImportName(localSpec?.canonicalName ?: name)
                     ?: return "blocked" to "UNSAFE_PYTHON_IMPORT_NAME"
-                val existing = verifyRootfsPythonImport(importName, target, taskId)
+                val distName = DependencyStorage.normalizedName("python", localSpec?.canonicalName ?: name)
+                val existing = verifyRootfsPythonImport(importName, distName, target, taskId)
                 if (existing.first && localSpec == null) return "installed" to "Rootfs import verification confirmed $importName"
                 val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
                 val installArg = localSpec?.guestPath ?: name
@@ -6137,7 +6138,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 }
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
                 if (result.exitCode != 0) return "failed" to text
-                val verified = verifyRootfsPythonImport(importName, target, taskId)
+                val verified = verifyRootfsPythonImport(importName, distName, target, taskId)
                 return if (verified.first) "installed" to "$text\nPost-install import verification confirmed $importName"
                 else "failed" to "$text\nPOST_VERIFY_FAILED: ${verified.second}"
             }
@@ -6180,12 +6181,21 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
     }
 
-    private fun verifyRootfsPythonImport(importName: String, target: File, taskId: Long?): Pair<Boolean, String> {
+    private fun verifyRootfsPythonImport(importName: String, distName: String, target: File, taskId: Long?): Pair<Boolean, String> {
         val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
+        val safeDist = distName.takeIf { Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,127}").matches(it) }.orEmpty()
         val command = AndroidLinuxRuntime.guestCommand(
             appContext,
             appContext.filesDir,
-            listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "/usr/bin/python3", "-c", "import $importName; print('PYTHON_IMPORT_OK')"),
+            listOf(
+                "/usr/bin/env",
+                "PYTHONPATH=$guestTarget",
+                "DAIDAI_VERIFY_IMPORT=$importName",
+                "DAIDAI_VERIFY_DIST=$safeDist",
+                "/usr/bin/python3",
+                "-c",
+                LocalTaskFallbackSemantics.PYTHON_IMPORT_VERIFY_SCRIPT,
+            ),
         ) ?: return false to "ROOTFS_PYTHON_UNAVAILABLE"
         val result = runLocalProcess(command, target, JSONArray().put("Verifying rootfs Python import: $importName"), 30, taskId = taskId)
         val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }

@@ -16,6 +16,9 @@ class LocalTaskFallbackSemanticsTest {
         assertEquals("Cryptodome", LocalTaskFallbackSemantics.pythonImportName("pycryptodomex"))
         assertEquals("yaml", LocalTaskFallbackSemantics.pythonImportName("PyYAML"))
         assertEquals("requests", LocalTaskFallbackSemantics.pythonImportName("requests==2.32.0"))
+        assertEquals("websocket", LocalTaskFallbackSemantics.pythonImportName("websocket-client"))
+        assertEquals("websocket", LocalTaskFallbackSemantics.pythonImportName("WebSocket_Client==1.9.2"))
+        assertEquals("sklearn", LocalTaskFallbackSemantics.pythonImportName("scikit-learn"))
         assertNull(LocalTaskFallbackSemantics.pythonImportName("../unsafe"))
     }
 
@@ -28,6 +31,10 @@ class LocalTaskFallbackSemanticsTest {
         assertEquals(
             LocalTaskFallbackSemantics.DependencyCandidate("python", "python-dotenv"),
             LocalTaskFallbackSemantics.detectMissingDependency("python", "ModuleNotFoundError: No module named 'dotenv'"),
+        )
+        assertEquals(
+            LocalTaskFallbackSemantics.DependencyCandidate("python", "websocket-client"),
+            LocalTaskFallbackSemantics.detectMissingDependency("python", "ModuleNotFoundError: No module named 'websocket'"),
         )
         assertEquals(
             LocalTaskFallbackSemantics.DependencyCandidate("nodejs", "axios"),

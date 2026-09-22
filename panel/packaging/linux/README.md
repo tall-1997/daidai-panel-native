@@ -66,6 +66,4 @@ proxy_read_timeout 24h;
 add_header X-Accel-Buffering no;
 ```
 
-## Docker 替代方案
-
-更省心的方式是用 Docker 跑（仓库根目录提供 `docker-compose.yml`）。Docker 镜像里已经处理好上述所有问题，并且支持 `PUID`/`PGID` 环境变量适配 NAS 用户。
+本仓库不发布 Linux 安装包或 Docker 镜像。Android 安装包只从 [tall-1997/daidai-panel-native Releases](https://github.com/tall-1997/daidai-panel-native/releases) 下载。

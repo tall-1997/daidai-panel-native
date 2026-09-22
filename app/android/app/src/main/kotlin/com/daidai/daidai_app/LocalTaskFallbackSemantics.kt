@@ -23,14 +23,22 @@ internal object LocalTaskFallbackSemantics {
     private val nodeInstallHint = Regex("\\bnpm[ \\t]+(?:i|install|add)[ \\t]+((?:@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)(?:[ \\t]+@?[A-Za-z0-9][A-Za-z0-9_./@+-]*)*)")
     private val managedModules = setOf("notify", "sendNotify")
     private val pythonPackageMap = mapOf(
+        "attr" to "attrs",
         "bs4" to "beautifulsoup4",
         "crypto" to "pycryptodome",
         "cryptodome" to "pycryptodomex",
         "cv2" to "opencv-python",
         "dateutil" to "python-dateutil",
         "dotenv" to "python-dotenv",
+        "execjs" to "pyexecjs",
+        "jwt" to "pyjwt",
+        "nacl" to "pynacl",
+        "openssl" to "pyopenssl",
         "pil" to "pillow",
+        "serial" to "pyserial",
+        "sklearn" to "scikit-learn",
         "socks" to "pysocks",
+        "websocket" to "websocket-client",
         "yaml" to "pyyaml",
     )
 
@@ -42,7 +50,9 @@ internal object LocalTaskFallbackSemantics {
         val normalized = packageName.trim().substringBefore(';').substringBefore('[')
             .takeWhile { it !in "=<>!~ \t\r\n(," }
             .lowercase().replace(Regex("[-_.]+"), "-")
+        // 发行名不等于 import 名。websocket-client 的模块是 websocket，不是 websocket_client。
         val importName = when (normalized) {
+        "attrs" -> "attr"
         "pycryptodome" -> "Crypto"
         "pycryptodomex" -> "Cryptodome"
         "beautifulsoup4" -> "bs4"
@@ -50,11 +60,61 @@ internal object LocalTaskFallbackSemantics {
         "python-dotenv" -> "dotenv"
         "opencv-python" -> "cv2"
         "pillow" -> "PIL"
+        "pyexecjs" -> "execjs"
+        "pyjwt" -> "jwt"
+        "pynacl" -> "nacl"
+        "pyopenssl" -> "OpenSSL"
+        "pyserial" -> "serial"
+        "pysocks" -> "socks"
         "pyyaml" -> "yaml"
+        "scikit-learn" -> "sklearn"
+        "websocket-client" -> "websocket"
         else -> normalized.replace('-', '_')
         }
         return importName.takeIf { Regex("[A-Za-z_][A-Za-z0-9_.]*").matches(it) }
     }
+
+    internal val PYTHON_IMPORT_VERIFY_SCRIPT = """
+import importlib, importlib.metadata as md, os, sys
+guess = os.environ.get('DAIDAI_VERIFY_IMPORT', '')
+dist_name = os.environ.get('DAIDAI_VERIFY_DIST', '')
+def attempt(name, seen):
+    if not name or name in seen:
+        return False
+    seen.append(name)
+    if not __import__('re').fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', name):
+        return False
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        sys.stderr.write('%s: %s\n' % (type(exc).__name__, exc))
+        return False
+    print('PYTHON_IMPORT_OK', name)
+    return True
+seen = []
+if attempt(guess, seen):
+    raise SystemExit(0)
+names = []
+try:
+    dist = md.distribution(dist_name)
+    text = dist.read_text('top_level.txt') or ''
+    names.extend(line.strip() for line in text.splitlines() if line.strip())
+except Exception as exc:
+    sys.stderr.write('distribution lookup failed: %s\n' % exc)
+if not names and dist_name:
+    try:
+        wanted = dist_name.lower().replace('_', '-')
+        for mod, dists in md.packages_distributions().items():
+            normalized = [item.lower().replace('_', '-') for item in dists]
+            if wanted in normalized:
+                names.append(mod)
+    except Exception as exc:
+        sys.stderr.write('packages_distributions failed: %s\n' % exc)
+for name in names:
+    if attempt(name, seen):
+        raise SystemExit(0)
+raise SystemExit(1)
+    """.trimIndent()
 
     internal fun detectMissingDependencies(runtime: String, output: String): List<DependencyCandidate> {
         val candidates = linkedSetOf<DependencyCandidate>()

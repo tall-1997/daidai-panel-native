@@ -42,6 +42,10 @@ class ScriptCompatibilityTest {
         assertEquals(setOf("beautifulsoup4"), scan.pythonPackages)
     }
 
+    @Test fun mapsWebsocketImportToWebsocketClient() {
+        assertEquals(setOf("websocket-client"), ScriptCompatibility.scanPython("import websocket\n", File(".")).pythonPackages)
+    }
+
     @Test fun ignoresDynamicAndUnknownRequires() {
         val scan = ScriptCompatibility.scanNode("require(name); require('not-an-allowlisted-package'); import('@scope/unknown')", File("."))
         assertTrue(scan.nodePackages.isEmpty())

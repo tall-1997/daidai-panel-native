@@ -21,6 +21,14 @@
 - 检查更新改为读取本仓库 `tall-1997/daidai-panel-native` 的已发布版本，更新清单按标签下载，不再依赖 `/releases/latest`。
 - 登录页把链路本地地址和运营商级 NAT 地址按本机地址处理，默认使用 http。
 
+### 依赖
+
+- 修复 Python 依赖已经安装成功、验证却失败的问题。`websocket-client` 的模块名是 `websocket`，不再误当成 `websocket_client`。安装和验证使用同一个 rootfs Python 与 site-packages；发行包若声明了自己的顶层模块，也按该模块验证。
+
+### 说明
+
+- 仓库介绍和文档改为只描述本仓库的 Android 本机版，不再保留其他仓库的 Docker、Windows 或 Magisk 下载说明。
+
 ### 安装包
 
 - ARM64：`daidai-panel-native-2.0.2-prerelease-arm64.apk`

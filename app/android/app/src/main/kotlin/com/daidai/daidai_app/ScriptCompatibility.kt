@@ -15,6 +15,10 @@ internal object ScriptCompatibility {
 
     private val pythonPackageMap = mapOf(
         "yaml" to "pyyaml", "bs4" to "beautifulsoup4", "crypto" to "pycryptodome",
+        "cryptodome" to "pycryptodomex", "cv2" to "opencv-python", "pil" to "pillow",
+        "attr" to "attrs", "execjs" to "pyexecjs", "jwt" to "pyjwt", "nacl" to "pynacl",
+        "openssl" to "pyopenssl", "serial" to "pyserial", "sklearn" to "scikit-learn",
+        "socks" to "pysocks", "websocket" to "websocket-client",
         "requests" to "requests", "httpx" to "httpx", "lxml" to "lxml", "pandas" to "pandas",
         "numpy" to "numpy", "dateutil" to "python-dateutil", "dotenv" to "python-dotenv",
     )
