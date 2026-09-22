@@ -21,5 +21,17 @@ class ScriptPathContractTest {
                 LocalPanelStore.normalizeScriptPath(path)
             }
         }
+        listOf("evil\n.js", "evil\r.js", "quote\".js", "%0a.js", "%0d.js").forEach { path ->
+            assertThrows(path, IllegalArgumentException::class.java) {
+                LocalPanelStore.normalizeScriptPath(path)
+            }
+        }
+    }
+
+    @Test
+    fun `content disposition filenames cannot split headers`() {
+        assertEquals("attachment; filename=\"脚本.py\"", LocalPanelStore.contentDispositionHeader("脚本.py"))
+        assertEquals("attachment; filename=\"evil_.js\"", LocalPanelStore.contentDispositionHeader("evil\n.js"))
+        assertEquals("attachment; filename=\"x_.bin\"", LocalPanelStore.contentDispositionHeader("x\".bin"))
     }
 }

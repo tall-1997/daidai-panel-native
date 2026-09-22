@@ -247,4 +247,112 @@ class LocalPanelFallbackContractTest {
         assertFalse(LocalPanelStore.isValidTaskBatchRequest(NanoHTTPD.Method.POST, "/tasks/batch/run/extra", "run"))
         assertFalse(LocalPanelStore.isValidTaskBatchRequest(NanoHTTPD.Method.POST, "/tasks/batch/retry", "retry"))
     }
+
+    @Test
+    fun `subscription urls only allow http and https`() {
+        assertTrue(LocalPanelStore.isAllowedSubscriptionUrl("https://example.com/raw.js"))
+        assertTrue(LocalPanelStore.isAllowedSubscriptionUrl("http://192.168.1.8:8080/a.js"))
+        assertFalse(LocalPanelStore.isAllowedSubscriptionUrl("file:///data/local.js"))
+        assertFalse(LocalPanelStore.isAllowedSubscriptionUrl("javascript:alert(1)"))
+        assertFalse(LocalPanelStore.isAllowedSubscriptionUrl(""))
+    }
+
+    @Test
+    fun `git remotes reject file and keep ssh or https`() {
+        assertTrue(LocalPanelStore.isAllowedGitRemote("git@github.com:foo/bar.git"))
+        assertTrue(LocalPanelStore.isAllowedGitRemote("ssh://git@github.com/foo/bar.git"))
+        assertTrue(LocalPanelStore.isAllowedGitRemote("https://github.com/foo/bar.git"))
+        assertFalse(LocalPanelStore.isAllowedGitRemote("file:///data/local/tmp/evil.git"))
+        assertFalse(LocalPanelStore.isAllowedGitRemote("git@github.com foo/bar.git"))
+        assertFalse(LocalPanelStore.isAllowedGitRemote("git@-oProxyCommand=id:foo/bar.git"))
+        assertFalse(LocalPanelStore.isAllowedGitRemote("ssh://-oProxyCommand=id/foo.git"))
+        assertFalse(LocalPanelStore.isAllowedGitRemote("-uhttps://github.com/foo/bar.git"))
+    }
+
+    @Test
+    fun `git refs reject option injection and clone uses -- before the url`() {
+        assertTrue(LocalPanelStore.isSafeGitRef("main"))
+        assertTrue(LocalPanelStore.isSafeGitRef("feature/foo"))
+        assertFalse(LocalPanelStore.isSafeGitRef("-u"))
+        assertFalse(LocalPanelStore.isSafeGitRef("master:refs/heads/evil"))
+        assertFalse(LocalPanelStore.isSafeGitRef("../evil"))
+        assertEquals(
+            listOf("/usr/bin/git", "clone", "--depth", "1", "--branch", "main", "--", "https://github.com/foo/bar.git", "/workspace"),
+            LocalPanelStore.gitCloneGuestArgs("https://github.com/foo/bar.git", "main"),
+        )
+        assertEquals(null, LocalPanelStore.gitCloneGuestArgs("git@-oProxyCommand=id:foo/bar.git", "main"))
+        assertEquals(null, LocalPanelStore.gitCloneGuestArgs("https://github.com/foo/bar.git", "--upload-pack=id"))
+        assertEquals(
+            listOf("/usr/bin/git", "-C", "/workspace", "pull", "--ff-only", "--", "origin", "main"),
+            LocalPanelStore.gitPullGuestArgs("main"),
+        )
+    }
+
+    @Test
+    fun `http subscription redirects stay on http or https`() {
+        assertEquals(
+            "https://cdn.example.com/a.js",
+            LocalPanelStore.resolvedSubscriptionUrl("https://example.com/raw.js", "https://cdn.example.com/a.js"),
+        )
+        assertEquals(
+            "https://example.com/b.js",
+            LocalPanelStore.resolvedSubscriptionUrl("https://example.com/raw.js", "/b.js"),
+        )
+        assertEquals(null, LocalPanelStore.resolvedSubscriptionUrl("https://example.com/raw.js", "file:///data/local.js"))
+        assertEquals(null, LocalPanelStore.resolvedSubscriptionUrl("https://example.com/raw.js", "javascript:alert(1)"))
+    }
+
+    @Test
+    fun `forwarded client ip is only trusted from loopback`() {
+        assertEquals("10.0.0.8", LocalPanelStore.trustedClientIp("127.0.0.1", "10.0.0.8, 1.1.1.1"))
+        assertEquals("192.168.1.9", LocalPanelStore.trustedClientIp("192.168.1.9", "10.0.0.8"))
+        assertEquals("::1", LocalPanelStore.trustedClientIp("::1", ""))
+    }
+
+    @Test
+    fun `git clone refuses a non empty non git directory`() {
+        assertTrue(LocalPanelStore.canCloneIntoDirectory(false, false, false, false))
+        assertTrue(LocalPanelStore.canCloneIntoDirectory(true, true, true, true))
+        assertTrue(LocalPanelStore.canCloneIntoDirectory(true, true, false, false))
+        assertFalse(LocalPanelStore.canCloneIntoDirectory(true, true, false, true))
+        assertFalse(LocalPanelStore.canCloneIntoDirectory(true, false, false, false))
+    }
+
+    @Test
+    fun `workspace leaf names cannot escape the scripts root`() {
+        assertEquals("subscription-1", LocalPanelStore.sanitizeWorkspaceLeaf("..", "subscription-1"))
+        assertEquals("subscription-1", LocalPanelStore.sanitizeWorkspaceLeaf(".", "subscription-1"))
+        assertEquals("ok-dir", LocalPanelStore.sanitizeWorkspaceLeaf("ok-dir", "subscription-1"))
+        assertEquals("a_b", LocalPanelStore.sanitizeWorkspaceLeaf("a/b", "subscription-1"))
+    }
+
+    @Test
+    fun `user roles follow viewer operator admin ranks`() {
+        assertTrue(LocalPanelStore.roleAtLeast("admin", "operator"))
+        assertTrue(LocalPanelStore.roleAtLeast("operator", "operator"))
+        assertTrue(LocalPanelStore.roleAtLeast("operator", "viewer"))
+        assertFalse(LocalPanelStore.roleAtLeast("viewer", "operator"))
+        assertFalse(LocalPanelStore.roleAtLeast("viewer", "admin"))
+        assertFalse(LocalPanelStore.roleAtLeast("operator", "admin"))
+        assertFalse(LocalPanelStore.roleAtLeast("", "viewer"))
+    }
+
+    @Test
+    fun `open api secrets compare in constant time`() {
+        assertTrue(LocalPanelStore.secretsEqual("abc", "abc"))
+        assertFalse(LocalPanelStore.secretsEqual("abc", "abd"))
+        assertFalse(LocalPanelStore.secretsEqual("abc", "ab"))
+    }
+
+    @Test
+    fun `android check update compares this repo versions and skips drafts`() {
+        assertEquals("tall-1997/daidai-panel-native", LocalPanelHttpServer.ANDROID_RELEASE_REPO)
+        assertTrue(LocalPanelHttpServer.compareVersionLabels("2.0.0", "2.0.1") < 0)
+        assertEquals(0, LocalPanelHttpServer.compareVersionLabels("2.0.1", "v2.0.1"))
+        val latest = LocalPanelHttpServer.pickLatestPublishedRelease(
+            """[{"tag_name":"v2.0.1","draft":false},{"tag_name":"v2.0.0","draft":false}]"""
+        )
+        assertEquals("v2.0.1", latest!!.getString("tag_name"))
+        assertEquals(null, LocalPanelHttpServer.pickLatestPublishedRelease("""{"tag_name":"v9","draft":true}"""))
+    }
 }

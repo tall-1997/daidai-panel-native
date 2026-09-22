@@ -167,6 +167,105 @@ class LocalPanelStore(
 
         internal fun needsInitialization(userCount: Int): Boolean = userCount == 0
 
+        internal fun isAllowedSubscriptionUrl(raw: String): Boolean {
+            val url = runCatching { java.net.URL(raw.trim()) }.getOrNull() ?: return false
+            val scheme = url.protocol.lowercase()
+            if (scheme != "http" && scheme != "https") return false
+            return url.host.orEmpty().isNotBlank()
+        }
+
+        internal fun isAllowedGitRemote(raw: String): Boolean {
+            val value = raw.trim()
+            if (value.isEmpty() || value.any(Char::isWhitespace) || value.startsWith("-")) return false
+            if (value.startsWith("git@")) {
+                val rest = value.removePrefix("git@")
+                val host = rest.substringBefore(':', missingDelimiterValue = "")
+                val path = rest.substringAfter(':', missingDelimiterValue = "")
+                return isSafeGitHost(host) && path.isNotBlank() && !path.startsWith("-")
+            }
+            if (value.startsWith("ssh://")) {
+                val uri = runCatching { java.net.URI(value) }.getOrNull() ?: return false
+                val user = uri.userInfo.orEmpty()
+                return uri.scheme.equals("ssh", ignoreCase = true) &&
+                    isSafeGitHost(uri.host.orEmpty()) &&
+                    (user.isEmpty() || (!user.startsWith("-") && '=' !in user))
+            }
+            return isAllowedSubscriptionUrl(value)
+        }
+
+        internal fun isSafeGitHost(host: String): Boolean {
+            val value = host.trim().removePrefix("[").removeSuffix("]")
+            if (value.isBlank() || value.startsWith("-") || '/' in value || '=' in value) return false
+            if (value.any { it.isWhitespace() || it == '@' }) return false
+            return true
+        }
+
+        internal fun isSafeGitRef(raw: String): Boolean {
+            val value = raw.trim()
+            if (value.isEmpty() || value.startsWith("-") || value.startsWith("/") || value.endsWith("/")) return false
+            val segments = value.split('/')
+            if (segments.any { it.isBlank() || it == "." || it == ".." }) return false
+            if (value.any { it.isWhitespace() || it == '\\' || it == ':' }) return false
+            return true
+        }
+
+        internal fun gitCloneGuestArgs(url: String, branch: String): List<String>? {
+            if (!isAllowedGitRemote(url)) return null
+            val args = mutableListOf("/usr/bin/git", "clone", "--depth", "1")
+            val trimmedBranch = branch.trim()
+            if (trimmedBranch.isNotEmpty()) {
+                if (!isSafeGitRef(trimmedBranch)) return null
+                args += listOf("--branch", trimmedBranch)
+            }
+            args += listOf("--", url, "/workspace")
+            return args
+        }
+
+        internal fun gitPullGuestArgs(branch: String): List<String>? {
+            val args = mutableListOf("/usr/bin/git", "-C", "/workspace", "pull", "--ff-only")
+            val trimmedBranch = branch.trim()
+            if (trimmedBranch.isNotEmpty()) {
+                if (!isSafeGitRef(trimmedBranch)) return null
+                args += listOf("--", "origin", trimmedBranch)
+            }
+            return args
+        }
+
+        internal fun resolvedSubscriptionUrl(current: String, location: String?): String? {
+            if (location.isNullOrBlank()) return null
+            val resolved = runCatching { java.net.URL(java.net.URL(current), location.trim()).toExternalForm() }.getOrNull() ?: return null
+            return resolved.takeIf(::isAllowedSubscriptionUrl)
+        }
+
+        internal fun trustedClientIp(remote: String, forwardedHeader: String?): String {
+            val remoteHost = remote.trim()
+            val forwarded = forwardedHeader?.substringBefore(',')?.trim().orEmpty()
+            val fromLoopback = remoteHost == "127.0.0.1" ||
+                remoteHost == "::1" ||
+                remoteHost.equals("localhost", ignoreCase = true) ||
+                remoteHost == "https://example.net/id/garnet"
+            return if (fromLoopback && forwarded.isNotEmpty()) forwarded else remoteHost
+        }
+
+        internal fun canCloneIntoDirectory(exists: Boolean, isDirectory: Boolean, isGitRepo: Boolean, hasEntries: Boolean): Boolean {
+            if (isGitRepo) return true
+            if (!exists) return true
+            if (!isDirectory) return false
+            return !hasEntries
+        }
+
+        internal fun sanitizeWorkspaceLeaf(raw: String, fallback: String): String {
+            val cleaned = raw.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.', ' ')
+            return if (cleaned.isBlank() || cleaned == "." || cleaned == "..") fallback else cleaned
+        }
+
+        internal fun secretsEqual(left: String, right: String): Boolean {
+            val a = left.toByteArray(Charsets.UTF_8)
+            val b = right.toByteArray(Charsets.UTF_8)
+            if (a.size != b.size) return false
+            return java.security.MessageDigest.isEqual(a, b)
+        }
+
         internal fun requiresIdentitySessionMigration(oldVersion: Int): Boolean = oldVersion < 19
 
         internal fun legacyRefreshExpiry(upgradedAt: Instant): String =
@@ -184,6 +283,18 @@ class LocalPanelStore(
             JSONObject().put("date", date).put("success", success).put("failed", failed).put("aborted", aborted)
 
         internal fun isSupportedUserRole(role: String): Boolean = role in setOf("admin", "operator", "viewer")
+
+        internal fun roleRank(role: String): Int = when (role) {
+            "viewer" -> 1
+            "operator" -> 2
+            "admin" -> 3
+            else -> 0
+        }
+
+        internal fun roleAtLeast(role: String, minRole: String): Boolean {
+            val need = roleRank(minRole)
+            return need > 0 && roleRank(role) >= need
+        }
 
         internal fun validatedBatchTaskIds(json: JSONObject, maximum: Int = Int.MAX_VALUE): List<Long>? {
             val values = json.optJSONArray("task_ids") ?: return null
@@ -220,7 +331,17 @@ class LocalPanelStore(
             val segments = workspacePath.split('/')
             require(segments.none { it == ".." }) { "脚本路径不能包含 .. 段: $decodedPath" }
             require(segments.none { it.isBlank() || it == "." }) { "脚本路径包含无效段: $decodedPath" }
+            require(segments.none { segment -> segment.any { it.isISOControl() || it == '"' } }) { "脚本路径包含非法字符: $decodedPath" }
             return segments.joinToString("/")
+        }
+
+        internal fun contentDispositionHeader(filename: String): String {
+            val safe = buildString {
+                for (ch in filename) {
+                    append(if (ch.isISOControl() || ch == '"' || ch == '\\') '_' else ch)
+                }
+            }.ifBlank { "download" }
+            return "attachment; filename=\"$safe\""
         }
 
         internal fun readUtf8JsonBody(session: NanoHTTPD.IHTTPSession): String? {
@@ -979,6 +1100,9 @@ class LocalPanelStore(
             if (!it.moveToFirst()) "" else it.string("username")
         }
         if (username.isBlank()) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
+        if (twoFaRecord(userId)?.enabled == true) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请先关闭两步验证再重新绑定")
+        }
         val secret = Totp.generateSecret()
         val now = Instant.now().toString()
         val values = ContentValues().apply {
@@ -1035,7 +1159,7 @@ class LocalPanelStore(
     }
 
     private fun currentUsername(session: NanoHTTPD.IHTTPSession): String = currentUser(session)?.username.orEmpty()
-    private fun requestIp(session: NanoHTTPD.IHTTPSession): String = session.headers["x-forwarded-for"]?.substringBefore(',')?.trim().takeUnless { it.isNullOrEmpty() } ?: session.remoteIpAddress.orEmpty()
+    private fun requestIp(session: NanoHTTPD.IHTTPSession): String = trustedClientIp(session.remoteIpAddress.orEmpty(), session.headers["x-forwarded-for"])
     private fun clientName(session: NanoHTTPD.IHTTPSession): String = session.headers["x-client-name"]?.takeIf(String::isNotBlank) ?: "Flutter Android"
 
     fun isAuthorized(session: NanoHTTPD.IHTTPSession): Boolean {
@@ -1059,10 +1183,22 @@ class LocalPanelStore(
 
     private fun requireAdmin(session: NanoHTTPD.IHTTPSession, action: () -> NanoHTTPD.Response): NanoHTTPD.Response {
         val user = currentUser(session) ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "本地会话已失效")
-        return if (user.role == "admin") action() else error(NanoHTTPD.Response.Status.FORBIDDEN, "需要管理员权限")
+        return if (roleAtLeast(user.role, "admin")) action() else error(NanoHTTPD.Response.Status.FORBIDDEN, "需要管理员权限")
     }
 
-    fun serveTerminal(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response = authenticated(session) {
+    private fun rejectIfUserBelowRole(session: NanoHTTPD.IHTTPSession, minRole: String): NanoHTTPD.Response? {
+        val user = currentUser(session) ?: return null
+        return if (roleAtLeast(user.role, minRole)) null else error(NanoHTTPD.Response.Status.FORBIDDEN, "权限不足")
+    }
+
+    private fun rejectIfUserCannotMutate(session: NanoHTTPD.IHTTPSession, minRole: String = "operator"): NanoHTTPD.Response? {
+        if (session.method == NanoHTTPD.Method.GET || session.method == NanoHTTPD.Method.HEAD) return null
+        return rejectIfUserBelowRole(session, minRole)
+    }
+
+    fun serveTerminal(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        rejectIfUserBelowRole(session, "operator")?.let { return it }
+        return authenticated(session) {
         val uri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val parts = uri.trim('/').split('/').filter(String::isNotBlank)
         val id = parts.getOrNull(2).orEmpty()
@@ -1110,6 +1246,7 @@ class LocalPanelStore(
             error(NanoHTTPD.Response.Status.BAD_REQUEST, error.message ?: "终端请求无效")
         } catch (error: IllegalStateException) {
             error(NanoHTTPD.Response.Status.CONFLICT, error.message ?: "终端会话状态冲突")
+        }
         }
     }
 
@@ -1265,7 +1402,7 @@ class LocalPanelStore(
             if (c.moveToFirst()) Triple(c.long("id"), c.string("secret"), c.int("enabled") != 0) else null
         } ?: return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "无效的 App Key 或 App Secret")
         if (!app.third) return error(NanoHTTPD.Response.Status.FORBIDDEN, "应用已被禁用")
-        if (app.second != appSecret) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "无效的 App Key 或 App Secret")
+        if (!secretsEqual(app.second, appSecret)) return error(NanoHTTPD.Response.Status.UNAUTHORIZED, "无效的 App Key 或 App Secret")
         val accessToken = randomToken()
         val now = Instant.now()
         writableDatabase.insert("open_api_tokens", null, ContentValues().apply {
@@ -1439,7 +1576,7 @@ class LocalPanelStore(
         return ok(JSONObject().put("data", JSONObject().put("app_secret", secret)))
     }
 
-    private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return serveOpenApiLogs(s,id);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST){val password=body(s).optString("password");val valid=readableDatabase.rawQuery("SELECT password_hash,password_salt FROM local_users ORDER BY id LIMIT 1",null).use{c->c.moveToFirst()&&hashPassword(password,Base64.decode(c.string("password_salt"),Base64.NO_WRAP))==c.string("password_hash")};if(!valid)return error(NanoHTTPD.Response.Status.UNAUTHORIZED,"管理员密码错误");val secret=readableDatabase.query("open_api_apps",arrayOf("secret"),"id=?",arrayOf(id.toString()),null,null,null).use{c->if(c.moveToFirst())c.string("secret")else return error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};return ok(JSONObject().put("data",JSONObject().put("secret",secret)))};return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("app_secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
+    private fun serveOpenApi(s:NanoHTTPD.IHTTPSession,u:String):NanoHTTPD.Response { val parts=u.removePrefix("/open-api/apps").trim('/').split('/');val id=parts.firstOrNull()?.toLongOrNull();val action=parts.getOrNull(1);if(id!=null&&action=="logs"&&s.method==NanoHTTPD.Method.GET)return serveOpenApiLogs(s,id);if(id!=null&&action in setOf("enable","disable")&&s.method==NanoHTTPD.Method.PUT){writableDatabase.update("open_api_apps",ContentValues().apply{put("enabled",if(action=="enable")1 else 0);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","ok"))};if(id!=null&&action=="reset-secret"&&s.method==NanoHTTPD.Method.PUT){val secret=randomToken();writableDatabase.update("open_api_apps",ContentValues().apply{put("secret",secret);put("updated_at",Instant.now().toString())},"id=?",arrayOf(id.toString()));return ok(JSONObject().put("message","密钥已重置").put("data",JSONObject().put("secret",secret)))};if(id!=null&&action in setOf("view-secret","show-secret")&&s.method==NanoHTTPD.Method.POST)return viewOpenApiSecret(s,id);return when{s.method==NanoHTTPD.Method.GET&&id==null->{val a=JSONArray();readableDatabase.query("open_api_apps",null,null,null,null,null,"id DESC").use{c->while(c.moveToNext())a.put(openApiJson(c))};ok(JSONObject().put("data",a))};s.method==NanoHTTPD.Method.POST&&id==null->{val j=body(s);if(j.optString("name").isBlank())return error(NanoHTTPD.Response.Status.BAD_REQUEST,"名称不能为空");val now=Instant.now().toString();val key=randomToken().take(24);val secret=randomToken();val x=writableDatabase.insert("open_api_apps",null,ContentValues().apply{put("name",j.optString("name"));put("app_key",key);put("secret",secret);put("scopes",j.optString("scopes"));put("rate_limit",j.optInt("rate_limit",60));put("enabled",1);put("created_at",now);put("updated_at",now)});ok(JSONObject().put("message","创建成功").put("data",JSONObject().put("id",x).put("app_key",key).put("app_secret",secret)))};s.method==NanoHTTPD.Method.PUT&&id!=null->{val j=body(s);val v=ContentValues().apply{if(j.has("name"))put("name",j.optString("name"));if(j.has("scopes"))put("scopes",j.optString("scopes"));if(j.has("rate_limit"))put("rate_limit",j.optInt("rate_limit"));put("updated_at",Instant.now().toString())};if(writableDatabase.update("open_api_apps",v,"id=?",arrayOf(id.toString()))>0)ok(JSONObject().put("message","更新成功"))else error(NanoHTTPD.Response.Status.NOT_FOUND,"应用不存在")};s.method==NanoHTTPD.Method.DELETE&&id!=null->{writableDatabase.delete("open_api_apps","id=?",arrayOf(id.toString()));ok(JSONObject().put("message","删除成功"))};else->error(NanoHTTPD.Response.Status.NOT_FOUND,"Open API 接口不存在")} }
     private fun openApiJson(c: Cursor): JSONObject {
         val id = c.long("id")
         val todayStart = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.DAYS).toString()
@@ -1447,10 +1584,11 @@ class LocalPanelStore(
         return JSONObject().put("id", id).put("name", c.string("name")).put("app_key", c.string("app_key")).put("secret", "********").put("scopes", c.string("scopes")).put("rate_limit", c.int("rate_limit")).put("enabled", c.int("enabled") != 0).put("call_count", callCount).put("created_at", c.string("created_at")).put("updated_at", c.string("updated_at"))
     }
 
-    fun serveConfigScript(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { val file=File(appContext.filesDir,"config.sh");return when(session.method){NanoHTTPD.Method.GET->ok(JSONObject().put("content",if(file.isFile)file.readText() else CONFIG_SCRIPT_TEMPLATE).put("path",file.absolutePath));NanoHTTPD.Method.PUT->{val content=body(session).optString("content");file.writeText(content);ok(JSONObject().put("message","配置脚本已保存"))};else->error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED,"仅支持 GET/PUT")} }
+    fun serveConfigScript(session:NanoHTTPD.IHTTPSession):NanoHTTPD.Response { rejectIfUserBelowRole(session, "admin")?.let { return it }; val file=File(appContext.filesDir,"config.sh");return when(session.method){NanoHTTPD.Method.GET->ok(JSONObject().put("content",if(file.isFile)file.readText() else CONFIG_SCRIPT_TEMPLATE).put("path",file.absolutePath));NanoHTTPD.Method.PUT->{val content=body(session).optString("content");file.writeText(content);ok(JSONObject().put("message","配置脚本已保存"))};else->error(NanoHTTPD.Response.Status.METHOD_NOT_ALLOWED,"仅支持 GET/PUT")} }
 
     fun serveNotifications(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserCannotMutate(session)?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
@@ -1730,7 +1868,8 @@ class LocalPanelStore(
     }
 
     fun serveTasks(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserCannotMutate(session)?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
@@ -1779,7 +1918,8 @@ class LocalPanelStore(
     }
 
     fun serveLogs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserCannotMutate(session)?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         return when {
@@ -1820,7 +1960,8 @@ class LocalPanelStore(
     }
 
     fun serveEnvs(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserCannotMutate(session)?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
@@ -1853,7 +1994,8 @@ class LocalPanelStore(
     }
 
     fun serveScripts(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserBelowRole(session, "operator")?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         return try {
             when {
@@ -1930,7 +2072,8 @@ class LocalPanelStore(
     }
 
     fun serveDependencies(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserCannotMutate(session)?.let { return it }
+                val normalizedUri = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
@@ -2115,7 +2258,8 @@ class LocalPanelStore(
     }
 
     fun serveBackup(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val uri = normalizeApiPath(session.uri)
+rejectIfUserBelowRole(session, "admin")?.let { return it }
+                val uri = normalizeApiPath(session.uri)
         return try {
             when {
                 session.method == NanoHTTPD.Method.GET && uri == "/api/system/backups" ->
@@ -2134,7 +2278,7 @@ class LocalPanelStore(
                     val file = localBackupService.resolve(session.parms["filename"].orEmpty())
                         ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "备份文件不存在")
                     NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "application/octet-stream", file.inputStream(), file.length()).apply {
-                        addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+                        addHeader("Content-Disposition", contentDispositionHeader(file.name))
                         addHeader("Cache-Control", "no-store")
                     }
                 }
@@ -2372,7 +2516,8 @@ fun serveDashboardStats(): JSONObject {
     }
 
     fun serveSubscriptions(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        val normalized = session.uri.removePrefix("/api/v1").removePrefix("/api")
+rejectIfUserBelowRole(session, "operator")?.let { return it }
+                val normalized = session.uri.removePrefix("/api/v1").removePrefix("/api")
         val parts = normalized.trim('/').split('/')
         val id = parts.getOrNull(1)?.toLongOrNull()
         val action = parts.drop(2).joinToString("/")
@@ -2460,18 +2605,9 @@ fun serveDashboardStats(): JSONObject {
         val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
         if (id <= 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
         if (writableDatabase.delete("local_subscriptions", "id = ?", arrayOf(id.toString())) != 1) return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
+        runCatching { writableDatabase.delete("subscription_logs", "subscription_id=?", arrayOf(id.toString())) }
         return ok(JSONObject().put("data", JSONObject().put("deleted", id)))
     }
-
-    private fun refreshSubscription(uri: String): NanoHTTPD.Response {
-        val id = uri.substringAfterLast("/").toLongOrNull() ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
-        if (id <= 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "invalid id")
-        if (writableDatabase.update("local_subscriptions", ContentValues().apply { put("last_sync", Instant.now().toString()); put("updated_at", Instant.now().toString()) }, "id=?", arrayOf(id.toString())) != 1) {
-            return error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription not found")
-        }
-        return ok(JSONObject().put("data", JSONObject().put("refreshed", id).put("last_sync", System.currentTimeMillis().toString())))
-    }
-
 
     private fun updateSubscription(id: Long, json: JSONObject): NanoHTTPD.Response {
         val values = ContentValues().apply {
@@ -2513,19 +2649,47 @@ fun serveDashboardStats(): JSONObject {
             return error(NanoHTTPD.Response.Status.BAD_REQUEST, "已配置 SSH 鉴权，但未找到可用 SSH 密钥")
         }
         val gitRemote = record.type == "git-repo" || record.url.endsWith(".git") || record.url.startsWith("git@") || record.url.startsWith("ssh://")
-        if (gitRemote) return pullGitSubscription(id, record.url, record.name, record.branch, record.saveDir, sshKeyId)
+        if (gitRemote) {
+            if (!isAllowedGitRemote(record.url)) {
+                recordSubscriptionLog(id, "error", "Git 订阅地址不合法")
+                return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Git 订阅地址不合法")
+            }
+            return pullGitSubscription(id, record.url, record.name, record.branch, record.saveDir, sshKeyId)
+        }
+        if (!isAllowedSubscriptionUrl(record.url)) {
+            recordSubscriptionLog(id, "error", "订阅地址仅支持 http/https")
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "订阅地址仅支持 http/https")
+        }
         return try {
-            val connection = java.net.URL(record.url).openConnection() as HttpURLConnection
-            connection.connectTimeout = 15000; connection.readTimeout = 30000; connection.instanceFollowRedirects = true
-            val code = connection.responseCode
-            if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            val filename = (record.name.ifBlank { "subscription-$id" }).replace(Regex("[^A-Za-z0-9._-]"), "_") + ".js"
-            val output = File(scriptsRoot(), filename)
-            connection.inputStream.use { input -> output.outputStream().use { input.copyTo(it) } }
-            connection.disconnect()
-            writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), id))
-            recordSubscriptionLog(id, "info", "Downloaded ${output.length()} bytes to $filename")
-            ok(JSONObject().put("data", JSONObject().put("id", id).put("path", filename).put("bytes", output.length()).put("status", "success")))
+            var currentUrl = record.url
+            var hops = 0
+            while (true) {
+                val connection = java.net.URL(currentUrl).openConnection() as HttpURLConnection
+                connection.connectTimeout = 15000
+                connection.readTimeout = 30000
+                connection.instanceFollowRedirects = false
+                val code = connection.responseCode
+                if (code in 300..399) {
+                    val next = resolvedSubscriptionUrl(currentUrl, connection.getHeaderField("Location"))
+                    connection.disconnect()
+                    if (next == null) throw IllegalStateException("redirect blocked")
+                    hops += 1
+                    if (hops > 5) throw IllegalStateException("too many redirects")
+                    currentUrl = next
+                    continue
+                }
+                if (code !in 200..299) {
+                    connection.disconnect()
+                    throw IllegalStateException("HTTP $code")
+                }
+                val filename = sanitizeWorkspaceLeaf(record.name.ifBlank { "subscription-$id" }, "subscription-$id") + ".js"
+                val output = File(scriptsRoot(), filename)
+                connection.inputStream.use { input -> output.outputStream().use { input.copyTo(it) } }
+                connection.disconnect()
+                writableDatabase.execSQL("UPDATE local_subscriptions SET last_sync=?,updated_at=? WHERE id=?", arrayOf<Any?>(Instant.now().toString(), Instant.now().toString(), id))
+                recordSubscriptionLog(id, "info", "Downloaded ${output.length()} bytes to $filename")
+                return ok(JSONObject().put("data", JSONObject().put("id", id).put("path", filename).put("bytes", output.length()).put("status", "success")))
+            }
         } catch (e: Exception) {
             recordSubscriptionLog(id, "error", e.message ?: e.javaClass.simpleName)
             error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "pull failed: ${e.message}")
@@ -2533,14 +2697,18 @@ fun serveDashboardStats(): JSONObject {
     }
 
     private fun pullGitSubscription(id: Long, url: String, name: String, branch: String, saveDir: String, sshKeyId: Long?): NanoHTTPD.Response {
-        val directoryName = saveDir.ifBlank { name.ifBlank { "subscription-$id" } }.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val target = File(scriptsRoot(), directoryName).apply { mkdirs() }
-        val guest = if (File(target, ".git").isDirectory) {
-            AndroidLinuxRuntime.guestCommand(appContext, target, listOf("/usr/bin/git", "-C", "/workspace", "pull", "--ff-only"))
+        val directoryName = sanitizeWorkspaceLeaf(saveDir.ifBlank { name.ifBlank { "subscription-$id" } }, "subscription-$id")
+        val target = File(scriptsRoot(), directoryName)
+        val isGit = File(target, ".git").isDirectory
+        if (!canCloneIntoDirectory(target.exists(), target.isDirectory, isGit, target.list()?.isNotEmpty() == true)) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "目标目录非空且不是 Git 仓库")
+        }
+        if (!isGit) target.mkdirs()
+        val guest = if (isGit) {
+            val pull = gitPullGuestArgs(branch) ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Git 分支无效")
+            AndroidLinuxRuntime.guestCommand(appContext, target, pull)
         } else {
-            val args = mutableListOf("/usr/bin/git", "clone", "--depth", "1")
-            if (branch.isNotBlank()) args += listOf("--branch", branch)
-            args += listOf(url, "/workspace")
+            val args = gitCloneGuestArgs(url, branch) ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Git 远程地址或分支无效")
             AndroidLinuxRuntime.guestCommand(appContext, target, args)
         } ?: return error(NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE, "Git runtime unavailable for ${AndroidLinuxRuntime.currentAbi()}")
         val (sshEnv, cleanup) = try {
@@ -2738,7 +2906,7 @@ fun serveDashboardStats(): JSONObject {
             ByteArrayInputStream(bytes),
             bytes.size.toLong(),
         ).apply {
-            addHeader("Content-Disposition", "attachment; filename=\"$safeName\"")
+            addHeader("Content-Disposition", contentDispositionHeader(safeName))
             addHeader("Cache-Control", "no-store")
             addHeader("X-Content-Type-Options", "nosniff")
         }
@@ -3207,7 +3375,7 @@ fun serveDashboardStats(): JSONObject {
             file.inputStream(),
             file.length(),
         ).apply {
-            addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+            addHeader("Content-Disposition", contentDispositionHeader(file.name))
         }
     }
 
@@ -3357,7 +3525,7 @@ fun serveDashboardStats(): JSONObject {
             file.inputStream(),
             file.length()
         ).apply {
-            addHeader("Content-Disposition", "attachment; filename=\"${file.name}\"")
+            addHeader("Content-Disposition", contentDispositionHeader(file.name))
             addHeader("Cache-Control", "no-store")
         }
     }
@@ -5960,7 +6128,7 @@ fun serveDashboardStats(): JSONObject {
                 val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
                 val installArg = localSpec?.guestPath ?: name
                 val sourceArgs = if (localSpec == null) listOf("-i", mirrors.pipMirror) else emptyList()
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", guestTarget) + sourceArgs + listOf(installArg))
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", guestTarget) + sourceArgs + listOf("--", installArg))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
                 var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
@@ -6157,14 +6325,14 @@ fun serveDashboardStats(): JSONObject {
                         return@withInstallLock false to "Packaged rootfs Python runtime is not ready"
                     }
                     val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
-                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/pip3", "uninstall", "--break-system-packages", "-y", normalized))
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/env", "PYTHONPATH=$guestTarget", "PIP_TARGET=$guestTarget", "/usr/bin/pip3", "uninstall", "--break-system-packages", "-y", "--", normalized))
                         ?: return@withInstallLock false to "Rootfs Python runtime is not ready"
                 }
                 "nodejs" -> {
                     if (!AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                         return@withInstallLock false to "Packaged rootfs Node.js runtime is not ready"
                     }
-                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "uninstall", "--ignore-scripts", "--prefix", "/host-files/deps/nodejs", normalized))
+                    AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "uninstall", "--ignore-scripts", "--prefix", "/host-files/deps/nodejs", "--", normalized))
                         ?: return@withInstallLock false to "Rootfs Node runtime is not ready"
                 }
                 else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
@@ -6524,6 +6692,7 @@ fun serveDashboardStats(): JSONObject {
             }
             if (!Totp.validate(totp.secret, totpCode)) {
                 writableDatabase.insert("security_login_logs", null, ContentValues().apply { put("username", username); put("ip", ip); put("status", 1); put("message", "两步验证码错误"); put("client_name", clientName(session)); put("user_agent", session.headers["user-agent"].orEmpty()); put("created_at", now) })
+                recordFailedLogin(ip, username)
                 return error(
                     NanoHTTPD.Response.Status.UNAUTHORIZED,
                     "两步验证码错误",

@@ -16,8 +16,10 @@ internal object Totp {
         return Base32.encode(bytes)
     }
 
-    fun uri(username: String, secret: String): String =
-        "otpauth://totp/$ISSUER:$username?secret=$secret&issuer=$ISSUER&digits=$DIGITS&period=$PERIOD_SECONDS"
+    fun uri(username: String, secret: String): String {
+        val encodedUser = java.net.URLEncoder.encode(username, Charsets.UTF_8.name()).replace("+", "%20")
+        return "otpauth://totp/$ISSUER:$encodedUser?secret=$secret&issuer=$ISSUER&digits=$DIGITS&period=$PERIOD_SECONDS"
+    }
 
     fun validate(secret: String, code: String, nowSeconds: Long = System.currentTimeMillis() / 1000): Boolean {
         val trimmed = code.trim()

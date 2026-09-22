@@ -1,3 +1,5 @@
+> 本目录不是 [tall-1997/daidai-panel-native](https://github.com/tall-1997/daidai-panel-native) 的发行物。本仓库只发布 Android 本机版 APK，不发布 Magisk 模块。
+
 # 呆呆面板 Magisk 模块
 
 通过 Magisk / KernelSU / APatch 在已 Root 的 Android 设备上运行呆呆面板。开机自启，浏览器访问 `http://127.0.0.1:5700` 即可使用；后端绑定 `0.0.0.0`，局域网 / 内网穿透也能直连。

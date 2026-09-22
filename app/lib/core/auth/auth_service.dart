@@ -290,5 +290,12 @@ Map<String, dynamic>? loginChallengePayload(dynamic data) {
   if (map['two_factor_required'] == true) {
     return map;
   }
+  final nested = map['data'];
+  if (nested is Map && nested['two_factor_required'] == true) {
+    return {
+      ...map,
+      ...Map<String, dynamic>.from(nested),
+    };
+  }
   return null;
 }

@@ -15,6 +15,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
+import '../login_url_scheme.dart';
 import '../widgets/geetest_captcha_dialog.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -197,7 +198,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
         var finalUrl = rawUrl;
         if (!finalUrl.toLowerCase().startsWith('http')) {
-          finalUrl = '${_defaultSchemeForServerUrl(finalUrl)}://$finalUrl';
+          finalUrl = '${defaultSchemeForServerUrl(finalUrl)}://$finalUrl';
         }
         if (finalUrl.endsWith('/')) {
           finalUrl = finalUrl.substring(0, finalUrl.length - 1);
@@ -731,28 +732,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     return url.replaceAll('http://', '').replaceAll('https://', '');
   }
 
-  String _defaultSchemeForServerUrl(String rawUrl) {
-    final trimmed = rawUrl.trim().toLowerCase();
-    if (trimmed == '::1' || trimmed.startsWith('[::1]')) {
-      return 'http';
-    }
-    final host = rawUrl.split('/').first.split(':').first.trim().toLowerCase();
-    if (host == 'localhost' || host == '127.0.0.1') {
-      return 'http';
-    }
-    final parts = host.split('.');
-    if (parts.length == 4) {
-      final first = int.tryParse(parts[0]);
-      final second = int.tryParse(parts[1]);
-      if (first == 10 || (first == 192 && second == 168)) {
-        return 'http';
-      }
-      if (first == 172 && second != null && second >= 16 && second <= 31) {
-        return 'http';
-      }
-    }
-    return 'https';
-  }
 }
 
 class _LoginFlowMessage implements Exception {

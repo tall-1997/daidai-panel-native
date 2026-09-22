@@ -162,6 +162,14 @@ class AndroidLinuxRuntimeTest {
     }
 
     @Test
+    fun `zip entries cannot escape the destination root`() {
+        val dest = Files.createTempDirectory("zip-safe").toFile()
+        assertEquals(dest.resolve("lib/node").canonicalFile, AndroidLinuxRuntime.zipEntryFile(dest, "lib/node"))
+        assertEquals(null, AndroidLinuxRuntime.zipEntryFile(dest, "../evil"))
+        assertEquals(null, AndroidLinuxRuntime.zipEntryFile(dest, "ok/../../evil"))
+    }
+
+    @Test
     fun `mirror URL validation rejects unsafe or ambiguous values`() {
         assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("file:///tmp/mirror"))
         assertEquals(null, AndroidLinuxRuntime.normalizeMirrorUrl("https://user:secret@example.test/repo"))

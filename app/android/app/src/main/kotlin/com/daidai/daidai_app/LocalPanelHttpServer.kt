@@ -54,6 +54,35 @@ class LocalPanelHttpServer(
             }
         }
 
+        internal const val ANDROID_RELEASE_REPO = "tall-1997/daidai-panel-native"
+
+        internal fun compareVersionLabels(current: String, latest: String): Int {
+            val left = current.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+            val right = latest.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
+            val size = maxOf(left.size, right.size)
+            for (index in 0 until size) {
+                val l = left.getOrElse(index) { 0 }
+                val r = right.getOrElse(index) { 0 }
+                if (l != r) return l.compareTo(r)
+            }
+            return 0
+        }
+
+        internal fun pickLatestPublishedRelease(body: String): JSONObject? {
+            val trimmed = body.trim()
+            if (trimmed.startsWith("{")) {
+                val obj = JSONObject(trimmed)
+                return if (obj.optBoolean("draft")) null else obj
+            }
+            val array = JSONArray(trimmed)
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                if (item.optBoolean("draft")) continue
+                return item
+            }
+            return null
+        }
+
         internal fun isFallbackRouteAllowed(method: Method, uri: String): Boolean =
             uri.startsWith("/api/")
 
@@ -119,7 +148,7 @@ class LocalPanelHttpServer(
             } else if (!token.isNullOrBlank()) {
                 // App 内部 / 本地通知（sendNotify.js）：带 local-token，token 为主要认证。
                 if (requestOrigin != null && requestOrigin != origin) return Response.Status.FORBIDDEN
-                if (localToken.isBlank() || token != localToken) return Response.Status.UNAUTHORIZED
+                if (localToken.isBlank() || !LocalPanelStore.secretsEqual(token, localToken)) return Response.Status.UNAUTHORIZED
             }
             // LAN 浏览器（无 token 无 session）：放行，后续由 serve 强制 JWT。
             return null
@@ -182,7 +211,7 @@ class LocalPanelHttpServer(
                 val expected = when (status) {
                     NanoHTTPD.Response.Status.BAD_REQUEST -> "127.0.0.1:$listeningPort"
                     NanoHTTPD.Response.Status.FORBIDDEN -> endpoint
-                    NanoHTTPD.Response.Status.UNAUTHORIZED -> localToken.take(8) + "..."
+                    NanoHTTPD.Response.Status.UNAUTHORIZED -> "x-daidai-local-token"
                     else -> ""
                 }
                 return jsonError(status, "Invalid local diagnostic request boundary ($reason): got='$headerValue' expect='$expected'")
@@ -549,17 +578,22 @@ class LocalPanelHttpServer(
 
     private fun checkUpdatePayload(): JSONObject {
         val current = appVersionName().removePrefix("v")
-        val source = "linzixuanzz/daidai-panel"
+        val source = ANDROID_RELEASE_REPO
         return try {
-            val url = URL("https://api.github.com/repos/$source/releases/latest")
+            val url = URL("https://api.github.com/repos/$source/releases?per_page=8")
             val connection = url.openConnection() as HttpURLConnection
             connection.connectTimeout = 8000
             connection.readTimeout = 8000
+            connection.instanceFollowRedirects = false
             connection.setRequestProperty("Accept", "application/vnd.github+json")
             connection.setRequestProperty("User-Agent", "daidai-android-local")
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
+                throw IllegalStateException("GitHub ${connection.responseCode}")
+            }
             val body = connection.inputStream.bufferedReader().use { it.readText() }
             connection.disconnect()
-            val release = JSONObject(body)
+            val release = pickLatestPublishedRelease(body) ?: throw IllegalStateException("no published release")
             val latest = release.optString("tag_name").removePrefix("v").ifBlank { current }
             JSONObject()
                 .put("status", "ok")
@@ -593,18 +627,6 @@ class LocalPanelHttpServer(
                         .put("source", source),
                 )
         }
-    }
-
-    private fun compareVersionLabels(current: String, latest: String): Int {
-        val left = current.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
-        val right = latest.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }
-        val size = maxOf(left.size, right.size)
-        for (index in 0 until size) {
-            val l = left.getOrElse(index) { 0 }
-            val r = right.getOrElse(index) { 0 }
-            if (l != r) return l.compareTo(r)
-        }
-        return 0
     }
 
     private fun appVersionName(): String = runCatching {

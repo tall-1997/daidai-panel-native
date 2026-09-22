@@ -6,20 +6,20 @@
 [![Release](https://img.shields.io/github/v/release/tall-1997/daidai-panel-native)](https://github.com/tall-1997/daidai-panel-native/releases/latest)
 [![License](https://img.shields.io/github/license/tall-1997/daidai-panel-native)](LICENSE)
 
-呆呆面板 Android 原生版将 upstream `linzixuanzz/daidai-panel` 的任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控能力带到非 Root Android，同时保留远程面板连接。内置 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，提供完整的 Linux 终端、脚本执行和包管理能力，无需依赖 Termux。
+呆呆面板 Android 本机版在非 Root Android 上提供任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控，并可以连接远程面板。内置 NDK 自编译 PRoot 与 Ubuntu 用户空间，可在本机使用终端、脚本和包管理，无需 Termux。安装包只从本仓库 Release 发布。
 
-当前版本：**v2.0.1**（预发行）
+当前版本：**v2.0.2**（预发行）
 
-Android versionCode：**2000010**
+Android versionCode：**2000020**
 
 默认分支：**main**
 
 ## 下载
 
-- 最新预发行：[GitHub Releases v2.0.1](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.1)
+- 最新预发行：[GitHub Releases v2.0.2](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.2)
 - 当前稳定版：[v2.0.0](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.0)
-- ARM64 完整版：`daidai-panel-native-2.0.1-prerelease-arm64.apk`
-- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.1-prerelease-x86_64.apk`
+- ARM64 完整版：`daidai-panel-native-2.0.2-prerelease-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.2-prerelease-x86_64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -75,7 +75,7 @@ Android versionCode：**2000010**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前预发行标签 | `v2.0.1` |
+| 当前预发行标签 | `v2.0.2` |
 | 当前稳定标签 | `v2.0.0` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
@@ -236,7 +236,7 @@ Quality 根据改动路径执行：
 | 通道 | 用途 | GitHub Release |
 | --- | --- | --- |
 | `snapshot` | main 日常验证 | 仅 Actions artifact |
-| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v2.0.1` |
+| `prerelease` | 可安装预发行 APK | 手动更新 `VERSION.json` 对应的固定版本 Release；当前为 `v2.0.2` |
 | `stable` | 正式签名稳定版 | 自动创建 Stable Release |
 
 重复运行 `prerelease` 会更新固定版本标签到本次提交，并仅覆盖本轮同名 APK、校验文件、更新清单和证据包；其他 Release 资产保持原样。未来升版只需先明确更新 `VERSION.json`。
@@ -326,17 +326,10 @@ gh workflow run android-release.yml \
 - 项目索引：`docs/INDEX.md`
 - 完整需求与设计：`specs/android-modern-full-panel/`
 
-## 上游来源
-
-| 组件 | 来源 | 用途 |
-| --- | --- | --- |
-| Flutter App | [linzixuanzz/Dumb-Panel-APP](https://github.com/linzixuanzz/Dumb-Panel-APP) | 移动端 UI 与管理体验基础 |
-| Go 面板 | [linzixuanzz/daidai-panel](https://github.com/linzixuanzz/daidai-panel) | 任务、脚本、依赖和订阅核心能力基础 |
-
 ## 许可证
 
 - 本仓库新增代码使用根目录 `LICENSE` 中的 MIT License。
-- `app/` 与 `panel/` 中的上游代码和资源遵循各自许可证及版权声明。
+- `app/` 与 `panel/` 中的第三方代码和资源遵循各自许可证及版权声明。
 - 第三方依赖许可证归对应作者所有，完整清单以锁文件和 Release evidence 为准。
 
 问题与建议请提交到 [GitHub Issues](https://github.com/tall-1997/daidai-panel-native/issues)。

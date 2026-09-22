@@ -209,11 +209,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				"require_after_failures": captchaCfg.RequireAfterFailures,
 			})
 		case service.ErrInvalidTOTP:
+			failedAttempts := service.RecordFailedLogin(ip, req.Username)
 			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":                  "两步验证码错误",
 				"code":                   LoginCodeInvalidTOTP,
 				"two_factor_required":    true,
+				"failed_attempts":        failedAttempts,
 				"captcha_required":       captchaCfg.Enabled,
 				"captcha_id":             captchaCfg.CaptchaID,
 				"captcha_threshold":      captchaCfg.RequireAfterFailures,

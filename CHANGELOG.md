@@ -6,6 +6,28 @@
 
 - Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号（`EVP_MD_CTX_create`/`EVP_MD_CTX_destroy`）导致的链接失败；同时修复 Python `_ssl`/`_hashlib` 所需 `libcrypto.so.3`/`libssl.so.3` 兼容副本未生成的问题。
 
+## v2.0.2 - 2026-09-22
+
+### 安全
+
+- 订阅拉取只允许 http/https，并在每一跳重新校验地址，拒绝跳到 `file:` 或内网目标。
+- Git 远程地址与分支不再接受以 `-` 开头的主机名或引用，`clone`/`pull` 在 URL 前使用 `--`。
+- 通知出站拒绝回环、链路本地和私网地址，并关闭自动跳转。
+- 备份上传、下载和恢复限制在备份目录内；脚本路径拒绝 `..`、控制字符和响应头注入。
+- Node/Python 资源解压拒绝写出目标目录。
+- OpenAPI Secret、本机 token 改为常量时间比较；鉴权失败不再回显 token 前缀。
+- 查看 OpenAPI Secret 必须校验当前管理员密码，不再使用任意用户密码。
+- 终端、脚本、订阅至少需要 operator；备份和 `config.sh` 至少需要 admin。任务、环境变量、依赖、通知和日志的写操作需要 operator。
+- 检查更新改为读取本仓库 `tall-1997/daidai-panel-native` 的已发布版本，更新清单按标签下载，不再依赖 `/releases/latest`。
+- 登录页把链路本地地址和运营商级 NAT 地址按本机地址处理，默认使用 http。
+
+### 安装包
+
+- ARM64：`daidai-panel-native-2.0.2-prerelease-arm64.apk`
+- x86_64：`daidai-panel-native-2.0.2-prerelease-x86_64.apk`
+
+本版本为预发行。请从本仓库 Release 下载安装包，不要使用其他仓库的 Docker、Magisk 或旧版 APK。
+
 ## v2.0.1 - 2026-09-18
 
 ### Android 本地 fallback

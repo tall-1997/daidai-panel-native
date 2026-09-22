@@ -18,11 +18,9 @@
 
 ---
 
-呆呆面板 (Daidai Panel) 是一款轻量级定时任务管理平台，采用 Go (Gin) + Vue3 (Element Plus) + SQLite 架构，专注于脚本托管与自动化任务调度。支持 Python、Node.js（含 `.js` / `.mjs`）、Shell、TypeScript、Go 等多语言脚本的定时执行与可视化管理，内置 18 种消息推送渠道、订阅管理、环境变量、依赖管理、Open API 等功能。Docker 一键部署，开箱即用。
+本目录是呆呆面板本机版仓库中的内置面板源码，版本与根目录 `VERSION.json` 一致，当前为 **v2.0.2**。产品介绍、安装包和更新说明以仓库根目录 README 为准。
 
-> 最新稳定版：`v2.3.9` · [更新日志](./docs/release-notes/v2.3.9.md)<br>
-> 本次重点：修复企业微信 mpnews 图文正文不换行、窗口最小化被强制全屏、桌面版 Python 版本缺失自动回退、随机延迟误延迟手动执行，以及多设备登录后旧会话无限加载。<br>
-> APP 客户端：[linzixuanzz/Dumb-Panel-APP](https://github.com/linzixuanzz/Dumb-Panel-APP)
+本仓库不发布 Docker 镜像、Windows 安装包或 Magisk 模块。请只从 [tall-1997/daidai-panel-native Releases](https://github.com/tall-1997/daidai-panel-native/releases) 下载 Android 安装包。
 
 ## 功能特性
 

@@ -98,7 +98,11 @@ object AndroidNodeRuntime {
             ZipInputStream(input).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    val outFile = File(dest, entry.name)
+                    val outFile = AndroidLinuxRuntime.zipEntryFile(dest, entry.name)
+                    if (outFile == null) {
+                        entry = zis.nextEntry
+                        continue
+                    }
                     if (entry.isDirectory) {
                         outFile.mkdirs()
                     } else {

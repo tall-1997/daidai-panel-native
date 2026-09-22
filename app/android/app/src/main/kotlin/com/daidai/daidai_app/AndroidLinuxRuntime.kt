@@ -294,6 +294,14 @@ object AndroidLinuxRuntime {
         Thread { try { ensureRootfsReady(context) } catch (_: Exception) { } }.start()
     }
 
+    internal fun zipEntryFile(dest: File, entryName: String): File? {
+        if (entryName.isBlank()) return null
+        val root = dest.canonicalFile
+        val target = File(dest, entryName).canonicalFile
+        val prefix = root.path + File.separator
+        return if (target == root || target.path.startsWith(prefix)) target else null
+    }
+
     internal fun normalizeMirrorUrl(value: String): String? {
         val normalized = value.trim().trimEnd('/')
         if (normalized.isEmpty() || normalized.any { it.isWhitespace() || it.isISOControl() }) return null

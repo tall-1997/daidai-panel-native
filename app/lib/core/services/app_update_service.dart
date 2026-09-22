@@ -23,6 +23,47 @@ const _kGitHubMirrorPrefix = 'https://$_kGitHubMirrorHost/';
 const _kAndroidUpdateManifestUrl =
     'https://github.com/$_kGitHubRepo/releases/latest/download/android-update.json';
 
+@visibleForTesting
+String githubReleaseAssetUrl({
+  required String repo,
+  required String tag,
+  required String asset,
+}) {
+  return 'https://github.com/$repo/releases/download/${tag.trim()}/${asset.trim()}';
+}
+
+@visibleForTesting
+bool cachedInstallerHasRequiredMetadata({
+  required int fileSize,
+  required int expectedSize,
+  required String expectedDigest,
+  required String expectedMd5,
+}) {
+  if (fileSize <= 0) return false;
+  if (expectedSize > 0 && fileSize != expectedSize) return false;
+  if (expectedMd5.trim().isNotEmpty) return true;
+  final digest = expectedDigest.trim().toLowerCase();
+  if (digest.isEmpty) return false;
+  final hash = digest.startsWith('sha256:') ? digest.substring('sha256:'.length) : digest;
+  return hash.isNotEmpty;
+}
+
+@visibleForTesting
+Map<String, dynamic>? pickLatestPublishedGithubRelease(dynamic data) {
+  if (data is Map) {
+    if (data['draft'] == true) return null;
+    return Map<String, dynamic>.from(data);
+  }
+  if (data is List) {
+    for (final item in data) {
+      if (item is Map && item['draft'] != true) {
+        return Map<String, dynamic>.from(item);
+      }
+    }
+  }
+  return null;
+}
+
 bool _isTrustedDownloadUrl(String rawUrl) {
   final uri = Uri.tryParse(rawUrl);
   if (uri == null || uri.scheme != 'https') {
@@ -229,11 +270,11 @@ class AppUpdateService {
     }
     try {
       final resp = await _dio.get(
-        'https://api.github.com/repos/$_kGitHubRepo/releases/latest',
+        'https://api.github.com/repos/$_kGitHubRepo/releases?per_page=8',
         options: Options(headers: {'Accept': 'application/vnd.github.v3+json'}),
       );
-      final data = resp.data;
-      if (data is! Map<String, dynamic>) {
+      final data = pickLatestPublishedGithubRelease(resp.data);
+      if (data == null) {
         throw const FormatException('GitHub Release 响应格式无效');
       }
 
@@ -303,11 +344,31 @@ class AppUpdateService {
 
   static Future<AppUpdateInfo?> _checkAndroidManifest() async {
     try {
-      final response = await _dio.get(
-        _kAndroidUpdateManifestUrl,
-        options: Options(headers: AppUserAgent.defaultHeaders),
-      );
-      final raw = response.data;
+      final urls = <String>[_kAndroidUpdateManifestUrl];
+      try {
+        final listed = await _dio.get(
+          'https://api.github.com/repos/$_kGitHubRepo/releases?per_page=8',
+          options: Options(headers: {'Accept': 'application/vnd.github.v3+json'}),
+        );
+        final tag = pickLatestPublishedGithubRelease(listed.data)?['tag_name']?.toString();
+        if (tag != null && tag.trim().isNotEmpty) {
+          urls.insert(
+            0,
+            githubReleaseAssetUrl(repo: _kGitHubRepo, tag: tag, asset: 'android-update.json'),
+          );
+        }
+      } catch (_) {}
+      Object? raw;
+      for (final url in urls) {
+        try {
+          final response = await _dio.get(
+            url,
+            options: Options(headers: AppUserAgent.defaultHeaders),
+          );
+          raw = response.data;
+          break;
+        } catch (_) {}
+      }
       if (raw is! Map) return null;
       final runtimeAbi = await _platform.invokeMethod<String>('getRuntimeAbi');
       final manifest = AndroidUpdateManifest.fromJson(
@@ -621,15 +682,20 @@ class AppUpdateService {
       return false;
     }
     final size = await file.length();
-    if (expectedSize > 0 && size != expectedSize) {
-      return false;
-    }
-    if (expectedSize <= 0 && size <= 1024 * 1024) {
+    if (!cachedInstallerHasRequiredMetadata(
+      fileSize: size,
+      expectedSize: expectedSize,
+      expectedDigest: expectedDigest,
+      expectedMd5: expectedMd5,
+    )) {
       return false;
     }
     if (expectedMd5.isNotEmpty &&
         !await _matchesHash(file, expectedMd5, md5)) {
       return false;
+    }
+    if (expectedDigest.trim().isEmpty) {
+      return expectedMd5.trim().isNotEmpty;
     }
     return _matchesDigest(file, expectedDigest);
   }
@@ -637,13 +703,13 @@ class AppUpdateService {
   static Future<bool> _matchesDigest(File file, String expectedDigest) async {
     final normalized = expectedDigest.trim().toLowerCase();
     if (normalized.isEmpty) {
-      return true;
+      return false;
     }
     final expected = normalized.startsWith('sha256:')
         ? normalized.substring('sha256:'.length)
         : normalized;
     if (expected.isEmpty) {
-      return true;
+      return false;
     }
     final actual = await sha256.bind(file.openRead()).first;
     return actual.toString().toLowerCase() == expected;

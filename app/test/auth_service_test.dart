@@ -17,4 +17,20 @@ void main() {
       expect(result.errorMessage, '服务器地址格式无效');
     });
   });
+
+  group('loginChallengePayload', () {
+    test('reads a nested two-factor challenge', () {
+      final payload = loginChallengePayload({
+        'error': '请输入两步验证码',
+        'data': {'two_factor_required': true, 'code': 'two_factor_required'},
+      });
+      expect(payload, isNotNull);
+      expect(payload!['two_factor_required'], isTrue);
+      expect(payload['code'], 'two_factor_required');
+    });
+
+    test('ignores ordinary 4xx payloads', () {
+      expect(loginChallengePayload({'error': '用户名或密码错误'}), isNull);
+    });
+  });
 }
