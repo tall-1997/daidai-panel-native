@@ -980,6 +980,7 @@ let eventSource: EventStreamConnection | null = null;
 const logContainerRef = ref<HTMLElement>();
 let depsLogBuffer: string[] = [];
 let depsLogFlushRaf = 0;
+let logReconnectTimer = 0;
 let detailLoadGeneration = 0;
 const createType = ref("nodejs");
 const createNames = ref("");
@@ -1541,6 +1542,10 @@ function viewLog(row: any) {
     return;
   }
 
+  openLogStream(row, generation);
+}
+
+function openLogStream(row: any, generation: number) {
   const url = `/api/v1/deps/${row.id}/log-stream`;
   eventSource = openAuthorizedEventStream(url, {
     onMessage(data) {
@@ -1562,11 +1567,24 @@ function viewLog(row: any) {
     },
     onEvent(event) {
       if (generation !== detailLoadGeneration) return;
-      if (event.event === "done") {
-        logDone.value = true;
+      if (event.event !== "done") return;
+      if (event.data === "reconnect") {
+        // Android 本机 fallback 只能一次返回一段快照，安装仍在进行时用它要求客户端重连；
+        // 重新请求会把当前日志整段重放，因此先清空缓冲，避免同一行重复堆叠。
         closeSSE();
-        loadData();
+        depsTerminalBuffer.clear();
+        logContent.value = "";
+        depsLogVersion.value++;
+        logReconnectTimer = window.setTimeout(() => {
+          logReconnectTimer = 0;
+          if (generation !== detailLoadGeneration || !showLogDialog.value) return;
+          openLogStream(row, generation);
+        }, 1000);
+        return;
       }
+      logDone.value = true;
+      closeSSE();
+      loadData();
     },
     onError() {
       if (generation !== detailLoadGeneration) return;
@@ -1578,6 +1596,10 @@ function viewLog(row: any) {
 }
 
 function closeSSE() {
+  if (logReconnectTimer) {
+    window.clearTimeout(logReconnectTimer);
+    logReconnectTimer = 0;
+  }
   if (depsLogFlushRaf) {
     cancelAnimationFrame(depsLogFlushRaf);
     depsLogFlushRaf = 0;
