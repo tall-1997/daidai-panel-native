@@ -88,7 +88,7 @@ func TestReleaseGateStateByChannel(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			top, gate, err := releaseGateState(test.channel, contract, test.smoke, "")
+			top, gate, err := releaseGateState(test.channel, contract, test.smoke)
 			if test.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantError) {
 					t.Fatalf("error = %v, want containing %q", err, test.wantError)
