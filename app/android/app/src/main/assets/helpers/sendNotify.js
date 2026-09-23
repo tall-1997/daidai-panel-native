@@ -165,9 +165,9 @@ function requestNotify(title, content, params = {}) {
       headers: {
         'Authorization': `Bearer ${notifyToken}`,
         'Content-Type': 'application/json',
-        'Origin': String(process.env.DAIDAI_NOTIFY_ORIGIN || ''),
-        'X-Daidai-Local-Token': notifyToken,
         'Content-Length': Buffer.byteLength(payload),
+        ...(process.env.DAIDAI_NOTIFY_ORIGIN ? { 'Origin': process.env.DAIDAI_NOTIFY_ORIGIN } : {}),
+        ...(process.env.DAIDAI_NOTIFY_LOCAL_TOKEN ? { 'X-Daidai-Local-Token': process.env.DAIDAI_NOTIFY_LOCAL_TOKEN } : {}),
       },
       timeout: timeoutMs,
     }, (res) => {
