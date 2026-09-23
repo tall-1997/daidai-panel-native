@@ -2660,7 +2660,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             recordSubscriptionLog(id, "error", "订阅地址仅支持 http/https")
             return error(NanoHTTPD.Response.Status.BAD_REQUEST, "订阅地址仅支持 http/https")
         }
-        return try {
+        try {
             var currentUrl = record.url
             var hops = 0
             while (true) {
@@ -2692,7 +2692,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             }
         } catch (e: Exception) {
             recordSubscriptionLog(id, "error", e.message ?: e.javaClass.simpleName)
-            error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "pull failed: ${e.message}")
+            return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, "pull failed: ${e.message}")
         }
     }
 
