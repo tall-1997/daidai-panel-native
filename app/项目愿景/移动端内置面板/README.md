@@ -16,7 +16,7 @@
 | 产品形态 | 可行性 | 目标能力 |
 |---|---:|---|
 | Android 普通设备 | 中高 | 内置 API、SQLite、任务管理、有限后台调度、受控脚本运行时 |
-| Android Root 设备 | 不在本仓库范围 | 本仓库只发布非 Root Android 本机版 |
+| Android Root 设备 | 高 | 复用 Magisk/Linux 运行环境，接近后端面板完整能力 |
 | iOS 普通设备 | 中 | 内置数据与管理核心、前台自动化、系统允许的后台任务 |
 | iOS 完整脚本执行 | 低 | 受 App Sandbox、后台时长、动态代码执行和分发规则限制 |
 
@@ -34,7 +34,7 @@
 
 1. 将后端核心能力拆为可嵌入的共享服务层。
 2. Android 先实现本地 Sidecar 后端与受控运行时。
-3. 本仓库不提供 Root 模块或容器模块。
+3. Root Android 复用上游 Magisk 容器能力形成完整版本。
 4. iOS 实现沙箱内本地核心，并将完整脚本执行路由到远程执行节点。
 5. App 自动发现本地实例，将 `127.0.0.1` 本地连接作为一种受管服务器配置。
 
@@ -52,5 +52,6 @@
 ## 参考基线
 
 - 当前 App：Flutter、Riverpod、GoRouter、Dio，已覆盖后端主要管理 API。
-- 本仓库 Android 本机版使用 Kotlin 本机面板和内置 Linux 用户空间。
-- 不提供 Root 模块，也不引用其他仓库的版本号。
+- 上游面板：Go、Gin、SQLite，Go 二进制可同时提供 API 与 Web 静态资源。
+- 上游 Android Root 方案：Magisk 模块通过 Linux 容器提供 Python、Node.js、Git 和后端服务。
+- 上游版本基线：`daidai-panel v2.3.9`。

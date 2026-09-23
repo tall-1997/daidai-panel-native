@@ -145,7 +145,6 @@ func main() {
 	outputDir := flag.String("output-dir", "release/evidence", "evidence output directory")
 	runtimeManifestPath := flag.String("runtime-manifest", "runtime/manifest.json", "runtime manifest path")
 	runtimeSmokePath := flag.String("runtime-smoke", "runtime/smoke-evidence.json", "runtime smoke evidence path")
-	emulatorSmokePath := flag.String("emulator-smoke", "", "passed x86_64 emulator smoke evidence path")
 	compatibilityPath := flag.String("compatibility", "runtime/compatibility.json", "runtime compatibility matrix path")
 	routeTracePath := flag.String("route-trace", "contracts/backend-api-mobile.json", "route trace path")
 	goModPath := flag.String("go-mod", "panel/server/go.mod", "Go module file path")
@@ -163,7 +162,7 @@ func main() {
 	}
 	gateContract := readReleaseGateContract(*releaseContractPath)
 	runtimeSmoke := readRuntimeSmokeEvidence(*runtimeSmokePath)
-	topLevelStatus, normalizedGateStatus, err := releaseGateState(*channel, gateContract, runtimeSmoke, *emulatorSmokePath)
+	topLevelStatus, normalizedGateStatus, err := releaseGateState(*channel, gateContract, runtimeSmoke)
 	if err != nil {
 		fatalf("release gate state: %v", err)
 	}
@@ -259,26 +258,7 @@ func buildPendingEvidence() map[string]gateSummary {
 	}
 }
 
-func emulatorSmokePassed(path string) bool {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return false
-	}
-	var smoke struct {
-		Status   string `json:"status"`
-		MatrixID string `json:"matrix_id"`
-	}
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	if err := json.Unmarshal(payload, &smoke); err != nil {
-		return false
-	}
-	return smoke.Status == "passed" && smoke.MatrixID == "api30-x86_64-4k"
-}
-
-func releaseGateState(channel string, contract releaseGateContract, smoke runtimeSmokeEvidence, emulatorSmokePath string) (string, string, error) {
+func releaseGateState(channel string, contract releaseGateContract, smoke runtimeSmokeEvidence) (string, string, error) {
 	channel = strings.TrimSpace(channel)
 	if channel != "snapshot" && channel != "prerelease" && channel != "stable" {
 		return "", "", fmt.Errorf("unsupported channel %q", channel)
@@ -288,10 +268,6 @@ func releaseGateState(channel string, contract releaseGateContract, smoke runtim
 	}
 	if channel != "stable" {
 		return "pending", "pending", nil
-	}
-	// 没有自托管 ARM64 真机时，正式版接受同一次构建已通过的 x86_64 模拟器证据。
-	if emulatorSmokePassed(emulatorSmokePath) {
-		return "completed", "pass", nil
 	}
 	for _, runtimeID := range contract.StableRequiredRuntimeIDs {
 		var recordIndex = -1

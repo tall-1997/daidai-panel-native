@@ -471,8 +471,8 @@ jobs:
 
   stable-device:
     if: needs.verify-build.outputs.release_channel == 'stable'
-    needs: [verify-build, x86-device]
-    runs-on: ubuntu-latest
+    needs: verify-build
+    runs-on: [self-hosted, android-device]
     timeout-minutes: 90
     outputs:
       evidence_artifact_name: ${{ needs.verify-build.outputs.stable_device_evidence_artifact_name }}
@@ -486,27 +486,41 @@ jobs:
         with:
           name: ${{ needs.verify-build.outputs.candidate_artifact_name }}
           path: candidate
-      - name: Download x86_64 emulator evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: x86_64-device-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence
-      - name: Record stable release evidence from the passed emulator smoke
+      - name: Run stable candidate on trusted physical device
         env:
           VERSION: ${{ needs.verify-build.outputs.version }}
           CHANNEL: ${{ needs.verify-build.outputs.release_channel }}
         shell: bash
         run: |
-          APP_APK="candidate/daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
-          X64_APK="candidate/daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
-          X64_TEST_APK="candidate/daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
-          test -s "${APP_APK}"
-          test -s "${X64_APK}"
-          test -s "${X64_TEST_APK}"
-          test -s evidence/api30-x86_64-4k.json
-          jq -e '.status == "verified" and .matrix_id == "api30-x86_64-4k"' evidence/api30-x86_64-4k.json
-          jq -e --arg sha "$(sha256sum "${X64_APK}" | cut -d ' ' -f1)" '.artifacts.app_apk.sha256 == $sha' evidence/api30-x86_64-4k.device.json
-          jq -e --arg sha "$(sha256sum "${X64_TEST_APK}" | cut -d ' ' -f1)" '.artifacts.test_apk.sha256 == $sha' evidence/api30-x86_64-4k.device.json
+          APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"
+          TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
+          X64_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
+          X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
+          APP_APK="candidate/${APP_APK_NAME}"
+          TEST_APK="candidate/${TEST_APK_NAME}"
+          MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+          mkdir -p evidence
+          python3 scripts/android-runtime-smoke.py run \
+            --apk "${APP_APK}" \
+            --test-apk "${TEST_APK}" \
+            --matrix-id "${MATRIX_ID}" \
+            --expected-api "$(jq -er '.device_smoke.matrix[0].api' scripts/release-runtime-contract.json)" \
+            --expected-page-size "$(jq -er '.device_smoke.matrix[0].page_size_bytes' scripts/release-runtime-contract.json)" \
+            --expected-abi "$(jq -er '.device_smoke.matrix[0].abi' scripts/release-runtime-contract.json)" \
+            --output "evidence/${MATRIX_ID}.json"
+          python3 scripts/verify-release-runtime-evidence.py \
+            --contract scripts/release-runtime-contract.json \
+            --channel stable \
+            --evidence-dir evidence \
+            --app-apk "${APP_APK}" \
+            --test-apk "${TEST_APK}"
+          go run ./scripts/verify-runtime-contract.go \
+            --manifest candidate/runtime/manifest.json \
+            --compatibility candidate/runtime/compatibility.json \
+            --smoke-evidence "evidence/${MATRIX_ID}.json" \
+            --apk "${APP_APK}" \
+            --strict \
+            --strict-runtime-ids="$(jq -er '.stable_required_runtime_ids | join(",")' scripts/release-runtime-contract.json)"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.verify-build.outputs.stable_device_evidence_artifact_name }}
@@ -538,7 +552,6 @@ jobs:
         run: |
           if [[ "${CHANNEL}" == "stable" ]]; then
             test "${DEVICE_RESULT}" = success
-            echo "Stable release uses the passed x86_64 emulator smoke. ARM64 physical-device evidence remains blocked."
           else
             test "${CHANNEL}" = prerelease
             test "${DEVICE_RESULT}" = skipped
@@ -600,7 +613,6 @@ jobs:
             --channel "${CHANNEL}" \
             --runtime-manifest candidate/runtime/manifest.json \
             --runtime-smoke candidate/runtime/smoke-evidence.json \
-            --emulator-smoke evidence/api30-x86_64-4k.json \
             --compatibility candidate/runtime/compatibility.json \
             --route-trace candidate/contracts/backend-api-mobile.json \
             --output-dir release/evidence \
@@ -651,8 +663,8 @@ jobs:
           print(body)
           print()
           if channel == 'stable':
-              print('正式版已通过正式签名、x86_64 模拟器运行时验证与发布 APK 摘要一致性门禁。')
-              print('ARM64 真机验证仍缺少自托管 runner，本次不以真机证据宣称 ARM64 已覆盖。')
+              print('Stable Release 已通过正式签名、真机运行时验证与发布 APK 摘要一致性门禁。')
+              print('附件证据记录了真机实际安装的 app APK 与 androidTest APK SHA256。')
           else:
               print('Prerelease 已通过版本、正式签名、证书指纹与 CI 构建门禁。')
               print('ARM64 Android 真机验证仍为 blocked 边界，release evidence 与 runtime gates 保持 pending。')

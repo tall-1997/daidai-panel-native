@@ -174,10 +174,11 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("needs.verify-build.outputs.app_apk_name", self.workflow)
         self.assertNotIn("needs.verify-build.outputs.test_apk_name", self.workflow)
 
+        stable_job = self.workflow.split("  stable-device:", 1)[1].split("  release:", 1)[0]
         release_job = self.workflow.split("  release:", 1)[1]
         app_assignment = 'APP_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64.apk"'
         test_assignment = 'TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"'
-        for job in (release_job,):
+        for job in (stable_job, release_job):
             self.assertIn("VERSION: ${{ needs.verify-build.outputs.version }}", job)
             self.assertIn("CHANNEL: ${{ needs.verify-build.outputs.release_channel }}", job)
             self.assertIn(app_assignment, job)
@@ -191,16 +192,18 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
                 self.assertEqual(test_path, f"candidate/daidai-panel-native-{self.version}-{channel}-arm64-androidTest.apk")
 
     def test_device_evidence_remains_bound_to_candidate_apk_digests(self):
-        self.assertGreaterEqual(self.workflow.count("--app-apk \"${APP_APK}\""), 1)
-        self.assertGreaterEqual(self.workflow.count("--test-apk \"${TEST_APK}\""), 1)
+        self.assertGreaterEqual(self.workflow.count("--app-apk \"${APP_APK}\""), 2)
+        self.assertGreaterEqual(self.workflow.count("--test-apk \"${TEST_APK}\""), 2)
         self.assertIn('EXPECTED_APK_SHA="$(cut -d \' \' -f1 "${APP_APK}.sha256")"', self.workflow)
         self.assertIn('test "$(sha256sum "${APP_APK}" | cut -d \' \' -f1)" = "${EXPECTED_APK_SHA}"', self.workflow)
 
     def test_stable_runtime_contract_receives_strict_scope(self):
         stable_job = self.workflow.split("  stable-device:", 1)[1].split("  release:", 1)[0]
-        self.assertIn("x86_64-device-evidence-${{ github.run_id }}-${{ github.run_attempt }}", stable_job)
-        self.assertIn("api30-x86_64-4k.json", stable_job)
-        self.assertNotIn("runs-on: [self-hosted, android-device]", stable_job)
+        self.assertIn("--strict \\", stable_job)
+        self.assertIn('--strict-runtime-ids="$(jq -er', stable_job)
+        self.assertIn('--smoke-evidence "evidence/${MATRIX_ID}.json"', stable_job)
+        self.assertIn('--apk "${APP_APK}"', stable_job)
+        self.assertNotIn("--native-lib-dir", stable_job)
 
     def test_toolchain_and_evidence_scope_are_explicit(self):
         self.assertIn("NODE_VERSION: '20.19.x'", self.workflow)
