@@ -55,8 +55,6 @@ class LocalPanelStore(
     private val taskProcesses = ConcurrentHashMap<Long, Process>()
     private val subscriptionPullProcesses = ConcurrentHashMap<Long, Process>()
     private val subscriptionStopRequested = ConcurrentHashMap.newKeySet<Long>()
-    private val dependencyProcesses = ConcurrentHashMap<Long, Process>()
-    private val dependencyCancelRequested = ConcurrentHashMap.newKeySet<Long>()
     private val taskAbortRequested = ConcurrentHashMap.newKeySet<Long>()
     private val taskRetrySignals = ConcurrentHashMap<Long, CountDownLatch>()
     private val taskRunLogIds = ConcurrentHashMap<Long, Long>()
@@ -166,12 +164,6 @@ class LocalPanelStore(
         }
 
         internal fun taskLogDone(status: Int): Boolean = status != 2
-
-        // Mirrors the core dependency log stream: only a non-transient status may terminate
-        // the stream. Anything still in flight must ask the client to reconnect, otherwise
-        // the app reads the raw status as a terminal one and reports success mid-install.
-        internal fun dependencyStatusInFlight(status: String): Boolean =
-            status.trim().lowercase() in setOf("installing", "removing", "uninstalling", "pending", "queued", "running")
 
         internal fun needsInitialization(userCount: Int): Boolean = userCount == 0
 
@@ -2097,7 +2089,7 @@ rejectIfUserCannotMutate(session)?.let { return it }
             session.method == NanoHTTPD.Method.GET && id != null && action == "log-stream" -> dependencyLog(id)
             session.method == NanoHTTPD.Method.GET && id != null && action == "status" -> dependencyStatus(id)
             session.method == NanoHTTPD.Method.PUT && id != null && action == "cancel" ->
-                cancelDependency(id)
+                updateDependencyStatus(id, "cancelled", "Dependency operation cancelled")
             session.method == NanoHTTPD.Method.PUT && id != null && action == "reinstall" ->
                 reinstallDependency(id)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/deps/batch-delete" ->
@@ -2540,7 +2532,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             id != null && session.method == NanoHTTPD.Method.PUT && action == "refresh" -> pullSubscription(id)
             id != null && session.method == NanoHTTPD.Method.PUT && action == "pull/stop" -> stopSubscriptionPull(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "logs" -> subscriptionLogs(id)
-            id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id, session)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
         }
     }
@@ -2781,31 +2773,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
 
     private fun subscriptionLogArray(id: Long): JSONArray = queryRows("SELECT * FROM subscription_logs WHERE subscription_id=? ORDER BY id DESC LIMIT 200", arrayOf(id.toString())) { c -> JSONObject().put("id", c.long("id")).put("level", c.string("level")).put("message", c.string("message")).put("created_at", c.string("created_at")) }
     private fun subscriptionLogs(id: Long) = ok(JSONObject().put("data", subscriptionLogArray(id)))
-    private fun subscriptionPullStream(id: Long, session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
-        // The core keeps this stream open while the pull runs and reports progress as plain log
-        // lines. The fallback answers with fixed-length snapshots, so replay the lines the client
-        // has not seen yet (its Last-Event-ID is a subscription log row id) and ask it to
-        // reconnect until the pull stops. Marking the stream done here would make the app show a
-        // finished pull while git is still running.
-        val running = subscriptionPullProcesses.containsKey(id) && !subscriptionStopRequested.contains(id)
-        val cursor = requestLogCursor(session)
-        val rows = subscriptionLogArray(id)
-        val ordered = ArrayList<JSONObject>(rows.length())
-        for (i in rows.length() - 1 downTo 0) ordered += rows.getJSONObject(i)
-        val payload = StringBuilder()
-        for (row in ordered) {
-            val rowId = row.optLong("id")
-            if (rowId <= cursor) continue
-            payload.append("id: ").append(rowId).append('\n')
-            payload.append("data: ").append(row.optString("message").replace("\n", "\\n")).append("\n\n")
-        }
-        val done = when {
-            running -> "reconnect"
-            ordered.isEmpty() -> "not_running"
-            else -> "finished"
-        }
-        payload.append("event: done\ndata: ").append(done).append("\n\n")
-        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/event-stream; charset=utf-8", payload.toString()).apply { addHeader("Cache-Control", "no-cache") }
+    private fun subscriptionPullStream(id: Long): NanoHTTPD.Response {
+        val rows = subscriptionLogArray(id); val text = buildString { for (i in 0 until rows.length()) append("data: ").append(rows.getJSONObject(i).toString()).append("\n\n"); append("event: done\ndata: {\"done\":true}\n\n") }
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/event-stream; charset=utf-8", text).apply { addHeader("Cache-Control", "no-cache") }
     }
 
     private fun serveTaskViews(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response {
@@ -3986,7 +3956,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             "const out=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;" +
             "vm.runInThisContext(out,{filename:file});"
 
-    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null, extraEnvironment: Map<String, String> = emptyMap(), subscriptionId: Long? = null, dependencyId: Long? = null): LocalScriptResult {
+    private fun runLocalProcess(command: List<String>, workingDir: File, logs: JSONArray, timeoutSeconds: Long = 300, onLine: ((String) -> Unit)? = null, taskId: Long? = null, extraEnvironment: Map<String, String> = emptyMap(), subscriptionId: Long? = null): LocalScriptResult {
         logs.put("Command: ${command.first().substringAfterLast('/')}")
         var process: Process? = null
         return try {
@@ -4003,9 +3973,6 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             }
             if (subscriptionId != null && !registerSubscriptionProcess(subscriptionId, started)) {
                 return LocalScriptResult(logs.put("Subscription pull aborted"), "aborted", true, 130)
-            }
-            if (dependencyId != null && !registerDependencyProcess(dependencyId, started)) {
-                return LocalScriptResult(logs.put("Dependency operation cancelled"), "cancelled", true, 130)
             }
             val output = Collections.synchronizedList(mutableListOf<String>())
             val reader = Thread {
@@ -4036,16 +4003,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 process?.let { subscriptionPullProcesses.remove(subscriptionId, it) }
                 subscriptionStopRequested.remove(subscriptionId)
             }
-            if (dependencyId != null) process?.let { dependencyProcesses.remove(dependencyId, it) }
         }
-    }
-
-    private fun registerDependencyProcess(dependencyId: Long, process: Process): Boolean {
-        dependencyProcesses[dependencyId] = process
-        if (!dependencyCancelRequested.contains(dependencyId)) return true
-        terminateTaskProcess(process)
-        dependencyProcesses.remove(dependencyId, process)
-        return false
     }
 
     private fun registerSubscriptionProcess(subscriptionId: Long, process: Process): Boolean {
@@ -5878,17 +5836,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     }
 
     private fun scheduleDependencyInstall(depType: String, name: String, dependencyId: Long, identityName: String, operationId: String) {
-        dependencyCancelRequested.remove(dependencyId)
         dependencyExecutor.execute {
             val result = try {
-                installDependencyForFallback(depType, name, dependencyId = dependencyId)
+                installDependencyForFallback(depType, name)
             } catch (error: Throwable) {
                 "crashed" to "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
-            }
-            if (dependencyCancelRequested.remove(dependencyId)) {
-                updateDependencyRecord(dependencyId, "cancelled", (result.second + "\nDependency operation cancelled").trim().take(2000), "")
-                finishOperation(operationId, "cancelled", 130, "DEPENDENCY_CANCELED")
-                return@execute
             }
             val success = result.first == "installed"
             val installedVersion = if (success) {
@@ -6138,7 +6090,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         }
     }
 
-    private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null, dependencyId: Long? = null): Pair<String, String> {
+    private fun installDependencyForFallback(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val runtimeVersion = when (depType) {
             "python" -> DependencyStorage.PYTHON_VERSION
             "nodejs" -> DependencyStorage.NODE_VERSION
@@ -6146,10 +6098,10 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         }
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
             if (depType == "python" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/python3")) {
-                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId, dependencyId)
+                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
             }
             if (depType == "nodejs" && AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
-                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId, dependencyId)
+                return@withInstallLock installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
             }
             val installedVersion = when (depType) {
                 "python" -> queryPipInstalledPackages()[DependencyStorage.normalizedName(depType, name)]
@@ -6159,11 +6111,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             if (DependencyStorage.satisfies(depType, name, installedVersion)) {
                 return@withInstallLock "installed" to "Already installed${installedVersion?.let { ": $it" }.orEmpty()}; skipped network installation"
             }
-            installDependencyForFallbackUnlocked(depType, name, onLine, taskId, dependencyId)
+            installDependencyForFallbackUnlocked(depType, name, onLine, taskId)
         }
     }
 
-    private fun installDependencyForFallbackUnlocked(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null, dependencyId: Long? = null): Pair<String, String> {
+    private fun installDependencyForFallbackUnlocked(depType: String, name: String, onLine: ((String) -> Unit)? = null, taskId: Long? = null): Pair<String, String> {
         val mirrors = AndroidLinuxRuntime.mirrorConfig(appContext)
         val localSpec = localDependencyFileSpec(depType, name)
         if (depType == "python") {
@@ -6179,14 +6131,12 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 val sourceArgs = if (localSpec == null) listOf("-i", mirrors.pipMirror) else emptyList()
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", guestTarget) + sourceArgs + listOf("--", installArg))
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
-                var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, dependencyId = dependencyId)
-                if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to textOf(result)
-                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId, dependencyId)) {
+                var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
+                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
                     onLine?.invoke("Native build toolchain installed; retrying Python dependency")
-                    result = runLocalProcess(command, target, JSONArray().put("Retrying Python dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, dependencyId = dependencyId)
+                    result = runLocalProcess(command, target, JSONArray().put("Retrying Python dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
                 }
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-                if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to text
                 if (result.exitCode != 0) return "failed" to text
                 val verified = verifyRootfsPythonImport(importName, distName, target, taskId)
                 return if (verified.first) "installed" to "$text\nPost-install import verification confirmed $importName"
@@ -6201,14 +6151,12 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 val sourceArgs = if (localSpec == null) listOf("--registry", mirrors.npmMirror) else emptyList()
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs") + sourceArgs + listOf("--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
-                var result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment(), dependencyId)
-                if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to textOf(result)
-                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId, dependencyId)) {
+                var result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
+                if (result.exitCode != 0 && installRootfsBuildToolchain(onLine, taskId)) {
                     onLine?.invoke("Native build toolchain installed; retrying Node dependency")
-                    result = runLocalProcess(command, deps, JSONArray().put("Retrying Node dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment(), dependencyId)
+                    result = runLocalProcess(command, deps, JSONArray().put("Retrying Node dependency with rootfs build toolchain"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment())
                 }
                 val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-                if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to text
                 return if (result.exitCode == 0) "installed" to text else "failed" to text
             }
             return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: packaged rootfs Node.js runtime is not ready"
@@ -6226,9 +6174,8 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             val logs = JSONArray()
                 .put("Installing rootfs system package: $name")
                 .put("preferred_package_manager=${preferredManager.ifBlank { "auto" }}")
-            val result = runLocalProcess(command, appContext.filesDir, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, dependencyId = dependencyId)
+            val result = runLocalProcess(command, appContext.filesDir, logs, ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId)
             val text = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-            if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to text
             return if (result.exitCode == 0) "installed" to text else "failed" to text
         }
         return "unavailable" to "RUNTIME_PACKAGE_MANAGER_UNAVAILABLE: $depType is not supported on Android fallback"
@@ -6260,10 +6207,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         "npm_config_ignore_scripts" to "false",
     )
 
-    private fun textOf(result: LocalScriptResult): String =
-        (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
-
-    private fun installRootfsBuildToolchain(onLine: ((String) -> Unit)?, taskId: Long?, dependencyId: Long? = null): Boolean {
+    private fun installRootfsBuildToolchain(onLine: ((String) -> Unit)?, taskId: Long?): Boolean {
         val command = AndroidLinuxRuntime.guestCommand(
             appContext,
             appContext.filesDir,
@@ -6277,12 +6221,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             ScriptCompatibility.INSTALL_TIMEOUT_SECONDS,
             onLine,
             taskId,
-            dependencyId = dependencyId,
         ).exitCode == 0
     }
 
     private fun dependencyLog(id: Long): NanoHTTPD.Response {
-        val row = readableDatabase.query(
+        val cursor = readableDatabase.query(
             "dependencies",
             arrayOf("status", "log"),
             "id = ?",
@@ -6290,32 +6233,19 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             null,
             null,
             null
-        ).use {
-            if (!it.moveToFirst()) null else it.string("status") to it.string("log")
-        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
-        val status = row.first
-        // The app renders every `data:` frame verbatim, so replay the log as plain lines, each
-        // tagged with a stable id: the SSE client drops ids it already rendered, which keeps
-        // reconnects (this fallback streams fixed-length snapshots) free of duplicated lines.
-        val payload = StringBuilder()
-        var index = 0
-        for (line in row.second.replace("\r\n", "\n").replace('\r', '\n').split('\n')) {
-            if (line.isEmpty()) continue
-            payload.append("id: ").append(index++).append('\n')
-            payload.append("data: ").append(line).append("\n\n")
+        )
+        cursor.use {
+            if (!it.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
+            val status = it.string("status")
+            val log = it.string("log")
+            val framedLog = log.replace("\r\n", "\n").replace('\r', '\n').split('\n').joinToString("\n") { "data: $it" }
+            val payload = "event: log\n$framedLog\n\nevent: done\ndata: $status\n\n"
+            return NanoHTTPD.newFixedLengthResponse(
+                NanoHTTPD.Response.Status.OK,
+                "text/event-stream; charset=utf-8",
+                payload
+            )
         }
-        // A finished install reports its terminal status; an install still in flight must ask for
-        // a reconnect instead, because the app maps the raw status to a finished install and would
-        // otherwise report success while the package is still being built.
-        payload.append("event: done\n")
-        payload.append("data: ").append(
-            if (dependencyStatusInFlight(status)) "reconnect" else status,
-        ).append("\n\n")
-        return NanoHTTPD.newFixedLengthResponse(
-            NanoHTTPD.Response.Status.OK,
-            "text/event-stream; charset=utf-8",
-            payload.toString()
-        ).apply { addHeader("Cache-Control", "no-cache") }
     }
 
     private fun dependencyStatus(id: Long): NanoHTTPD.Response {
@@ -6339,28 +6269,6 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 )
             )
         }
-    }
-
-    private fun cancelDependency(id: Long): NanoHTTPD.Response {
-        val status = readableDatabase.query(
-            "dependencies",
-            arrayOf("status"),
-            "id = ?",
-            arrayOf(id.toString()),
-            null,
-            null,
-            null,
-        ).use { cursor ->
-            if (!cursor.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
-            cursor.string("status")
-        }
-        if (!dependencyStatusInFlight(status)) {
-            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "当前依赖任务未在处理中")
-        }
-        dependencyCancelRequested.add(id)
-        dependencyProcesses[id]?.let(::terminateTaskProcess)
-        updateDependencyRecord(id, "cancelled", "Dependency operation cancelled", "")
-        return ok(JSONObject().put("message", "取消请求已提交").put("data", JSONObject().put("id", id).put("status", "cancelled")))
     }
 
     private fun updateDependencyStatus(id: Long, status: String, log: String): NanoHTTPD.Response {
@@ -6401,22 +6309,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     }
 
     private fun scheduleDependencyUninstall(dependencyId: Long, depType: String, name: String, operationId: String) {
-        dependencyCancelRequested.remove(dependencyId)
         dependencyExecutor.execute {
             val result = try {
-                uninstallDependencyForFallback(depType, name, dependencyId)
+                uninstallDependencyForFallback(depType, name)
             } catch (error: Throwable) {
                 false to "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
-            }
-            if (dependencyCancelRequested.remove(dependencyId)) {
-                updateDependencyRecord(dependencyId, "cancelled", "Dependency operation cancelled", "")
-                finishOperation(operationId, "cancelled", 130, "DEPENDENCY_CANCELED")
-                return@execute
-            }
-            if (dependencyCancelRequested.remove(dependencyId)) {
-                updateDependencyRecord(dependencyId, "cancelled", "Dependency operation cancelled", "")
-                finishOperation(operationId, "cancelled", 130, "DEPENDENCY_CANCELED")
-                return@execute
             }
             if (result.first) {
                 writableDatabase.delete("dependencies", "id = ?", arrayOf(dependencyId.toString()))
@@ -6428,7 +6325,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         }
     }
 
-    private fun uninstallDependencyForFallback(depType: String, name: String, dependencyId: Long? = null): Pair<Boolean, String> {
+    private fun uninstallDependencyForFallback(depType: String, name: String): Pair<Boolean, String> {
         val normalized = DependencyStorage.normalizedName(depType, name)
         val runtimeVersion = if (depType == "python") DependencyStorage.PYTHON_VERSION else DependencyStorage.NODE_VERSION
         return DependencyStorage.withInstallLock(depType, name, runtimeVersion) {
@@ -6451,7 +6348,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 else -> return@withInstallLock false to "Physical uninstall is unavailable for $depType"
             }
             val workingDir = if (depType == "python") DependencyStorage.pythonSitePackages(appContext.filesDir) else File(appContext.filesDir, "deps/nodejs").also(DependencyStorage::ensureNodePackageManifest)
-            val result = runLocalProcess(command, workingDir.apply { mkdirs() }, JSONArray(), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, dependencyId = dependencyId)
+            val result = runLocalProcess(command, workingDir.apply { mkdirs() }, JSONArray(), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS)
             val log = (0 until result.logs.length()).joinToString("\n") { result.logs.optString(it) }
             (result.exitCode == 0) to log
         }
@@ -7082,11 +6979,8 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         terminalSessions.close()
         scriptProcesses.values.forEach(::terminateTaskProcess)
         taskProcesses.values.forEach(::terminateTaskProcess)
-        dependencyProcesses.values.forEach(::terminateTaskProcess)
         scriptProcesses.clear()
         taskProcesses.clear()
-        dependencyProcesses.clear()
-        dependencyCancelRequested.clear()
         scriptRunExecutor.shutdownNow()
         taskRunExecutor.shutdownNow()
         runningTaskIds.clear()
