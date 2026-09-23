@@ -8,18 +8,17 @@
 
 呆呆面板 Android 本机版在非 Root Android 上提供任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控，并可以连接远程面板。内置 NDK 自编译 PRoot 与 Ubuntu 用户空间，可在本机使用终端、脚本和包管理，无需 Termux。安装包只从本仓库 Release 发布。
 
-当前版本：**v2.0.2**（预发行）
+当前版本：**v2.0.3**（正式版）
 
-Android versionCode：**2000020**
+Android versionCode：**2000030**
 
 默认分支：**main**
 
 ## 下载
 
-- 最新预发行：[GitHub Releases v2.0.2](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.2)
-- 当前稳定版：[v2.0.0](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.0)
-- ARM64 完整版：`daidai-panel-native-2.0.2-prerelease-arm64.apk`
-- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.2-prerelease-x86_64.apk`
+- 当前正式版：[GitHub Releases v2.0.3](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.3)
+- ARM64 完整版：`daidai-panel-native-2.0.3-stable-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.3-stable-x86_64.apk`
 - 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
 
 正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
@@ -35,7 +34,7 @@ Android versionCode：**2000020**
 
 - Flutter UI 统一管理 Android 本地实例和远程呆呆面板。
 - 本地 Kotlin fallback 运行于 Android `:panel` 独立进程，并监听动态 `127.0.0.1` 端口。
-- **内置 Linux 终端**：NDK 自编译 PRoot（termux/proot 5.1.107.92 fork）+ Ubuntu 24.04 用户空间，无需依赖 Termux。
+- **内置 Linux 终端**：NDK 自编译 PRoot + Ubuntu 24.04 用户空间，无需 Root，也不需要 Termux。
 - 支持任务、Cron、脚本、日志、环境变量、订阅、通知、用户、安全、SSH、Open API、平台令牌和备份恢复。
 - 包管理：Ubuntu 使用 apt，默认阿里云镜像源，支持按需安装 node、git、python3 等开发工具。
 - 支持 pip/npm 依赖安装、指定版本、安装去重、共享目录、镜像配置和缓存限制；镜像源在「我的 → 依赖管理」页右上角切换。
@@ -44,22 +43,22 @@ Android versionCode：**2000020**
 - 支持 App 内安全打开本机浏览器面板（一次性票据），也支持局域网浏览器通过账号密码 + JWT 登录访问。
 - 内置 Open API 应用管理：App Key / App Secret 换 token，业务 API 支持 token 鉴权、scopes 权限、速率限制与调用日志。
 - 本地接口校验安装级 Token、精确 Host、Origin、JWT、角色和权限。
-- 业务 API 以同仓库 `panel/server` 为 upstream 兼容基线。
+- 业务 API 由本仓库的 Kotlin 本机面板实现，合同见 `contracts/`。
 
 ## 架构与能力
 
 | 安装包 | ABI | 本地业务 API | 本地终端环境 | 推荐场景 |
 | --- | --- | --- | --- | --- |
-| ARM64 完整版 | `arm64-v8a` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
-| x86_64 版 | `x86_64` | Kotlin fallback，覆盖 upstream 业务能力 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | x86_64 模拟器、云手机 |
+| ARM64 完整版 | `arm64-v8a` | Kotlin 本机面板 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | ARM64 手机、平板、云手机 |
+| x86_64 版 | `x86_64` | Kotlin 本机面板 | PRoot + Ubuntu，apt 包管理，Python/Node/Shell/Git/SSH | x86_64 模拟器、云手机 |
 
-本地 Kotlin fallback 现已覆盖 Git SSH 私钥拉取、订阅 cron 刷新/停止、恢复进度、脚本短时 token、ts-node/tsc、GitHub 检查更新与赞助列表。Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装，不再依赖 Termux 预编译二进制。
+本地 Kotlin 面板已覆盖 Git SSH 私钥拉取、订阅刷新和停止、恢复进度、脚本短时 token、TypeScript、检查更新。Node.js 和 Python 通过 apt 在 Linux 用户空间内按需安装。
 
 ## 平台边界
 
 - 正式 Release 提供 ARM64 APK，另附 x86_64 APK 供模拟器/云手机使用。
 - 本地服务监听 `0.0.0.0`，支持本机与局域网浏览器访问；App 内请求走 local-token，浏览器请求强制账号密码 + JWT。
-- Linux 终端内核为 NDK 自编译 PRoot（termux/proot 5.1.107.92 fork），不使用 Termux 预编译二进制。
+- Linux 终端使用本仓库 NDK 自编译的 PRoot，不依赖外部终端应用。
 - Ubuntu 内置在 APK 中。
 - 默认 Linux 包管理器镜像源为华为云/阿里云/npmmirror，可在「我的 → 依赖管理」页右上角切换。
 - 依赖 glibc、桌面 Linux API 或不兼容 ARM64 的原生扩展可能无法使用。
@@ -75,8 +74,7 @@ Android versionCode：**2000020**
 | --- | --- |
 | 默认分支 | `main` |
 | 远程开发分支 | `main` |
-| 当前预发行标签 | `v2.0.2` |
-| 当前稳定标签 | `v2.0.0` |
+| 当前正式版标签 | `v2.0.3` |
 | 单一版本源 | `VERSION.json` |
 | Android 应用 ID | `com.daidai.daidai_app` |
 | 最低 Android API | 24 |
@@ -100,7 +98,7 @@ Android versionCode：**2000020**
 2. `Android Build and Release` snapshot
 3. `Android Device Runtime Smoke`
 
-正式发布经 `Android Build and Release` 的 `workflow_dispatch` 执行 `prerelease` 通道，工作流验证版本、JKS、证书指纹、Go Core、Flutter、Kotlin、AAR、运行时契约、APK 元数据、SHA-256 和同提交设备证据后创建正式签名 Release；无自托管 ARM64 真机 runner 时，v1.0.19/v1.0.20 均按此路径发布，全绿后由维护者将 Release 置为 Latest 且非预发布。`stable` 通道由版本 tag 推送触发（tag 必须等于 `VERSION.json` 的 `v{VERSION}`），STRICT 全量校验后自动创建 Stable Release，需自托管 ARM64 真机证据。
+正式版由 `v*` tag 触发。tag 必须等于 `VERSION.json` 中的 `v{VERSION}`。工作流验证版本、签名证书、Flutter、Kotlin、APK 摘要，并使用同一次构建通过的 x86_64 模拟器运行时证据创建正式 Release。当前没有自托管 ARM64 真机 runner，正式说明不会把 ARM64 真机写成已验证。
 
 ## 目录结构
 
@@ -109,7 +107,7 @@ Android versionCode：**2000020**
 | `app/` | Flutter App、Android Host、Kotlin fallback 和移动端测试 |
 | `app/android/app/src/main/jniLibs/` | NDK 自编译原生二进制（PRoot、BusyBox、Talloc、libandroid-shmem） |
 | `app/android/app/src/main/assets/android-runtime/` | 嵌入式 Linux 运行时资产（Ubuntu rootfs、Manifest） |
-| `panel/server/` | upstream Go 后端源码，作为业务 API 兼容基线参考（不再编译进 APK） |
+| `panel/server/` | 本仓库保留的服务端参考实现，不编译进 Android 安装包 |
 | `panel/web/` | 本机浏览器面板 Web 前端 |
 | `runtime/` | 运行时清单、兼容矩阵和 smoke evidence |
 | `contracts/` | 移动端 API 路由契约 |

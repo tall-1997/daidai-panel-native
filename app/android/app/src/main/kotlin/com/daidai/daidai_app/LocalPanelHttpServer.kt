@@ -214,7 +214,7 @@ class LocalPanelHttpServer(
                     NanoHTTPD.Response.Status.UNAUTHORIZED -> "x-daidai-local-token"
                     else -> ""
                 }
-                return jsonError(status, "Invalid local diagnostic request boundary ($reason): got='$headerValue' expect='$expected'")
+                return jsonError(status, "Invalid local diagnostic request boundary ($reason)")
             }
             if (!isFallbackRouteAllowed(session.method, session.uri)) {
                 return jsonError(Response.Status.NOT_FOUND, "Diagnostic fallback interface unavailable")

@@ -145,8 +145,8 @@ def request_notify(title, content, channel_id=None, channel_ids=None, context=No
         headers={
             "Authorization": f"Bearer {notify_token}",
             "Content-Type": "application/json",
-            "Origin": os.getenv("DAIDAI_NOTIFY_ORIGIN", ""),
-            "X-Daidai-Local-Token": notify_token,
+            **({"Origin": os.environ["DAIDAI_NOTIFY_ORIGIN"]} if os.getenv("DAIDAI_NOTIFY_ORIGIN") else {}),
+            **({"X-Daidai-Local-Token": os.environ["DAIDAI_NOTIFY_LOCAL_TOKEN"]} if os.getenv("DAIDAI_NOTIFY_LOCAL_TOKEN") else {}),
         },
         method="POST",
     )
