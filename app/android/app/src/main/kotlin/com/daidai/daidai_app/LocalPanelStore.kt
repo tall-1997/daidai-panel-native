@@ -6280,7 +6280,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         // otherwise report success while the package is still being built.
         payload.append("event: done\n")
         payload.append("data: ").append(
-            if (LocalTaskFallbackSemantics.dependencyStatusInFlight(status)) "reconnect" else status,
+            if (dependencyStatusInFlight(status)) "reconnect" else status,
         ).append("\n\n")
         return NanoHTTPD.newFixedLengthResponse(
             NanoHTTPD.Response.Status.OK,
