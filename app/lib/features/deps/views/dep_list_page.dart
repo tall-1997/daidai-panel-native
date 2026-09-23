@@ -1861,9 +1861,13 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       for (final event in events) {
         final reconnect = isReconnectSseEvent(event.event, event.data);
         final terminal = isTerminalSseEvent(event.event, event.data);
-        _logState = _logState.add(event.data).transition(
-          DependencyLogPhase.streaming,
-        );
+        // `done` frames only carry stream state, which the status banner already shows; rendering
+        // their payload would append a stray "reconnect" line on every reconnect.
+        if (!terminal && !reconnect) {
+          _logState = _logState.add(event.data).transition(
+            DependencyLogPhase.streaming,
+          );
+        }
         if (terminal) {
           _logState = _logState.transition(
             dependencyLogDonePhase(event.data),
