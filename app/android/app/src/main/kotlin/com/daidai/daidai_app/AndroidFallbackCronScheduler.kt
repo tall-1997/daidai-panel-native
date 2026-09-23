@@ -338,11 +338,7 @@ internal object CronExpression {
             }
             else -> {
                 val number = base.toIntOrNull() ?: return null
-                // A bare start plus a step (`5/10`) is the standard cron range from that
-                // start through the field maximum, not a single value. `*/n` and `a-b/n`
-                // already expand that way; keeping only the start made fallback schedules
-                // fire once where the core fires on every step.
-                if (pieces.size == 2) number..range.last else number..number
+                number..number
             }
         }
         if (selected.first !in range || selected.last !in range || selected.first > selected.last) return null

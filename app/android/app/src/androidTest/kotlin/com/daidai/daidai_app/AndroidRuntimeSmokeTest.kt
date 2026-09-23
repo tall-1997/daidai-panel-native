@@ -34,7 +34,6 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AndroidRuntimeSmokeTest {
     private lateinit var context: Context
-    private lateinit var serviceClient: LocalPanelServiceClient
     private lateinit var evidenceFile: File
     private val steps = JSONArray()
     private var core = JSONObject()
@@ -44,7 +43,6 @@ class AndroidRuntimeSmokeTest {
     @Test
     fun methodChannelCoreLifecyclePersistsRuntimeState() {
         context = ApplicationProvider.getApplicationContext()
-        serviceClient = LocalPanelServiceClient(context)
         evidenceFile = File(context.filesDir, "runtime-smoke/instrumentation.json").apply {
             parentFile?.mkdirs()
         }
@@ -295,7 +293,6 @@ class AndroidRuntimeSmokeTest {
                 .toString(2)
             evidenceFile.writeText(evidence)
             publishInstrumentationEvidence(evidence)
-            serviceClient.close()
         }
     }
 
@@ -329,15 +326,20 @@ class AndroidRuntimeSmokeTest {
     private fun invokeLocalHost(method: String): JSONObject {
         val latch = CountDownLatch(1)
         var result: Result<String>? = null
-        val callback: (Result<String>) -> Unit = { result = it; latch.countDown() }
-        when (method) {
-            "ensure-started" -> serviceClient.ensureStarted(callback)
-            "status" -> serviceClient.status(callback)
-            "restart" -> serviceClient.restart(callback)
-            else -> error("Unsupported local host method: $method")
+        val client = LocalPanelServiceClient(context)
+        try {
+            val callback: (Result<String>) -> Unit = { result = it; latch.countDown() }
+            when (method) {
+                "ensure-started" -> client.ensureStarted(callback)
+                "status" -> client.status(callback)
+                "restart" -> client.restart(callback)
+                else -> error("Unsupported local host method: $method")
+            }
+            check(latch.await(120, TimeUnit.SECONDS)) { "Timed out invoking local_host/$method" }
+            return JSONObject(requireNotNull(result).getOrThrow())
+        } finally {
+            client.close()
         }
-        check(latch.await(120, TimeUnit.SECONDS)) { "Timed out invoking local_host/$method" }
-        return JSONObject(requireNotNull(result).getOrThrow())
     }
 
     private fun assertCoreReady(status: JSONObject) {

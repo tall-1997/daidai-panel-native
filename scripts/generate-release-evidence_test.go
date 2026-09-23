@@ -88,7 +88,7 @@ func TestReleaseGateStateByChannel(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			top, gate, err := releaseGateState(test.channel, contract, test.smoke, "")
+			top, gate, err := releaseGateState(test.channel, contract, test.smoke)
 			if test.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantError) {
 					t.Fatalf("error = %v, want containing %q", err, test.wantError)
@@ -103,26 +103,6 @@ func TestReleaseGateStateByChannel(t *testing.T) {
 				t.Fatalf("state = (%q, %q, %v), want (%q, %q, nil)", top, gate, err, test.wantTop, wantGate)
 			}
 		})
-	}
-}
-
-func TestEmulatorSmokePassedAcceptsVerifiedDeviceEvidence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "api30-x86_64-4k.device.json")
-	if err := os.WriteFile(path, []byte(`{"status":"verified","matrix_id":"api30-x86_64-4k"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !emulatorSmokePassed(path) {
-		t.Fatal("verified emulator device evidence was rejected")
-	}
-}
-
-func TestEmulatorSmokePassedRejectsLegacyStatus(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "api30-x86_64-4k.device.json")
-	if err := os.WriteFile(path, []byte(`{"status":"passed","matrix_id":"api30-x86_64-4k"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if emulatorSmokePassed(path) {
-		t.Fatal("legacy status passed must not replace verified device evidence")
 	}
 }
 

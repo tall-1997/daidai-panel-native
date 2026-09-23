@@ -6,7 +6,7 @@
 
 请从本仓库 Release 下载：
 
-- ARM64：`daidai-panel-native-2.0.3-stable-arm64.apk`
-- x86_64：`daidai-panel-native-2.0.3-stable-x86_64.apk`
+- ARM64：`daidai-panel-native-2.0.2-prerelease-arm64.apk`
+- x86_64：`daidai-panel-native-2.0.2-prerelease-x86_64.apk`
 
 安装包和更新说明以仓库根目录 README 为准。

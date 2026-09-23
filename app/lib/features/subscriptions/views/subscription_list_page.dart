@@ -1731,20 +1731,19 @@ class _SubscriptionPullStreamPageState
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
-        // A `done` frame is a control marker, not log content: its payload carries the stream
-        // state ("reconnect" while the pull runs, "not_running"/"finished" when it stops), so it
-        // must never be rendered as a log line.
-        if (event.event == 'done') {
-          if (event.data == 'not_running' && _logs.isEmpty) {
-            setState(() => _statusMessage = '当前没有正在运行的拉取任务');
-          }
-          if (event.data != 'reconnect') {
-            _logBatcher.flush();
-            setState(() => _done = true);
-          }
-          return;
+        final terminal = event.event == 'done' && event.data != 'reconnect';
+        if (terminal) _logBatcher.flush();
+        if (event.event == 'done' &&
+            event.data == 'not_running' &&
+            _logs.isEmpty) {
+          setState(() => _statusMessage = '当前没有正在运行的拉取任务');
+        } else {
+          _logBatcher.add(event.data);
         }
-        _logBatcher.add(event.data);
+        if (terminal) {
+          _logBatcher.flush();
+          setState(() => _done = true);
+        }
       },
       onDone: () {
         _logBatcher.flush();

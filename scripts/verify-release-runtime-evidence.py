@@ -52,10 +52,10 @@ def validate_artifacts(payload, path, expected_artifacts):
     return errors
 
 
-def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel, expected_matrix_ids=None):
+def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel):
     errors = []
     matrix = payload.get("matrix")
-    if matrix != (expected_matrix_ids if expected_matrix_ids is not None else matrix_ids):
+    if matrix != matrix_ids:
         errors.append(f"{path}: matrix must exactly match release runtime contract")
     records = payload.get("records")
     if not isinstance(records, list):
@@ -111,7 +111,7 @@ def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids,
                 expected = requirement.get("expected_version")
                 if f"command={requirement.get('command')};" not in combined_output:
                     errors.append(f"{path}: {runtime_id} pass lacks contracted command evidence")
-                if channel != "stable" and expected is not None and f"actual={expected};" not in combined_output:
+                if expected is not None and f"actual={expected};" not in combined_output:
                     errors.append(f"{path}: {runtime_id} pass lacks expected version evidence")
                 constraint = requirement.get("version_constraint")
                 if constraint is not None:
@@ -129,22 +129,19 @@ def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids,
     return errors
 
 
-def validate_device_runtime(payload, path, runtime_requirements, required_ids=None):
+def validate_device_runtime(payload, path, runtime_requirements):
     errors = []
     helper = payload.get("runtime")
     if not isinstance(helper, dict):
         return [f"{path}: device helper evidence is missing"]
     core = helper.get("core", {})
-    scheduler_states = {"active", "foreground_continuous", "system_compensation"}
     if (core.get("phase") != "ready" or core.get("core_version") != "kotlin-local-fallback"
-            or core.get("fallback_mode") != "full" or core.get("scheduler_host_state") not in scheduler_states
-            or core.get("scheduler_guarantee_state") not in scheduler_states or core.get("instance_id") != "kotlin-local-fallback"):
+            or core.get("fallback_mode") != "full" or core.get("scheduler_host_state") != "active"
+            or core.get("scheduler_guarantee_state") != "active" or core.get("instance_id") != "kotlin-local-fallback"):
         errors.append(f"{path}: Kotlin fallback core identity or health is invalid")
     steps = helper.get("steps")
     by_id = {step.get("id"): step for step in steps if isinstance(step, dict)} if isinstance(steps, list) else {}
     for runtime_id, requirement in runtime_requirements.items():
-        if required_ids is not None and runtime_id not in required_ids:
-            continue
         evidence = by_id.get(requirement.get("step_id"), {}).get("evidence", {})
         output = str(evidence.get("output", "")).strip()
         if evidence.get("command") != requirement.get("command") or evidence.get("exit_code") != 0 or not output:
@@ -156,8 +153,8 @@ def validate_device_runtime(payload, path, runtime_requirements, required_ids=No
         if pattern and match is None:
             errors.append(f"{path}: {runtime_id} helper output is invalid")
             continue
-        # Stable cloud verification runs x86_64 packages rebuilt by the runner. Their package
-        # versions may differ from frozen ARM64 assets; command success and output shape remain strict.
+        if requirement.get("expected_version") is not None and actual != requirement["expected_version"]:
+            errors.append(f"{path}: {runtime_id} helper version does not match contract")
         constraint = requirement.get("version_constraint")
         if constraint is not None and re.fullmatch(constraint, actual) is None:
             errors.append(f"{path}: {runtime_id} helper version constraint failed")
@@ -194,10 +191,6 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             errors.append(f"runtime_entries contains an invalid entry for {runtime_id}")
     if errors:
         return errors
-    emulator_matrix = contract.get("stable_emulator_matrix")
-    if not isinstance(emulator_matrix, dict) or not emulator_matrix.get("id"):
-        errors.append("stable_emulator_matrix must define the x86_64 emulator verification matrix")
-        return errors
     gate_scope = contract.get("release_gate_scope", {})
     required_gates = gate_scope.get("required") if isinstance(gate_scope, dict) else None
     optional_gates = gate_scope.get("optional") if isinstance(gate_scope, dict) else None
@@ -219,22 +212,19 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             errors.append(f"candidate APK cannot be read: {error}")
             return errors
 
-    verification_matrices = matrix_ids if channel != "stable" else [emulator_matrix["id"]]
-    for matrix_id in verification_matrices:
+    for matrix_id in matrix_ids:
         runtime_paths = list(evidence_root.rglob(f"{matrix_id}.json"))
         if len(runtime_paths) != 1:
             errors.append(f"{matrix_id}: expected exactly one runtime evidence file, got {len(runtime_paths)}")
         else:
             runtime = load_json(runtime_paths[0], errors)
             if runtime is not None:
-                expected_matrix_ids = verification_matrices if channel == "stable" else None
-                errors.extend(validate_runtime_payload(runtime, runtime_paths[0], matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel, expected_matrix_ids))
+                errors.extend(validate_runtime_payload(runtime, runtime_paths[0], matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel))
                 if channel == "stable":
                     errors.extend(validate_artifacts(runtime, runtime_paths[0], expected_artifacts))
 
         device_paths = list(evidence_root.rglob(f"{matrix_id}.device.json"))
         if channel == "stable":
-            expected = emulator_matrix
             if len(device_paths) != 1:
                 errors.append(f"{matrix_id}: expected exactly one device evidence file, got {len(device_paths)}")
                 continue
@@ -242,7 +232,8 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             if device is None:
                 continue
             errors.extend(validate_artifacts(device, device_paths[0], expected_artifacts))
-            errors.extend(validate_device_runtime(device, device_paths[0], runtime_requirements, set(stable_ids)))
+            errors.extend(validate_device_runtime(device, device_paths[0], runtime_requirements))
+            expected = next(item for item in matrices if item["id"] == matrix_id)
             actual_device = device.get("device", {})
             if device.get("status") != "verified":
                 errors.append(f"{matrix_id}: device status must be verified")

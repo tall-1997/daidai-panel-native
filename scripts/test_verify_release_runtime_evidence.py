@@ -16,7 +16,6 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
         self.contract = {
             "schema_version": 1,
             "device_smoke": {"matrix": [{"id": "api35-16k", "api": 35, "page_size_bytes": 16384, "abi": "arm64-v8a"}]},
-            "stable_emulator_matrix": {"id": "api30-x86_64-4k", "api": 30, "page_size_bytes": 4096, "abi": "x86_64"},
             "runtime_ids": ["python", "node", "shell"],
             "stable_required_runtime_ids": ["python", "node", "shell"],
             "runtime_entries": {
@@ -47,12 +46,11 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def write_evidence(self, device_status="verified", runtime_status="pass", include_device=True, statuses=None, emulator=False):
-        matrix_id = "api30-x86_64-4k" if emulator else "api35-16k"
+    def write_evidence(self, device_status="verified", runtime_status="pass", include_device=True, statuses=None):
         device = {
-            "matrix_id": matrix_id,
+            "matrix_id": "api35-16k",
             "status": device_status,
-            "device": ({"api": 30, "page_size_bytes": 4096, "abi": "x86_64"} if emulator else {"api": 35, "page_size_bytes": 16384, "abi": "arm64-v8a"}),
+            "device": {"api": 35, "page_size_bytes": 16384, "abi": "arm64-v8a"},
             "artifacts": self.artifact_digests(),
             "runtime": {
                 "core": {"phase": "ready", "instance_id": "kotlin-local-fallback", "core_version": "kotlin-local-fallback", "fallback_mode": "full", "scheduler_host_state": "active", "scheduler_guarantee_state": "active"},
@@ -64,9 +62,9 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
             },
         }
         if include_device:
-            (self.root / f"{matrix_id}.device.json").write_text(json.dumps(device))
+            (self.root / "api35-16k.device.json").write_text(json.dumps(device))
         runtime = {
-            "matrix": [matrix_id],
+            "matrix": ["api35-16k"],
             "artifacts": self.artifact_digests(),
             "records": [
                 {
@@ -81,36 +79,19 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
                 for item in ("python", "node", "shell")
             ],
         }
-        (self.root / f"{matrix_id}.json").write_text(json.dumps(runtime))
+        (self.root / "api35-16k.json").write_text(json.dumps(runtime))
 
     def test_stable_accepts_exact_verified_scope(self):
-        self.write_evidence(emulator=True)
+        self.write_evidence()
         self.assertEqual([], VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk))
-
-    def test_stable_accepts_emulator_matrix_evidence(self):
-        self.write_evidence(emulator=True)
-        self.assertEqual([], VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk))
-
-    def test_stable_rejects_emulator_device_metadata_drift(self):
-        self.write_evidence(emulator=True)
-        path = self.root / "api30-x86_64-4k.device.json"
-        payload = json.loads(path.read_text())
-        payload["device"]["abi"] = "arm64-v8a"
-        path.write_text(json.dumps(payload))
-        errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
-        self.assertTrue(any("device ABI does not match contract" in error for error in errors))
-
-    def test_stable_rejects_missing_emulator_evidence(self):
-        errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
-        self.assertTrue(any("api30-x86_64-4k: expected exactly one runtime evidence file" in error for error in errors))
 
     def test_stable_rejects_blocked_required_runtime(self):
-        self.write_evidence(statuses={"node": "blocked"}, emulator=True)
+        self.write_evidence(statuses={"node": "blocked"})
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
         self.assertTrue(any("stable required runtime node must pass" in error for error in errors))
 
     def test_stable_rejects_unverified_device_with_required_runtime_passes(self):
-        self.write_evidence(device_status="blocked", emulator=True)
+        self.write_evidence(device_status="blocked")
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
         self.assertTrue(any("status must be verified" in error for error in errors))
 
@@ -118,37 +99,29 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
         self.assertTrue(VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk))
 
     def test_stable_rejects_app_apk_digest_mismatch(self):
-        self.write_evidence(emulator=True)
+        self.write_evidence()
         self.app_apk.write_bytes(b"different release APK")
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
         self.assertTrue(any("app_apk SHA-256 does not match" in error for error in errors))
 
     def test_stable_rejects_test_apk_digest_mismatch(self):
-        self.write_evidence(emulator=True)
+        self.write_evidence()
         self.test_apk.write_bytes(b"different test APK")
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
         self.assertTrue(any("test_apk SHA-256 does not match" in error for error in errors))
 
-    def test_stable_accepts_emulator_helper_version_drift(self):
-        self.write_evidence(emulator=True)
-        path = self.root / "api30-x86_64-4k.device.json"
+    def test_stable_rejects_tampered_helper_runtime_version(self):
+        self.write_evidence()
+        path = self.root / "api35-16k.device.json"
         payload = json.loads(path.read_text())
         payload["runtime"]["steps"][0]["evidence"]["output"] = "Python 3.11.9"
         path.write_text(json.dumps(payload))
-        self.assertEqual([], VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk))
-
-    def test_stable_rejects_malformed_helper_version_output(self):
-        self.write_evidence(emulator=True)
-        path = self.root / "api30-x86_64-4k.device.json"
-        payload = json.loads(path.read_text())
-        payload["runtime"]["steps"][0]["evidence"]["output"] = "not-a-python-version"
-        path.write_text(json.dumps(payload))
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
-        self.assertTrue(any("helper output is invalid" in error for error in errors))
+        self.assertTrue(any("helper version does not match" in error for error in errors))
 
     def test_stable_rejects_record_version_drift(self):
-        self.write_evidence(emulator=True)
-        path = self.root / "api30-x86_64-4k.json"
+        self.write_evidence()
+        path = self.root / "api35-16k.json"
         payload = json.loads(path.read_text())
         payload["records"][0]["version"] = "3.11.9"
         path.write_text(json.dumps(payload))
@@ -156,8 +129,8 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
         self.assertTrue(any("record version does not match" in error for error in errors))
 
     def test_stable_rejects_tampered_fallback_identity(self):
-        self.write_evidence(emulator=True)
-        path = self.root / "api30-x86_64-4k.device.json"
+        self.write_evidence()
+        path = self.root / "api35-16k.device.json"
         payload = json.loads(path.read_text())
         payload["runtime"]["core"]["core_version"] = "gomobile"
         path.write_text(json.dumps(payload))
