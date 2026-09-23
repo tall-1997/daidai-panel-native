@@ -18,6 +18,15 @@ class AndroidFallbackCronSchedulerTest {
         assertFalse(CronExpression.matches("*/5 10-14 1,5,9 * *", time))
     }
 
+    @Test fun bareNumberStepRunsFromThatStartThroughTheFieldMaximum() {
+        assertTrue(CronExpression.matches("4/10 * * * *", time))
+        assertTrue(CronExpression.matches("34/10 * * * *", time))
+        assertFalse(CronExpression.matches("5/10 * * * *", time))
+        assertTrue(CronExpression.matches("5/10 12 * * *", time.withMinute(15)))
+        assertTrue(CronExpression.matches("5/10 12 * * *", time.withMinute(55)))
+        assertFalse(CronExpression.matches("5/10 12 * * *", time.withMinute(56)))
+    }
+
     @Test fun rejectsNonFiveFieldExpression() = assertFalse(CronExpression.matches("* * * *", time))
 
     @Test fun sixFieldStartAndStopSchedulesRunOnlyAtTheirExactSecond() {
