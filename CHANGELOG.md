@@ -15,11 +15,6 @@
 - 检查更新改为读取本仓库 `tall-1997/daidai-panel-native` 的已发布版本，更新清单按标签下载，不再依赖 `/releases/latest`。
 - 登录页把链路本地地址和运营商级 NAT 地址按本机地址处理，默认使用 http。
 
-### 日志流
-
-- 依赖日志流在安装仍进行时改为要求客户端重连，不再把进行中的状态当成终态，导致一打开依赖日志就显示“安装成功”；日志行按纯文本回放并附带稳定 `id:`，重连不会重复堆叠同一行。
-- 订阅拉取日志流改为纯文本行加 `id:` 游标，拉取进行中持续重连跟随，真正结束才发送 `finished`，空闲时发送 `not_running`，不再一打开就标记已完成；日志页面也不再渲染 `done` 帧的载荷（避免每次重连插入一行 `reconnect`）。
-
 ### Android
 
 - Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号导致的链接失败；同时补上 Python `_ssl`/`_hashlib` 需要的 `libcrypto.so.3`/`libssl.so.3` 兼容副本。
