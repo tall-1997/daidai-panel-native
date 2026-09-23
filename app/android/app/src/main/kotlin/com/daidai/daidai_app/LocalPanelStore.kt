@@ -165,6 +165,12 @@ class LocalPanelStore(
 
         internal fun taskLogDone(status: Int): Boolean = status != 2
 
+        // Mirrors the core dependency log stream: only a non-transient status may terminate
+        // the stream. Anything still in flight must ask the client to reconnect, otherwise
+        // the app reads the raw status as a terminal one and reports success mid-install.
+        internal fun dependencyStatusInFlight(status: String): Boolean =
+            status.trim().lowercase() in setOf("installing", "removing", "pending", "queued", "running")
+
         internal fun needsInitialization(userCount: Int): Boolean = userCount == 0
 
         internal fun isAllowedSubscriptionUrl(raw: String): Boolean {
@@ -2532,7 +2538,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             id != null && session.method == NanoHTTPD.Method.PUT && action == "refresh" -> pullSubscription(id)
             id != null && session.method == NanoHTTPD.Method.PUT && action == "pull/stop" -> stopSubscriptionPull(id)
             id != null && session.method == NanoHTTPD.Method.GET && action == "logs" -> subscriptionLogs(id)
-            id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id)
+            id != null && session.method == NanoHTTPD.Method.GET && action == "pull-stream" -> subscriptionPullStream(id, session)
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "subscription route not found")
         }
     }
@@ -2773,9 +2779,31 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
 
     private fun subscriptionLogArray(id: Long): JSONArray = queryRows("SELECT * FROM subscription_logs WHERE subscription_id=? ORDER BY id DESC LIMIT 200", arrayOf(id.toString())) { c -> JSONObject().put("id", c.long("id")).put("level", c.string("level")).put("message", c.string("message")).put("created_at", c.string("created_at")) }
     private fun subscriptionLogs(id: Long) = ok(JSONObject().put("data", subscriptionLogArray(id)))
-    private fun subscriptionPullStream(id: Long): NanoHTTPD.Response {
-        val rows = subscriptionLogArray(id); val text = buildString { for (i in 0 until rows.length()) append("data: ").append(rows.getJSONObject(i).toString()).append("\n\n"); append("event: done\ndata: {\"done\":true}\n\n") }
-        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/event-stream; charset=utf-8", text).apply { addHeader("Cache-Control", "no-cache") }
+    private fun subscriptionPullStream(id: Long, session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        // The core keeps this stream open while the pull runs and reports progress as plain log
+        // lines. The fallback answers with fixed-length snapshots, so replay the lines the client
+        // has not seen yet (its Last-Event-ID is a subscription log row id) and ask it to
+        // reconnect until the pull stops. Marking the stream done here would make the app show a
+        // finished pull while git is still running.
+        val running = subscriptionPullProcesses.containsKey(id) && !subscriptionStopRequested.contains(id)
+        val cursor = requestLogCursor(session)
+        val rows = subscriptionLogArray(id)
+        val ordered = ArrayList<JSONObject>(rows.length())
+        for (i in rows.length() - 1 downTo 0) ordered += rows.getJSONObject(i)
+        val payload = StringBuilder()
+        for (row in ordered) {
+            val rowId = row.optLong("id")
+            if (rowId <= cursor) continue
+            payload.append("id: ").append(rowId).append('\n')
+            payload.append("data: ").append(row.optString("message").replace("\n", "\\n")).append("\n\n")
+        }
+        val done = when {
+            running -> "reconnect"
+            ordered.isEmpty() -> "not_running"
+            else -> "finished"
+        }
+        payload.append("event: done\ndata: ").append(done).append("\n\n")
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK, "text/event-stream; charset=utf-8", payload.toString()).apply { addHeader("Cache-Control", "no-cache") }
     }
 
     private fun serveTaskViews(session: NanoHTTPD.IHTTPSession, uri: String): NanoHTTPD.Response {
@@ -6225,7 +6253,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     }
 
     private fun dependencyLog(id: Long): NanoHTTPD.Response {
-        val cursor = readableDatabase.query(
+        val row = readableDatabase.query(
             "dependencies",
             arrayOf("status", "log"),
             "id = ?",
@@ -6233,19 +6261,32 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             null,
             null,
             null
-        )
-        cursor.use {
-            if (!it.moveToFirst()) return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
-            val status = it.string("status")
-            val log = it.string("log")
-            val framedLog = log.replace("\r\n", "\n").replace('\r', '\n').split('\n').joinToString("\n") { "data: $it" }
-            val payload = "event: log\n$framedLog\n\nevent: done\ndata: $status\n\n"
-            return NanoHTTPD.newFixedLengthResponse(
-                NanoHTTPD.Response.Status.OK,
-                "text/event-stream; charset=utf-8",
-                payload
-            )
+        ).use {
+            if (!it.moveToFirst()) null else it.string("status") to it.string("log")
+        } ?: return error(NanoHTTPD.Response.Status.NOT_FOUND, "依赖不存在")
+        val status = row.first
+        // The app renders every `data:` frame verbatim, so replay the log as plain lines, each
+        // tagged with a stable id: the SSE client drops ids it already rendered, which keeps
+        // reconnects (this fallback streams fixed-length snapshots) free of duplicated lines.
+        val payload = StringBuilder()
+        var index = 0
+        for (line in row.second.replace("\r\n", "\n").replace('\r', '\n').split('\n')) {
+            if (line.isEmpty()) continue
+            payload.append("id: ").append(index++).append('\n')
+            payload.append("data: ").append(line).append("\n\n")
         }
+        // A finished install reports its terminal status; an install still in flight must ask for
+        // a reconnect instead, because the app maps the raw status to a finished install and would
+        // otherwise report success while the package is still being built.
+        payload.append("event: done\n")
+        payload.append("data: ").append(
+            if (LocalTaskFallbackSemantics.dependencyStatusInFlight(status)) "reconnect" else status,
+        ).append("\n\n")
+        return NanoHTTPD.newFixedLengthResponse(
+            NanoHTTPD.Response.Status.OK,
+            "text/event-stream; charset=utf-8",
+            payload.toString()
+        ).apply { addHeader("Cache-Control", "no-cache") }
     }
 
     private fun dependencyStatus(id: Long): NanoHTTPD.Response {
