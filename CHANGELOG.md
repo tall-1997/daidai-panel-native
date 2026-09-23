@@ -22,10 +22,12 @@
 
 ### Android
 
+- cron 的 `5/10` 这类「起点/步长」按标准从起点步进到字段上限，不再只在起点触发一次。
 - Python 运行时自带的 OpenSSL 库文件名与 SONAME 对齐为 `libcrypto_python.so`/`libssl_python.so`，避免按文件名遮蔽系统 `libcrypto.so`/`libssl.so`，修复 proot 内系统 libcurl 因缺失 OpenSSL 1.0 符号导致的链接失败；同时补上 Python `_ssl`/`_hashlib` 需要的 `libcrypto.so.3`/`libssl.so.3` 兼容副本。
 
 ### 依赖
 
+- 取消正在安装或卸载的依赖时会终止对应进程，不再只改状态、让安装结束后把状态覆盖回成功或失败。
 - 修复 Python 依赖已经安装成功、验证却失败的问题。`websocket-client` 的模块名是 `websocket`，不再误当成 `websocket_client`。安装和验证使用同一个 rootfs Python 与 site-packages；发行包若声明了自己的顶层模块，也按该模块验证。
 
 ### 说明
