@@ -504,7 +504,8 @@ jobs:
           test -s "${X64_APK}"
           test -s "${X64_TEST_APK}"
           test -s evidence/api30-x86_64-4k.json
-          jq -e '.status == "verified" and .matrix_id == "api30-x86_64-4k"' evidence/api30-x86_64-4k.json
+          jq -e '.status == "verified" and .matrix_id == "api30-x86_64-4k"' evidence/api30-x86_64-4k.device.json
+          jq -e '[.records[] | select(.status == "pass") | .runtime_id] | sort == ["node-lts-android-arm64","python-3.12-android-arm64","shell-android-arm64"]' evidence/api30-x86_64-4k.json
           jq -e --arg sha "$(sha256sum "${X64_APK}" | cut -d ' ' -f1)" '.artifacts.app_apk.sha256 == $sha' evidence/api30-x86_64-4k.device.json
           jq -e --arg sha "$(sha256sum "${X64_TEST_APK}" | cut -d ' ' -f1)" '.artifacts.test_apk.sha256 == $sha' evidence/api30-x86_64-4k.device.json
       - uses: actions/upload-artifact@v4
