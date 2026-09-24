@@ -446,7 +446,7 @@ export function useSettingsOverview() {
   function openGitHub() {
     const url = updateInfo.value?.has_update && updateInfo.value?.release_url
       ? updateInfo.value.release_url
-      : 'https://github.com/linzixuanzz/daidai-panel/releases'
+      : 'https://github.com/tall-1997/daidai-panel-native/releases'
     window.open(url, '_blank')
   }
 
