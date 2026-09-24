@@ -16,8 +16,7 @@
     "id": "api30-x86_64-4k",
     "api": 30,
     "page_size_bytes": 4096,
-    "abi": "x86_64",
-    "note": "GitHub cloud runners cannot run ARM64 emulators; stable releases verify with this x86_64 emulator matrix from the same build. Physical ARM64 evidence remains blocked until a self-hosted runner exists."
+    "abi": "x86_64"
   },
   "runtime_ids": [
     "python-3.12-android-arm64",
@@ -35,14 +34,38 @@
     "shell-android-arm64"
   ],
   "runtime_entries": {
-    "python-3.12-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "python3"},
-    "node-lts-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "node"},
-    "typescript-stable": {"entry_type": "apk_elf", "entrypoint": "libnode_exec.so"},
-    "shell-android-arm64": {"entry_type": "rootfs_command", "entrypoint": "bash"},
-    "git-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libgit_exec.so"},
-    "ssh-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libssh_exec.so"},
-    "yaegi-go": {"entry_type": "apk_elf", "entrypoint": "libyaegi_exec.so"},
-    "go-builder-android-arm64": {"entry_type": "apk_elf", "entrypoint": "libgobuilder_exec.so"}
+    "python-3.12-android-arm64": {
+      "entry_type": "rootfs_command",
+      "entrypoint": "python3"
+    },
+    "node-lts-android-arm64": {
+      "entry_type": "rootfs_command",
+      "entrypoint": "node"
+    },
+    "typescript-stable": {
+      "entry_type": "apk_elf",
+      "entrypoint": "libnode_exec.so"
+    },
+    "shell-android-arm64": {
+      "entry_type": "rootfs_command",
+      "entrypoint": "bash"
+    },
+    "git-android-arm64": {
+      "entry_type": "apk_elf",
+      "entrypoint": "libgit_exec.so"
+    },
+    "ssh-android-arm64": {
+      "entry_type": "apk_elf",
+      "entrypoint": "libssh_exec.so"
+    },
+    "yaegi-go": {
+      "entry_type": "apk_elf",
+      "entrypoint": "libyaegi_exec.so"
+    },
+    "go-builder-android-arm64": {
+      "entry_type": "apk_elf",
+      "entrypoint": "libgobuilder_exec.so"
+    }
   },
   "runtime_evidence": {
     "python-3.12-android-arm64": {

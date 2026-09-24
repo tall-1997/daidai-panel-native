@@ -41,6 +41,7 @@ type runtimeContract struct {
 type releaseRuntimeContract struct {
 	SchemaVersion            int                                   `json:"schema_version"`
 	DeviceSmoke              releaseDeviceSmoke                    `json:"device_smoke"`
+	StableEmulatorMatrix     *releaseDeviceMatrix                  `json:"stable_emulator_matrix,omitempty"`
 	RuntimeIDs               []string                              `json:"runtime_ids"`
 	StableRequiredRuntimeIDs []string                              `json:"stable_required_runtime_ids"`
 	RuntimeEntries           map[string]runtimeEntryContract       `json:"runtime_entries"`
@@ -376,6 +377,15 @@ func validateReleaseRuntimeContract(release releaseRuntimeContract, smoke smokeE
 	}
 	if !reflect.DeepEqual(smoke.Matrix, matrixIDs) {
 		errs = append(errs, fmt.Errorf("smoke evidence matrix differs from release runtime contract: got %v want %v", smoke.Matrix, matrixIDs))
+	}
+	if release.StableEmulatorMatrix != nil {
+		emulator := release.StableEmulatorMatrix
+		if emulator.ID == "" || emulator.API <= 0 || emulator.PageSizeBytes <= 0 || emulator.ABI == "" {
+			errs = append(errs, fmt.Errorf("invalid stable emulator matrix %q", emulator.ID))
+		}
+		if emulator.ID == matrixIDs[0] {
+			errs = append(errs, fmt.Errorf("stable emulator matrix must differ from the physical device matrix"))
+		}
 	}
 	return errs
 }
