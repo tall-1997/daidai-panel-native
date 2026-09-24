@@ -96,6 +96,9 @@ internal object DependencyStorage {
         "data-uri-to-buffer" to "data-uri-to-buffer@3.0.1",
         "fetch-blob" to "fetch-blob@2.1.2",
         "formdata-polyfill" to "formdata-polyfill@4.0.10",
+        // TypeScript 7 起为原生发行版，CJS require 无 transpileModule/ModuleKind API；
+        // 兜底内联转译器依赖这两个 API，必须固定到 5.x CJS 版本。
+        "typescript" to "typescript@5.6.3",
     )
 
     fun normalizedName(type: String, spec: String): String {

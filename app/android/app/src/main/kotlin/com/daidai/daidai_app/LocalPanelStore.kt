@@ -1713,7 +1713,14 @@ rejectIfUserCannotMutate(session)?.let { return it }
                 }
             }
         }
-        if (sent == 0 && failures.length() > 0) return error(NanoHTTPD.Response.Status.INTERNAL_ERROR, failures.optJSONObject(0)?.optString("error") ?: "发送失败")
+        if (sent == 0 && failures.length() > 0) {
+            val firstError = failures.optJSONObject(0)?.optString("error").orEmpty()
+            val status = when {
+                "POST_NOTIFICATIONS_DENIED" in firstError -> NanoHTTPD.Response.Status.FORBIDDEN
+                else -> NanoHTTPD.Response.Status.SERVICE_UNAVAILABLE
+            }
+            return error(status, firstError.ifBlank { "发送失败" })
+        }
         if (sent == 0 && ids != null) return error(NanoHTTPD.Response.Status.NOT_FOUND, "未找到已启用的目标通知渠道")
         return ok(JSONObject().put("message", "已发送 $sent 个渠道").put("sent", sent).put("failures", failures))
     }
@@ -3962,8 +3969,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         val nodePath = "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules"
         val guestFile = "/workspace/${file.name}"
         val tsNodeDir = File(appContext.filesDir, "deps/nodejs/node_modules/ts-node")
+        val typescriptDir = File(appContext.filesDir, "deps/nodejs/node_modules/typescript")
         return when {
-            tsNodeDir.isDirectory ->
+            tsNodeDir.isDirectory && typescriptDir.isDirectory ->
                 AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/node", "--require", "ts-node/register/transpile-only", guestFile))
             AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/ts-node") ->
                 AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/ts-node", "--transpile-only", guestFile))
@@ -3975,8 +3983,10 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                     listOf("/bin/sh", "-c", "out=/tmp/daidai-ts-\$\$.js; /usr/bin/tsc --pretty false --module commonjs --target es2019 --esModuleInterop --skipLibCheck --outFile \"\$out\" '/workspace/$escaped' && /usr/bin/node \"\$out\""),
                 )
             }
-            else ->
+            typescriptDir.isDirectory ->
                 AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/env", nodePath, "/usr/bin/node", "-e", typeScriptEvalCode(), guestFile))
+            else ->
+                AndroidLinuxRuntime.guestCommand(appContext, working, listOf("/usr/bin/node", guestFile))
         }
     }
 
@@ -4598,6 +4608,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         .put("updated_at", Instant.ofEpochMilli(file.lastModified()).toString())
 
     private fun createTask(json: JSONObject): NanoHTTPD.Response {
+        if (json.optString("command").isBlank()) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务命令不能为空")
         val channelId = taskNotificationChannelId(json)
             ?: if (json.has("notification_channel_id") && !json.isNull("notification_channel_id") && json.optLong("notification_channel_id") > 0) {
                 return error(NanoHTTPD.Response.Status.BAD_REQUEST, "通知渠道不存在")
@@ -5589,10 +5600,18 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         return if (matches.isEmpty()) createEnv(json) else updateEnv(matches[0], json)
     }
 
+    private fun validateEnvName(name: String): String? {
+        if (name.isBlank()) return "变量名不能为空"
+        if (!Regex("^[A-Za-z_][A-Za-z0-9_]*$").matches(name)) return "变量名 '$name' 格式无效：仅支持字母、数字、下划线，且不能以数字开头"
+        if (name in reservedRuntimeEnvironmentNames) return "变量名 '$name' 为运行时保留名，不允许使用"
+        return null
+    }
+
     private fun createEnv(json: JSONObject): NanoHTTPD.Response {
+        validateEnvName(json.optString("name").trim())?.let { return error(NanoHTTPD.Response.Status.BAD_REQUEST, it) }
         val now = Instant.now().toString()
         val values = ContentValues().apply {
-            put("name", json.optString("name"))
+            put("name", json.optString("name").trim())
             put("value", json.optString("value"))
             put("remarks", json.optString("remarks"))
             put("enabled", if (json.optBoolean("enabled", true)) 1 else 0)
@@ -5681,9 +5700,16 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     }
 
     private fun updateEnv(id: Long, json: JSONObject): NanoHTTPD.Response {
+        if (json.has("name")) {
+            val newName = json.optString("name").trim()
+            val currentName = envRow(id)?.optString("name").orEmpty()
+            if (newName != currentName) {
+                validateEnvName(newName)?.let { return error(NanoHTTPD.Response.Status.BAD_REQUEST, it) }
+            }
+        }
         val values = ContentValues().apply {
             listOf("name", "value", "remarks").forEach { key ->
-                if (json.has(key)) put(key, json.optString(key))
+                if (json.has(key)) put(key, json.optString(key).let { v -> if (key == "name") v.trim() else v })
             }
             if (json.has("enabled")) put("enabled", if (json.optBoolean("enabled")) 1 else 0)
             if (json.has("group") || json.has("groups")) put("groups_json", normalizeGroups(json).toString())
@@ -5813,6 +5839,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         val names = json.optJSONArray("names") ?: JSONArray()
         val depType = normalizeDependencyType(json.optString("type", "nodejs"))
             ?: return error(NanoHTTPD.Response.Status.BAD_REQUEST, "UNSUPPORTED_DEPENDENCY_TYPE: Android fallback supports pip/python, npm/nodejs, and rootfs system packages")
+        if (names.length() == 0) return error(NanoHTTPD.Response.Status.BAD_REQUEST, "缺少 names 数组或内容为空；请求体应为 {\"type\": ..., \"names\": [...]}")
         val now = Instant.now().toString()
         val items = JSONArray()
         for (index in 0 until names.length()) {
