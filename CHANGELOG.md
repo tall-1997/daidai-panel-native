@@ -22,6 +22,10 @@
 
 - 通知权限被拒（POST_NOTIFICATIONS_DENIED）返回 403 而非 500，渠道故障返回 503，语义更准确。
 
+### 发布工程
+
+- 修复正式版发布门禁：`release-runtime-contract.json` 显式声明 `stable_emulator_matrix`（api30-x86_64-4k），发布校验器在 stable 通道改用该矩阵验证同一次构建的 x86_64 模拟器运行时证据。此前契约仍指向云 runner 无法运行的 ARM64 模拟器矩阵 `api35-16k`，导致 stable 发布校验始终找不到证据文件（v2.0.3 正式版发布因此失败）。物理设备证据边界保持如实记录。
+
 ## v2.0.3 - 2026-09-23
 
 ### 通知

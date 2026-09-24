@@ -52,10 +52,10 @@ def validate_artifacts(payload, path, expected_artifacts):
     return errors
 
 
-def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel):
+def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel, expected_matrix_ids=None):
     errors = []
     matrix = payload.get("matrix")
-    if matrix != matrix_ids:
+    if matrix != (expected_matrix_ids if expected_matrix_ids is not None else matrix_ids):
         errors.append(f"{path}: matrix must exactly match release runtime contract")
     records = payload.get("records")
     if not isinstance(records, list):
@@ -129,7 +129,7 @@ def validate_runtime_payload(payload, path, matrix_ids, runtime_ids, stable_ids,
     return errors
 
 
-def validate_device_runtime(payload, path, runtime_requirements):
+def validate_device_runtime(payload, path, runtime_requirements, required_ids=None):
     errors = []
     helper = payload.get("runtime")
     if not isinstance(helper, dict):
@@ -142,6 +142,8 @@ def validate_device_runtime(payload, path, runtime_requirements):
     steps = helper.get("steps")
     by_id = {step.get("id"): step for step in steps if isinstance(step, dict)} if isinstance(steps, list) else {}
     for runtime_id, requirement in runtime_requirements.items():
+        if required_ids is not None and runtime_id not in required_ids:
+            continue
         evidence = by_id.get(requirement.get("step_id"), {}).get("evidence", {})
         output = str(evidence.get("output", "")).strip()
         if evidence.get("command") != requirement.get("command") or evidence.get("exit_code") != 0 or not output:
@@ -191,6 +193,10 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             errors.append(f"runtime_entries contains an invalid entry for {runtime_id}")
     if errors:
         return errors
+    emulator_matrix = contract.get("stable_emulator_matrix")
+    if not isinstance(emulator_matrix, dict) or not emulator_matrix.get("id"):
+        errors.append("stable_emulator_matrix must define the x86_64 emulator verification matrix")
+        return errors
     gate_scope = contract.get("release_gate_scope", {})
     required_gates = gate_scope.get("required") if isinstance(gate_scope, dict) else None
     optional_gates = gate_scope.get("optional") if isinstance(gate_scope, dict) else None
@@ -212,19 +218,22 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             errors.append(f"candidate APK cannot be read: {error}")
             return errors
 
-    for matrix_id in matrix_ids:
+    verification_matrices = matrix_ids if channel != "stable" else [emulator_matrix["id"]]
+    for matrix_id in verification_matrices:
         runtime_paths = list(evidence_root.rglob(f"{matrix_id}.json"))
         if len(runtime_paths) != 1:
             errors.append(f"{matrix_id}: expected exactly one runtime evidence file, got {len(runtime_paths)}")
         else:
             runtime = load_json(runtime_paths[0], errors)
             if runtime is not None:
-                errors.extend(validate_runtime_payload(runtime, runtime_paths[0], matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel))
+                expected_matrix_ids = verification_matrices if channel == "stable" else None
+                errors.extend(validate_runtime_payload(runtime, runtime_paths[0], matrix_ids, runtime_ids, stable_ids, runtime_requirements, runtime_entries, channel, expected_matrix_ids))
                 if channel == "stable":
                     errors.extend(validate_artifacts(runtime, runtime_paths[0], expected_artifacts))
 
         device_paths = list(evidence_root.rglob(f"{matrix_id}.device.json"))
         if channel == "stable":
+            expected = emulator_matrix
             if len(device_paths) != 1:
                 errors.append(f"{matrix_id}: expected exactly one device evidence file, got {len(device_paths)}")
                 continue
@@ -232,8 +241,7 @@ def validate(contract, evidence_root, channel, app_apk=None, test_apk=None):
             if device is None:
                 continue
             errors.extend(validate_artifacts(device, device_paths[0], expected_artifacts))
-            errors.extend(validate_device_runtime(device, device_paths[0], runtime_requirements))
-            expected = next(item for item in matrices if item["id"] == matrix_id)
+            errors.extend(validate_device_runtime(device, device_paths[0], runtime_requirements, set(stable_ids)))
             actual_device = device.get("device", {})
             if device.get("status") != "verified":
                 errors.append(f"{matrix_id}: device status must be verified")

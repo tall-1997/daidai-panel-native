@@ -170,6 +170,8 @@ def check_files(root, manifest_paths, version, version_code):
         except (OSError, VersionError) as error:
             errors.append(str(error))
     if errors:
+        # 统一以正斜杠呈现，保证 CI (Linux) 与本地 (Windows) 的漂移报告路径一致。
+        errors = [error.replace(str(root) + "\\", "").replace("\\", "/") for error in errors]
         raise VersionError("version drift detected:\n" + "\n".join(errors))
 
 

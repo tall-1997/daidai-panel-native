@@ -12,6 +12,13 @@
     "verified_artifact": "android-runtime-smoke-api35-16k-verified",
     "blocked_artifact": "android-runtime-smoke-api35-16k-blocked"
   },
+  "stable_emulator_matrix": {
+    "id": "api30-x86_64-4k",
+    "api": 30,
+    "page_size_bytes": 4096,
+    "abi": "x86_64",
+    "note": "GitHub cloud runners cannot run ARM64 emulators; stable releases verify with this x86_64 emulator matrix from the same build. Physical ARM64 evidence remains blocked until a self-hosted runner exists."
+  },
   "runtime_ids": [
     "python-3.12-android-arm64",
     "node-lts-android-arm64",
