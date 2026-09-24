@@ -629,27 +629,13 @@ class _MorePageState extends ConsumerState<MorePage> {
                         isLight: isLight,
                         icon: Icons.folder_outlined,
                       ),
-                      const SizedBox(height: 8),
-                      _RepoInfoRow(
-                        label: '上游仓库',
-                        url: 'github.com/linzixuanzz/Dumb-Panel-APP',
-                        isLight: isLight,
-                        icon: Icons.arrow_circle_up_outlined,
-                      ),
-                      const SizedBox(height: 8),
-                      _RepoInfoRow(
-                        label: '后端仓库',
-                        url: 'github.com/linzixuanzz/daidai-panel',
-                        isLight: isLight,
-                        icon: Icons.dns_outlined,
-                      ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 10),
               Text(
-                '本应用基于上游项目二次开发，感谢开源社区贡献',
+                '安装包与更新只从本仓库 Release 发布',
                 style: TextStyle(
                   fontSize: 11,
                   color: isLight ? AppColors.slate500 : AppColors.slate500,
