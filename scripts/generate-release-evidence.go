@@ -275,7 +275,7 @@ func emulatorSmokePassed(path string) bool {
 	if err := json.Unmarshal(payload, &smoke); err != nil {
 		return false
 	}
-	return smoke.Status == "passed" && smoke.MatrixID == "api30-x86_64-4k"
+	return smoke.Status == "verified" && smoke.MatrixID == "api30-x86_64-4k"
 }
 
 func releaseGateState(channel string, contract releaseGateContract, smoke runtimeSmokeEvidence, emulatorSmokePath string) (string, string, error) {

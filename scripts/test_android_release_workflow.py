@@ -191,7 +191,9 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
                 self.assertEqual(test_path, f"candidate/daidai-panel-native-{self.version}-{channel}-arm64-androidTest.apk")
 
     def test_device_evidence_remains_bound_to_candidate_apk_digests(self):
-        self.assertGreaterEqual(self.workflow.count("--app-apk \"${APP_APK}\""), 1)
+        self.assertGreaterEqual(self.workflow.count("--app-apk \"${X64_APK}\""), 1)
+        self.assertIn(".stable_emulator_matrix.id", self.workflow)
+        self.assertIn("release/device-smoke/api30-x86_64-4k.device.json", self.workflow)
         self.assertGreaterEqual(self.workflow.count("--test-apk \"${TEST_APK}\""), 1)
         self.assertIn('EXPECTED_APK_SHA="$(cut -d \' \' -f1 "${APP_APK}.sha256")"', self.workflow)
         self.assertIn('test "$(sha256sum "${APP_APK}" | cut -d \' \' -f1)" = "${EXPECTED_APK_SHA}"', self.workflow)

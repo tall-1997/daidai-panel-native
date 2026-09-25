@@ -106,6 +106,26 @@ func TestReleaseGateStateByChannel(t *testing.T) {
 	}
 }
 
+func TestEmulatorSmokePassedAcceptsVerifiedDeviceEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api30-x86_64-4k.device.json")
+	if err := os.WriteFile(path, []byte(`{"status":"verified","matrix_id":"api30-x86_64-4k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !emulatorSmokePassed(path) {
+		t.Fatal("verified emulator device evidence was rejected")
+	}
+}
+
+func TestEmulatorSmokePassedRejectsLegacyStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api30-x86_64-4k.device.json")
+	if err := os.WriteFile(path, []byte(`{"status":"passed","matrix_id":"api30-x86_64-4k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if emulatorSmokePassed(path) {
+		t.Fatal("legacy status passed must not replace verified device evidence")
+	}
+}
+
 func TestCompatibilityReportUsesCurrentDeviceMatrix(t *testing.T) {
 	report := buildCompatibilityReport(runtimeManifest{Components: []runtimeComponent{{ID: "python", Entrypoint: "python.so", ABI: "arm64-v8a"}}})
 	combinations := report["required_combinations"].([]string)

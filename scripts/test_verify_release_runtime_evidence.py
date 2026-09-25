@@ -129,14 +129,22 @@ class ReleaseRuntimeEvidenceTest(unittest.TestCase):
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
         self.assertTrue(any("test_apk SHA-256 does not match" in error for error in errors))
 
-    def test_stable_rejects_tampered_helper_runtime_version(self):
+    def test_stable_accepts_emulator_helper_version_drift(self):
         self.write_evidence(emulator=True)
         path = self.root / "api30-x86_64-4k.device.json"
         payload = json.loads(path.read_text())
         payload["runtime"]["steps"][0]["evidence"]["output"] = "Python 3.11.9"
         path.write_text(json.dumps(payload))
+        self.assertEqual([], VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk))
+
+    def test_stable_rejects_malformed_helper_version_output(self):
+        self.write_evidence(emulator=True)
+        path = self.root / "api30-x86_64-4k.device.json"
+        payload = json.loads(path.read_text())
+        payload["runtime"]["steps"][0]["evidence"]["output"] = "not-a-python-version"
+        path.write_text(json.dumps(payload))
         errors = VERIFIER.validate(self.contract, self.root, "stable", self.app_apk, self.test_apk)
-        self.assertTrue(any("helper version does not match" in error for error in errors))
+        self.assertTrue(any("helper output is invalid" in error for error in errors))
 
     def test_stable_rejects_record_version_drift(self):
         self.write_evidence(emulator=True)

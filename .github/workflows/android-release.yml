@@ -569,15 +569,15 @@ jobs:
           TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-arm64-androidTest.apk"
           X64_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64.apk"
           X64_TEST_APK_NAME="daidai-panel-native-${VERSION}-${CHANNEL}-x86_64-androidTest.apk"
-          APP_APK="candidate/${APP_APK_NAME}"
-          TEST_APK="candidate/${TEST_APK_NAME}"
+          X64_APK="candidate/${X64_APK_NAME}"
+          X64_TEST_APK="candidate/${X64_TEST_APK_NAME}"
           python3 scripts/verify-release-runtime-evidence.py \
             --contract scripts/release-runtime-contract.json \
             --channel stable \
             --evidence-dir device-evidence \
-            --app-apk "${APP_APK}" \
-            --test-apk "${TEST_APK}"
-          MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
+            --app-apk "${X64_APK}" \
+            --test-apk "${X64_TEST_APK}"
+          MATRIX_ID="$(jq -er '.stable_emulator_matrix.id' scripts/release-runtime-contract.json)"
           EVIDENCE_FILE="$(find device-evidence -type f -name "${MATRIX_ID}.json" -print -quit)"
           test -n "${EVIDENCE_FILE}"
           cp "${EVIDENCE_FILE}" candidate/runtime/smoke-evidence.json
@@ -601,7 +601,7 @@ jobs:
             --channel "${CHANNEL}" \
             --runtime-manifest candidate/runtime/manifest.json \
             --runtime-smoke candidate/runtime/smoke-evidence.json \
-            --emulator-smoke evidence/api30-x86_64-4k.json \
+            --emulator-smoke release/device-smoke/api30-x86_64-4k.device.json \
             --compatibility candidate/runtime/compatibility.json \
             --route-trace candidate/contracts/backend-api-mobile.json \
             --output-dir release/evidence \

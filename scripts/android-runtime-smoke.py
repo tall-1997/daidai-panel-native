@@ -330,7 +330,7 @@ def blocked_evidence(matrix_id, reason, source="none"):
     return {
         "version": "1",
         "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "matrix": MATRIX,
+        "matrix": [matrix_id],
         "records": [
             {
                 "runtime_id": runtime_id,
@@ -465,7 +465,7 @@ def run(args):
             "evidence_source": "android-device", "isolation_level": isolation,
             "timeout_seconds": timeout, "checks": normalized,
         })
-    payload = {"version": "1", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "matrix": MATRIX, "artifacts": artifacts, "records": contract_records}
+    payload = {"version": "1", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "matrix": [args.matrix_id], "artifacts": artifacts, "records": contract_records}
     device_payload = {
         "schema_version": 1,
         "status": "verified" if valid else "failed",

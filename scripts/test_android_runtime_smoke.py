@@ -120,7 +120,7 @@ class AndroidRuntimeSmokeTest(unittest.TestCase):
 
     def test_blocked_evidence_matches_runtime_contract_shape(self):
         evidence = SMOKE.blocked_evidence("api35-16k", "runner-unavailable")
-        self.assertEqual(SMOKE.MATRIX, evidence["matrix"])
+        self.assertEqual(["api35-16k"], evidence["matrix"])
         self.assertEqual(8, len(evidence["records"]))
         self.assertTrue(all(record["status"] == "blocked" for record in evidence["records"]))
         self.assertTrue(all(record["checks"][0]["reason"].endswith("matrix=api35-16k") for record in evidence["records"]))
