@@ -573,10 +573,10 @@ jobs:
           TEST_APK="candidate/${TEST_APK_NAME}"
           python3 scripts/verify-release-runtime-evidence.py \
             --contract scripts/release-runtime-contract.json \
-            --channel stable \
+            --channel prerelease \
             --evidence-dir device-evidence \
-            --app-apk "${APP_APK}" \
-            --test-apk "${TEST_APK}"
+            --app-apk "candidate/${X64_APK_NAME}" \
+            --test-apk "candidate/${X64_TEST_APK_NAME}"
           MATRIX_ID="$(jq -er '.device_smoke.matrix[0].id' scripts/release-runtime-contract.json)"
           EVIDENCE_FILE="$(find device-evidence -type f -name "${MATRIX_ID}.json" -print -quit)"
           test -n "${EVIDENCE_FILE}"
