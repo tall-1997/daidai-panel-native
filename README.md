@@ -8,20 +8,18 @@
 
 呆呆面板 Android 本机版在非 Root Android 上提供任务、脚本、日志、环境变量、订阅、依赖、通知、Open API、安全、备份和监控，并可以连接远程面板。内置 NDK 自编译 PRoot 与 Ubuntu 用户空间，可在本机使用终端、脚本和包管理，无需 Termux。安装包只从本仓库 Release 发布。
 
-当前版本：**v2.0.3**（正式版）
+当前版本：**v2.0.6**（正式版）
 
-Android versionCode：**2000030**
+Android versionCode：**2000060**
 
 默认分支：**main**
 
 ## 下载
 
-- 当前正式版：[GitHub Releases v2.0.3](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.3)
-- ARM64 完整版：`daidai-panel-native-2.0.3-stable-arm64.apk`
-- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.3-stable-x86_64.apk`
-- 每个 APK 均附带同名 `.sha256` 文件；完整摘要以 Release 附件为准。
-
-正式 Release 同时提供 APK 校验文件、`android-update.json` 和 release evidence 证据包。
+- 当前正式版：[GitHub Releases v2.0.6](https://github.com/tall-1997/daidai-panel-native/releases/tag/v2.0.6)
+- ARM64 完整版：`daidai-panel-native-2.0.6-stable-arm64.apk`
+- x86_64 版（模拟器/云手机）：`daidai-panel-native-2.0.6-stable-x86_64.apk`
+- Release 只提供安装包。应用内更新使用同版本的 `android-update.json`，不再附带 `.sha256` 文件。
 
 ## 首次登录
 

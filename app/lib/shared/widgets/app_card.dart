@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../core/theme/app_theme.dart';
-import '../../core/theme/theme_provider.dart';
 import 'app_icon.dart';
 
 export 'app_dialog.dart';
@@ -31,11 +30,7 @@ class AppCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     final performanceMode =
         stableForScrolling || Scrollable.maybeOf(context) != null;
     Widget card = isMiuix
@@ -88,11 +83,7 @@ class AppListTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -161,11 +152,8 @@ class AppGlassIconButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
+    final accent = context.brandOr(accentColor);
     final button = SizedBox(
       width: 44,
       height: 44,
@@ -176,7 +164,7 @@ class AppGlassIconButton extends ConsumerWidget {
                 child: MiuixIcon(
                   icon: icon,
                   size: iconSize,
-                  tint: accentColor,
+                  tint: accent,
                 ),
               )
             : SizedBox(
@@ -186,7 +174,7 @@ class AppGlassIconButton extends ConsumerWidget {
                   style: appLiquidGlassStyle(
                     isLight: isLight,
                     borderRadius: 18,
-                    accentColor: accentColor,
+                    accentColor: accent,
                     selected: true,
                   ),
                   child: Material(
@@ -195,7 +183,7 @@ class AppGlassIconButton extends ConsumerWidget {
                     child: InkWell(
                       customBorder: const CircleBorder(),
                       onTap: onTap,
-                      child: AppIcon(icon, size: iconSize, color: accentColor),
+                      child: AppIcon(icon, size: iconSize, color: accent),
                     ),
                   ),
                 ),
@@ -232,13 +220,9 @@ class AppLiquidGlassSurface extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     if (isMiuix) {
-      final accent = accentColor ?? AppColors.primary;
+      final accent = accentColor ?? context.brand;
       final miuixColors = MiuixTheme.of(context).colors;
       final baseColor = miuixColors.surfaceContainer;
       final color = selected
@@ -312,7 +296,7 @@ class AppLiquidGlassInput extends StatelessWidget {
                 theme.colorScheme.onSurfaceVariant,
               ),
               overlayColor: WidgetStatePropertyAll(
-                AppColors.primary.withAlpha(18),
+                context.brand.withAlpha(18),
               ),
               side: const WidgetStatePropertyAll(BorderSide.none),
               shape: const WidgetStatePropertyAll(CircleBorder()),
@@ -341,11 +325,7 @@ class AppStyleSlider extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     if (isMiuix) {
       return MiuixSlider(
         value: value,
@@ -356,7 +336,7 @@ class AppStyleSlider extends ConsumerWidget {
       builder: (context, constraints) => LiquidGlassSlider(
         value: value,
         layout: LiquidGlassSliderLayout(width: constraints.maxWidth),
-        activeColor: activeColor,
+        activeColor: context.brandOr(activeColor),
         inactiveColor: inactiveColor ?? Theme.of(context).colorScheme.outlineVariant,
         pixelRatio: 0.7,
         onChanged: onChanged ?? (_) {},
@@ -380,11 +360,7 @@ class AppLiquidGlassToggle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final enabled = onChanged != null;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     if (isMiuix) {
       return MiuixSwitch(
         value: value,
@@ -398,7 +374,7 @@ class AppLiquidGlassToggle extends ConsumerWidget {
         child: LiquidGlassToggle(
           value: value,
           onChanged: onChanged ?? (_) {},
-          activeColor: activeColor,
+          activeColor: context.brandOr(activeColor),
           inactiveColor: Theme.of(context).brightness == Brightness.light
               ? const Color(0x66708090)
               : const Color(0x88506678),
@@ -436,13 +412,9 @@ class AppLiquidGlassButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     final color = switch (variant) {
-      AppLiquidGlassButtonVariant.primary => AppColors.primary,
+      AppLiquidGlassButtonVariant.primary => context.brand,
       AppLiquidGlassButtonVariant.secondary =>
         isLight ? AppColors.slate600 : AppColors.slate300,
       AppLiquidGlassButtonVariant.danger => AppColors.red500,
@@ -551,10 +523,11 @@ class AppLiquidGlassChoiceChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.brandOr(accentColor);
     return AppLiquidGlassSurface(
       onTap: onSelected == null ? null : () => onSelected!(!selected),
       borderRadius: 16,
-      accentColor: accentColor,
+      accentColor: accent,
       selected: selected,
       performanceMode: performanceMode,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -564,7 +537,7 @@ class AppLiquidGlassChoiceChip extends StatelessWidget {
           fontSize: 12,
           fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
           color: selected
-              ? accentColor
+              ? accent
               : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
@@ -588,10 +561,11 @@ class AppLiquidGlassActionChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.brandOr(accentColor);
     return AppLiquidGlassSurface(
       onTap: onPressed,
       borderRadius: 16,
-      accentColor: accentColor,
+      accentColor: accent,
       selected: false,
       performanceMode: true,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -599,7 +573,7 @@ class AppLiquidGlassActionChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            AppIcon(icon, size: 15, color: accentColor),
+            AppIcon(icon, size: 15, color: accent),
             const SizedBox(width: 5),
           ],
           Text(
@@ -630,9 +604,10 @@ class AppLiquidGlassInputChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = context.brandOr(accentColor);
     return AppLiquidGlassSurface(
       borderRadius: 16,
-      accentColor: accentColor,
+      accentColor: accent,
       performanceMode: true,
       padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
       child: Row(
@@ -740,7 +715,7 @@ class AppGlassNotice {
     final messenger = ScaffoldMessenger.of(context);
     final color = switch (type) {
       AppGlassNoticeType.info => AppColors.blue500,
-      AppGlassNoticeType.success => AppColors.primary,
+      AppGlassNoticeType.success => context.brand,
       AppGlassNoticeType.warning => AppColors.amber500,
       AppGlassNoticeType.error => AppColors.red500,
     };

@@ -201,7 +201,7 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                           type: AppGlassNoticeType.success,
                         );
                       },
-                      child: const AppIcon(Icons.copy, size: 16, color: AppColors.primary),
+                      child: AppIcon(Icons.copy, size: 16, color: context.brand),
                     ),
                   ],
                 ),
@@ -268,16 +268,16 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
             const SizedBox(height: 12),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: _load,
                 child: _loading
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -345,10 +345,10 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                             ),
                             child: Row(
                               children: [
-                                const AppIcon(
+                                AppIcon(
                                   Icons.vpn_key_outlined,
                                   size: 18,
-                                  color: AppColors.primary,
+                                  color: context.brand,
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
@@ -391,10 +391,10 @@ class _SshKeysPageState extends ConsumerState<SshKeysPage> {
                                 ),
                                 GestureDetector(
                                   onTap: () => _showViewDialog(key),
-                                  child: const AppIcon(
+                                  child: AppIcon(
                                     Icons.visibility_outlined,
                                     size: 18,
-                                    color: AppColors.primary,
+                                    color: context.brand,
                                   ),
                                 ),
                                 const SizedBox(width: 12),

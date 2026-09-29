@@ -344,12 +344,12 @@ class _MorePageState extends ConsumerState<MorePage> {
             title: '检查更新',
             isLight: isLight,
             trailing: _checking
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: AppColors.primary,
+                      color: context.brand,
                     ),
                   )
                 : (_updateInfo?.hasUpdate == true
@@ -403,7 +403,7 @@ class _MorePageState extends ConsumerState<MorePage> {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: AppColors.primary.withAlpha(40), width: 2),
+          border: Border.all(color: context.brand.withAlpha(40), width: 2),
         ),
         child: ClipOval(
           child: Image.network(
@@ -432,7 +432,7 @@ class _MorePageState extends ConsumerState<MorePage> {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(25),
+        color: context.brand.withAlpha(25),
         shape: BoxShape.circle,
       ),
       child: Center(
@@ -441,7 +441,7 @@ class _MorePageState extends ConsumerState<MorePage> {
           style: TextStyle(
             fontSize: size * 0.38,
             fontWeight: FontWeight.w700,
-            color: AppColors.primary,
+            color: context.brand,
           ),
         ),
       ),
@@ -558,12 +558,12 @@ class _MorePageState extends ConsumerState<MorePage> {
                     width: 42,
                     height: 42,
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(20),
+                      color: context.brand.withAlpha(20),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const AppIcon(
+                    child: AppIcon(
                       Icons.dashboard_customize_outlined,
-                      color: AppColors.primary,
+                      color: context.brand,
                     ),
                   ),
                   const SizedBox(width: 12),

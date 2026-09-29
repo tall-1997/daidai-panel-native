@@ -138,16 +138,16 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: _load,
                 child: _loading && _apps.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -539,7 +539,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                           decoration: BoxDecoration(
                             color: enabled
-                                ? AppColors.primary.withAlpha(25)
+                                ? context.brand.withAlpha(25)
                                 : AppColors.slate400.withAlpha(25),
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -549,7 +549,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
                               color: enabled
-                                  ? AppColors.primary
+                                  ? context.brand
                                   : AppColors.slate400,
                             ),
                           ),
@@ -1153,16 +1153,16 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                   return false;
                 },
                 child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: _load,
                 child: _loading && _logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -1186,11 +1186,11 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                              _logs.length + (_logs.length < _total ? 1 : 0),
                          itemBuilder: (_, i) {
                            if (i == _logs.length) {
-                             return const Padding(
+                             return Padding(
                                padding: EdgeInsets.all(16),
                                child: Center(
                                  child: CircularProgressIndicator(
-                                   color: AppColors.primary,
+                                   color: context.brand,
                                  ),
                                ),
                              );
@@ -1220,7 +1220,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                   ),
                                   decoration: BoxDecoration(
                                     color: ok
-                                        ? AppColors.primary.withAlpha(25)
+                                        ? context.brand.withAlpha(25)
                                         : AppColors.red500.withAlpha(25),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
@@ -1231,7 +1231,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                       fontWeight: FontWeight.w700,
                                       fontFamily: 'monospace',
                                       color: ok
-                                          ? AppColors.primary
+                                          ? context.brand
                                           : AppColors.red500,
                                     ),
                                   ),

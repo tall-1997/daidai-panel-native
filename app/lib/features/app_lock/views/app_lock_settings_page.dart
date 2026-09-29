@@ -285,9 +285,9 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
             const SizedBox(height: 12),
             Expanded(
               child: lockState.loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     )
                   : ListView(
@@ -305,12 +305,12 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                     width: 46,
                                     height: 46,
                                     decoration: BoxDecoration(
-                                      color: AppColors.primary.withAlpha(18),
+                                      color: context.brand.withAlpha(18),
                                       borderRadius: BorderRadius.circular(14),
                                     ),
-                                    child: const AppIcon(
+                                    child: AppIcon(
                                       Icons.lock_person_outlined,
-                                      color: AppColors.primary,
+                                      color: context.brand,
                                     ),
                                   ),
                                   const SizedBox(width: 12),
@@ -345,7 +345,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                   AppLiquidGlassToggle(
                                     value: lockState.isEnabled,
                                     onChanged: _toggleEnabled,
-                                    activeColor: AppColors.primary,
+                                    activeColor: context.brand,
                                   ),
                                 ],
                               ),
@@ -450,7 +450,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                 value: lockState.config.biometricEnabled &&
                                     lockState.biometricAvailable,
                                 onChanged: _toggleBiometric,
-                                activeColor: AppColors.primary,
+                                activeColor: context.brand,
                               ),
                             ),
                           ),
@@ -503,7 +503,7 @@ class _MethodCard extends ConsumerWidget {
         children: [
           Row(
             children: [
-              AppIcon(icon, size: 22, color: AppColors.primary),
+              AppIcon(icon, size: 22, color: context.brand),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -544,16 +544,16 @@ class _StatusChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: (active ? AppColors.primary : AppColors.slate500).withAlpha(12),
+        color: (active ? context.brand : AppColors.slate500).withAlpha(12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: (active ? AppColors.primary : AppColors.slate500).withAlpha(24)),
+        border: Border.all(color: (active ? context.brand : AppColors.slate500).withAlpha(24)),
       ),
       child: Text(
         label,
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: active ? AppColors.primary : AppColors.slate500,
+          color: active ? context.brand : AppColors.slate500,
         ),
       ),
     );

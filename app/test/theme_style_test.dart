@@ -100,6 +100,49 @@ void main() {
   });
 
   group('style-aware shared controls', () {
+    test('MIUIX theme uses HyperOS blue on a gray page', () {
+      final theme = AppTheme.light();
+
+      expect(theme.colorScheme.primary, const Color(0xFF3482FF));
+      expect(theme.scaffoldBackgroundColor, const Color(0xFFF7F7F7));
+      expect(theme.cardTheme.color, const Color(0xFFFFFFFF));
+      expect(theme.colorScheme.primary, isNot(AppColors.primary));
+    });
+
+    test('MIUIX dark theme uses a black page and gray cards', () {
+      final theme = AppTheme.dark();
+
+      expect(theme.colorScheme.primary, const Color(0xFF277AF7));
+      expect(theme.scaffoldBackgroundColor, const Color(0xFF000000));
+      expect(theme.cardTheme.color, const Color(0xFF242424));
+    });
+
+    test('Liquid Glass keeps the emerald accent', () {
+      final theme = AppTheme.light(visualStyle: AppVisualStyle.liquidGlass);
+
+      expect(theme.colorScheme.primary, AppColors.primary);
+    });
+
+    test('palette is the only source for page, card and accent', () {
+      final miuix = AppTheme.light();
+      final glass = AppTheme.dark(visualStyle: AppVisualStyle.liquidGlass);
+      final miuixPalette = miuix.extension<AppVisualPalette>()!;
+      final glassPalette = glass.extension<AppVisualPalette>()!;
+
+      expect(miuixPalette.isMiuix, isTrue);
+      expect(miuixPalette.accent, miuix.colorScheme.primary);
+      expect(miuixPalette.page, miuix.scaffoldBackgroundColor);
+      expect(miuixPalette.card, miuix.cardTheme.color);
+      expect(miuix.progressIndicatorTheme.color, miuixPalette.accent);
+      expect(miuixPalette.resolve(AppColors.primary), const Color(0xFF3482FF));
+      expect(miuixPalette.resolve(AppColors.red500), AppColors.red500);
+
+      expect(glassPalette.isMiuix, isFalse);
+      expect(glassPalette.accent, AppColors.primary);
+      expect(glass.progressIndicatorTheme.color, AppColors.primary);
+      expect(glassPalette.resolve(AppColors.primary), AppColors.primary);
+    });
+
     test('MIUIX theme uses opaque shared surfaces', () {
       final theme = AppTheme.light();
       final buttonColor = theme.outlinedButtonTheme.style?.backgroundColor
@@ -331,15 +374,29 @@ Widget _backgroundTestApp(AppStyleSettings settings) {
 
 Widget _themeSettingsTestApp(AppStyleSettings settings) {
   return ProviderScope(
-    key: ValueKey(settings.visualStyle),
     overrides: [
       appStyleProvider.overrideWith((ref) => _FixedStyleNotifier(settings)),
     ],
-    child: MaterialApp(
-      theme: AppTheme.light(visualStyle: settings.visualStyle),
-      home: const ThemeSettingsPage(),
-    ),
+    child: const _StyleBoundApp(home: ThemeSettingsPage()),
   );
+}
+
+/// 与正式入口一样：风格一变，主题色板立刻跟着变。
+class _StyleBoundApp extends ConsumerWidget {
+  final Widget home;
+
+  const _StyleBoundApp({required this.home});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final style = ref.watch(
+      appStyleProvider.select((settings) => settings.visualStyle),
+    );
+    return MaterialApp(
+      theme: AppTheme.light(visualStyle: style),
+      home: home,
+    );
+  }
 }
 
 class _FixedStyleNotifier extends AppStyleNotifier {

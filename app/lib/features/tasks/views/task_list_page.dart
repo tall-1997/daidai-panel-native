@@ -706,7 +706,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       leading: const AppIcon(Icons.label_outline),
                       title: Text(group),
                       trailing: ref.watch(taskProvider).labelFilter == group
-                          ? const AppIcon(Icons.check, color: AppColors.primary)
+                          ? AppIcon(Icons.check, color: context.brand)
                           : null,
                       onTap: () => Navigator.pop(sheetContext, group),
                     );
@@ -1071,7 +1071,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       _TaskBatchActionButton(
                         label: '批量运行',
                         icon: Icons.play_circle_outline,
-                        color: AppColors.primary,
+                        color: context.brand,
                         isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
@@ -1081,7 +1081,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       _TaskBatchActionButton(
                         label: '批量启用',
                         icon: Icons.toggle_on_outlined,
-                        color: AppColors.primary,
+                        color: context.brand,
                         isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
@@ -1121,19 +1121,19 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     vertical: 10,
                   ),
                   borderRadius: 10,
-                  accentColor: AppColors.primary,
+                  accentColor: context.brand,
                   selected: true,
                   performanceMode: true,
-                  child: const Row(
+                  child: Row(
                     children: [
-                      AppIcon(Icons.swap_vert, size: 16, color: AppColors.primary),
+                      AppIcon(Icons.swap_vert, size: 16, color: context.brand),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           '长按拖拽调整当前任务列表顺序，点击「完成」保存',
                           style: TextStyle(
                             fontSize: 12,
-                            color: AppColors.primary,
+                            color: context.brand,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -1145,17 +1145,17 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             ],
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: () =>
                     ref.read(taskProvider.notifier).load(refresh: true),
                 child: state.loading && state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -1991,7 +1991,7 @@ class _TaskLogFileList extends StatelessWidget {
               children: [
                 AppIcon(
                   canOpen ? Icons.description_outlined : Icons.file_present,
-                  color: canOpen ? AppColors.primary : AppColors.slate400,
+                  color: canOpen ? context.brand : AppColors.slate400,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -2077,9 +2077,9 @@ class _TaskCard extends StatelessWidget {
     required this.onAction,
   });
 
-  Color _dotColor() {
+  Color _dotColor(BuildContext context) {
     if (task.isRunning) {
-      return AppColors.primary;
+      return context.brand;
     }
     if (task.isQueued) {
       return AppColors.amber500;
@@ -2088,7 +2088,7 @@ class _TaskCard extends StatelessWidget {
       return AppColors.red500;
     }
     if (task.isEnabled) {
-      return AppColors.primary;
+      return context.brand;
     }
     return AppColors.slate300;
   }
@@ -2108,7 +2108,7 @@ class _TaskCard extends StatelessWidget {
 
   Color _statusBg() {
     if (task.isRunning) {
-      return AppColors.primary.withAlpha(isLight ? 18 : 25);
+      return AppTheme.successColor.withAlpha(isLight ? 18 : 25);
     }
     if (task.isQueued) {
       return AppColors.amber500.withAlpha(isLight ? 18 : 25);
@@ -2121,7 +2121,7 @@ class _TaskCard extends StatelessWidget {
 
   Color _statusFg() {
     if (task.isRunning) {
-      return isLight ? const Color(0xFF047857) : AppColors.primary;
+      return isLight ? const Color(0xFF047857) : AppTheme.successColor;
     }
     if (task.isQueued) {
       return AppColors.amber500;
@@ -2174,10 +2174,10 @@ class _TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotColor = _dotColor();
+    final dotColor = _dotColor(context);
     final labels = task.userLabelsForDisplay;
     final hasFailure = task.lastRunStatus == 1;
-    final primaryColor = task.isRunning ? AppColors.red500 : AppColors.primary;
+    final primaryColor = task.isRunning ? AppColors.red500 : context.brand;
 
     return GestureDetector(
       onTap: onTap,
@@ -2189,7 +2189,7 @@ class _TaskCard extends StatelessWidget {
           performanceMode: true,
           selected: selected || hasFailure,
           accentColor: selected
-              ? AppColors.primary
+              ? context.brand
               : hasFailure
               ? AppColors.red500
               : null,
@@ -2206,7 +2206,7 @@ class _TaskCard extends StatelessWidget {
                       child: Checkbox(
                         value: selected,
                         onChanged: (_) => onSelectedChanged(),
-                        activeColor: AppColors.primary,
+                        activeColor: context.brand,
                         visualDensity: VisualDensity.compact,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
@@ -2437,7 +2437,7 @@ class _TaskScheduleSummary extends StatelessWidget {
         ? Icons.touch_app_outlined
         : Icons.power_settings_new_rounded;
     final color = isCron
-        ? AppColors.primary
+        ? context.brand
         : taskType == 'manual'
         ? AppColors.blue500
         : AppColors.amber500;
@@ -2750,7 +2750,7 @@ class _MetaChip extends ConsumerWidget {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
 
-    final accent = active ? AppColors.primary : AppColors.slate500;
+    final accent = active ? context.brand : AppColors.slate500;
     final background = accent.withAlpha(isLight ? 14 : 24);
     final foreground = active
         ? (isLight ? AppColors.slate700 : AppColors.slate300)
@@ -3505,7 +3505,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
           IconButton(
             icon: AppIcon(
               _autoScroll ? Icons.vertical_align_bottom : Icons.pause,
-              color: _autoScroll ? AppColors.primary : logTheme.mutedForeground,
+              color: _autoScroll ? context.brand : logTheme.mutedForeground,
             ),
             tooltip: _autoScroll ? '自动滚动: 开' : '自动滚动: 关',
             onPressed: () {
@@ -3518,8 +3518,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
       body: Container(
         color: logTheme.background,
         child: _loading && _lines.isEmpty
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
+            ? Center(
+                child: CircularProgressIndicator(color: context.brand),
               )
             : _lines.isEmpty
             ? Center(
@@ -3531,8 +3531,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage>
             : Theme(
                 data: Theme.of(context).copyWith(
                   textSelectionTheme: TextSelectionThemeData(
-                    selectionColor: AppColors.primary.withAlpha(80),
-                    selectionHandleColor: AppColors.primary,
+                    selectionColor: context.brand.withAlpha(80),
+                    selectionHandleColor: context.brand,
                   ),
                 ),
                 child: Scrollbar(

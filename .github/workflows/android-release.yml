@@ -642,6 +642,18 @@ jobs:
           VERSION="${{ needs.verify-build.outputs.version }}"
           CHANNEL="${{ needs.verify-build.outputs.release_channel }}"
           RELEASE_TAG="${{ needs.verify-build.outputs.release_tag }}"
+          remove_release_checksum_files() {
+            local names name
+            names="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+            while IFS= read -r name; do
+              case "${name}" in
+                *.sha256)
+                  gh release delete-asset "${RELEASE_TAG}" "${name}" --repo "${GITHUB_REPOSITORY}" --yes
+                  ;;
+              esac
+            done <<< "${names}"
+          }
+
           python3 - "$VERSION" "$CHANNEL" > release-notes.md <<'PYEOF'
           import re, sys
           version, channel = sys.argv[1:]
@@ -697,15 +709,8 @@ jobs:
             fi
             gh release create "${RELEASE_TAG}" \
               "${APP_APK}" \
-              "${APP_APK}.sha256" \
-              "${TEST_APK}" \
-              "${TEST_APK}.sha256" \
               "candidate/${X64_APK_NAME}" \
-              "candidate/${X64_APK_NAME}.sha256" \
-              "candidate/${X64_TEST_APK_NAME}" \
-              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
-              "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "呆呆面板本机版 ${RELEASE_TAG}" \
               --notes-file release-notes.md \
@@ -748,17 +753,11 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "呆呆面板本机版 ${RELEASE_TAG}" \
               --notes-file release-notes.md
+            remove_release_checksum_files
             gh release upload "${RELEASE_TAG}" \
               "${APP_APK}" \
-              "${APP_APK}.sha256" \
-              "${TEST_APK}" \
-              "${TEST_APK}.sha256" \
               "candidate/${X64_APK_NAME}" \
-              "candidate/${X64_APK_NAME}.sha256" \
-              "candidate/${X64_TEST_APK_NAME}" \
-              "candidate/${X64_TEST_APK_NAME}.sha256" \
               candidate/android-update.json \
-              "release-evidence-${VERSION}.tar.gz" \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber
             exit 0
@@ -783,15 +782,8 @@ jobs:
           fi
           gh release create "${RELEASE_TAG}" \
             "${APP_APK}" \
-            "${APP_APK}.sha256" \
-            "${TEST_APK}" \
-            "${TEST_APK}.sha256" \
             "candidate/${X64_APK_NAME}" \
-            "candidate/${X64_APK_NAME}.sha256" \
-            "candidate/${X64_TEST_APK_NAME}" \
-            "candidate/${X64_TEST_APK_NAME}.sha256" \
             candidate/android-update.json \
-            "release-evidence-${VERSION}.tar.gz" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "呆呆面板本机版 ${RELEASE_TAG}" \
             --notes-file release-notes.md \

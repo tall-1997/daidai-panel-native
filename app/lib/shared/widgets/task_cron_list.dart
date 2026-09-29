@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
-import '../../core/theme/theme_provider.dart';
 import 'app_icon.dart';
 
 class TaskCronList extends ConsumerWidget {
@@ -26,11 +25,7 @@ class TaskCronList extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     final items = _normalized;
     final cardBg = isMiuix
         ? theme.colorScheme.surfaceContainerHighest
@@ -40,10 +35,10 @@ class TaskCronList extends ConsumerWidget {
         : AppColors.slate500.withAlpha(isLight ? 28 : 56);
     final badgeBg = isMiuix
         ? Color.alphaBlend(
-            AppColors.primary.withAlpha(isLight ? 22 : 36),
+            context.brand.withAlpha(isLight ? 22 : 36),
             cardBg,
           )
-        : AppColors.primary.withAlpha(isLight ? 22 : 36);
+        : context.brand.withAlpha(isLight ? 22 : 36);
 
     if (items.isEmpty) {
       return Container(
@@ -103,13 +98,13 @@ class TaskCronList extends ConsumerWidget {
                           style: TextStyle(
                             fontSize: compact ? 10 : 11,
                             fontWeight: FontWeight.w800,
-                            color: AppColors.primary,
+                            color: context.brand,
                           ),
                         )
-                      : const AppIcon(
+                      : AppIcon(
                           Icons.schedule_rounded,
                           size: 16,
-                          color: AppColors.primary,
+                          color: context.brand,
                         ),
                 ),
                 const SizedBox(width: 9),

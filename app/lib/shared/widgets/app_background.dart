@@ -21,7 +21,7 @@ class AppBackground extends ConsumerWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final blur = settings.blurIntensity.clamp(0.0, 50.0);
-    final isMiuix = settings.visualStyle == AppVisualStyle.miuix;
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     final baseColor = Theme.of(context).scaffoldBackgroundColor;
     final mediaQuery = MediaQuery.of(context);
     final cacheWidth =

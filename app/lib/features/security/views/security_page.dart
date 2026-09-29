@@ -73,11 +73,11 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
                   controller: _tabController,
                   isScrollable: true,
                   tabAlignment: TabAlignment.start,
-                  labelColor: AppColors.primary,
+                  labelColor: context.brand,
                   unselectedLabelColor: isLight
                       ? AppColors.slate500
                       : AppColors.slate400,
-                  indicatorColor: AppColors.primary,
+                  indicatorColor: context.brand,
                   dividerColor: Colors.transparent,
                   labelStyle: const TextStyle(
                     fontSize: 13,
@@ -235,15 +235,15 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
         return false;
       },
       child: RefreshIndicator(
-        color: AppColors.primary,
+        color: context.brand,
         onRefresh: _load,
         child: _loading && _logs.isEmpty
             ? ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
+                children: [
                   SizedBox(height: 120),
                   Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
+                    child: CircularProgressIndicator(color: context.brand),
                   ),
                 ],
               )
@@ -322,7 +322,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                                 success ? Icons.check_circle : Icons.cancel,
                                 size: 18,
                                 color: success
-                                    ? AppColors.primary
+                                    ? context.brand
                                     : AppColors.red500,
                               ),
                               const SizedBox(width: 10),
@@ -379,11 +379,11 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                       );
                     }),
                   if (_loading && _logs.isNotEmpty)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.all(16),
                       child: Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.primary,
+                          color: context.brand,
                         ),
                       ),
                     ),
@@ -531,15 +531,15 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
     super.build(context);
 
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: context.brand,
       onRefresh: _load,
       child: _loading && _sessions.isEmpty
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
+              children: [
                 SizedBox(height: 120),
                 Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
+                  child: CircularProgressIndicator(color: context.brand),
                 ),
               ],
             )
@@ -607,10 +607,10 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                     ),
                     child: Row(
                       children: [
-                        const AppIcon(
+                        AppIcon(
                           Icons.devices,
                           size: 18,
-                          color: AppColors.primary,
+                          color: context.brand,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -786,15 +786,15 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
   Widget build(BuildContext context) {
     super.build(context);
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: context.brand,
       onRefresh: _load,
       child: _loading
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
+              children: [
                 SizedBox(height: 120),
                 Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
+                  child: CircularProgressIndicator(color: context.brand),
                 ),
               ],
             )
@@ -859,10 +859,10 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                   borderRadius: 12,
                   child: Row(
                     children: [
-                      const AppIcon(
+                      AppIcon(
                         Icons.shield_outlined,
                         size: 18,
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -1027,8 +1027,8 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
+      return Center(
+        child: CircularProgressIndicator(color: context.brand),
       );
     }
 
@@ -1045,7 +1045,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                 AppIcon(
                   Icons.security,
                   size: 24,
-                  color: _enabled ? AppColors.primary : AppColors.slate400,
+                  color: _enabled ? context.brand : AppColors.slate400,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1067,7 +1067,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                         style: TextStyle(
                           fontSize: 12,
                           color: _enabled
-                              ? AppColors.primary
+                              ? context.brand
                               : AppColors.slate400,
                         ),
                       ),
@@ -1288,16 +1288,16 @@ class _LoginStatsTabState extends ConsumerState<_LoginStatsTab>
     if (_loading) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        children: const [
+        children: [
           SizedBox(height: 120),
-          Center(child: CircularProgressIndicator(color: AppColors.primary)),
+          Center(child: CircularProgressIndicator(color: context.brand)),
         ],
       );
     }
 
     if (_stats == null || _stats!.isEmpty) {
       return RefreshIndicator(
-        color: AppColors.primary,
+        color: context.brand,
         onRefresh: _load,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -1316,7 +1316,7 @@ class _LoginStatsTabState extends ConsumerState<_LoginStatsTab>
 
     final keys = _stats!.keys.toList()..sort();
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: context.brand,
       onRefresh: _load,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1430,15 +1430,15 @@ class _AuditLogsTabState extends ConsumerState<_AuditLogsTab>
         return false;
       },
       child: RefreshIndicator(
-        color: AppColors.primary,
+        color: context.brand,
         onRefresh: _load,
         child: _loading
             ? ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
+                children: [
                   SizedBox(height: 120),
                   Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
+                    child: CircularProgressIndicator(color: context.brand),
                   ),
                 ],
               )
@@ -1461,11 +1461,11 @@ class _AuditLogsTabState extends ConsumerState<_AuditLogsTab>
                 itemCount: _logs.length + (_logs.length < _total ? 1 : 0),
                 itemBuilder: (_, i) {
                   if (i == _logs.length) {
-                    return const Padding(
+                    return Padding(
                       padding: EdgeInsets.all(16),
                       child: Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.primary,
+                          color: context.brand,
                         ),
                       ),
                     );
@@ -1487,10 +1487,10 @@ class _AuditLogsTabState extends ConsumerState<_AuditLogsTab>
                       children: [
                         Row(
                           children: [
-                            const AppIcon(
+                            AppIcon(
                               Icons.history,
                               size: 16,
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                             const SizedBox(width: 8),
                             Expanded(

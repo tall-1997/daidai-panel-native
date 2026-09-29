@@ -372,8 +372,8 @@ class _LogStreamPageState extends State<LogStreamPage> {
             : Theme(
                 data: Theme.of(context).copyWith(
                   textSelectionTheme: TextSelectionThemeData(
-                    selectionColor: AppColors.primary.withAlpha(80),
-                    selectionHandleColor: AppColors.primary,
+                    selectionColor: context.brand.withAlpha(80),
+                    selectionHandleColor: context.brand,
                   ),
                 ),
                 child: Scrollbar(

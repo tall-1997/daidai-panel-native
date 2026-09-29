@@ -227,16 +227,16 @@ class _UserListPageState extends ConsumerState<UserListPage> {
             const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: () => ref.read(userListProvider.notifier).load(),
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -636,7 +636,7 @@ class _UserCard extends ConsumerWidget {
         ? AppColors.red500
         : user.role == 'operator'
         ? AppColors.amber500
-        : AppColors.primary;
+        : context.brand;
     final isSelf = currentUsername == user.username;
 
     return Padding(
@@ -705,7 +705,7 @@ class _UserCard extends ConsumerWidget {
                   style: TextStyle(
                     fontSize: 12,
                     color: user.enabled
-                        ? AppColors.primary
+                        ? context.brand
                         : AppColors.slate400,
                   ),
                 ),

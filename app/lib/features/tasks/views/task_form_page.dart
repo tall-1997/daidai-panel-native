@@ -1018,8 +1018,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                                 margin: const EdgeInsets.only(left: 8),
                                 width: 6,
                                 height: 6,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.primary,
+                                decoration: BoxDecoration(
+                                  color: context.brand,
                                   shape: BoxShape.circle,
                                 ),
                               ),

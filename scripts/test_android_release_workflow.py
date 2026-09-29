@@ -138,19 +138,30 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn("Could not determine prerelease state for tag %s; failing closed", self.workflow)
 
-    def test_clobber_is_scoped_to_current_named_assets(self):
+    def test_release_publishes_installers_without_checksum_files(self):
         upload = self.workflow.split('gh release upload "${RELEASE_TAG}"', 1)[1].split("exit 0", 1)[0]
         for asset in (
             '"${APP_APK}"',
-            '"${APP_APK}.sha256"',
-            '"${TEST_APK}"',
-            '"${TEST_APK}.sha256"',
+            '"candidate/${X64_APK_NAME}"',
             "candidate/android-update.json",
-            '"release-evidence-${VERSION}.tar.gz"',
         ):
             self.assertIn(asset, upload)
+        for excluded in (
+            ".sha256",
+            '"${TEST_APK}"',
+            "release-evidence-",
+        ):
+            self.assertNotIn(excluded, upload)
         self.assertIn("--clobber", upload)
-        self.assertNotIn("gh release delete-asset", self.workflow)
+        self.assertIn("remove_release_checksum_files\n            gh release upload \"${RELEASE_TAG}\"", self.workflow)
+        for create in self.workflow.split('gh release create "${RELEASE_TAG}"')[1:]:
+            assets = create.split("--repo", 1)[0]
+            self.assertNotIn(".sha256", assets)
+            self.assertNotIn("release-evidence-", assets)
+            self.assertIn('"${APP_APK}"', assets)
+            self.assertIn("candidate/android-update.json", assets)
+        self.assertIn('gh release delete-asset "${RELEASE_TAG}" "${name}"', self.workflow)
+        self.assertIn("*.sha256)", self.workflow)
 
     def test_all_actions_artifacts_include_attempt_and_download_via_outputs(self):
         self.assertIn("RUN_ATTEMPT: ${{ github.run_attempt }}", self.workflow)
@@ -215,7 +226,8 @@ class AndroidReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn("release/apk-metadata/**", self.workflow)
         self.assertIn('cp "${APP_APK}" "${APP_APK}.sha256" "${TEST_APK}" "${TEST_APK}.sha256" \\', self.workflow)
         self.assertIn('"candidate/${X64_TEST_APK_NAME}" "candidate/${X64_TEST_APK_NAME}.sha256" release/artifacts/', self.workflow)
-        self.assertGreaterEqual(self.workflow.count('"${TEST_APK}.sha256"'), 2)
+        self.assertIn('"${TEST_APK}.sha256"', self.workflow)
+        self.assertNotIn('"${TEST_APK}.sha256"', self.workflow.split('gh release upload "${RELEASE_TAG}"', 1)[1].split("exit 0", 1)[0])
 
     def test_gradle_web_jobs_pin_node_and_npm_contract(self):
         workflow_paths = (

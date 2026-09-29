@@ -108,7 +108,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       margin: const EdgeInsets.only(left: 16, right: 16, bottom: 10),
       itemPadding: 5,
       itemStyle: LiquidGlassNavItemStyle(
-        selectedColor: AppColors.primary,
+        selectedColor: context.brand,
         unselectedColor: isLight ? AppColors.slate600 : AppColors.slate300,
         iconSize: 22,
         labelFontSize: 10,
@@ -116,10 +116,10 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       pillStyle: LiquidGlassNavPillStyle(
         mode: LiquidGlassPillMode.both,
         animated: true,
-        color: AppColors.primary.withAlpha(isLight ? 28 : 42),
+        color: context.brand.withAlpha(isLight ? 28 : 42),
         glassStyle: LiquidGlassStyle(
           appearance: LiquidGlassAppearance(
-            color: AppColors.primary.withAlpha(isLight ? 22 : 34),
+            color: context.brand.withAlpha(isLight ? 22 : 34),
             blur: const LiquidGlassBlur(sigmaX: 2, sigmaY: 2),
           ),
           refraction: const LiquidGlassRefraction(
@@ -199,7 +199,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     final bg = styleSettings.backgroundImagePath;
     final blur = styleSettings.blurIntensity.clamp(0.0, 50.0);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMiuix = styleSettings.visualStyle == AppVisualStyle.miuix;
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
 
     Widget backgroundWidget;
     if (bg != null) {

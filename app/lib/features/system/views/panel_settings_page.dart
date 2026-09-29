@@ -129,9 +129,9 @@ class _PanelSettingsPageState extends ConsumerState<PanelSettingsPage> {
             const SizedBox(height: 16),
             Expanded(
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     )
                   : ListView(

@@ -49,7 +49,7 @@ class TrendChart extends ConsumerWidget {
               ),
             ),
             const Spacer(),
-            _LegendDot(color: AppColors.primary, label: '成功', isLight: isLight),
+            _LegendDot(color: AppTheme.successColor, label: '成功', isLight: isLight),
             const SizedBox(width: 12),
             _LegendDot(color: AppColors.red500, label: '失败', isLight: isLight),
             const SizedBox(width: 12),
@@ -125,7 +125,7 @@ class TrendChart extends ConsumerWidget {
               ),
               borderData: FlBorderData(show: false),
               lineBarsData: [
-                _line(successSpots, AppColors.primary),
+                _line(successSpots, AppTheme.successColor),
                 _line(failSpots, AppColors.red500),
                 _line(abortedSpots, AppColors.amber500),
               ],

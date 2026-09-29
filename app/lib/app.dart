@@ -18,8 +18,10 @@ class DaidaiApp extends ConsumerStatefulWidget {
 }
 
 class _DaidaiAppState extends ConsumerState<DaidaiApp> {
-  late final ThemeData _lightTheme = AppTheme.light();
-  late final ThemeData _darkTheme = AppTheme.dark();
+  ThemeData _lightTheme(AppVisualStyle style) =>
+      AppTheme.light(visualStyle: style);
+
+  ThemeData _darkTheme(AppVisualStyle style) => AppTheme.dark(visualStyle: style);
 
   @override
   void initState() {
@@ -39,12 +41,15 @@ class _DaidaiAppState extends ConsumerState<DaidaiApp> {
     final themeMode = ref.watch(
       appStyleProvider.select((settings) => settings.themeMode),
     );
+    final visualStyle = ref.watch(
+      appStyleProvider.select((settings) => settings.visualStyle),
+    );
 
     return MaterialApp.router(
       title: '呆呆面板',
       debugShowCheckedModeBanner: false,
-      theme: _lightTheme,
-      darkTheme: _darkTheme,
+      theme: _lightTheme(visualStyle),
+      darkTheme: _darkTheme(visualStyle),
       themeMode: themeMode,
       routerConfig: router,
       locale: const Locale('zh', 'CN'),

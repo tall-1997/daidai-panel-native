@@ -780,9 +780,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
             const SizedBox(height: 12),
             Expanded(
               child: state.loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     )
                   : state.error != null && state.tree.isEmpty
@@ -790,7 +790,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   : visibleTree.isEmpty
                   ? _buildEmpty(state)
                   : RefreshIndicator(
-                      color: AppColors.primary,
+                      color: context.brand,
                       onRefresh: () =>
                           ref.read(scriptProvider.notifier).loadTree(),
                       child: ListView(
@@ -2522,8 +2522,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         ],
       ),
       body: state.loadingContent
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
+          ? Center(
+              child: CircularProgressIndicator(color: context.brand),
             )
           : state.isBinary
           ? const Center(
@@ -2566,7 +2566,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                         data: TextSelectionThemeData(
                           selectionColor: _searchHighlightActive
                               ? AppColors.amber500.withAlpha(120)
-                              : AppColors.primary.withAlpha(60),
+                              : context.brand.withAlpha(60),
                         ),
                         child: TextField(
                           controller: _contentController,
@@ -2719,9 +2719,9 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
               const SizedBox(height: 16),
               Expanded(
                 child: _loading
-                    ? const Center(
+                    ? Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.primary,
+                          color: context.brand,
                         ),
                       )
                     : _versions.isEmpty
@@ -2755,15 +2755,15 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.primary.withAlpha(18),
+                                        color: context.brand.withAlpha(18),
                                         borderRadius: BorderRadius.circular(
                                           999,
                                         ),
                                       ),
                                       child: Text(
                                         'v${version.version}',
-                                        style: const TextStyle(
-                                          color: AppColors.primary,
+                                        style: TextStyle(
+                                          color: context.brand,
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),
@@ -3184,9 +3184,9 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet>
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: _loading
-                      ? const Center(
+                      ? Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: context.brand,
                           ),
                         )
                       : _logs.isEmpty

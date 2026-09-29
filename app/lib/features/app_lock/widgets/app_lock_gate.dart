@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/theme/theme_provider.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../providers/app_lock_provider.dart';
 import 'pattern_pad.dart';
@@ -70,11 +69,11 @@ class _AppLockGateState extends ConsumerState<AppLockGate> {
       children: [
         widget.child,
         if (showInitializing)
-          const Positioned.fill(
+          Positioned.fill(
             child: ColoredBox(
               color: Color(0xEE07111F),
               child: Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
+                child: CircularProgressIndicator(color: context.brand),
               ),
             ),
           ),
@@ -242,11 +241,7 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isMiuix = ref.watch(
-      appStyleProvider.select(
-        (settings) => settings.visualStyle == AppVisualStyle.miuix,
-      ),
-    );
+    final isMiuix = AppVisualPalette.of(context).isMiuix;
     final methods = <_UnlockMethod>[
       if (widget.state.hasBiometric) _UnlockMethod.biometric,
       if (widget.state.hasPassword) _UnlockMethod.password,
@@ -270,13 +265,13 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
                     width: 64,
                     height: 64,
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(22),
+                      color: context.brand.withAlpha(22),
                       shape: BoxShape.circle,
                     ),
-                    child: const AppIcon(
+                    child: AppIcon(
                       Icons.lock_outline,
                       size: 30,
-                      color: AppColors.primary,
+                      color: context.brand,
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -435,13 +430,13 @@ class _AppLockOverlayState extends ConsumerState<_AppLockOverlay> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppColors.primary.withAlpha(12),
+            color: context.brand.withAlpha(12),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withAlpha(28)),
+            border: Border.all(color: context.brand.withAlpha(28)),
           ),
           child: Column(
             children: [
-              const AppIcon(Icons.fingerprint, size: 42, color: AppColors.primary),
+              AppIcon(Icons.fingerprint, size: 42, color: context.brand),
               const SizedBox(height: 12),
               Text(
                 '使用${widget.state.biometricLabel}解锁',

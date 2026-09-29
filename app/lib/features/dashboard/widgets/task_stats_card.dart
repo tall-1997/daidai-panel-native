@@ -38,13 +38,13 @@ class TaskStatsCard extends ConsumerWidget {
             _StatItem(
               label: '总任务',
               value: '$total',
-              color: AppColors.primary,
+              color: context.brand,
               isLight: isLight,
             ),
             _StatItem(
               label: '已启用',
               value: '$enabled',
-              color: AppColors.primary,
+              color: context.brand,
               isLight: isLight,
             ),
             _StatItem(
@@ -73,7 +73,7 @@ class TaskStatsCard extends ConsumerWidget {
             _StatItem(
               label: '今日成功',
               value: '$todaySuccess',
-              color: AppColors.primary,
+              color: context.brand,
               isLight: isLight,
             ),
             _StatItem(

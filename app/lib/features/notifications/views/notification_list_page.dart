@@ -457,7 +457,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
             const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: () async {
                   final notifier = ref.read(notificationListProvider.notifier);
                   await Future.wait([notifier.load(), notifier.loadTypes()]);
@@ -465,11 +465,11 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -1510,14 +1510,14 @@ class _ChannelCard extends StatelessWidget {
             height: 36,
             decoration: BoxDecoration(
               color: channel.enabled
-                  ? AppColors.primary.withAlpha(25)
+                  ? context.brand.withAlpha(25)
                   : AppColors.slate200.withAlpha(60),
               borderRadius: BorderRadius.circular(8),
             ),
             child: AppIcon(
               _typeIcon(),
               size: 18,
-              color: channel.enabled ? AppColors.primary : AppColors.slate400,
+              color: channel.enabled ? context.brand : AppColors.slate400,
             ),
           ),
           const SizedBox(width: 12),
@@ -1570,7 +1570,7 @@ class _ChannelCard extends StatelessWidget {
               child: AppIcon(
                 channel.enabled ? Icons.toggle_on : Icons.toggle_off,
                 size: 28,
-                color: channel.enabled ? AppColors.primary : AppColors.slate400,
+                color: channel.enabled ? context.brand : AppColors.slate400,
               ),
             ),
           ),

@@ -61,7 +61,7 @@ class _HealthCheckPageState extends State<HealthCheckPage> {
             if (_items.isEmpty) const AppCard(child: Center(child: Text('尚未执行健康检查'))),
             ..._items.map((item) {
               final status = item['status']?.toString() ?? 'unknown';
-              final color = status == 'ok' ? AppColors.primary : status == 'warning' ? AppColors.amber500 : AppColors.red500;
+              final color = status == 'ok' ? AppTheme.successColor : status == 'warning' ? AppColors.amber500 : AppColors.red500;
               return AppCard(margin: const EdgeInsets.only(bottom: 10), child: Row(children: [AppIcon(status == 'ok' ? Icons.check_circle : Icons.warning_amber, color: color), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(_label(item['name']?.toString() ?? ''), style: const TextStyle(fontWeight: FontWeight.w700)), if ((item['message']?.toString() ?? '').isNotEmpty) Text(item['message'].toString())]))]));
             }),
             const SizedBox(height: 12),

@@ -835,10 +835,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               ),
               Text(
                 'v${widget.info.latestVersion}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
+                  color: context.brand,
                 ),
               ),
             ],
@@ -870,7 +870,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             const SizedBox(height: 16),
             LinearProgressIndicator(
               value: _progress,
-              color: AppColors.primary,
+              color: context.brand,
               backgroundColor: widget.isLight
                   ? AppColors.slate200
                   : AppColors.slate800,

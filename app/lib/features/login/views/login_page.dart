@@ -415,7 +415,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         width: 56,
                         height: 56,
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withAlpha(25),
+                          color: context.brand.withAlpha(25),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: ClipRRect(
@@ -818,7 +818,7 @@ class _CompactCheck extends StatelessWidget {
             child: Checkbox(
               value: value,
               onChanged: enabled ? (v) => onChanged(v ?? false) : null,
-              activeColor: AppColors.primary,
+              activeColor: context.brand,
               checkColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),

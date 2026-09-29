@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_miuix/miuix.dart';
 
-import 'app_theme.dart';
+import 'app_visual_palette.dart';
 
-/// 在 Material 主题之下再注入一层 MIUIX 主题（HyperOS 配色 + 文本样式）。
+/// 让 MIUIX 控件和 Material 主题读同一套色板。
 ///
-/// 明暗亮度取自上层 [Theme]（由 [MaterialApp.themeMode] 决定），
-/// 配色在 MIUIX 默认色板基础上保留应用品牌主色，避免整体换色。
+/// MIUIX 用官方 HyperOS 色。Liquid Glass 只把强调色换成翠绿，
+/// 避免控件树里出现两套主色。
 class AppMiuixTheme extends StatelessWidget {
   final Widget child;
 
@@ -14,20 +14,28 @@ class AppMiuixTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppVisualPalette.of(context);
     final brightness = Theme.of(context).brightness;
-    final lightColors = lightColorScheme().copy(
-      primary: AppColors.primary,
-      primaryVariant: AppColors.primaryDark,
+    if (palette.isMiuix) {
+      return MiuixTheme(
+        data: MiuixThemeData.of(brightness),
+        child: child,
+      );
+    }
+    final official = brightness == Brightness.dark
+        ? darkColorScheme()
+        : lightColorScheme();
+    final glass = official.copy(
+      primary: palette.accent,
+      primaryVariant: palette.accentStrong,
     );
-    final darkColors = darkColorScheme().copy(
-      primary: AppColors.primary,
-      primaryVariant: AppColors.primaryDark,
+    return MiuixTheme(
+      data: MiuixThemeData.of(
+        brightness,
+        lightColors: brightness == Brightness.dark ? null : glass,
+        darkColors: brightness == Brightness.dark ? glass : null,
+      ),
+      child: child,
     );
-    final data = MiuixThemeData.of(
-      brightness,
-      lightColors: lightColors,
-      darkColors: darkColors,
-    );
-    return MiuixTheme(data: data, child: child);
   }
 }

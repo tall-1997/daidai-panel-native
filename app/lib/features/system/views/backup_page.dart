@@ -913,7 +913,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
       return isLight ? AppColors.red600 : AppColors.red500;
     }
     if (progress.completed) {
-      return isLight ? AppColors.primaryDark : AppColors.primary;
+      return isLight ? context.brandStrong : context.brand;
     }
     return isLight ? AppColors.blue600 : AppColors.blue500;
   }
@@ -1129,10 +1129,10 @@ class _BackupPageState extends ConsumerState<BackupPage>
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: AppColors.primary.withAlpha(isLight ? 16 : 26),
+                color: context.brand.withAlpha(isLight ? 16 : 26),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: AppColors.primary.withAlpha(isLight ? 40 : 56),
+                  color: context.brand.withAlpha(isLight ? 40 : 56),
                 ),
               ),
               child: Text(
@@ -1497,7 +1497,7 @@ class _BackupPageState extends ConsumerState<BackupPage>
             const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: _refresh,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -1553,11 +1553,11 @@ class _BackupPageState extends ConsumerState<BackupPage>
                       if (_backups.isNotEmpty) const SizedBox(height: 12),
                     ],
                     if (_loading && _backups.isEmpty)
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.symmetric(vertical: 60),
                         child: Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: context.brand,
                           ),
                         ),
                       )

@@ -1355,7 +1355,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             _BatchActionButton(
                               label: '批量启用',
                               icon: Icons.play_circle_outline,
-                              color: AppColors.primary,
+                              color: context.brand,
                               isLight: isLight,
                               enabled: selectedCount > 0,
                               onTap: () =>
@@ -1390,7 +1390,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             _BatchActionButton(
                               label: '置顶',
                               icon: Icons.vertical_align_top,
-                              color: AppColors.primary,
+                              color: context.brand,
                               isLight: isLight,
                               enabled: selectedCount > 0,
                               onTap: () => _pinTop(true),
@@ -1422,25 +1422,25 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   ),
                   decoration: BoxDecoration(
                     color: isLight
-                        ? AppColors.primary.withAlpha(12)
-                        : AppColors.primary.withAlpha(20),
+                        ? context.brand.withAlpha(12)
+                        : context.brand.withAlpha(20),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.primary.withAlpha(40)),
+                    border: Border.all(color: context.brand.withAlpha(40)),
                   ),
                   child: Row(
                     children: [
-                      const AppIcon(
+                      AppIcon(
                         Icons.swap_vert,
                         size: 16,
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                       const SizedBox(width: 8),
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           '长按拖拽调整顺序，点击「完成」保存',
                           style: TextStyle(
                             fontSize: 12,
-                            color: AppColors.primary,
+                            color: context.brand,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -1453,16 +1453,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
             const SizedBox(height: 12),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: _refresh,
                 child: state.loading && state.envs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -1594,7 +1594,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                   height: 8,
                                   decoration: BoxDecoration(
                                     color: env.enabled
-                                        ? AppColors.primary
+                                        ? context.brand
                                         : AppColors.slate300,
                                     shape: BoxShape.circle,
                                   ),
@@ -1709,7 +1709,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           decoration: BoxDecoration(
                             color:
                                 (env.enabled
-                                        ? AppColors.primary
+                                        ? context.brand
                                         : AppColors.slate400)
                                     .withAlpha(18),
                             borderRadius: BorderRadius.circular(999),
@@ -1720,7 +1720,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
                               color: env.enabled
-                                  ? AppColors.primary
+                                  ? context.brand
                                   : AppColors.slate500,
                             ),
                           ),
@@ -1753,11 +1753,11 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           style: OutlinedButton.styleFrom(
                             foregroundColor: env.enabled
                                 ? AppColors.slate600
-                                : AppColors.primary,
+                                : context.brand,
                             side: BorderSide(
                               color: env.enabled
                                   ? AppColors.slate300
-                                  : AppColors.primary,
+                                  : context.brand,
                             ),
                           ),
                         ),
@@ -2085,13 +2085,13 @@ class _EnvValueSheetEditor extends ConsumerWidget {
                       width: 36,
                       height: 36,
                       decoration: BoxDecoration(
-                        color: AppColors.primary.withAlpha(isLight ? 20 : 34),
+                        color: context.brand.withAlpha(isLight ? 20 : 34),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const AppIcon(
+                      child: AppIcon(
                         Icons.open_in_full,
                         size: 18,
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -2378,7 +2378,7 @@ class _EnvCardState extends State<_EnvCard> {
                                   : Icons.play_circle_outline,
                               color: widget.env.enabled
                                   ? AppColors.slate500
-                                  : AppColors.primary,
+                                  : context.brand,
                               onTap: widget.onToggle,
                             ),
                             _EnvSwipeAction(
@@ -2436,7 +2436,7 @@ class _EnvCardState extends State<_EnvCard> {
                       child: Checkbox(
                         value: widget.selected,
                         onChanged: (_) => widget.onSelectedChanged(),
-                        activeColor: AppColors.primary,
+                        activeColor: context.brand,
                         visualDensity: VisualDensity.compact,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
@@ -2448,7 +2448,7 @@ class _EnvCardState extends State<_EnvCard> {
                     height: 6,
                     decoration: BoxDecoration(
                       color: widget.env.enabled
-                          ? AppColors.primary
+                          ? context.brand
                           : AppColors.slate300,
                       shape: BoxShape.circle,
                     ),

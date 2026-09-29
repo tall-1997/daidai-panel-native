@@ -128,7 +128,7 @@ class _VisualStyleSelector extends StatelessWidget {
                           ? Icons.auto_awesome
                           : Icons.blur_on_outlined,
                       color: currentStyle == style
-                          ? AppColors.primary
+                          ? context.brand
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                     const SizedBox(height: 4),
@@ -184,7 +184,7 @@ class _ThemeModeSelector extends ConsumerWidget {
                     _modeIcon(mode),
                     size: 22,
                     color: isSelected
-                        ? AppColors.primary
+                        ? context.brand
                         : (isLight ? AppColors.slate400 : AppColors.slate500),
                   ),
                   const SizedBox(height: 4),
@@ -196,7 +196,7 @@ class _ThemeModeSelector extends ConsumerWidget {
                           ? FontWeight.w600
                           : FontWeight.w400,
                       color: isSelected
-                          ? AppColors.primary
+                          ? context.brand
                           : (isLight ? AppColors.slate500 : AppColors.slate400),
                     ),
                   ),
@@ -346,7 +346,7 @@ class _BlurIntensitySlider extends StatelessWidget {
             builder: (context, constraints) => LiquidGlassSlider(
               value: (currentValue / 20).clamp(0.0, 1.0),
               layout: LiquidGlassSliderLayout(width: constraints.maxWidth),
-              activeColor: AppColors.primary,
+              activeColor: context.brand,
               inactiveColor: isLight ? AppColors.slate200 : AppColors.slate700,
               pixelRatio: 0.8,
               onChanged: (value) => onChanged((value * 20).roundToDouble()),

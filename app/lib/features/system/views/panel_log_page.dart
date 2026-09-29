@@ -192,9 +192,9 @@ class _PanelLogPageState extends State<PanelLogPage> {
                 border: Border.all(color: borderColor),
               ),
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     )
                   : _content.trim().isEmpty

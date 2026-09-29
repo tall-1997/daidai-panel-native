@@ -104,11 +104,11 @@ class _SponsorPageState extends State<SponsorPage> {
       backgroundColor: Colors.transparent,
       appBar: AppBar(title: const Text('赞助名单')),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
+          ? Center(
+              child: CircularProgressIndicator(color: context.brand),
             )
           : RefreshIndicator(
-              color: AppColors.primary,
+              color: context.brand,
               onRefresh: _loadSponsors,
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
@@ -159,7 +159,7 @@ class _SponsorPageState extends State<SponsorPage> {
                           AppIcon(
                             Icons.favorite_border,
                             size: 44,
-                            color: AppColors.primary.withAlpha(180),
+                            color: context.brand.withAlpha(180),
                           ),
                           const SizedBox(height: 12),
                           Text(
@@ -284,10 +284,10 @@ class _SponsorCard extends StatelessWidget {
           const SizedBox(width: 10),
           Text(
             currencyFormat.format(sponsor.amount),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
-              color: AppColors.primary,
+              color: context.brand,
             ),
           ),
         ],
@@ -307,16 +307,16 @@ class _FallbackAvatar extends StatelessWidget {
       width: 46,
       height: 46,
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(22),
+        color: context.brand.withAlpha(22),
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
       child: Text(
         initial,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.w700,
-          color: AppColors.primary,
+          color: context.brand,
         ),
       ),
     );

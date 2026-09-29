@@ -1251,7 +1251,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     return AppLiquidGlassSurface(
       onTap: () => _changeType(type),
       selected: selected,
-      accentColor: AppColors.primary,
+      accentColor: context.brand,
       borderRadius: 14,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Column(
@@ -1262,7 +1262,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             style: TextStyle(
               fontSize: 12,
               color: selected
-                  ? AppColors.primaryDark
+                  ? context.brandStrong
                   : (isLight ? AppColors.slate500 : AppColors.slate400),
             ),
           ),
@@ -1273,7 +1273,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               fontSize: 22,
               fontWeight: FontWeight.w800,
               color: selected
-                  ? AppColors.primary
+                  ? context.brand
                   : (isLight ? AppColors.slate900 : AppColors.slate50),
             ),
           ),
@@ -1394,7 +1394,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                         ]
                       : runtimes.map((runtime) {
                           final color = runtime.available
-                              ? AppColors.primary
+                              ? context.brand
                               : AppColors.amber500;
                           return Tooltip(
                             message: runtime.message,
@@ -1577,7 +1577,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     count: state.items.where((d) => d.isInstalled).length,
                     selected: _statusFilter == 'installed',
                     isLight: isLight,
-                    color: AppColors.primary,
+                    color: context.brand,
                     onTap: () => setState(
                       () => _statusFilter = _statusFilter == 'installed'
                           ? null
@@ -1624,16 +1624,16 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   return false;
                 },
                 child: RefreshIndicator(
-                  color: AppColors.primary,
+                  color: context.brand,
                   onRefresh: _loadPageData,
                   child: state.loading && state.items.isEmpty
                       ? ListView(
                           physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
+                          children: [
                             SizedBox(height: 120),
                             Center(
                               child: CircularProgressIndicator(
-                                color: AppColors.primary,
+                                color: context.brand,
                               ),
                             ),
                           ],
@@ -1708,11 +1708,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                 (state.items.length < state.total ? 1 : 0),
                             itemBuilder: (_, i) {
                               if (i == filtered.length) {
-                                return const Padding(
+                                return Padding(
                                   padding: EdgeInsets.all(16),
                                   child: Center(
                                     child: CircularProgressIndicator(
-                                      color: AppColors.primary,
+                                      color: context.brand,
                                     ),
                                   ),
                                 );
@@ -1800,7 +1800,7 @@ class _DepCard extends ConsumerWidget {
     if (dep.isCancelled) {
       return AppColors.slate500.withAlpha(isLight ? 14 : 24);
     }
-    return AppColors.primary.withAlpha(isLight ? 18 : 25);
+    return AppTheme.successColor.withAlpha(isLight ? 18 : 25);
   }
 
   Color _statusFg() {
@@ -1813,7 +1813,7 @@ class _DepCard extends ConsumerWidget {
     if (dep.isCancelled) {
       return isLight ? AppColors.slate600 : AppColors.slate300;
     }
-    return isLight ? const Color(0xFF047857) : AppColors.primary;
+    return isLight ? const Color(0xFF047857) : AppTheme.successColor;
   }
 
   @override
@@ -2145,7 +2145,7 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
                   style: TextStyle(
                     color: logTheme.brightness == Brightness.dark
                         ? logTheme.foreground
-                        : AppColors.primary,
+                        : context.brand,
                     fontSize: 13,
                   ),
                 ),
@@ -2191,7 +2191,7 @@ class _StatusFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = color ?? AppColors.primary;
+    final activeColor = color ?? context.brand;
     final fg = selected
         ? activeColor
         : (isLight ? AppColors.slate600 : AppColors.slate400);

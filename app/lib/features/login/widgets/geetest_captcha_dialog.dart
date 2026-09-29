@@ -216,13 +216,13 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(20),
+                      color: context.brand.withAlpha(20),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const AppIcon(
+                    child: AppIcon(
                       Icons.verified_user_outlined,
                       size: 18,
-                      color: AppColors.primary,
+                      color: context.brand,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -252,9 +252,9 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                     children: [
                       WebViewWidget(controller: _controller),
                       if (_loading)
-                        const Center(
+                        Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: context.brand,
                           ),
                         ),
                     ],

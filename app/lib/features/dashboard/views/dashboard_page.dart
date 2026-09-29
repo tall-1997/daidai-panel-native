@@ -161,7 +161,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(25),
+        color: context.brand.withAlpha(25),
         shape: BoxShape.circle,
         border: Border.all(
           color: isLight ? AppColors.slate200 : AppColors.slate800,
@@ -173,7 +173,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
           style: TextStyle(
             fontSize: size * 0.4,
             fontWeight: FontWeight.w700,
-            color: AppColors.primary,
+            color: context.brand,
           ),
         ),
       ),
@@ -236,15 +236,15 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: RefreshIndicator(
-        color: AppColors.primary,
+        color: context.brand,
         onRefresh: () => ref.read(dashboardProvider.notifier).load(),
         child: data.loading && data.system.isEmpty
             ? ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
+                children: [
                   SizedBox(height: 120),
                   Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
+                    child: CircularProgressIndicator(color: context.brand),
                   ),
                 ],
               )
@@ -376,17 +376,17 @@ class _DashboardPageState extends ConsumerState<DashboardPage> with WidgetsBindi
                       Expanded(
                         child: _StatCard(
                           icon: Icons.storage,
-                           iconBg: AppColors.primary.withAlpha(20),
-                          iconBgDark: AppColors.primary.withAlpha(25),
-                          iconColor: AppColors.primary,
-                          iconColorDark: AppColors.primary,
+                           iconBg: context.brand.withAlpha(20),
+                          iconBgDark: context.brand.withAlpha(25),
+                          iconColor: context.brand,
+                          iconColorDark: context.brand,
                           label: data.memoryUnavailable
                               ? '内存（资源采集不可用）'
                               : '内存 (${data.memoryUsed}/${data.memoryTotal})',
                           value: data.memoryUnavailable
                               ? null
                               : data.memoryUsage,
-                          barColor: AppColors.primary,
+                          barColor: context.brand,
                           valueText: data.memoryUnavailable
                               ? '不可用'
                               : '${data.memoryUsage.toStringAsFixed(0)}%',
@@ -519,11 +519,11 @@ class _ServerInfoCard extends ConsumerWidget {
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: AppColors.primary,
+                color: context.brand,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withAlpha(180),
+                    color: context.brand.withAlpha(180),
                     blurRadius: 8,
                   ),
                 ],
@@ -582,7 +582,7 @@ class _ServerInfoCard extends ConsumerWidget {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.primary,
+                    color: context.brand,
                   ),
                 ),
               ),

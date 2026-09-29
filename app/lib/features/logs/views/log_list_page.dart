@@ -770,17 +770,17 @@ class _LogListPageState extends ConsumerState<LogListPage>
 
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: () =>
                     ref.read(logListProvider.notifier).load(refresh: true),
                 child: state.loading && state.logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -884,7 +884,7 @@ class _LogItem extends ConsumerWidget {
   });
 
   Color _statusColor() {
-    if (log.isSuccess) return AppColors.primary;
+    if (log.isSuccess) return AppTheme.successColor;
     if (log.isFailed) return AppColors.red500;
     if (log.isAborted) return AppColors.amber500;
     return AppColors.blue500;
@@ -900,7 +900,7 @@ class _LogItem extends ConsumerWidget {
         padding: const EdgeInsets.only(bottom: 12),
         child: AppLiquidGlassSurface(
           borderRadius: 18,
-          accentColor: AppColors.primary,
+          accentColor: context.brand,
           selected: selected,
           performanceMode: true,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -914,7 +914,7 @@ class _LogItem extends ConsumerWidget {
                 child: Checkbox(
                   value: selected,
                   onChanged: (_) => onView(),
-                  activeColor: AppColors.primary,
+                  activeColor: context.brand,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(4),
                   ),
@@ -999,13 +999,14 @@ class _StatusFilterChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLight = Theme.of(context).brightness == Brightness.light;
+    final accent = context.brandOr(selectedColor);
     final foreground = selected
-        ? selectedColor
+        ? accent
         : (isLight ? AppColors.slate600 : AppColors.slate300);
     return AppLiquidGlassSurface(
       onTap: onTap,
       borderRadius: 18,
-      accentColor: selectedColor,
+      accentColor: accent,
       selected: selected,
       performanceMode: true,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

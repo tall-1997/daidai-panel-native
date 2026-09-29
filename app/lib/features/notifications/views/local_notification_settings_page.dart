@@ -103,10 +103,10 @@ class _LocalNotificationSettingsPageState
           ),
           const SizedBox(height: 10),
           if (_loading)
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
-                child: CircularProgressIndicator(color: AppColors.primary),
+                child: CircularProgressIndicator(color: context.brand),
               ),
             )
           else ...[
@@ -159,7 +159,7 @@ class _LocalNotificationSettingsPageState
             AppIcon(
               _permissionGranted ? Icons.check_circle : Icons.cancel,
               size: 20,
-              color: _permissionGranted ? AppColors.primary : AppColors.red500,
+              color: _permissionGranted ? AppTheme.successColor : AppColors.red500,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -256,7 +256,7 @@ class _ChannelTile extends ConsumerWidget {
             ),
             AppLiquidGlassToggle(
               value: enabled,
-              activeColor: AppColors.primary,
+              activeColor: context.brand,
               onChanged: onToggle,
             ),
           ],

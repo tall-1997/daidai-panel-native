@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_miuix/miuix.dart';
 
+import 'app_visual_palette.dart';
 import 'theme_provider.dart';
 
-/// 设计系统色板 — 基于 Emerald + Slate
+export 'app_visual_palette.dart';
+
+/// Liquid Glass 与成功/运行状态仍用 Emerald。MIUIX 默认界面不读这里的 primary。
 class AppColors {
   // Primary
   static const primary = Color(0xFF10B981); // Emerald-500
@@ -68,18 +72,48 @@ class AppColors {
 }
 
 class AppTheme {
+  static ColorScheme _miuixScheme(MiuixColors colors, Brightness brightness) {
+    return ColorScheme(
+      brightness: brightness,
+      primary: colors.primary,
+      onPrimary: colors.onPrimary,
+      primaryContainer: colors.tertiaryContainer,
+      onPrimaryContainer: colors.onTertiaryContainer,
+      secondary: colors.primary,
+      onSecondary: colors.onPrimary,
+      secondaryContainer: colors.secondaryContainer,
+      onSecondaryContainer: colors.onSecondaryVariant,
+      error: colors.error,
+      onError: colors.onError,
+      errorContainer: colors.errorContainer,
+      onErrorContainer: colors.onErrorContainer,
+      surface: colors.surfaceContainer,
+      onSurface: colors.onSurface,
+      onSurfaceVariant: colors.onSurfaceContainerVariant,
+      outline: colors.dividerLine,
+      outlineVariant: colors.surfaceContainerHigh,
+      surfaceContainerHighest: colors.surfaceContainerHigh,
+      surfaceTint: Colors.transparent,
+    );
+  }
+
   static ThemeData light({
     AppVisualStyle visualStyle = AppVisualStyle.miuix,
   }) {
+    if (visualStyle == AppVisualStyle.miuix) {
+      final colors = lightColorScheme();
+      return _buildTheme(
+        _miuixScheme(colors, Brightness.light),
+        AppVisualPalette.miuix(colors, Brightness.light),
+      );
+    }
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
       brightness: Brightness.light,
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: visualStyle == AppVisualStyle.miuix
-          ? Colors.white
-          : AppColors.lightSurface,
+      surface: AppColors.lightSurface,
       onSurface: AppColors.slate900,
       onSurfaceVariant: AppColors.slate500,
       outline: AppColors.glassCardBorder,
@@ -87,21 +121,26 @@ class AppTheme {
       error: AppColors.red500,
       surfaceContainerHighest: AppColors.slate100,
     );
-    return _buildTheme(colorScheme, visualStyle);
+    return _buildTheme(colorScheme, _glassPalette(Brightness.light));
   }
 
   static ThemeData dark({
     AppVisualStyle visualStyle = AppVisualStyle.miuix,
   }) {
+    if (visualStyle == AppVisualStyle.miuix) {
+      final colors = darkColorScheme();
+      return _buildTheme(
+        _miuixScheme(colors, Brightness.dark),
+        AppVisualPalette.miuix(colors, Brightness.dark),
+      );
+    }
     final colorScheme = ColorScheme.fromSeed(
       seedColor: AppColors.primary,
       brightness: Brightness.dark,
       primary: AppColors.primary,
       onPrimary: Colors.white,
       secondary: AppColors.blue500,
-      surface: visualStyle == AppVisualStyle.miuix
-          ? AppColors.slate900
-          : AppColors.darkSurface,
+      surface: AppColors.darkSurface,
       onSurface: AppColors.slate50,
       onSurfaceVariant: AppColors.slate400,
       outline: AppColors.slate800,
@@ -109,36 +148,45 @@ class AppTheme {
       error: AppColors.red500,
       surfaceContainerHighest: AppColors.slate900,
     );
-    return _buildTheme(colorScheme, visualStyle);
+    return _buildTheme(colorScheme, _glassPalette(Brightness.dark));
   }
 
-  static ThemeData _buildTheme(ColorScheme cs, AppVisualStyle visualStyle) {
+  static AppVisualPalette _glassPalette(Brightness brightness) {
+    final isLight = brightness == Brightness.light;
+    return AppVisualPalette(
+      style: AppVisualStyle.liquidGlass,
+      accent: AppColors.primary,
+      accentStrong: isLight ? AppColors.primaryDark : AppColors.primary,
+      onAccent: const Color(0xFFFFFFFF),
+      page: isLight ? AppColors.lightPage : AppColors.darkPage,
+      card: isLight ? AppColors.lightSurface : AppColors.darkSurface,
+      control: isLight ? AppColors.lightControl : AppColors.darkControl,
+      controlPressed: isLight
+          ? AppColors.lightControlPressed
+          : AppColors.darkControlPressed,
+      text: isLight ? AppColors.slate900 : AppColors.slate50,
+      textSecondary: isLight ? AppColors.slate500 : AppColors.slate400,
+      divider: isLight ? const Color(0x70FFFFFF) : AppColors.darkBorder,
+      success: AppColors.primary,
+      disabledAccent: AppColors.primary.withAlpha(90),
+    );
+  }
+
+  static ThemeData _buildTheme(ColorScheme cs, AppVisualPalette palette) {
     final isLight = cs.brightness == Brightness.light;
-    final isMiuix = visualStyle == AppVisualStyle.miuix;
-    final cardColor = isMiuix
-        ? (isLight ? Colors.white : AppColors.slate900)
-        : (isLight ? AppColors.lightSurface : AppColors.darkSurface);
-    final borderColor = isMiuix
-        ? (isLight ? AppColors.slate200 : AppColors.slate700)
-        : (isLight ? const Color(0x70FFFFFF) : AppColors.darkBorder);
-    final scaffoldBg = isMiuix
-        ? (isLight ? const Color(0xFFFFFFFF) : const Color(0xFF242424))
-        : (isLight ? AppColors.lightPage : AppColors.darkPage);
-    final controlColor = isMiuix
-        ? (isLight ? AppColors.slate100 : AppColors.slate800)
-        : (isLight ? AppColors.lightControl : AppColors.darkControl);
-    final pressedControlColor = isMiuix
-        ? (isLight ? AppColors.slate200 : AppColors.slate700)
-        : (isLight
-              ? AppColors.lightControlPressed
-              : AppColors.darkControlPressed);
+    final isMiuix = palette.isMiuix;
+    final cardColor = palette.card;
+    final borderColor = isMiuix ? Colors.transparent : palette.divider;
+    final scaffoldBg = palette.page;
+    final controlColor = palette.control;
+    final pressedControlColor = palette.controlPressed;
     final overlayGlassColor = isMiuix
-        ? scaffoldBg
+        ? cardColor
         : (isLight
               ? Colors.white.withAlpha(188)
               : AppColors.slate900.withAlpha(196));
     final modalSurfaceColor = isMiuix
-        ? scaffoldBg
+        ? cardColor
         : (isLight
               ? Colors.white.withAlpha(236)
               : AppColors.slate900.withAlpha(236));
@@ -169,16 +217,34 @@ class AppTheme {
           states.contains(WidgetState.focused);
       return BorderSide(
         color: selected
-            ? AppColors.primary.withAlpha(isLight ? 120 : 150)
+            ? cs.primary.withAlpha(isLight ? 120 : 150)
             : borderColor,
         width: selected ? 1.2 : 1,
       );
     }
 
+    final textTheme = (isLight
+            ? Typography.material2021().black
+            : Typography.material2021().white)
+        .apply(bodyColor: palette.text, displayColor: palette.text);
     return ThemeData(
       useMaterial3: true,
+      extensions: [palette],
       colorScheme: cs,
+      textTheme: textTheme,
       scaffoldBackgroundColor: scaffoldBg,
+      iconTheme: IconThemeData(color: palette.text),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: palette.accent),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: palette.accent,
+        selectionColor: palette.accent.withAlpha(80),
+        selectionHandleColor: palette.accent,
+      ),
+      dividerTheme: DividerThemeData(
+        color: palette.divider,
+        thickness: 0.5,
+        space: 0,
+      ),
       appBarTheme: AppBarTheme(
         centerTitle: isMiuix,
         elevation: 0,
@@ -199,7 +265,7 @@ class AppTheme {
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: borderColor, width: 0.5),
+          side: BorderSide(color: borderColor, width: isMiuix ? 0 : 0.5),
         ),
         margin: const EdgeInsets.only(bottom: 10),
       ),
@@ -214,7 +280,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+          borderSide: BorderSide(color: cs.primary, width: 1.5),
         ),
         filled: true,
         fillColor: controlColor,
@@ -234,18 +300,31 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
-          backgroundColor: WidgetStateProperty.resolveWith(resolveControlColor),
-          foregroundColor: const WidgetStatePropertyAll(AppColors.primary),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (isMiuix) {
+              if (states.contains(WidgetState.disabled)) {
+                return palette.disabledAccent;
+              }
+              if (states.contains(WidgetState.pressed)) {
+                return Color.alphaBlend(const Color(0x22000000), cs.primary);
+              }
+              return cs.primary;
+            }
+            return resolveControlColor(states);
+          }),
+          foregroundColor: WidgetStatePropertyAll(isMiuix ? cs.onPrimary : cs.primary),
           overlayColor: WidgetStatePropertyAll(
-            AppColors.primary.withAlpha(isLight ? 18 : 28),
+            cs.primary.withAlpha(isLight ? 18 : 28),
           ),
           minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
           padding: const WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           ),
-          side: WidgetStateProperty.resolveWith(resolveControlSide),
+          side: isMiuix
+              ? const WidgetStatePropertyAll(BorderSide.none)
+              : WidgetStateProperty.resolveWith(resolveControlSide),
           shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(isMiuix ? 16 : 14)),
           ),
           elevation: const WidgetStatePropertyAll(0),
           textStyle: const WidgetStatePropertyAll(
@@ -258,7 +337,7 @@ class AppTheme {
           backgroundColor: WidgetStateProperty.resolveWith(resolveControlColor),
           foregroundColor: WidgetStatePropertyAll(cs.onSurface),
           overlayColor: WidgetStatePropertyAll(
-            AppColors.primary.withAlpha(isLight ? 16 : 24),
+            cs.primary.withAlpha(isLight ? 16 : 24),
           ),
           minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
           padding: const WidgetStatePropertyAll(
@@ -287,7 +366,7 @@ class AppTheme {
           }),
           foregroundColor: WidgetStatePropertyAll(cs.primary),
           overlayColor: WidgetStatePropertyAll(
-            AppColors.primary.withAlpha(isLight ? 16 : 24),
+            cs.primary.withAlpha(isLight ? 16 : 24),
           ),
           padding: const WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -305,7 +384,7 @@ class AppTheme {
           backgroundColor: WidgetStateProperty.resolveWith(resolveControlColor),
           foregroundColor: WidgetStatePropertyAll(cs.onSurfaceVariant),
           overlayColor: WidgetStatePropertyAll(
-            AppColors.primary.withAlpha(isLight ? 18 : 28),
+            cs.primary.withAlpha(isLight ? 18 : 28),
           ),
           minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
           side: WidgetStateProperty.resolveWith(resolveControlSide),
@@ -316,7 +395,7 @@ class AppTheme {
         thumbColor: WidgetStateProperty.all(Colors.white),
         trackColor: WidgetStateProperty.resolveWith((states) {
           return states.contains(WidgetState.selected)
-              ? AppColors.primary
+              ? cs.primary
               : isLight
               ? AppColors.slate300
               : AppColors.slate700;
@@ -337,20 +416,20 @@ class AppTheme {
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         indicatorColor: isMiuix
             ? Color.alphaBlend(
-                AppColors.primary.withAlpha(isLight ? 28 : 42),
+                cs.primary.withAlpha(isLight ? 28 : 42),
                 cardColor,
               )
             : Colors.transparent,
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return const IconThemeData(color: AppColors.primary, size: 22);
+            return IconThemeData(color: cs.primary, size: 22);
           }
           return IconThemeData(color: cs.onSurfaceVariant, size: 22);
         }),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return const TextStyle(
-              color: AppColors.primary,
+            return TextStyle(
+              color: cs.primary,
               fontSize: 10,
               fontWeight: FontWeight.w600,
             );
@@ -358,19 +437,14 @@ class AppTheme {
           return TextStyle(color: cs.onSurfaceVariant, fontSize: 10);
         }),
       ),
-      dividerTheme: DividerThemeData(
-        color: borderColor,
-        thickness: 0.5,
-        space: 0,
-      ),
       chipTheme: ChipThemeData(
         backgroundColor: overlayGlassColor,
         selectedColor: pressedControlColor,
         disabledColor: isLight ? AppColors.slate100 : AppColors.slate800,
         side: BorderSide(color: borderColor),
         labelStyle: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-        secondaryLabelStyle: const TextStyle(
-          color: AppColors.primary,
+        secondaryLabelStyle: TextStyle(
+          color: cs.primary,
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
@@ -380,12 +454,12 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       tabBarTheme: TabBarThemeData(
-        labelColor: AppColors.primary,
+        labelColor: cs.primary,
         unselectedLabelColor: cs.onSurfaceVariant,
-        indicatorColor: AppColors.primary,
+        indicatorColor: cs.primary,
         dividerColor: Colors.transparent,
         overlayColor: WidgetStatePropertyAll(
-          AppColors.primary.withAlpha(isLight ? 14 : 24),
+          cs.primary.withAlpha(isLight ? 14 : 24),
         ),
         labelStyle: const TextStyle(fontWeight: FontWeight.w700),
         unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
@@ -445,7 +519,7 @@ class AppTheme {
           fontSize: 14,
           fontWeight: FontWeight.w600,
         ),
-        actionTextColor: AppColors.primary,
+        actionTextColor: cs.primary,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
@@ -466,4 +540,17 @@ class AppTheme {
   static const Color warningColor = AppColors.amber500;
   static const Color runningColor = AppColors.primary;
   static const Color disabledColor = AppColors.slate300;
+}
+
+extension AppBrandContext on BuildContext {
+  AppVisualPalette get palette => AppVisualPalette.of(this);
+
+  /// 当前视觉风格的强调色。MIUIX 为 HyperOS 蓝，Liquid Glass 为翠绿。
+  Color get brand => palette.accent;
+
+  /// 浅色下略压暗，对应原来的 primaryDark。
+  Color get brandStrong => palette.accentStrong;
+
+  /// 未指定强调色时跟随当前主题。显式传入的其他颜色保持不变。
+  Color brandOr(Color color) => palette.resolve(color);
 }

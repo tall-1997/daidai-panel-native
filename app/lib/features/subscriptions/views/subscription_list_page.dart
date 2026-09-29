@@ -327,17 +327,17 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                   return false;
                 },
                 child: RefreshIndicator(
-                color: AppColors.primary,
+                color: context.brand,
                 onRefresh: () =>
                     ref.read(subscriptionListProvider.notifier).load(),
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
+                        children: [
                           SizedBox(height: 120),
                           Center(
                             child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                              color: context.brand,
                             ),
                           ),
                         ],
@@ -368,11 +368,11 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                             (state.items.length < state.total ? 1 : 0),
                         itemBuilder: (_, i) {
                           if (i == state.items.length) {
-                            return const Padding(
+                            return Padding(
                               padding: EdgeInsets.all(16),
                               child: Center(
                                 child: CircularProgressIndicator(
-                                  color: AppColors.primary,
+                                  color: context.brand,
                                 ),
                               ),
                             );
@@ -1193,22 +1193,22 @@ class _SubCard extends ConsumerWidget {
     required this.onEdit,
   });
 
-  Color _statusBg() {
+  Color _statusBg(BuildContext context) {
     if (sub.isPulling) {
       return AppColors.blue500.withAlpha(isLight ? 20 : 25);
     }
     if (sub.enabled) {
-      return AppColors.primary.withAlpha(isLight ? 18 : 25);
+      return context.brand.withAlpha(isLight ? 18 : 25);
     }
     return AppColors.slate500.withAlpha(isLight ? 14 : 24);
   }
 
-  Color _statusFg() {
+  Color _statusFg(BuildContext context) {
     if (sub.isPulling) {
       return isLight ? AppColors.blue600 : AppColors.blue500;
     }
     if (sub.enabled) {
-      return isLight ? AppColors.primaryDark : AppColors.primary;
+      return isLight ? context.brandStrong : context.brand;
     }
     return AppColors.slate500;
   }
@@ -1230,7 +1230,7 @@ class _SubCard extends ConsumerWidget {
                   width: 8,
                   height: 8,
                   decoration: BoxDecoration(
-                    color: sub.enabled ? AppColors.primary : AppColors.slate300,
+                    color: sub.enabled ? context.brand : AppColors.slate300,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -1253,7 +1253,7 @@ class _SubCard extends ConsumerWidget {
                     vertical: 3,
                   ),
                   decoration: BoxDecoration(
-                    color: _statusBg(),
+                    color: _statusBg(context),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -1261,7 +1261,7 @@ class _SubCard extends ConsumerWidget {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: _statusFg(),
+                      color: _statusFg(context),
                     ),
                   ),
                 ),
@@ -1325,7 +1325,7 @@ class _SubCard extends ConsumerWidget {
                   _SmallIconBtn(
                     icon: sub.isPulling ? Icons.stop : Icons.sync,
                     onTap: sub.isPulling ? onStopPull : onPull,
-                    color: sub.isPulling ? AppColors.red500 : AppColors.primary,
+                    color: sub.isPulling ? AppColors.red500 : context.brand,
                   ),
                   const SizedBox(width: 4),
                   _SmallIconBtn(
@@ -1533,16 +1533,16 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
         children: [
           Expanded(
             child: RefreshIndicator(
-              color: AppColors.primary,
+              color: context.brand,
               onRefresh: () => _load(page: _page),
               child: _loading && _logs.isEmpty
                   ? ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
+                      children: [
                         SizedBox(height: 120),
                         Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: context.brand,
                           ),
                         ),
                       ],
@@ -1589,7 +1589,7 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: success
-                                            ? AppColors.primary.withAlpha(20)
+                                            ? context.brand.withAlpha(20)
                                             : AppColors.red500.withAlpha(15),
                                         borderRadius: BorderRadius.circular(
                                           999,
@@ -1601,7 +1601,7 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                           fontSize: 11,
                                           fontWeight: FontWeight.w700,
                                           color: success
-                                              ? AppColors.primary
+                                              ? context.brand
                                               : AppColors.red500,
                                         ),
                                       ),
@@ -1837,7 +1837,7 @@ class _SubscriptionPullStreamPageState
                   style: TextStyle(
                     color: logTheme.brightness == Brightness.dark
                         ? logTheme.foreground
-                        : AppColors.primary,
+                        : context.brand,
                     fontSize: 13,
                   ),
                 ),

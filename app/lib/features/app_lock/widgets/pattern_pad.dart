@@ -65,7 +65,7 @@ class PatternPad extends StatelessWidget {
               return AppLiquidGlassSurface(
                 borderRadius: 999,
                 onTap: () => onPointTap(point),
-                accentColor: AppColors.primary,
+                accentColor: context.brand,
                 selected: isSelected,
                 performanceMode: true,
                 child: AspectRatio(
@@ -73,8 +73,8 @@ class PatternPad extends StatelessWidget {
                   child: Center(
                     child: Text(
                       isSelected ? '${selectedIndex + 1}' : '',
-                      style: const TextStyle(
-                        color: AppColors.primary,
+                      style: TextStyle(
+                        color: context.brand,
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
                       ),

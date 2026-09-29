@@ -664,13 +664,13 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
             const SizedBox(height: 16),
             Expanded(
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.brand,
                       ),
                     )
                   : RefreshIndicator(
-                      color: AppColors.primary,
+                      color: context.brand,
                       onRefresh: _load,
                       child: ListView(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
@@ -805,7 +805,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                                 : Icons.error_outline,
                                             size: 16,
                                             color: runtime.available
-                                                ? AppColors.primary
+                                                ? context.brand
                                                 : AppColors.red500,
                                           ),
                                           visualDensity: VisualDensity.compact,
@@ -1453,7 +1453,7 @@ class _ActionBtn extends ConsumerWidget {
       borderRadius: 12,
       performanceMode: true,
       accentColor: enabled
-          ? (danger ? AppColors.red500 : AppColors.primary)
+          ? (danger ? AppColors.red500 : context.brand)
           : AppColors.slate400,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
@@ -1462,7 +1462,7 @@ class _ActionBtn extends ConsumerWidget {
             icon,
             size: 20,
             color: enabled
-                ? (danger ? AppColors.red500 : AppColors.primary)
+                ? (danger ? AppColors.red500 : context.brand)
                 : AppColors.slate400,
           ),
           const SizedBox(width: 12),
