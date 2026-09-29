@@ -344,7 +344,10 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
           children: [
             _buildRootfsCard(),
             if (!supported)
-              const AppCard(child: Text('当前面板不支持 Android/Magisk 运行时管理')),
+              const AppCard(
+                margin: EdgeInsets.only(bottom: 12),
+                child: Text('当前面板不支持 Android/Magisk 运行时管理'),
+              ),
             for (final runtime in runtimes.whereType<Map>())
               AppCard(
                 margin: const EdgeInsets.only(bottom: 8),

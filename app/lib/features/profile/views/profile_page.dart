@@ -119,6 +119,18 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     }
   }
 
+  Widget _profileField(TextEditingController controller, String label, {bool obscure = false}) {
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      textAlign: TextAlign.start,
+      decoration: InputDecoration(
+        labelText: label,
+        floatingLabelAlignment: FloatingLabelAlignment.start,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authProvider).user;
@@ -131,49 +143,59 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         children: [
           AppCard(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                CircleAvatar(
-                  radius: 42,
-                  backgroundImage: avatarUrl == null ? null : NetworkImage(avatarUrl),
-                  child: user?.avatarUrl == null
-                      ? const AppIcon(Icons.person, size: 38)
-                      : null,
+                Center(
+                  child: CircleAvatar(
+                    radius: 42,
+                    backgroundImage: avatarUrl == null ? null : NetworkImage(avatarUrl),
+                    child: user?.avatarUrl == null
+                        ? const AppIcon(Icons.person, size: 38)
+                        : null,
+                  ),
                 ),
                 const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    AppLiquidGlassButton(label: '更换头像', onPressed: _busy ? null : _pickAvatar, height: 42),
-                    AppLiquidGlassButton(
-                      label: '删除头像',
-                      onPressed: _busy ? null : () => _run(() => ref.read(authProvider.notifier).deleteAvatar(), '头像已删除'),
-                      height: 42,
-                      variant: AppLiquidGlassButtonVariant.danger,
-                    ),
-                  ],
+                AppLiquidGlassButton(
+                  label: '更换头像',
+                  onPressed: _busy ? null : _pickAvatar,
+                  height: 42,
+                ),
+                const SizedBox(height: 12),
+                AppLiquidGlassButton(
+                  label: '删除头像',
+                  onPressed: _busy
+                      ? null
+                      : () => _run(
+                            () => ref.read(authProvider.notifier).deleteAvatar(),
+                            '头像已删除',
+                          ),
+                  height: 42,
+                  variant: AppLiquidGlassButtonVariant.danger,
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 20),
           AppCard(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TextField(controller: _username, decoration: const InputDecoration(labelText: '用户名')),
+                _profileField(_username, '用户名'),
                 const SizedBox(height: 12),
                 AppLiquidGlassButton(label: '修改用户名', onPressed: _busy ? null : _changeUsername),
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 20),
           AppCard(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TextField(controller: _oldPassword, obscureText: true, decoration: const InputDecoration(labelText: '当前密码')),
+                _profileField(_oldPassword, '当前密码', obscure: true),
                 const SizedBox(height: 10),
-                TextField(controller: _newPassword, obscureText: true, decoration: const InputDecoration(labelText: '新密码')),
+                _profileField(_newPassword, '新密码', obscure: true),
                 const SizedBox(height: 10),
-                TextField(controller: _confirmPassword, obscureText: true, decoration: const InputDecoration(labelText: '确认新密码')),
+                _profileField(_confirmPassword, '确认新密码', obscure: true),
                 const SizedBox(height: 12),
                 AppLiquidGlassButton(label: '修改密码', onPressed: _busy ? null : _changePassword),
               ],

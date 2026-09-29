@@ -650,24 +650,36 @@ class LocalPanelHttpServer(
     }
 
     private fun cpuUsagePercent(): Double {
-        val first = readProcStat() ?: return 0.0
-        Thread.sleep(120)
-        val second = readProcStat() ?: return 0.0
-        val idle = second.first - first.first
-        val total = second.second - first.second
-        return if (total <= 0) 0.0 else ((total - idle).toDouble() * 100.0 / total).coerceIn(0.0, 100.0)
+        readProcStatUsage()?.let { return it }
+        AndroidCpuSampler.readCpufreq(File("/sys/devices/system/cpu"))?.let { return it }
+        readLoadAverageUsage()?.let { return it }
+        return readProcessCpuUsage() ?: 0.0
     }
 
-    private fun readProcStat(): Pair<Long, Long>? = runCatching {
-        val values = java.io.File("/proc/stat").readLines().firstOrNull { it.startsWith("cpu ") }
-            ?.trim()
-            ?.split(Regex("\\s+"))
-            ?.drop(1)
-            ?.mapNotNull(String::toLongOrNull)
+    private fun readProcStatUsage(): Double? {
+        val first = AndroidCpuSampler.parseProcStat(AndroidCpuSampler.readText(File("/proc/stat")) ?: return null)
             ?: return null
-        val idle = values.getOrElse(3) { 0L } + values.getOrElse(4) { 0L }
-        idle to values.sum()
-    }.getOrNull()
+        Thread.sleep(120)
+        val second = AndroidCpuSampler.parseProcStat(AndroidCpuSampler.readText(File("/proc/stat")) ?: return null)
+            ?: return null
+        return AndroidCpuSampler.usageFromProcSamples(first, second)
+    }
+
+    private fun readLoadAverageUsage(): Double? {
+        val text = AndroidCpuSampler.readText(File("/proc/loadavg")) ?: return null
+        return AndroidCpuSampler.loadAveragePercent(text, Runtime.getRuntime().availableProcessors())
+    }
+
+    private fun readProcessCpuUsage(): Double? {
+        val firstCpu = android.os.Process.getElapsedCpuTime()
+        val firstWall = android.os.SystemClock.elapsedRealtime()
+        Thread.sleep(120)
+        return AndroidCpuSampler.processUsagePercent(
+            android.os.Process.getElapsedCpuTime() - firstCpu,
+            android.os.SystemClock.elapsedRealtime() - firstWall,
+            Runtime.getRuntime().availableProcessors(),
+        )
+    }
 
     private fun recoveryMetadata(): JSONObject = JSONObject().put(
         "data",
