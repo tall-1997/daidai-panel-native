@@ -224,6 +224,17 @@ func (h *TaskHandler) Import(c *gin.Context) {
 			task.TaskAfter = &value
 		}
 
+		if value, ok := taskData["depends_on"].(float64); ok && value > 0 {
+			dependsOn := uint(value)
+			task.DependsOn = &dependsOn
+		}
+		if value, ok := taskData["sort_order"].(float64); ok {
+			task.SortOrder = int(value)
+		}
+		if value, ok := taskData["allow_multiple_instances"].(bool); ok {
+			task.AllowMultipleInstances = value
+		}
+
 		if err := database.DB.Select("*").Create(&task).Error; err != nil {
 			errors = append(errors, fmt.Sprintf("task %d: %s", i+1, err.Error()))
 			continue

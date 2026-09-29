@@ -189,15 +189,33 @@ class ApiEndpoints {
       '$baseApi/open-api/apps/$id/view-secret';
   static String openApiAppLogs(int id) => '$baseApi/open-api/apps/$id/logs';
   static const String platforms = '$baseApi/platform-tokens/platforms';
-  static String platformById(int id) => '$baseApi/platform-tokens/platforms/$id';
+  static String platformById(int id) =>
+      '$baseApi/platform-tokens/platforms/$id';
   static const String platformTokens = '$baseApi/platform-tokens';
   static String platformTokenById(int id) => '$baseApi/platform-tokens/$id';
-  static String platformTokenEnable(int id) => '$baseApi/platform-tokens/$id/enable';
-  static String platformTokenDisable(int id) => '$baseApi/platform-tokens/$id/disable';
+  static String platformTokenEnable(int id) =>
+      '$baseApi/platform-tokens/$id/enable';
+  static String platformTokenDisable(int id) =>
+      '$baseApi/platform-tokens/$id/disable';
   static const String configScript = '$baseApi/system/config-script';
   static const String androidRuntimeStatus = '$baseApi/android-runtime/status';
-  static const String androidRuntimeInstall = '$baseApi/android-runtime/install';
-  static const String androidRuntimeUninstall = '$baseApi/android-runtime/uninstall';
+  static const String androidRuntimeInstall =
+      '$baseApi/android-runtime/install';
+  static const String androidRuntimeUninstall =
+      '$baseApi/android-runtime/uninstall';
+  static const String androidRootfsStatus = '$baseApi/android-runtime/status';
+  static const String androidRootfsDistribution =
+      '$baseApi/android-runtime/distribution';
+  static const String androidRootfsSource = '$baseApi/android-runtime/source';
+  static const String androidRootfsDownload =
+      '$baseApi/android-runtime/download';
+  static const String androidRootfsDownloadStatus =
+      '$baseApi/android-runtime/download-status';
+  static const String terminalSessions = '$baseApi/terminal/sessions';
+  static String terminalSession(String id) => '$terminalSessions/$id';
+  static String terminalInput(String id) => '${terminalSession(id)}/input';
+  static String terminalResize(String id) => '${terminalSession(id)}/resize';
+  static String terminalStop(String id) => '${terminalSession(id)}/stop';
   static const String depsPip = '$baseApi/deps/pip';
   static const String depsNpm = '$baseApi/deps/npm';
   static const String depsExport = '$baseApi/deps/export';

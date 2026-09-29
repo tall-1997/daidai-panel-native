@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -241,6 +243,81 @@ type androidInstallRequest struct {
 	StripComponents int    `json:"strip_components"`                // 解压层数
 }
 
+// validateAndroidRuntimeDownloadURL 限制自定义下载源必须为 https，
+// 且主机名解析结果不得指向环回/私网/链路本地地址，防止 SSRF 探测内网。
+func validateAndroidRuntimeDownloadURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL 无效: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("仅支持 https 下载源")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("URL 缺少主机名")
+	}
+	ips, err := net.LookupIP(parsed.Hostname())
+	if err != nil {
+		return fmt.Errorf("解析下载主机失败: %w", err)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("下载主机指向内网地址，已拒绝")
+		}
+	}
+	return nil
+}
+
+// androidArchiveTargetPath 校验解压目标必须落在 targetDir 内，防止 tar slip。
+func androidArchiveTargetPath(targetDir, name string) (string, error) {
+	cleaned := filepath.Clean(filepath.Join(targetDir, name))
+	rootAbs, err := filepath.Abs(targetDir)
+	if err != nil {
+		return "", err
+	}
+	cleanedAbs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", err
+	}
+	if cleanedAbs != rootAbs && !strings.HasPrefix(cleanedAbs, rootAbs+string(os.PathSeparator)) {
+		return "", fmt.Errorf("越界路径")
+	}
+	return cleanedAbs, nil
+}
+
+// ensureNoSymlinkInPath 检查 from 到 to 之间的既有路径段，
+// 任一环节是软链即返回错误（用于阻止经先前软链条目越界写入）。
+func ensureNoSymlinkInPath(from, to string) error {
+	fromAbs, err := filepath.Abs(from)
+	if err != nil {
+		return err
+	}
+	toAbs, err := filepath.Abs(to)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(fromAbs, toAbs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("路径不在目标目录内")
+	}
+	current := fromAbs
+	for _, segment := range strings.Split(rel, string(os.PathSeparator)) {
+		if segment == "" || segment == "." {
+			continue
+		}
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if err != nil {
+			// 尚未创建的段不存在软链风险
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("路径包含软链: %s", current)
+		}
+	}
+	return nil
+}
+
 // Install 以 SSE 形式流式返回下载/解压进度。
 func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 	androidBinDir := resolveAndroidRuntimeBinDir()
@@ -277,7 +354,6 @@ func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "当前架构没有预置下载源，请手动填写 url")
 		return
 	}
-
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
@@ -288,6 +364,12 @@ func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	// SSE 接口必须先建立事件流，再报告下载源校验错误；否则客户端会收到普通 JSON，
+	// 无法进入统一的进度/错误处理路径。安全策略本身不放宽。
+	if err := validateAndroidRuntimeDownloadURL(req.URL); err != nil {
+		emit("❌ 下载源被拒绝: " + err.Error())
+		return
 	}
 
 	emit(fmt.Sprintf("下载目标: %s", req.URL))
@@ -360,9 +442,8 @@ func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 			continue
 		}
 
-		outPath := filepath.Join(targetDir, name)
-		// 防止 tar slip
-		if !strings.HasPrefix(outPath, targetDir+string(os.PathSeparator)) && outPath != targetDir {
+		outPath, pathErr := androidArchiveTargetPath(targetDir, name)
+		if pathErr != nil {
 			emit("⚠ 跳过越界路径: " + hdr.Name)
 			continue
 		}
@@ -374,6 +455,12 @@ func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 				return
 			}
 		case tar.TypeReg, tar.TypeRegA:
+			// 若任一父目录是软链（可能由归档先前的 symlink 条目创建），
+			// 写入会跟随软链逃逸 targetDir，因此拒绝并跳过。
+			if err := ensureNoSymlinkInPath(targetDir, filepath.Dir(outPath)); err != nil {
+				emit("⚠ 跳过经软链写入的路径: " + hdr.Name)
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 				emit("❌ 创建父目录失败: " + err.Error())
 				return
@@ -390,6 +477,15 @@ func (h *AndroidRuntimeHandler) Install(c *gin.Context) {
 			}
 			f.Close()
 		case tar.TypeSymlink:
+			// 软链目标必须仍在 targetDir 内，防止后续条目经软链越界读写。
+			linkTarget := hdr.Linkname
+			if !filepath.IsAbs(linkTarget) {
+				linkTarget = filepath.Join(filepath.Dir(outPath), linkTarget)
+			}
+			if _, err := androidArchiveTargetPath(targetDir, linkTarget); err != nil {
+				emit("⚠ 跳过越界软链: " + hdr.Name)
+				continue
+			}
 			_ = os.Remove(outPath)
 			if err := os.Symlink(hdr.Linkname, outPath); err != nil {
 				emit("⚠ 创建软链失败(" + outPath + "): " + err.Error())

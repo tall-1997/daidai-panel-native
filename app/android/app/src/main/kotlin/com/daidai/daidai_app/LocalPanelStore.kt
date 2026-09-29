@@ -3733,14 +3733,29 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             }.start()
             val writer = Thread {
                 runCatching { process.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(input) } }
-            }.also { it.start() }
-            val output = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            }.also { it.isDaemon = true; it.start() }
+            // 用独立线程并发消费输出，避免主线程 readText() 等待 EOF 时
+            // 永远到不了 waitFor 的超时分支（格式化器挂起即永久占用请求线程）。
+            val outputBuilder = StringBuilder()
+            val reader = Thread {
+                runCatching {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                        while (true) {
+                            val line = r.readLine() ?: break
+                            synchronized(outputBuilder) { outputBuilder.append(line).append('\n') }
+                        }
+                    }
+                }
+            }.also { it.isDaemon = true; it.start() }
             val finished = process.waitFor(30, TimeUnit.SECONDS)
-            writer.join(1_000)
             if (!finished) {
                 process.destroyForcibly()
+                reader.join(1_000)
                 return null
             }
+            writer.join(1_000)
+            reader.join(5_000)
+            val output = synchronized(outputBuilder) { outputBuilder.toString() }
             if (process.exitValue() == 0) Pair(output, formatter) else null
         } catch (_: Exception) {
             null
@@ -4631,7 +4646,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             put("notify_on_success", if (json.optBoolean("notify_on_success")) 1 else 0)
             put("notify_on_abort", if (json.optBoolean("notify_on_abort")) 1 else 0)
             channelId?.let { put("notification_channel_id", it) }
-            put("status", json.optDouble("status", 1.0))
+            // 运行中状态是瞬时进程状态，导入时归一化为启用，避免恢复出虚假 running
+            val importedStatus = json.optDouble("status", 1.0)
+            put("status", if (importedStatus == 2.0) 1.0 else importedStatus)
             put("labels", json.optJSONArray("labels")?.toString() ?: "[]")
             put("success_exit_codes", taskSuccessExitCodesValue(json))
             put("allow_multiple_instances", if (json.optBoolean("allow_multiple_instances")) 1 else 0)
@@ -5550,6 +5567,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     }
 
     private fun upsertTask(json: JSONObject) {
+        if (json.optString("command").isBlank()) {
+            throw IllegalArgumentException("任务命令不能为空")
+        }
         val now = Instant.now().toString()
         val name = json.optString("name").trim().ifBlank { "未命名任务" }
         val values = ContentValues().apply {
@@ -5560,7 +5580,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             put("python_version", json.optString("python_version"))
             put("task_before", json.optString("task_before"))
             put("task_after", json.optString("task_after"))
-            put("status", json.optDouble("status", 1.0))
+            // 运行中状态是瞬时进程状态，导入时归一化为启用，避免恢复出虚假 running
+            val importedStatus = json.optDouble("status", 1.0)
+            put("status", if (importedStatus == 2.0) 1.0 else importedStatus)
             put("labels", (json.optJSONArray("labels") ?: JSONArray()).toString())
             put("timeout", json.optInt("timeout", 0).coerceIn(0, 604800))
             put("max_retries", json.optInt("max_retries", 0).coerceIn(0, 20))
@@ -5570,6 +5592,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             if (json.has("sort_order")) put("sort_order", json.optInt("sort_order"))
             if (json.has("random_delay_seconds") && !json.isNull("random_delay_seconds")) put("random_delay_seconds", json.optInt("random_delay_seconds").coerceAtLeast(0))
             if (json.has("stop_schedule")) put("stop_schedule", json.optString("stop_schedule"))
+            put("notify_on_failure", if (json.optBoolean("notify_on_failure")) 1 else 0)
+            put("notify_on_success", if (json.optBoolean("notify_on_success")) 1 else 0)
+            put("notify_on_abort", if (json.optBoolean("notify_on_abort")) 1 else 0)
+            if (json.has("depends_on") && !json.isNull("depends_on")) put("depends_on", json.optLong("depends_on"))
+            taskNotificationChannelId(json)?.let { put("notification_channel_id", it) }
             put("updated_at", now)
         }
         val existing = readableDatabase.query("tasks", arrayOf("id"), "name = ?", arrayOf(name), null, null, null).use { cursor ->

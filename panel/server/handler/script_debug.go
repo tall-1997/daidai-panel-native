@@ -91,6 +91,12 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 	}
 
 	envMap, scriptToken := buildScriptExecEnv(workDir)
+	if preflightErr := service.PreflightScriptDependencies(ext, full, envMap, nil); preflightErr != nil {
+		service.RevokeScriptToken(scriptToken)
+		cleanupFn()
+		response.Error(c, 424, preflightErr.Error())
+		return
+	}
 	cmd, cleanup, err := newScriptCommand(interpreter, full, nil, workDir, envMap)
 	if err != nil {
 		service.RevokeScriptToken(scriptToken)

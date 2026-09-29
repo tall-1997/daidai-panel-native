@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"daidai-panel/middleware"
@@ -328,17 +327,7 @@ func stopTerminal(session *terminalSession) {
 	_ = session.ptmx.Close()
 	session.mu.Unlock()
 	if process != nil {
-		_ = syscall.Kill(-process.Pid, syscall.SIGTERM)
-		_ = process.Signal(syscall.SIGTERM)
-		time.AfterFunc(500*time.Millisecond, func() {
-			session.mu.Lock()
-			stillRunning := session.ExitCode == nil
-			session.mu.Unlock()
-			if stillRunning {
-				_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
-				_ = process.Kill()
-			}
-		})
+		terminateTerminalProcessGroup(session, process)
 	}
 }
 

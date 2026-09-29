@@ -822,13 +822,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         context: context,
         builder: (dialogCtx) => AppDialog(
           title: const Text('批量改名'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: nameController, decoration: const InputDecoration(labelText: '统一新名称（留空则查找替换）')),
-              TextField(controller: searchController, decoration: const InputDecoration(labelText: '查找文本')),
-              TextField(controller: replaceController, decoration: const InputDecoration(labelText: '替换文本')),
-            ],
+          content: SingleChildScrollView(
+            // 键盘弹出时内容可滚动，避免小屏垂直溢出
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameController, decoration: const InputDecoration(labelText: '统一新名称（留空则查找替换）')),
+                TextField(controller: searchController, decoration: const InputDecoration(labelText: '查找文本')),
+                TextField(controller: replaceController, decoration: const InputDecoration(labelText: '替换文本')),
+              ],
+            ),
           ),
           actions: [AppLiquidGlassDialogActions(actions: [
             AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
@@ -1516,7 +1519,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     ? ReorderableListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
                         itemCount: state.envs.length,
-                        onReorder: (oldIndex, newIndex) {
+                        onReorderItem: (oldIndex, newIndex) {
                           final current = List<EnvVar>.from(state.envs);
                           if (current.isEmpty || oldIndex >= current.length) {
                             return;

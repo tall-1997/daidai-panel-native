@@ -17,6 +17,7 @@ import '../../../shared/models/task.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/utils/import_payloads.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/bounded_log_buffer.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -178,20 +179,21 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     }
 
     final file = result.files.first;
-    final multipart = await _toMultipartFile(file);
-    if (multipart == null) {
+    final bytes = await readPlatformFileBytes(
+      file,
+      maxBytes: maxTaskImportBytes,
+    );
+    if (bytes.isEmpty) {
       _showMessage('无法读取所选任务文件');
       return;
     }
 
     setState(() => _taskTransferBusy = true);
     try {
-      final formData = FormData();
-      formData.files.add(MapEntry('file', multipart));
+      final payload = parseTaskImportPayload(bytes);
       await DioClient.instance.dio.post(
         ApiEndpoints.tasksImport,
-        data: formData,
-        options: Options(contentType: 'multipart/form-data'),
+        data: {'tasks': payload},
       );
       await ref.read(taskProvider.notifier).load(refresh: true);
       _showMessage('任务导入成功');
@@ -202,23 +204,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         setState(() => _taskTransferBusy = false);
       }
     }
-  }
-
-  Future<MultipartFile?> _toMultipartFile(PlatformFile file) async {
-    if (file.path != null && file.path!.isNotEmpty) {
-      return MultipartFile.fromFile(file.path!, filename: file.name);
-    }
-    if (file.readStream != null) {
-      return MultipartFile.fromStream(
-        () => file.readStream!,
-        file.size,
-        filename: file.name,
-      );
-    }
-    if (file.bytes != null) {
-      return MultipartFile.fromBytes(file.bytes!, filename: file.name);
-    }
-    return null;
   }
 
   Uint8List? _extractBytes(dynamic data) {
@@ -1585,7 +1570,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             clipBehavior: Clip.hardEdge,
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
             itemCount: groups.length,
-            onReorder: (oldIndex, newIndex) {
+            onReorderItem: (oldIndex, newIndex) {
               setState(() {
                 final item = groups.removeAt(oldIndex);
                 groups.insert(newIndex, item);
@@ -1643,7 +1628,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       clipBehavior: Clip.hardEdge,
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
       itemCount: tasks.length,
-      onReorder: (oldIndex, newIndex) {
+      onReorderItem: (oldIndex, newIndex) {
         // 只先调整本地顺序，等用户点击“完成”后再统一保存到后端，避免拖一下就请求多次。
         ref.read(taskProvider.notifier).reorderLocalTasks(oldIndex, newIndex);
         setState(() => _taskOrderDirty = true);

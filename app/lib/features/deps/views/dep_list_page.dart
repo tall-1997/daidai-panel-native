@@ -329,8 +329,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
       );
       state = state.copyWith(
         runtimeLoading: false,
-        runtimeSupported:
-            capabilityState != PanelCapabilityState.unsupported,
+        runtimeSupported: capabilityState != PanelCapabilityState.unsupported,
       );
     }
   }
@@ -494,14 +493,18 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     final notifier = ref.read(depListProvider.notifier);
     final state = ref.read(depListProvider);
     try {
-      final types = ['nodejs', 'python', 'linux']
-          .where((type) => type != skipType)
-          .toList();
+      final types = [
+        'nodejs',
+        'python',
+        'linux',
+      ].where((type) => type != skipType).toList();
       final results = await Future.wait(
         types.map(
           (type) => notifier.fetchByType(
             type,
-            pythonVersion: type == 'python' ? state.selectedPythonVersion : null,
+            pythonVersion: type == 'python'
+                ? state.selectedPythonVersion
+                : null,
           ),
         ),
       );
@@ -602,9 +605,79 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     }
   }
 
+  bool _runtimeReadyFor(String type, DepListState state) {
+    if (type == 'linux') {
+      return true;
+    }
+    if (type == 'python') {
+      final version = state.selectedPythonVersion;
+      return state.runtimeSupported &&
+          state.pythonRuntimes.any(
+            (runtime) => runtime.version == version && runtime.available,
+          );
+    }
+    return type == 'nodejs';
+  }
+
+  Future<bool> _probeDependencyRuntime(String type) async {
+    final state = ref.read(depListProvider);
+    if (!_runtimeReadyFor(type, state)) return false;
+    try {
+      if (type == 'python') {
+        await DioClient.instance.dio.get(
+          ApiEndpoints.depsPip,
+          queryParameters: {'python_version': state.selectedPythonVersion},
+        );
+      } else if (type == 'nodejs') {
+        await DioClient.instance.dio.get(ApiEndpoints.depsNpm);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _ensureDependencyRuntime(String type) async {
+    if (await _probeDependencyRuntime(type)) return true;
+    if (!mounted) return false;
+    final goRuntime = await showAppDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AppDialog(
+        title: const Text('运行时不可用'),
+        content: Text(
+          type == 'python'
+              ? '当前 Python 版本或 pip 尚未就绪。请先安装/配置对应 Python 运行时，或下载 Android Linux rootfs。'
+              : '当前 Node.js/npm 运行时尚未就绪。请先下载 Android Linux rootfs 并确认 npm 可用。',
+        ),
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: '打开运行时配置',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (goRuntime == true && mounted) {
+      await context.push('/android-runtime');
+      await ref.read(depListProvider.notifier).loadPythonRuntimes();
+    }
+    return _probeDependencyRuntime(type);
+  }
+
   Future<void> _handleCreate() async {
     final request = await _showCreateDialog();
     if (request == null) {
+      return;
+    }
+    if (!await _ensureDependencyRuntime(request.type)) {
       return;
     }
     try {
@@ -694,23 +767,34 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               ),
             ),
           ),
-          actions: [AppLiquidGlassDialogActions(actions: [
-            AppGlassDialogAction(label: '取消', onPressed: () => Navigator.of(dialogCtx).pop()),
-            AppGlassDialogAction(label: '安装', variant: AppLiquidGlassButtonVariant.primary, onPressed: () {
-                final names = _parseNames(namesController.text, autoSplit);
-                if (names.isEmpty) {
-                  AppGlassNotice.show(
-                    this.context,
-                    '请输入依赖名称',
-                    type: AppGlassNoticeType.warning,
-                  );
-                  return;
-                }
-                Navigator.of(
-                  dialogCtx,
-                ).pop(_CreateDepRequest(type: createType, names: names));
-              }),
-          ])],
+          actions: [
+            AppLiquidGlassDialogActions(
+              actions: [
+                AppGlassDialogAction(
+                  label: '取消',
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                ),
+                AppGlassDialogAction(
+                  label: '安装',
+                  variant: AppLiquidGlassButtonVariant.primary,
+                  onPressed: () {
+                    final names = _parseNames(namesController.text, autoSplit);
+                    if (names.isEmpty) {
+                      AppGlassNotice.show(
+                        this.context,
+                        '请输入依赖名称',
+                        type: AppGlassNoticeType.warning,
+                      );
+                      return;
+                    }
+                    Navigator.of(
+                      dialogCtx,
+                    ).pop(_CreateDepRequest(type: createType, names: names));
+                  },
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     ).whenComplete(namesController.dispose);
@@ -725,10 +809,21 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       builder: (dialogCtx) => AppDialog(
         title: const Text('批量卸载'),
         content: Text('确定要批量卸载选中的 ${_selectedIds.length} 个依赖吗？'),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: '批量卸载', onPressed: () => Navigator.pop(dialogCtx, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: '批量卸载',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed != true) {
@@ -760,10 +855,21 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               ? '确定要强制卸载「${dep.name}」吗？这会跳过依赖检查直接删除。'
               : '确定要卸载「${dep.name}」吗？',
         ),
-        actions: [AppLiquidGlassDialogActions(actions: [
-          AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-          AppGlassDialogAction(label: force ? '强制卸载' : '卸载', onPressed: () => Navigator.pop(dialogCtx, true), variant: AppLiquidGlassButtonVariant.danger),
-        ])],
+        actions: [
+          AppLiquidGlassDialogActions(
+            actions: [
+              AppGlassDialogAction(
+                label: '取消',
+                onPressed: () => Navigator.pop(dialogCtx, false),
+              ),
+              AppGlassDialogAction(
+                label: force ? '强制卸载' : '卸载',
+                onPressed: () => Navigator.pop(dialogCtx, true),
+                variant: AppLiquidGlassButtonVariant.danger,
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed != true) {
@@ -811,9 +917,16 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               ),
             ),
           ),
-          actions: [AppLiquidGlassDialogActions(actions: [
-            AppGlassDialogAction(label: '关闭', onPressed: () => Navigator.pop(dialogCtx)),
-          ])],
+          actions: [
+            AppLiquidGlassDialogActions(
+              actions: [
+                AppGlassDialogAction(
+                  label: '关闭',
+                  onPressed: () => Navigator.pop(dialogCtx),
+                ),
+              ],
+            ),
+          ],
         ),
       );
     } catch (error) {
@@ -832,10 +945,20 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             controller: controller,
             decoration: const InputDecoration(labelText: '依赖 ID，逗号分隔'),
           ),
-          actions: [AppLiquidGlassDialogActions(actions: [
-            AppGlassDialogAction(label: '取消', onPressed: () => Navigator.pop(dialogCtx, false)),
-            AppGlassDialogAction(label: '提交', onPressed: () => Navigator.pop(dialogCtx, true)),
-          ])],
+          actions: [
+            AppLiquidGlassDialogActions(
+              actions: [
+                AppGlassDialogAction(
+                  label: '取消',
+                  onPressed: () => Navigator.pop(dialogCtx, false),
+                ),
+                AppGlassDialogAction(
+                  label: '提交',
+                  onPressed: () => Navigator.pop(dialogCtx, true),
+                ),
+              ],
+            ),
+          ],
         ),
       );
       if (ok != true) return;
@@ -977,8 +1100,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                           ),
                           MapEntry('PyPI 官方', 'https://pypi.org/simple'),
                         ].map((entry) {
-                           return AppLiquidGlassActionChip(
-                             label: entry.key,
+                          return AppLiquidGlassActionChip(
+                            label: entry.key,
                             onPressed: () {
                               setDialogState(
                                 () => pipController.text = entry.value,
@@ -1009,8 +1132,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             'https://repo.huaweicloud.com/repository/npm/',
                           ),
                         ].map((entry) {
-                           return AppLiquidGlassActionChip(
-                             label: entry.$1,
+                          return AppLiquidGlassActionChip(
+                            label: entry.$1,
                             onPressed: () {
                               setDialogState(
                                 () => npmController.text = entry.$2,
@@ -1035,8 +1158,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     spacing: 8,
                     runSpacing: 8,
                     children: _linuxMirrorOptions(initial).map((entry) {
-                       return AppLiquidGlassActionChip(
-                         label: entry.key,
+                      return AppLiquidGlassActionChip(
+                        label: entry.key,
                         onPressed: initial.linuxMirrorSupported
                             ? () {
                                 setDialogState(
@@ -1296,7 +1419,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     final state = ref.watch(depListProvider);
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    
+
     final screenWidth = MediaQuery.of(context).size.width;
     final isNarrow = screenWidth < 420;
 
@@ -1487,128 +1610,135 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   return false;
                 },
                 child: RefreshIndicator(
-                color: AppColors.primary,
-                onRefresh: _loadPageData,
-                child: state.loading && state.items.isEmpty
-                    ? ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
+                  color: AppColors.primary,
+                  onRefresh: _loadPageData,
+                  child: state.loading && state.items.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            SizedBox(height: 120),
+                            Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.primary,
+                              ),
                             ),
-                          ),
-                        ],
-                      )
-                    : state.error != null && state.items.isEmpty
-                    ? ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        children: [
-                          const SizedBox(height: 100),
-                          AppCard(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
+                          ],
+                        )
+                      : state.error != null && state.items.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          children: [
+                            const SizedBox(height: 100),
+                            AppCard(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const AppIcon(
+                                    Icons.cloud_off_outlined,
+                                    size: 42,
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    state.error!,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  AppLiquidGlassButton(
+                                    label: '重试',
+                                    onPressed: _loadPageData,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
+                      : () {
+                          final filtered = _statusFilter == null
+                              ? state.items
+                              : state.items
+                                    .where(
+                                      (d) => _statusFilter == 'installed'
+                                          ? d.isInstalled
+                                          : d.status == _statusFilter,
+                                    )
+                                    .toList();
+                          if (filtered.isEmpty) {
+                            return ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
                               children: [
-                                const AppIcon(Icons.cloud_off_outlined, size: 42),
-                                const SizedBox(height: 10),
-                                Text(
-                                  state.error!,
-                                  textAlign: TextAlign.center,
+                                const SizedBox(height: 100),
+                                AppIcon(
+                                  Icons.inventory_2_outlined,
+                                  size: 56,
+                                  color: AppColors.slate400.withAlpha(120),
                                 ),
                                 const SizedBox(height: 12),
-                                AppLiquidGlassButton(
-                                  label: '重试',
-                                  onPressed: _loadPageData,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )
-                    : () {
-                        final filtered = _statusFilter == null
-                            ? state.items
-                            : state.items
-                                  .where((d) => _statusFilter == 'installed' ? d.isInstalled : d.status == _statusFilter)
-                                  .toList();
-                        if (filtered.isEmpty) {
-                          return ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            children: [
-                              const SizedBox(height: 100),
-                              AppIcon(
-                                Icons.inventory_2_outlined,
-                                size: 56,
-                                color: AppColors.slate400.withAlpha(120),
-                              ),
-                              const SizedBox(height: 12),
-                              Center(
-                                child: Text(
-                                  _statusFilter != null
-                                      ? '没有${_statusFilter == 'installed' ? '已安装' : '失败'}的依赖'
-                                      : '暂无${_typeLabel(state.selectedType)}依赖',
-                                  style: const TextStyle(
-                                    color: AppColors.slate400,
+                                Center(
+                                  child: Text(
+                                    _statusFilter != null
+                                        ? '没有${_statusFilter == 'installed' ? '已安装' : '失败'}的依赖'
+                                        : '暂无${_typeLabel(state.selectedType)}依赖',
+                                    style: const TextStyle(
+                                      color: AppColors.slate400,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          );
-                        }
-                         return ListView.builder(
-                           padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                           itemCount:
-                               filtered.length +
-                               (state.items.length < state.total ? 1 : 0),
-                           itemBuilder: (_, i) {
-                             if (i == filtered.length) {
-                               return const Padding(
-                                 padding: EdgeInsets.all(16),
-                                 child: Center(
-                                   child: CircularProgressIndicator(
-                                     color: AppColors.primary,
-                                   ),
-                                 ),
-                               );
-                             }
-                             final dep = filtered[i];
-                            return _DepCard(
-                              dep: dep,
-                              isLight: isLight,
-                              selected: _selectedIds.contains(dep.id),
-                              subtitle:
-                                  '${_typeLabel(dep.type)}'
-                                  '${dep.type == 'python' && dep.pythonVersion.isNotEmpty ? ' ${dep.pythonVersion}' : ''}'
-                                  ' · ${formatTimeCn(dep.createdAt, short: true)}',
-                              onSelected: (value) {
-                                setState(() {
-                                  if (value) {
-                                    _selectedIds.add(dep.id);
-                                  } else {
-                                    _selectedIds.remove(dep.id);
-                                  }
-                                });
-                              },
-                              onViewLog: () =>
-                                  context.push('/deps/${dep.id}/log-stream'),
-                              onCancel: dep.isBusy
-                                  ? () => _handleCancel(dep)
-                                  : null,
-                              onReinstall: dep.isBusy
-                                  ? null
-                                  : () => _handleReinstall(dep),
-                              onDelete: dep.isBusy
-                                  ? null
-                                  : () => _confirmDelete(dep),
-                              onForceDelete: dep.isBusy
-                                  ? null
-                                  : () => _confirmDelete(dep, force: true),
+                              ],
                             );
-                          },
-                        );
-                      }(),
+                          }
+                          return ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                            itemCount:
+                                filtered.length +
+                                (state.items.length < state.total ? 1 : 0),
+                            itemBuilder: (_, i) {
+                              if (i == filtered.length) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Center(
+                                    child: CircularProgressIndicator(
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                );
+                              }
+                              final dep = filtered[i];
+                              return _DepCard(
+                                dep: dep,
+                                isLight: isLight,
+                                selected: _selectedIds.contains(dep.id),
+                                subtitle:
+                                    '${_typeLabel(dep.type)}'
+                                    '${dep.type == 'python' && dep.pythonVersion.isNotEmpty ? ' ${dep.pythonVersion}' : ''}'
+                                    ' · ${formatTimeCn(dep.createdAt, short: true)}',
+                                onSelected: (value) {
+                                  setState(() {
+                                    if (value) {
+                                      _selectedIds.add(dep.id);
+                                    } else {
+                                      _selectedIds.remove(dep.id);
+                                    }
+                                  });
+                                },
+                                onViewLog: () =>
+                                    context.push('/deps/${dep.id}/log-stream'),
+                                onCancel: dep.isBusy
+                                    ? () => _handleCancel(dep)
+                                    : null,
+                                onReinstall: dep.isBusy
+                                    ? null
+                                    : () => _handleReinstall(dep),
+                                onDelete: dep.isBusy
+                                    ? null
+                                    : () => _confirmDelete(dep),
+                                onForceDelete: dep.isBusy
+                                    ? null
+                                    : () => _confirmDelete(dep, force: true),
+                              );
+                            },
+                          );
+                        }(),
                 ),
               ),
             ),
@@ -1675,134 +1805,134 @@ class _DepCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
         stableForScrolling: true,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         child: Row(
-        children: [
-          SizedBox(
-            width: 24,
-            height: 24,
-            child: Checkbox(
-              value: selected,
-              onChanged: (value) => onSelected(value ?? false),
-              visualDensity: VisualDensity.compact,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: Checkbox(
+                value: selected,
+                onChanged: (value) => onSelected(value ?? false),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        dep.name,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          dep.name,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
+                      if (dep.version.isNotEmpty)
+                        Text(
+                          dep.version,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isLight
+                                ? AppColors.slate500
+                                : AppColors.slate400,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _statusBg(),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          dep.statusText,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _statusFg(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isLight
+                                ? AppColors.slate400
+                                : AppColors.slate500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              onPressed: onViewLog,
+              icon: const AppIcon(Icons.terminal, size: 18),
+              tooltip: '日志',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (action) {
+                switch (action) {
+                  case 'cancel':
+                    onCancel?.call();
+                  case 'reinstall':
+                    onReinstall?.call();
+                  case 'delete':
+                    onDelete?.call();
+                  case 'force_delete':
+                    onForceDelete?.call();
+                }
+              },
+              icon: const AppIcon(Icons.more_horiz, size: 18),
+              itemBuilder: (_) => [
+                if (dep.isBusy)
+                  const PopupMenuItem(value: 'cancel', child: Text('取消安装')),
+                if (!dep.isBusy)
+                  const PopupMenuItem(value: 'reinstall', child: Text('重新安装')),
+                if (!dep.isBusy)
+                  const PopupMenuItem(value: 'delete', child: Text('卸载')),
+                if (!dep.isBusy)
+                  PopupMenuItem(
+                    value: 'force_delete',
+                    child: Text(
+                      '强制卸载',
+                      style: TextStyle(color: AppColors.red500),
                     ),
-                    if (dep.version.isNotEmpty)
-                      Text(
-                        dep.version,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isLight
-                              ? AppColors.slate500
-                              : AppColors.slate400,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _statusBg(),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        dep.statusText,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: _statusFg(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isLight
-                              ? AppColors.slate400
-                              : AppColors.slate500,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
               ],
             ),
-          ),
-          const SizedBox(width: 4),
-          IconButton(
-            onPressed: onViewLog,
-            icon: const AppIcon(Icons.terminal, size: 18),
-            tooltip: '日志',
-            visualDensity: VisualDensity.compact,
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (action) {
-              switch (action) {
-                case 'cancel':
-                  onCancel?.call();
-                case 'reinstall':
-                  onReinstall?.call();
-                case 'delete':
-                  onDelete?.call();
-                case 'force_delete':
-                  onForceDelete?.call();
-              }
-            },
-            icon: const AppIcon(Icons.more_horiz, size: 18),
-            itemBuilder: (_) => [
-              if (dep.isBusy)
-                const PopupMenuItem(value: 'cancel', child: Text('取消安装')),
-              if (!dep.isBusy)
-                const PopupMenuItem(value: 'reinstall', child: Text('重新安装')),
-              if (!dep.isBusy)
-                const PopupMenuItem(value: 'delete', child: Text('卸载')),
-              if (!dep.isBusy)
-                PopupMenuItem(
-                  value: 'force_delete',
-                  child: Text(
-                    '强制卸载',
-                    style: TextStyle(color: AppColors.red500),
-                  ),
-                ),
-            ],
-          ),
           ],
         ),
       ),
@@ -1864,9 +1994,9 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         // `done` frames only carry stream state, which the status banner already shows; rendering
         // their payload would append a stray "reconnect" line on every reconnect.
         if (!terminal && !reconnect) {
-          _logState = _logState.add(event.data).transition(
-            DependencyLogPhase.streaming,
-          );
+          _logState = _logState
+              .add(event.data)
+              .transition(DependencyLogPhase.streaming);
         }
         if (terminal) {
           _logState = _logState.transition(
@@ -1883,9 +2013,7 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _scrollController.hasClients) {
-        _scrollController.jumpTo(
-          _scrollController.position.maxScrollExtent,
-        );
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
     });
   }
@@ -2018,9 +2146,10 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
 String _dependencyLogStatusText(DependencyLogState state) {
   return switch (state.phase) {
     DependencyLogPhase.succeeded => '安装完成',
-    DependencyLogPhase.failed => state.message?.trim().isNotEmpty == true
-        ? '安装失败：${state.message}'
-        : '安装失败',
+    DependencyLogPhase.failed =>
+      state.message?.trim().isNotEmpty == true
+          ? '安装失败：${state.message}'
+          : '安装失败',
     DependencyLogPhase.cancelled => '安装已取消',
     DependencyLogPhase.connectionError => state.message ?? '日志连接失败',
     DependencyLogPhase.reconnecting => state.message ?? '正在恢复日志连接',
@@ -2060,37 +2189,37 @@ class _StatusFilterChip extends StatelessWidget {
       selected: selected,
       performanceMode: true,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: fg,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: selected
+                  ? activeColor
+                  : (isLight ? AppColors.slate200 : AppColors.slate800),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$count',
               style: TextStyle(
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: fg,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: selected ? Colors.white : fg,
               ),
             ),
-            const SizedBox(width: 5),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: selected
-                    ? activeColor
-                    : (isLight ? AppColors.slate200 : AppColors.slate800),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : fg,
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
+      ),
     );
   }
 }

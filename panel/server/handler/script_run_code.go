@@ -46,6 +46,12 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 		return
 	}
 	envMap, scriptToken := buildScriptExecEnv(tmpDir)
+	if preflightErr := service.PreflightScriptDependencies(ext, tmpFile, envMap, nil); preflightErr != nil {
+		service.RevokeScriptToken(scriptToken)
+		os.Remove(tmpFile)
+		response.Error(c, 424, preflightErr.Error())
+		return
+	}
 	cmd, cleanup, err := newScriptCommand(interpreter, tmpFile, nil, tmpDir, envMap)
 	if err != nil {
 		service.RevokeScriptToken(scriptToken)

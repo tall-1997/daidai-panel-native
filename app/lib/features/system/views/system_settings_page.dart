@@ -512,6 +512,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
     final selected = await showAppBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -537,26 +538,35 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                 ),
               ],
               const SizedBox(height: 12),
-              ...urls.map(
-                (url) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(ctx, url),
-                    style: OutlinedButton.styleFrom(
-                      alignment: Alignment.centerLeft,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 12,
+              Flexible(
+                // 候选较多时列表可滚动，避免底部弹窗超出屏幕；
+                // 长 URL 单行截断，防止按钮内横向溢出。
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: urls.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (ctx, index) {
+                    final url = urls[index];
+                    return OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, url),
+                      style: OutlinedButton.styleFrom(
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      url,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
+                      child: Text(
+                        url,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],

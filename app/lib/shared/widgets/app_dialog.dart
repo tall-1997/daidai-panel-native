@@ -33,6 +33,12 @@ class AppDialog extends StatelessWidget {
     final colors = miuix.colors;
     final textStyles = miuix.textStyles;
 
+    // 避让软键盘：键盘弹出时把弹窗整体抬离键盘区域
+    final mediaQuery = MediaQuery.of(context);
+    final dialogInsets = insetPadding ??
+        const EdgeInsets.symmetric(horizontal: 24);
+    final viewInset = mediaQuery.viewInsets.bottom;
+
     final children = <Widget>[
       if (title != null)
         Padding(
@@ -76,7 +82,12 @@ class AppDialog extends StatelessWidget {
 
     return Center(
       child: Padding(
-        padding: insetPadding ?? const EdgeInsets.symmetric(horizontal: 24),
+        padding: EdgeInsets.only(
+          left: dialogInsets.horizontal / 2,
+          right: dialogInsets.horizontal / 2,
+          top: viewInset > 0 ? 12 : 0,
+          bottom: viewInset,
+        ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxWidth),
           child: Material(
@@ -87,10 +98,13 @@ class AppDialog extends StatelessWidget {
               borderRadius: BorderRadius.circular(32),
               side: BorderSide(color: colors.dividerLine),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: children,
+            child: SingleChildScrollView(
+              // 内容超高时可整体滚动，避免 RenderFlex overflow
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: children,
+              ),
             ),
           ),
         ),

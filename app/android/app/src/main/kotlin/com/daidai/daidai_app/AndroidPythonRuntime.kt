@@ -209,13 +209,29 @@ else:
             pb.directory(home)
             pb.redirectErrorStream(true)
             val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText()
+            // 用独立线程并发消费输出，避免主线程 readText() 等待 EOF 时
+            // 永远到不了 waitFor 的超时分支（子进程挂起即永久卡死）。
+            val outputBuilder = StringBuilder()
+            val reader = Thread {
+                runCatching {
+                    process.inputStream.bufferedReader().use { r ->
+                        while (true) {
+                            val line = r.readLine() ?: break
+                            synchronized(outputBuilder) { outputBuilder.append(line).append('\n') }
+                        }
+                    }
+                }
+            }.also { it.isDaemon = true; it.start() }
             val finished = process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
+                reader.join(1_000)
+                val output = synchronized(outputBuilder) { outputBuilder.toString() }
                 android.util.Log.w("daidai-panel", "bootstrap pip timed out: ${output.takeLast(500)}")
                 return false
             }
+            reader.join(5_000)
+            val output = synchronized(outputBuilder) { outputBuilder.toString() }
             if (process.exitValue() != 0) {
                 android.util.Log.w("daidai-panel", "bootstrap pip exit=${process.exitValue()}: ${output.takeLast(500)}")
             }

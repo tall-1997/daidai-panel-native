@@ -195,10 +195,17 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
     final textColor = isLight ? AppColors.slate600 : AppColors.slate300;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
-      child: SizedBox(
-        width: 420,
-        height: 520,
-        child: Padding(
+      child: ConstrainedBox(
+        // 固定 520px 会在小屏/横屏/字体放大时超出可用高度；
+        // 改为最大尺寸约束，高度不足时按可用空间收缩，WebView 区域由 Expanded 吸收。
+        constraints: BoxConstraints(
+          maxWidth: 420,
+          maxHeight: MediaQuery.of(context).size.height - 48,
+        ),
+        child: SizedBox(
+          width: 420,
+          height: 520,
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -257,6 +264,7 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

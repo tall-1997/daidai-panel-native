@@ -530,12 +530,17 @@ class _ServerInfoCard extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: 10),
-            Text(
-              data.hostname,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: isLight ? AppColors.slate600 : AppColors.slate400,
+            Expanded(
+              // hostname 为运行时数据，长度不可控；窄屏/字体放大时截断防止横向溢出
+              child: Text(
+                data.hostname,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isLight ? AppColors.slate600 : AppColors.slate400,
+                ),
               ),
             ),
           ],
@@ -551,11 +556,15 @@ class _ServerInfoCard extends ConsumerWidget {
         const SizedBox(height: 4),
         Row(
           children: [
-            Text(
-              '已运行：${data.uptime}',
-              style: TextStyle(
-                fontSize: 12,
-                color: isLight ? AppColors.slate500 : AppColors.slate400,
+            Flexible(
+              child: Text(
+                '已运行：${data.uptime}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isLight ? AppColors.slate500 : AppColors.slate400,
+                ),
               ),
             ),
             if (data.panelVersion.isNotEmpty) ...[
@@ -565,12 +574,16 @@ class _ServerInfoCard extends ConsumerWidget {
                 margin: const EdgeInsets.symmetric(horizontal: 10),
                 color: isLight ? AppColors.slate300 : AppColors.slate700,
               ),
-              Text(
-                'v${data.panelVersion}',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
+              Flexible(
+                child: Text(
+                  'v${data.panelVersion}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
                 ),
               ),
             ],

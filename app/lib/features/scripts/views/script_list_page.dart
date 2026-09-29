@@ -1275,7 +1275,15 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     const DropdownMenuItem(value: '', child: Text('根目录')),
                     ...folders.map(
                       (folder) =>
-                          DropdownMenuItem(value: folder, child: Text(folder)),
+                          DropdownMenuItem(
+                          value: folder,
+                          // 长路径单行截断，避免下拉项和选中项横向溢出
+                          child: Text(
+                            folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                     ),
                   ],
                   onChanged: (value) {
@@ -1369,7 +1377,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ...folders.map(
                         (folder) => DropdownMenuItem(
                           value: folder,
-                          child: Text(folder),
+                          // 长路径单行截断，避免下拉项和选中项横向溢出
+                          child: Text(
+                            folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ],
@@ -1489,7 +1502,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ...folders.map(
                         (folder) => DropdownMenuItem(
                           value: folder,
-                          child: Text(folder),
+                          // 长路径单行截断，避免下拉项和选中项横向溢出
+                          child: Text(
+                            folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ],
@@ -1588,7 +1606,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ...folders.map(
                         (folder) => DropdownMenuItem(
                           value: folder,
-                          child: Text(folder),
+                          // 长路径单行截断，避免下拉项和选中项横向溢出
+                          child: Text(
+                            folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ],
@@ -1731,7 +1754,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       ...folders.map(
                         (folder) => DropdownMenuItem(
                           value: folder,
-                          child: Text(folder),
+                          // 长路径单行截断，避免下拉项和选中项横向溢出
+                          child: Text(
+                            folder,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ],

@@ -130,10 +130,8 @@ class _MorePageState extends ConsumerState<MorePage> {
     final capabilityScope = PanelCapabilityRegistry.currentScope;
     bool shows(PanelCapability capability) =>
         showsPanelCapability(capability, scope: capabilityScope);
-    VoidCallback? gated(
-      PanelCapability capability,
-      VoidCallback action,
-    ) => enablesPanelCapability(capability, scope: capabilityScope)
+    VoidCallback? gated(PanelCapability capability, VoidCallback action) =>
+        enablesPanelCapability(capability, scope: capabilityScope)
         ? action
         : null;
 
@@ -195,6 +193,12 @@ class _MorePageState extends ConsumerState<MorePage> {
                   () => context.push('/scripts'),
                 ),
               ),
+            _SettingsItem(
+              icon: Icons.terminal_outlined,
+              title: '交互终端',
+              isLight: isLight,
+              onTap: () => context.push('/terminal'),
+            ),
             if (shows(PanelCapability.subscriptionPull))
               _SettingsItem(
                 icon: Icons.sync,

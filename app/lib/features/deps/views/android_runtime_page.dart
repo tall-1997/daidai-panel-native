@@ -28,6 +28,10 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
   bool _loading = true;
   bool _busy = false;
   String? _error;
+  Map<String, dynamic>? _rootfs;
+  Map<String, dynamic>? _downloadStatus;
+  String _distribution = 'ubuntu';
+  String _sourceId = '';
 
   @override
   void initState() {
@@ -45,25 +49,54 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final response = await DioClient.instance.dio.get(ApiEndpoints.androidRuntimeStatus);
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.androidRuntimeStatus,
+      );
       final data = extractData(response.data);
+      final rootfsData = data is Map ? data['rootfs'] : null;
       PanelCapabilityRegistry.recordSupported(PanelCapability.androidRuntime);
       if (!mounted) return;
       setState(() {
         _data = data is Map ? Map<String, dynamic>.from(data) : const {};
+        final rootfs = rootfsData is Map
+            ? Map<String, dynamic>.from(rootfsData)
+            : <String, dynamic>{};
+        final selected = rootfs['selected_distribution']?.toString();
+        final image = rootfs['image'];
+        final selectedSource = image is Map
+            ? image['selected_source']?.toString()
+            : null;
+        _rootfs = rootfs.isEmpty ? null : rootfs;
+        _distribution = selected?.isNotEmpty == true ? selected! : 'ubuntu';
+        _sourceId = selectedSource ?? '';
         _loading = false;
       });
     } catch (error) {
-      PanelCapabilityRegistry.recordFailure(PanelCapability.androidRuntime, error);
-      if (mounted) setState(() { _loading = false; _error = extractErrorMessage(error, '运行时状态加载失败'); });
+      PanelCapabilityRegistry.recordFailure(
+        PanelCapability.androidRuntime,
+        error,
+      );
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = extractErrorMessage(error, '运行时状态加载失败');
+        });
+      }
     }
   }
 
   Future<void> _install(String name) async {
     if (_busy) return;
-    setState(() { _busy = true; _logs.clear(); _error = null; });
+    setState(() {
+      _busy = true;
+      _logs.clear();
+      _error = null;
+    });
     String? terminalResult;
     String? currentEvent;
     final dataLines = <String>[];
@@ -101,23 +134,30 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
           .transform(const LineSplitter());
       final completer = Completer<void>();
       _installCompleter = completer;
-      _installSubscription = lines.listen((line) {
-        if (line.isEmpty || line == '\r') {
+      _installSubscription = lines.listen(
+        (line) {
+          if (line.isEmpty || line == '\r') {
+            emitEvent();
+            return;
+          }
+          final field = parseSseField(line);
+          if (field?.name == 'event') {
+            currentEvent = field!.value.trim();
+          } else if (field?.name == 'data') {
+            dataLines.add(field!.value);
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!completer.isCompleted) {
+            completer.completeError(error, stackTrace);
+          }
+        },
+        onDone: () {
           emitEvent();
-          return;
-        }
-        final field = parseSseField(line);
-        if (field?.name == 'event') {
-          currentEvent = field!.value.trim();
-        } else if (field?.name == 'data') {
-          dataLines.add(field!.value);
-        }
-      }, onError: (Object error, StackTrace stackTrace) {
-        if (!completer.isCompleted) completer.completeError(error, stackTrace);
-      }, onDone: () {
-        emitEvent();
-        if (!completer.isCompleted) completer.complete();
-      }, cancelOnError: true);
+          if (!completer.isCompleted) completer.complete();
+        },
+        cancelOnError: true,
+      );
       await completer.future;
       if (terminalResult != 'installed' && terminalResult != 'finished') {
         throw StateError(
@@ -127,28 +167,169 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
         );
       }
     } catch (error) {
-      if (mounted) setState(() => _error = extractErrorMessage(error, '运行时安装失败'));
+      if (mounted) {
+        setState(() => _error = extractErrorMessage(error, '运行时安装失败'));
+      }
     } finally {
       _installSubscription = null;
       _installCompleter = null;
-      if (mounted) { setState(() => _busy = false); await _load(); }
+      if (mounted) {
+        setState(() => _busy = false);
+        await _load();
+      }
     }
   }
 
-  Future<void> _uninstall(String name) async {
+  Future<void> _selectRootfs(String distribution, String sourceId) async {
     try {
-      await DioClient.instance.dio.post(ApiEndpoints.androidRuntimeUninstall, data: {'name': name});
-      if (!mounted) return;
+      await DioClient.instance.dio.post(
+        ApiEndpoints.androidRootfsDistribution,
+        queryParameters: {'distribution': distribution},
+      );
+      await DioClient.instance.dio.post(
+        ApiEndpoints.androidRootfsSource,
+        queryParameters: {'distribution': distribution, 'source_id': sourceId},
+      );
       await _load();
     } catch (error) {
-      if (mounted) setState(() => _error = extractErrorMessage(error, '卸载失败'));
+      if (mounted) {
+        setState(() => _error = extractErrorMessage(error, '保存 rootfs 配置失败'));
+      }
     }
+  }
+
+  Future<void> _downloadRootfs() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await DioClient.instance.dio.post(
+        ApiEndpoints.androidRootfsDownload,
+        queryParameters: {'distribution': _distribution},
+      );
+      for (var i = 0; i < 360 && mounted; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        final response = await DioClient.instance.dio.get(
+          ApiEndpoints.androidRootfsDownloadStatus,
+          queryParameters: {'distribution': _distribution},
+        );
+        final status = extractData(response.data);
+        if (status is Map) {
+          setState(() => _downloadStatus = Map<String, dynamic>.from(status));
+          if (status['running'] != true) break;
+        }
+      }
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = extractErrorMessage(error, 'rootfs 下载失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _buildRootfsCard() {
+    final rootfs = _rootfs;
+    if (rootfs == null) return const SizedBox.shrink();
+    final image = rootfs['image'] is Map
+        ? Map<String, dynamic>.from(rootfs['image'] as Map)
+        : const <String, dynamic>{};
+    final sources = image['sources'] is List
+        ? (image['sources'] as List)
+              .whereType<Map>()
+              .map((source) => Map<String, dynamic>.from(source))
+              .toList()
+        : const <Map<String, dynamic>>[];
+    final installed = rootfs['installed'] == true;
+    final running = _downloadStatus?['running'] == true;
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Linux rootfs / PTY 环境',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            installed
+                ? '已就绪：${rootfs['distribution'] ?? _distribution}'
+                : '未就绪：终端和依赖安装需要先准备 rootfs',
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _distribution,
+            decoration: const InputDecoration(labelText: '发行版', isDense: true),
+            items: const [
+              DropdownMenuItem(value: 'ubuntu', child: Text('Ubuntu')),
+              DropdownMenuItem(value: 'alpine', child: Text('Alpine')),
+            ],
+            onChanged: _busy
+                ? null
+                : (value) {
+                    if (value != null) {
+                      setState(() => _distribution = value);
+                    }
+                  },
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: sources.any((source) => source['id'] == _sourceId)
+                ? _sourceId
+                : null,
+            decoration: const InputDecoration(labelText: '镜像源', isDense: true),
+            items: sources
+                .map(
+                  (source) => DropdownMenuItem<String>(
+                    value: source['id']?.toString(),
+                    child: Text(
+                      source['display_name']?.toString() ??
+                          source['id'].toString(),
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: _busy
+                ? null
+                : (value) {
+                    if (value != null) {
+                      setState(() => _sourceId = value);
+                      _selectRootfs(_distribution, value);
+                    }
+                  },
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _downloadStatus?['message']?.toString() ??
+                      '选择发行版和镜像源后下载 rootfs',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: _busy || installed ? null : _downloadRootfs,
+                icon: const Icon(Icons.download),
+                label: Text(running ? '下载中' : '下载 rootfs'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final supported = _data?['supported'] == true;
-    final runtimes = _data?['runtimes'] is List ? _data!['runtimes'] as List : const [];
+    final runtimes = _data?['runtimes'] is List
+        ? _data!['runtimes'] as List
+        : const [];
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(title: const Text('Android 运行时')),
@@ -161,20 +342,43 @@ class _AndroidRuntimePageState extends State<AndroidRuntimePage> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            if (!supported) const AppCard(child: Text('当前面板不支持 Android/Magisk 运行时管理')),
+            _buildRootfsCard(),
+            if (!supported)
+              const AppCard(child: Text('当前面板不支持 Android/Magisk 运行时管理')),
             for (final runtime in runtimes.whereType<Map>())
               AppCard(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
                   title: Text(runtime['name'].toString()),
-                  subtitle: Text('${runtime['version'] ?? '未安装'}\n${runtime['path'] ?? ''}'),
-                  trailing: Wrap(children: [
-                    IconButton(onPressed: _busy ? null : () => _install(runtime['name'].toString()), icon: const AppIcon(Icons.download)),
-                    IconButton(onPressed: runtime['installed'] == true ? () => _uninstall(runtime['name'].toString()) : null, icon: const AppIcon(Icons.delete_outline)),
-                  ]),
+                  subtitle: Text(
+                    '${runtime['version'] ?? '未安装'}\n${runtime['path'] ?? ''}',
+                  ),
+                  trailing: _rootfs != null
+                      ? (runtime['installed'] == true
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: Colors.green,
+                              )
+                            : const SizedBox.shrink())
+                      : Wrap(
+                          children: [
+                            IconButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () => _install(runtime['name'].toString()),
+                              icon: const AppIcon(Icons.download),
+                            ),
+                          ],
+                        ),
                 ),
               ),
-            if (_logs.isNotEmpty) AppCard(child: SelectableText(_logs.join('\n'), style: const TextStyle(fontFamily: 'monospace'))),
+            if (_logs.isNotEmpty)
+              AppCard(
+                child: SelectableText(
+                  _logs.join('\n'),
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
           ],
         ),
       ),

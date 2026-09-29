@@ -611,6 +611,17 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 
 	onOutput(fmt.Sprintf("=== 开始执行 [%s] ===\n", startTime.Format("2006-01-02 15:04:05")))
 
+	// 启动用户脚本前完成静态依赖预检：已持久化且实际存在的依赖直接复用，
+	// 缺失项按运行时版本加锁安装；任一安装失败都不启动用户脚本。
+	if plan != nil && strings.TrimSpace(plan.FullPath) != "" {
+		if err := PreflightScriptDependencies(filepath.Ext(plan.FullPath), plan.FullPath, envVars, onOutput); err != nil {
+			onOutput(fmt.Sprintf("[依赖预检失败，已阻止脚本执行: %s]\n", err))
+			exitCode = 1
+			lastFailureOutput = err.Error()
+			return
+		}
+	}
+
 	if task.TaskBefore != nil && *task.TaskBefore != "" {
 		onOutput("[执行前置脚本]\n")
 		captureHookEnvExports(envVars, onOutput, func(hookEnv map[string]string) {

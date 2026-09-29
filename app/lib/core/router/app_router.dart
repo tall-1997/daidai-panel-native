@@ -34,6 +34,7 @@ import '../../features/system/views/capability_unavailable_page.dart';
 import '../../features/openapi/views/open_api_page.dart';
 import '../../features/app_lock/views/app_lock_settings_page.dart';
 import '../../features/settings/views/theme_settings_page.dart';
+import '../../features/terminal/views/terminal_session_page.dart';
 import '../../features/profile/views/profile_page.dart';
 import '../../shared/widgets/app_background.dart';
 import '../../shared/widgets/main_scaffold.dart';
@@ -142,6 +143,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           '/health-check',
         };
         const operatorRoutes = <String>{
+          '/terminal',
           '/scripts',
           '/subscriptions',
           '/envs',
@@ -340,6 +342,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/deps',
         parentNavigatorKey: _rootNavigatorKey,
         pageBuilder: (_, state) => _rootPage(const DepListPage()),
+      ),
+      GoRoute(
+        path: '/terminal',
+        parentNavigatorKey: _rootNavigatorKey,
+        pageBuilder: (_, state) => _rootPage(const TerminalSessionPage()),
       ),
       GoRoute(
         path: '/deps/:id/log-stream',
