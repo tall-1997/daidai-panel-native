@@ -270,7 +270,15 @@ func validateAndroidRuntimeDownloadURL(raw string) error {
 
 // androidArchiveTargetPath 校验解压目标必须落在 targetDir 内，防止 tar slip。
 func androidArchiveTargetPath(targetDir, name string) (string, error) {
-	cleaned := filepath.Clean(filepath.Join(targetDir, name))
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	if normalized == "" || strings.HasPrefix(normalized, "/") {
+		return "", fmt.Errorf("越界路径")
+	}
+	relative := filepath.Clean(normalized)
+	if relative == ".." || strings.HasPrefix(relative, "../") || filepath.IsAbs(relative) {
+		return "", fmt.Errorf("越界路径")
+	}
+	cleaned := filepath.Join(targetDir, filepath.FromSlash(relative))
 	rootAbs, err := filepath.Abs(targetDir)
 	if err != nil {
 		return "", err
