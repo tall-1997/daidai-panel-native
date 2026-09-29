@@ -3,7 +3,7 @@ set -euo pipefail
 
 NODE_MOBILE_VERSION="${NODE_MOBILE_VERSION:-18.20.4}"
 NPM_VERSION="${NPM_VERSION:-10.9.4}"
-TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-5.9.3}"
+TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-5.6.3}"
 NODE_ARCHIVE="nodejs-mobile-v${NODE_MOBILE_VERSION}-android.zip"
 NODE_URL="${NODE_URL:-https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v${NODE_MOBILE_VERSION}/${NODE_ARCHIVE}}"
 

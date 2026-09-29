@@ -821,10 +821,11 @@ class LocalPanelStore(
     }
 
     private fun ensureMirrorDefaults(db: SQLiteDatabase) {
+        val distribution = AndroidLinuxRuntime.selectedDistribution(appContext)
         val defaults = mapOf(
             AndroidLinuxRuntime.PIP_MIRROR_KEY to AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX,
             AndroidLinuxRuntime.NPM_MIRROR_KEY to AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY,
-            AndroidLinuxRuntime.LINUX_MIRROR_KEY to AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.LINUX_MIRROR_KEY to AndroidLinuxRuntime.defaultLinuxMirror(distribution),
         )
         val editor = configPrefs.edit()
         var preferencesChanged = false
@@ -838,7 +839,11 @@ class LocalPanelStore(
             val imported = configPrefs.getString(key, null)
                 ?: legacyMirrors?.optString(key)?.takeIf { it.isNotBlank() }
                 ?: legacyMirrors?.optString(key.removeSuffix("_mirror"))?.takeIf { it.isNotBlank() }
-            val value = AndroidLinuxRuntime.resolveMirrorValue(persisted, imported, defaultValue)
+            val value = if (key == AndroidLinuxRuntime.LINUX_MIRROR_KEY) {
+                AndroidLinuxRuntime.coerceLinuxMirror(distribution, persisted, imported)
+            } else {
+                AndroidLinuxRuntime.resolveMirrorValue(persisted, imported, defaultValue)
+            }
             if (persisted != value) {
                 db.insertWithOnConflict("local_configs", null, ContentValues().apply {
                     put("key", key)
@@ -2241,13 +2246,20 @@ rejectIfUserCannotMutate(session)?.let { return it }
 
     private fun normalizedConfigValue(key: String, value: String): String? =
         if (key in mirrorConfigKeys) {
-            if (value.isBlank()) defaultMirrorValue(key) else AndroidLinuxRuntime.normalizeMirrorUrl(value)
+            when {
+                value.isBlank() -> defaultMirrorValue(key)
+                key == AndroidLinuxRuntime.LINUX_MIRROR_KEY -> {
+                    val normalized = AndroidLinuxRuntime.normalizeMirrorUrl(value) ?: return null
+                    AndroidLinuxRuntime.coerceLinuxMirror(AndroidLinuxRuntime.selectedDistribution(appContext), normalized, null)
+                }
+                else -> AndroidLinuxRuntime.normalizeMirrorUrl(value)
+            }
         } else value
 
     private fun defaultMirrorValue(key: String): String = when (key) {
         AndroidLinuxRuntime.PIP_MIRROR_KEY -> AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX
         AndroidLinuxRuntime.NPM_MIRROR_KEY -> AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY
-        AndroidLinuxRuntime.LINUX_MIRROR_KEY -> AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR
+        AndroidLinuxRuntime.LINUX_MIRROR_KEY -> AndroidLinuxRuntime.defaultLinuxMirror(AndroidLinuxRuntime.selectedDistribution(appContext))
         else -> ""
     }
 
@@ -2987,16 +2999,28 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
 
     private fun mirrorResponseData(): JSONObject {
         val rootfs = AndroidLinuxRuntime.statusJson(appContext).optJSONObject("rootfs")
-        val manager = rootfs?.optString("package_manager").orEmpty().ifBlank { "apt" }
+        val distribution = rootfs?.optString("distribution").orEmpty().ifBlank { AndroidLinuxRuntime.selectedDistribution(appContext) }
+        val manager = rootfs?.optString("package_manager").orEmpty().ifBlank {
+            if (distribution == "alpine") "apk" else "apt"
+        }
         return JSONObject()
             .put(AndroidLinuxRuntime.PIP_MIRROR_KEY, configValue(AndroidLinuxRuntime.PIP_MIRROR_KEY, AndroidLinuxRuntime.PYTHON_PIP_ALIBABA_INDEX))
             .put(AndroidLinuxRuntime.NPM_MIRROR_KEY, configValue(AndroidLinuxRuntime.NPM_MIRROR_KEY, AndroidLinuxRuntime.NODE_NPM_NPMMIRROR_REGISTRY))
-            .put(AndroidLinuxRuntime.LINUX_MIRROR_KEY, configValue(AndroidLinuxRuntime.LINUX_MIRROR_KEY, AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR))
+            .put(AndroidLinuxRuntime.LINUX_MIRROR_KEY, AndroidLinuxRuntime.coerceLinuxMirror(distribution, configValue(AndroidLinuxRuntime.LINUX_MIRROR_KEY, AndroidLinuxRuntime.defaultLinuxMirror(distribution)), null))
             .put("linux_package_manager", manager)
-            .put("linux_distribution", rootfs?.optString("distribution").orEmpty().ifBlank { "ubuntu" })
-            .put("linux_mirror_supported", manager == "apt")
-            .put("linux_mirror_label", if (manager == "apt") "Ubuntu APT（阿里云默认）" else "Linux")
-            .put("linux_mirror_message", if (manager == "apt") "默认使用阿里云，支持任意合法 HTTP(S) 镜像源" else "当前包管理器暂不支持镜像设置")
+            .put("linux_distribution", distribution)
+            .put("linux_abi", AndroidLinuxRuntime.currentAbi())
+            .put("linux_mirror_supported", manager == "apt" || manager == "apk")
+            .put("linux_mirror_label", when (manager) {
+                "apt" -> "Ubuntu APT（阿里云默认）"
+                "apk" -> "Alpine APK（阿里云默认）"
+                else -> "Linux"
+            })
+            .put("linux_mirror_message", when (manager) {
+                "apt" -> "未设置时使用阿里云境内源；arm64 使用 ubuntu-ports"
+                "apk" -> "未设置时使用阿里云 Alpine 境内源"
+                else -> "运行时未就绪时，依赖安装仍使用阿里云和 npmmirror 境内默认源"
+            })
     }
     private fun setPythonDefault(json: JSONObject): NanoHTTPD.Response { val version=json.optString("version",DependencyStorage.PYTHON_VERSION);upsertConfig("python_runtime_default",version);return ok(JSONObject().put("data",JSONObject().put("version",version))) }
     private fun exportDependencies(type: String): NanoHTTPD.Response { val lines=mutableListOf<String>();readableDatabase.query("dependencies",arrayOf("name","version"),if(type.isBlank())null else "type=?",if(type.isBlank())null else arrayOf(normalizeDependencyType(type)?:type),null,null,"name").use{c->while(c.moveToNext())lines += c.string("name") + if(c.string("version").isBlank()) "" else if(type=="npm"||type=="nodejs") "@${c.string("version")}" else "==${c.string("version")}"};return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"text/plain; charset=utf-8",lines.joinToString("\n")) }
@@ -3964,7 +3988,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 }
             }
             ext == "js" || ext == "mjs" || languageHint.equals("javascript", ignoreCase = true) ->
-                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules", "/usr/bin/node", "/workspace/${file.name}"))
+                AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/env", "NODE_PATH=${AndroidNodeRuntime.guestNodeModulePath()}", "/usr/bin/node", "/workspace/${file.name}"))
             ext == "ts" || languageHint.equals("typescript", ignoreCase = true) -> typeScriptCommand(file)
             ext == "go" || languageHint.equals("go", ignoreCase = true) -> native("libyaegi_exec.so")?.let { listOf(it, file.absolutePath) }
                 ?: AndroidLinuxRuntime.guestCommand(appContext, file.parentFile ?: scriptsRoot(), listOf("/usr/bin/go", "run", "/workspace/${file.name}"))
@@ -3981,7 +4005,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
 
     private fun typeScriptCommand(file: File): List<String>? {
         val working = file.parentFile ?: scriptsRoot()
-        val nodePath = "NODE_PATH=/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules"
+        val nodePath = "NODE_PATH=${AndroidNodeRuntime.guestNodeModulePath()}"
         val guestFile = "/workspace/${file.name}"
         val tsNodeDir = File(appContext.filesDir, "deps/nodejs/node_modules/ts-node")
         val typescriptDir = File(appContext.filesDir, "deps/nodejs/node_modules/typescript")
@@ -4261,6 +4285,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                     "PIP_TARGET" to DependencyStorage.pythonSitePackages(appContext.filesDir).absolutePath,
                     "NODE_PATH" to listOf(
                         scriptsRoot().absolutePath,
+                        AndroidNodeRuntime.bundledModulesDir(appContext).absolutePath,
                         File(appContext.filesDir, "deps/nodejs/node_modules").absolutePath,
                     ).filter(String::isNotBlank).joinToString(File.pathSeparator),
                     "NODE_OPTIONS" to "--require=${File(scriptsRoot(), "sendNotify.js").absolutePath}",
@@ -4306,7 +4331,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         target["TMPDIR"] = "/tmp"
         target["PYTHONPATH"] = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages:/workspace"
         target["PYTHONUNBUFFERED"] = "1"
-        target["NODE_PATH"] = "/host-files/deps/nodejs/node_modules:/usr/local/lib/node_modules:/usr/lib/node_modules:/workspace"
+        target["NODE_PATH"] = AndroidNodeRuntime.guestNodeModulePath(includeWorkspace = true)
         target.remove("NODE_OPTIONS")
         AndroidLinuxRuntime.nodeRuntimeOptions(AndroidLinuxRuntime.currentAbi())?.let { target["NODE_OPTIONS"] = it }
         target["QL_DIR"] = "/host-files"
@@ -6230,8 +6255,14 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 if (existing.first && localSpec == null) return "installed" to "Rootfs import verification confirmed $importName"
                 val guestTarget = "/host-files/deps/python/${DependencyStorage.PYTHON_VERSION}/site-packages"
                 val installArg = localSpec?.guestPath ?: name
-                val sourceArgs = if (localSpec == null) listOf("-i", mirrors.pipMirror) else emptyList()
-                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3", "install", "--target", guestTarget) + sourceArgs + listOf("--", installArg))
+                AndroidLinuxRuntime.ensureRootfsReady(appContext)
+                val pipMirror = AndroidLinuxRuntime.runtimeMirrorUrl(appContext, mirrors.pipMirror)
+                val pipArgs = if (localSpec == null) {
+                    AndroidLinuxRuntime.pipInstallArguments(pipMirror, guestTarget, installArg)
+                } else {
+                    listOf("install", "--no-input", "--no-cache-dir", "--timeout", "60", "--retries", "5", "--target", guestTarget, "--", installArg)
+                }
+                val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/pip3") + pipArgs)
                     ?: return "unavailable" to "ROOTFS_PYTHON_UNAVAILABLE"
                 var result = runLocalProcess(command, target, JSONArray().put("Installing Python dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, dependencyId = dependencyId)
                 if (dependencyId != null && dependencyCancelRequested.contains(dependencyId)) return "cancelled" to textOf(result)
@@ -6252,7 +6283,9 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             if (AndroidLinuxRuntime.guestRuntimeAvailable(appContext, "/usr/bin/npm")) {
                 val deps = File(appContext.filesDir, "deps/nodejs").apply { mkdirs() }.also(DependencyStorage::ensureNodePackageManifest)
                 val installSpec = localSpec?.guestPath ?: DependencyStorage.nodeInstallPackageSpec(name)
-                val sourceArgs = if (localSpec == null) listOf("--registry", mirrors.npmMirror) else emptyList()
+                AndroidLinuxRuntime.ensureRootfsReady(appContext)
+                val npmMirror = AndroidLinuxRuntime.runtimeMirrorUrl(appContext, mirrors.npmMirror)
+                val sourceArgs = if (localSpec == null) AndroidLinuxRuntime.npmMirrorArguments(npmMirror) else emptyList()
                 val command = AndroidLinuxRuntime.guestCommand(appContext, appContext.filesDir, listOf("/usr/bin/npm", "install", "--no-audit", "--no-fund", "--prefix", "/host-files/deps/nodejs") + sourceArgs + listOf("--", installSpec))
                     ?: return "unavailable" to "ROOTFS_NODE_UNAVAILABLE"
                 var result = runLocalProcess(command, deps, JSONArray().put(DependencyStorage.nodeInstallCompatibilityNotice(name)).put("Installing Node dependency in ${AndroidLinuxRuntime.currentAbi()} rootfs: $installSpec"), ScriptCompatibility.INSTALL_TIMEOUT_SECONDS, onLine, taskId, npmLifecycleEnvironment(), dependencyId)

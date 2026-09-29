@@ -1157,6 +1157,25 @@ const linuxMirrorOptions = computed(() => {
   }
 
   if (manager === "apt") {
+    const usePorts =
+      mirrorMeta.value.linux_abi === "arm64-v8a" ||
+      (mirrorMeta.value.linux_mirror || "").includes("/ubuntu-ports");
+    if (usePorts) {
+      return [
+        {
+          label: "阿里云 Ubuntu Ports (默认)",
+          value: "https://mirrors.aliyun.com/ubuntu-ports",
+        },
+        {
+          label: "清华大学 Ubuntu Ports",
+          value: "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports",
+        },
+        {
+          label: "腾讯云 Ubuntu Ports",
+          value: "https://mirrors.cloud.tencent.com/ubuntu-ports",
+        },
+      ];
+    }
     if (distro === "debian") {
       return [
         {

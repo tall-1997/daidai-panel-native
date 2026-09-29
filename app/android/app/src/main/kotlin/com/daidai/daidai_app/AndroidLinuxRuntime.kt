@@ -79,7 +79,8 @@ object AndroidLinuxRuntime {
     const val PIP_MIRROR_KEY = "pip_mirror"
     const val NPM_MIRROR_KEY = "npm_mirror"
     const val LINUX_MIRROR_KEY = "linux_mirror"
-    private val DNS_FALLBACK_SERVERS = listOf("1.1.1.1", "8.8.8.8")
+    // 1.1.1.1 / 8.8.8.8 在境内经常超时，会让依赖安装表现为偶发失败。
+    internal val CHINA_DNS_SERVERS = listOf("223.5.5.5", "119.29.29.29", "114.114.114.114")
 
     data class DnsConfig(
         val source: String,
@@ -185,7 +186,12 @@ object AndroidLinuxRuntime {
     }
 
     fun baseEnvironment(context: Context, workingDir: File): MutableMap<String, String> {
-        val mirrors = mirrorConfig(context)
+        val configured = mirrorConfig(context)
+        val mirrors = MirrorConfig(
+            pipMirror = runtimeMirrorUrl(context, configured.pipMirror),
+            npmMirror = runtimeMirrorUrl(context, configured.npmMirror),
+            linuxMirror = runtimeMirrorUrl(context, configured.linuxMirror),
+        )
         val prootLoader = resolveNativeTool(context, listOf(PROOT_LOADER_LIBRARY_NAME))
         return mutableMapOf(
             "HOME" to context.filesDir.absolutePath,
@@ -214,15 +220,37 @@ object AndroidLinuxRuntime {
         "PROOT_VERBOSE" to "0",
     )
 
-    internal fun mirrorEnvironment(mirrors: MirrorConfig): Map<String, String> = mapOf(
-        "PIP_INDEX_URL" to mirrors.pipMirror,
-        "NPM_CONFIG_REGISTRY" to mirrors.npmMirror,
-        "npm_config_registry" to mirrors.npmMirror,
-        "DAIDAI_LINUX_MIRROR" to mirrors.linuxMirror,
-    )
+    internal fun mirrorEnvironment(mirrors: MirrorConfig): Map<String, String> {
+        val npmRegistry = if (mirrors.npmMirror.endsWith("/")) mirrors.npmMirror else "${mirrors.npmMirror}/"
+        return buildMap {
+            put("PIP_INDEX_URL", mirrors.pipMirror)
+            mirrorHost(mirrors.pipMirror).takeIf { it.isNotEmpty() }?.let { put("PIP_TRUSTED_HOST", it) }
+            put("NPM_CONFIG_REGISTRY", npmRegistry)
+            put("npm_config_registry", npmRegistry)
+            put("DAIDAI_LINUX_MIRROR", mirrors.linuxMirror)
+        }
+    }
 
-    internal fun pipInstallArguments(mirror: String, target: String, packageSpec: String): List<String> =
-        listOf("install", "--no-input", "--no-cache-dir", "-i", mirror, "--target", target, "--", packageSpec)
+    internal fun mirrorHost(url: String): String =
+        normalizeMirrorUrl(url)?.let { URI(it).host }?.trim().orEmpty()
+
+    internal fun reachableMirrorUrl(url: String, hasCaCertificates: Boolean): String =
+        if (!hasCaCertificates && url.startsWith("https://")) url.replaceFirst("https://", "http://") else url
+
+    fun runtimeMirrorUrl(context: Context, url: String): String {
+        val root = File(context.filesDir, "runtimes/linux-rootfs/${currentAbi()}")
+        return reachableMirrorUrl(url, rootfsHasCaCertificates(root))
+    }
+
+    internal fun pipInstallArguments(mirror: String, target: String, packageSpec: String): List<String> {
+        val args = mutableListOf("install", "--no-input", "--no-cache-dir", "--timeout", "60", "--retries", "5", "-i", mirror)
+        mirrorHost(mirror).takeIf { it.isNotEmpty() }?.let { args += listOf("--trusted-host", it) }
+        args += listOf("--target", target, "--", packageSpec)
+        return args
+    }
+
+    internal fun npmMirrorArguments(mirror: String): List<String> =
+        listOf("--registry", if (mirror.endsWith("/")) mirror else "$mirror/", "--fetch-retries", "5", "--fetch-retry-mintimeout", "10000", "--fetch-timeout", "60000")
 
     internal fun npmInstallArguments(mirror: String, prefix: String, cacheDir: String, packageSpec: String): List<String> =
         listOf("install", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", mirror, "--cache", cacheDir, "--prefix", prefix, "--", packageSpec)
@@ -250,7 +278,7 @@ object AndroidLinuxRuntime {
         MirrorConfig(
             pipMirror = normalizeMirrorUrl(preferences.getString(PIP_MIRROR_KEY, null).orEmpty()) ?: PYTHON_PIP_ALIBABA_INDEX,
             npmMirror = normalizeMirrorUrl(preferences.getString(NPM_MIRROR_KEY, null).orEmpty()) ?: NODE_NPM_NPMMIRROR_REGISTRY,
-            linuxMirror = normalizeMirrorUrl(preferences.getString(LINUX_MIRROR_KEY, null).orEmpty()) ?: defaultLinuxMirror(selectedDistribution(context)),
+            linuxMirror = coerceLinuxMirror(selectedDistribution(context), preferences.getString(LINUX_MIRROR_KEY, null), null),
         )
     }
 
@@ -317,6 +345,57 @@ object AndroidLinuxRuntime {
             ?: imported?.let(::normalizeMirrorUrl)
             ?: defaultValue
 
+    internal fun coerceLinuxMirror(distribution: String, persisted: String?, imported: String?, abi: String = currentAbi()): String {
+        val fallback = defaultLinuxMirror(distribution, abi)
+        val chosen = persisted?.let(::normalizeMirrorUrl) ?: imported?.let(::normalizeMirrorUrl) ?: return fallback
+        // 旧版本把所有架构都写成 Ubuntu archive。官方源和错发行版地址在境内会直接装失败。
+        if (distribution == "alpine" && (isUbuntuFamilyMirror(chosen) || isOfficialAlpineMirror(chosen))) return fallback
+        if (distribution != "alpine" && (isAlpineMirror(chosen) || isOfficialUbuntuMirror(chosen))) return fallback
+        if (abi == "arm64-v8a" && distribution != "alpine") arm64PortsMirror(chosen)?.let { return it }
+        return chosen
+    }
+
+    private fun isUbuntuFamilyMirror(url: String): Boolean {
+        val value = url.lowercase()
+        return value.contains("/ubuntu") || value.contains("ubuntu.com") || value.contains("/debian")
+    }
+
+    private fun isAlpineMirror(url: String): Boolean {
+        val value = url.lowercase()
+        return value.contains("/alpine") || value.contains("alpinelinux.org")
+    }
+
+    private fun isOfficialAlpineMirror(url: String): Boolean {
+        val value = url.lowercase()
+        return value == "https://dl-cdn.alpinelinux.org/alpine" || value == "http://dl-cdn.alpinelinux.org/alpine"
+    }
+
+    private fun isOfficialUbuntuMirror(url: String): Boolean {
+        val value = url.lowercase()
+        return value.contains("archive.ubuntu.com") || value.contains("ports.ubuntu.com") || value.contains("security.ubuntu.com")
+    }
+
+    private fun arm64PortsMirror(url: String): String? {
+        val value = url.trimEnd('/').lowercase()
+        if (value.contains("ubuntu-ports")) return null
+        return when (value) {
+            "https://mirrors.aliyun.com/ubuntu", "http://mirrors.aliyun.com/ubuntu" -> UBUNTU_PORTS_APT_DEFAULT_MIRROR
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu", "http://mirrors.tuna.tsinghua.edu.cn/ubuntu" -> "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
+            "https://mirrors.cloud.tencent.com/ubuntu", "http://mirrors.cloud.tencent.com/ubuntu" -> "https://mirrors.cloud.tencent.com/ubuntu-ports"
+            "https://repo.huaweicloud.com/ubuntu", "http://repo.huaweicloud.com/ubuntu" -> "https://repo.huaweicloud.com/ubuntu-ports"
+            else -> null
+        }
+    }
+
+    internal fun guestDnsServers(systemServers: List<String>): List<String> {
+        val system = normalizeDnsServers(systemServers)
+        if (system.isEmpty()) return CHINA_DNS_SERVERS
+        val merged = LinkedHashSet<String>()
+        system.take(2).forEach(merged::add)
+        CHINA_DNS_SERVERS.firstOrNull { it !in merged }?.let(merged::add)
+        return merged.take(3).toList()
+    }
+
     fun copyVersionedLibraries(nativeDir: File, compatLibDir: File, links: Map<String, List<String>>) {
         compatLibDir.mkdirs()
         for ((source, targets) in links) {
@@ -334,7 +413,11 @@ object AndroidLinuxRuntime {
     @Volatile private var cachedLinuxRootfs: RootfsPaths? = null
 
     fun ensureRootfsReady(context: Context, mirrors: MirrorConfig = mirrorConfig(context)): RootfsPaths? = synchronized(mirrorConfigLock) {
-        cachedLinuxRootfs?.let { return@synchronized it }
+        cachedLinuxRootfs?.let { cached ->
+            // 缓存只跳过解压。镜像必须每次重写，否则改源后安装仍走旧地址。
+            prepareRuntimeDirectories(cached.root, mirrors)
+            return@synchronized cached
+        }
         val abi = currentAbi()
         val root = File(context.filesDir, "runtimes/linux-rootfs/$abi")
         val proot = resolveNativeTool(context, listOf("libdaidai_proot.so"))
@@ -808,12 +891,8 @@ object AndroidLinuxRuntime {
             manager.getLinkProperties(manager.activeNetwork)?.dnsServers.orEmpty()
                 .map { it.hostAddress }
         }.getOrDefault(emptyList())
-        val validSystemServers = normalizeDnsServers(systemServers)
-        return if (validSystemServers.isEmpty()) {
-            persistDnsConfig(root, "fallback", DNS_FALLBACK_SERVERS)
-        } else {
-            persistDnsConfig(root, "active_network", validSystemServers)
-        }
+        val servers = guestDnsServers(systemServers)
+        return persistDnsConfig(root, if (normalizeDnsServers(systemServers).isEmpty()) "fallback" else "active_network", servers)
     }
 
     private fun detectPackageManager(root: File): String = when {
@@ -857,41 +936,49 @@ object AndroidLinuxRuntime {
         File(root, "etc/ssl/certs/ca-certificates.crt").isFile
 
     internal fun configureRootfsMirrors(root: File, mirrors: MirrorConfig) {
+        // 缺 CA 时 https 镜像会握手失败。apt、apk、pip、npm 使用同一回退，避免只有系统包能装。
+        val hasCa = rootfsHasCaCertificates(root)
+        val linuxMirror = reachableMirrorUrl(mirrors.linuxMirror, hasCa)
+        val pipMirror = reachableMirrorUrl(mirrors.pipMirror, hasCa)
+        val npmMirror = reachableMirrorUrl(mirrors.npmMirror, hasCa)
         if (File(root, "etc/alpine-release").isFile || File(root, "sbin/apk").isFile || File(root, "usr/sbin/apk").isFile) {
             val release = File(root, "etc/alpine-release").readTextOrNull()?.trim()?.substringBeforeLast('.')?.takeIf { it.startsWith("3") } ?: "latest-stable"
             File(root, "etc/apk/repositories").apply {
                 parentFile?.mkdirs()
-                writeText("${mirrors.linuxMirror}/v$release/main\n${mirrors.linuxMirror}/v$release/community\n")
+                writeText("${linuxMirror}/v$release/main\n${linuxMirror}/v$release/community\n")
             }
         }
         if (File(root, "etc/os-release").readTextOrNull()?.contains("Ubuntu", ignoreCase = true) == true || File(root, "usr/bin/apt-get").isFile) {
             val release = File(root, "etc/lsb-release").readTextOrNull()
                 ?.lineSequence()?.firstOrNull { it.startsWith("DISTRIB_CODENAME=") }?.substringAfter("=")?.trim().orEmpty()
             if (release.isNotEmpty()) {
-                // 下载的 ubuntu-base 默认未装 ca-certificates：https 镜像会因 CA 缺失握手失败
-                //（鸡生蛋问题），缺 CA 时先回退到 http 源，装上证书后的下次启动会自动恢复 https。
-                val aptMirror = when {
-                    mirrors.linuxMirror.startsWith("https://") && !rootfsHasCaCertificates(root) ->
-                        mirrors.linuxMirror.replaceFirst("https://", "http://")
-                    else -> mirrors.linuxMirror
-                }
                 File(root, "etc/apt/sources.list").apply {
                     parentFile?.mkdirs()
-                    writeText("deb $aptMirror/ $release main restricted universe multiverse\n" +
-                        "deb $aptMirror/ $release-updates main restricted universe multiverse\n" +
-                        "deb $aptMirror/ $release-security main restricted universe multiverse\n")
+                    writeText("deb $linuxMirror/ $release main restricted universe multiverse\n" +
+                        "deb $linuxMirror/ $release-updates main restricted universe multiverse\n" +
+                        "deb $linuxMirror/ $release-security main restricted universe multiverse\n")
                 }
                 listOf("etc/apt/sources.list.d").forEach { dir -> File(root, dir).let { if (it.isDirectory) it.listFiles()?.forEach { child -> child.delete() } } }
             }
         }
-        val pipConfig = "[global]\nindex-url = ${mirrors.pipMirror}\ntimeout = 60\n"
-        listOf(File(root, "etc/pip.conf"), File(root, "root/.pip/pip.conf")).forEach { file ->
-            file.parentFile?.mkdirs()
-            file.writeText(pipConfig)
+        val pipHost = mirrorHost(pipMirror)
+        val pipConfig = buildString {
+            append("[global]\nindex-url = ").append(pipMirror).append('\n')
+            if (pipHost.isNotEmpty()) append("trusted-host = ").append(pipHost).append('\n')
+            append("timeout = 60\nretries = 5\n")
         }
-        File(root, "etc/npmrc").apply {
-            parentFile?.mkdirs()
-            writeText("registry=${mirrors.npmMirror}\nignore-scripts=true\n")
+        listOf("etc/pip.conf", "root/.config/pip/pip.conf", "root/.pip/pip.conf").forEach { relative ->
+            File(root, relative).apply {
+                parentFile?.mkdirs()
+                writeText(pipConfig)
+            }
+        }
+        val npmrc = "registry=$npmMirror\nignore-scripts=true\n"
+        listOf("etc/npmrc", "usr/etc/npmrc", "root/.npmrc").forEach { relative ->
+            File(root, relative).apply {
+                parentFile?.mkdirs()
+                writeText(npmrc)
+            }
         }
     }
 

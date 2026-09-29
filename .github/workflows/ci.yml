@@ -80,6 +80,7 @@ jobs:
               - 'app/scripts/test_verify_android_linux_runtime.py'
               - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
               - 'app/scripts/test_prepare_android_alpine_rootfs.py'
+              - 'app/scripts/test_node_runtime_typescript.py'
               - 'app/scripts/rootfs-trusted-sources.json'
               - 'app/runtime-tools/yaegi/**'
               - 'panel/web/**'
@@ -122,6 +123,7 @@ jobs:
               - 'app/scripts/prepare-android-alpine-rootfs.sh'
               - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
               - 'app/scripts/test_prepare_android_alpine_rootfs.py'
+              - 'app/scripts/test_node_runtime_typescript.py'
 
   go-quality:
     name: Go test and vet
@@ -304,7 +306,7 @@ jobs:
         run: gradle -p android :app:testReleaseUnitTest --no-daemon --stacktrace
 
       - name: Test Android Linux runtime verifier
-        run: python3 -m unittest scripts/test_android_abi_matrix.py scripts/test_verify_android_update_manifest.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
+        run: python3 -m unittest scripts/test_android_abi_matrix.py scripts/test_verify_android_update_manifest.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py app/scripts/test_node_runtime_typescript.py
 
       - name: Upload Kotlin test reports
         if: always()
@@ -373,7 +375,7 @@ jobs:
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
           go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
+          python3 -m unittest scripts/test_version.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py app/scripts/test_node_runtime_typescript.py
           python3 scripts/version.py check
           go run ./scripts/verify-runtime-contract.go
 

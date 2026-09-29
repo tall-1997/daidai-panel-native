@@ -6,6 +6,7 @@ export interface MirrorsResponse {
   linux_mirror: string
   linux_package_manager: string
   linux_distribution: string
+  linux_abi?: string
   linux_mirror_supported: boolean
   linux_mirror_label: string
   linux_mirror_message: string

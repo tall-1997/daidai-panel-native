@@ -33,6 +33,7 @@ on:
       - 'app/scripts/test_verify_android_linux_runtime.py'
       - 'app/scripts/test_prepare_android_ubuntu_rootfs.py'
       - 'app/scripts/test_prepare_android_alpine_rootfs.py'
+      - 'app/scripts/test_node_runtime_typescript.py'
       - 'app/scripts/rootfs-trusted-sources.json'
       - 'panel/server/**'
       - 'panel/web/**'
@@ -139,7 +140,7 @@ jobs:
             --expected-page-size "${DEVICE_EXPECTED_PAGE_SIZE}" \
             --expected-abi "${DEVICE_EXPECTED_ABI}"
       - name: Test smoke driver
-        run: python3 -m unittest scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
+        run: python3 -m unittest scripts/test_android_runtime_smoke.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py app/scripts/test_node_runtime_typescript.py
       - uses: actions/upload-artifact@v4
         with:
           name: android-runtime-smoke-apks

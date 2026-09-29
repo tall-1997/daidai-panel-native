@@ -205,8 +205,9 @@ class AndroidLinuxRuntimeTest {
         assertEquals(
             mapOf(
                 "PIP_INDEX_URL" to mirrors.pipMirror,
-                "NPM_CONFIG_REGISTRY" to mirrors.npmMirror,
-                "npm_config_registry" to mirrors.npmMirror,
+                "PIP_TRUSTED_HOST" to "pypi.org",
+                "NPM_CONFIG_REGISTRY" to "https://registry.npmjs.org/",
+                "npm_config_registry" to "https://registry.npmjs.org/",
                 "DAIDAI_LINUX_MIRROR" to mirrors.linuxMirror,
             ),
             AndroidLinuxRuntime.mirrorEnvironment(mirrors),
@@ -216,12 +217,16 @@ class AndroidLinuxRuntimeTest {
     @Test
     fun `fallback installers receive configured mirrors as structured arguments`() {
         assertEquals(
-            listOf("install", "--no-input", "--no-cache-dir", "-i", "https://pypi.org/simple", "--target", "/deps/python", "--", "requests"),
+            listOf("install", "--no-input", "--no-cache-dir", "--timeout", "60", "--retries", "5", "-i", "https://pypi.org/simple", "--trusted-host", "pypi.org", "--target", "/deps/python", "--", "requests"),
             AndroidLinuxRuntime.pipInstallArguments("https://pypi.org/simple", "/deps/python", "requests"),
         )
         assertEquals(
             listOf("install", "--no-audit", "--no-fund", "--update-notifier=false", "--registry", "https://registry.npmjs.org", "--cache", "/deps/cache", "--prefix", "/deps/node", "--", "lodash"),
             AndroidLinuxRuntime.npmInstallArguments("https://registry.npmjs.org", "/deps/node", "/deps/cache", "lodash"),
+        )
+        assertEquals(
+            listOf("--registry", "https://registry.npmmirror.com/", "--fetch-retries", "5", "--fetch-retry-mintimeout", "10000", "--fetch-timeout", "60000"),
+            AndroidLinuxRuntime.npmMirrorArguments("https://registry.npmmirror.com"),
         )
     }
 
@@ -268,6 +273,10 @@ class AndroidLinuxRuntimeTest {
         val sources = root.resolve("etc/apt/sources.list").readText()
         assertTrue(sources.contains("deb http://mirrors.aliyun.com/ubuntu/ noble main restricted universe multiverse"))
         assertFalse(sources.contains("https://mirrors.aliyun.com/ubuntu/"))
+        assertTrue(root.resolve("etc/pip.conf").readText().contains("index-url = http://pypi.org/simple"))
+        assertTrue(root.resolve("root/.config/pip/pip.conf").readText().contains("trusted-host = pypi.org"))
+        assertTrue(root.resolve("usr/etc/npmrc").readText().contains("registry=http://registry.npmjs.org"))
+        assertTrue(root.resolve("root/.npmrc").readText().contains("registry=http://registry.npmjs.org"))
 
         root.resolve("etc/ssl/certs/ca-certificates.crt").apply { parentFile.mkdirs(); writeText("") }
         AndroidLinuxRuntime.configureRootfsMirrors(root, mirrors)
@@ -286,6 +295,47 @@ class AndroidLinuxRuntimeTest {
         assertEquals("apk", AndroidLinuxRuntime.distributionPackageManager("alpine"))
         assertEquals("apt", AndroidLinuxRuntime.distributionPackageManager("ubuntu"))
         assertEquals(AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR, AndroidLinuxRuntime.defaultLinuxMirror("alpine", "x86_64"))
+    }
+
+    @Test
+    fun `unset or mismatched linux mirrors resolve to a china source for the distribution`() {
+        assertEquals(
+            AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.coerceLinuxMirror("alpine", null, null, "x86_64"),
+        )
+        assertEquals(
+            AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.coerceLinuxMirror("alpine", AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR, null, "x86_64"),
+        )
+        assertEquals(
+            AndroidLinuxRuntime.UBUNTU_PORTS_APT_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.coerceLinuxMirror("ubuntu", AndroidLinuxRuntime.UBUNTU_APT_DEFAULT_MIRROR, null, "arm64-v8a"),
+        )
+        assertEquals(
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu",
+            AndroidLinuxRuntime.coerceLinuxMirror("ubuntu", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu", null, "x86_64"),
+        )
+        assertEquals(
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports",
+            AndroidLinuxRuntime.coerceLinuxMirror("ubuntu", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu", null, "arm64-v8a"),
+        )
+        assertEquals(
+            AndroidLinuxRuntime.ALPINE_APK_DEFAULT_MIRROR,
+            AndroidLinuxRuntime.coerceLinuxMirror("alpine", "https://dl-cdn.alpinelinux.org/alpine", null, "x86_64"),
+        )
+    }
+
+    @Test
+    fun `guest dns uses china resolvers when system dns is missing and keeps one as backup`() {
+        assertEquals(AndroidLinuxRuntime.CHINA_DNS_SERVERS, AndroidLinuxRuntime.guestDnsServers(emptyList()))
+        assertEquals(
+            listOf("192.168.1.1", "223.5.5.5"),
+            AndroidLinuxRuntime.guestDnsServers(listOf("192.168.1.1")),
+        )
+        assertEquals(
+            listOf("223.5.5.5", "119.29.29.29", "114.114.114.114"),
+            AndroidLinuxRuntime.guestDnsServers(listOf("223.5.5.5", "119.29.29.29", "8.8.8.8")),
+        )
     }
 
     @Test

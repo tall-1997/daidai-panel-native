@@ -264,7 +264,7 @@ jobs:
           go test ./scripts/verify-runtime-contract.go ./scripts/verify-runtime-contract_test.go
           go test ./scripts/verify-runtime-elf.go ./scripts/verify-runtime-elf_test.go
           go test ./scripts/generate-release-evidence.go ./scripts/generate-release-evidence_test.go
-          python3 -m unittest scripts/test_version.py scripts/test_android_abi_matrix.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_android_update_manifest.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py
+          python3 -m unittest scripts/test_version.py scripts/test_android_abi_matrix.py scripts/test_android_release_workflow.py scripts/test_android_runtime_smoke.py scripts/test_verify_android_update_manifest.py scripts/test_verify_release_runtime_evidence.py app/scripts/test_sync_android_native_manifest.py app/scripts/test_verify_android_apk_abi.py app/scripts/test_verify_android_linux_runtime.py app/scripts/test_prepare_android_ubuntu_rootfs.py app/scripts/test_prepare_android_alpine_rootfs.py app/scripts/test_node_runtime_typescript.py
 
       - name: Verify generated route contract
         run: go run ./scripts/generate-route-contract.go -check

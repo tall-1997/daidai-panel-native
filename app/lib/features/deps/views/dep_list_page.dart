@@ -89,6 +89,7 @@ class DepMirrorConfig {
   final String linuxMirror;
   final String linuxPackageManager;
   final String linuxDistribution;
+  final String linuxAbi;
   final bool linuxMirrorSupported;
   final String linuxMirrorLabel;
   final String linuxMirrorMessage;
@@ -99,6 +100,7 @@ class DepMirrorConfig {
     this.linuxMirror = '',
     this.linuxPackageManager = '',
     this.linuxDistribution = '',
+    this.linuxAbi = '',
     this.linuxMirrorSupported = false,
     this.linuxMirrorLabel = 'Linux',
     this.linuxMirrorMessage = '',
@@ -111,6 +113,7 @@ class DepMirrorConfig {
       linuxMirror: json['linux_mirror']?.toString() ?? '',
       linuxPackageManager: json['linux_package_manager']?.toString() ?? '',
       linuxDistribution: json['linux_distribution']?.toString() ?? '',
+      linuxAbi: json['linux_abi']?.toString() ?? '',
       linuxMirrorSupported: json['linux_mirror_supported'] == true,
       linuxMirrorLabel: json['linux_mirror_label']?.toString() ?? 'Linux',
       linuxMirrorMessage: json['linux_mirror_message']?.toString() ?? '',
@@ -124,6 +127,7 @@ class DepMirrorConfig {
     String? linuxPackageManager,
     bool? linuxMirrorSupported,
     String? linuxDistribution,
+    String? linuxAbi,
     String? linuxMirrorLabel,
     String? linuxMirrorMessage,
   }) {
@@ -134,6 +138,7 @@ class DepMirrorConfig {
       linuxPackageManager: linuxPackageManager ?? this.linuxPackageManager,
       linuxMirrorSupported: linuxMirrorSupported ?? this.linuxMirrorSupported,
       linuxDistribution: linuxDistribution ?? this.linuxDistribution,
+      linuxAbi: linuxAbi ?? this.linuxAbi,
       linuxMirrorLabel: linuxMirrorLabel ?? this.linuxMirrorLabel,
       linuxMirrorMessage: linuxMirrorMessage ?? this.linuxMirrorMessage,
     );
@@ -997,6 +1002,15 @@ class _DepListPageState extends ConsumerState<DepListPage> {
 
   List<MapEntry<String, String>> _linuxMirrorOptions(DepMirrorConfig config) {
     if (config.linuxPackageManager == 'apt') {
+      final usePorts = config.linuxAbi == 'arm64-v8a' ||
+          config.linuxMirror.contains('/ubuntu-ports');
+      if (usePorts) {
+        return const [
+          MapEntry('阿里云 Ubuntu Ports (默认)', 'https://mirrors.aliyun.com/ubuntu-ports'),
+          MapEntry('清华大学 Ubuntu Ports', 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports'),
+          MapEntry('腾讯云 Ubuntu Ports', 'https://mirrors.cloud.tencent.com/ubuntu-ports'),
+        ];
+      }
       return const [
         MapEntry('阿里云 Ubuntu (默认)', 'https://mirrors.aliyun.com/ubuntu'),
         MapEntry('清华大学 Ubuntu', 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu'),
@@ -1008,7 +1022,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       return const [
         MapEntry('阿里云 Alpine (默认)', 'https://mirrors.aliyun.com/alpine'),
         MapEntry('清华大学 Alpine', 'https://mirrors.tuna.tsinghua.edu.cn/alpine'),
-        MapEntry('Alpine 官方', 'https://dl-cdn.alpinelinux.org/alpine'),
+        MapEntry('华为云 Alpine', 'https://repo.huaweicloud.com/alpine'),
       ];
     }
     return const [];

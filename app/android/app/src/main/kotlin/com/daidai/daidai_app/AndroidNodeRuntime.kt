@@ -3,11 +3,11 @@ package com.daidai.daidai_app
 import android.content.Context
 import java.io.File
 import java.util.zip.ZipInputStream
-import org.json.JSONObject
 
 object AndroidNodeRuntime {
     private const val VERSION = "18.20.4"
     private const val ASSET_ARCHIVE = "node-runtime/18.20.4/node-runtime.zip"
+    const val TYPESCRIPT_VERSION = "5.6.3"
 
     data class NodeRuntimePaths(
         val executable: String,
@@ -17,6 +17,44 @@ object AndroidNodeRuntime {
 
     private var cached: NodeRuntimePaths? = null
     @Volatile private var lastFailure: String = ""
+    @Volatile private var moduleExtractAttempted = false
+
+    fun guestNodeModulePath(includeWorkspace: Boolean = false): String {
+        val paths = mutableListOf(
+            "/host-files/runtimes/node-$VERSION/usr/lib/node_modules",
+            "/host-files/deps/nodejs/node_modules",
+            "/usr/local/lib/node_modules",
+            "/usr/lib/node_modules",
+        )
+        if (includeWorkspace) paths += "/workspace"
+        return paths.joinToString(":")
+    }
+
+    fun bundledModulesDir(context: Context): File = moduleHome(context)
+
+    fun typescriptInstalled(context: Context): Boolean =
+        typescriptReady(moduleHome(context)) ||
+            File(context.filesDir, "deps/nodejs/node_modules/typescript/package.json").isFile
+
+    fun ensureModules(context: Context): File? {
+        val modules = moduleHome(context)
+        if (typescriptReady(modules)) return modules
+        synchronized(this) {
+            if (typescriptReady(modules)) return modules
+            if (moduleExtractAttempted) return null
+            moduleExtractAttempted = true
+            val home = modules.parentFile?.parentFile ?: return null
+            return try {
+                home.deleteRecursively()
+                home.mkdirs()
+                extractZipAsset(context, home)
+                modules.takeIf { typescriptReady(it) }
+            } catch (error: Exception) {
+                lastFailure = error.message.orEmpty()
+                null
+            }
+        }
+    }
 
     fun ensureReady(context: Context): NodeRuntimePaths? {
         cached?.let { return it }
@@ -37,18 +75,9 @@ object AndroidNodeRuntime {
         val launcherExe = File(nativeDir, "libnode_exec.so")
         if (!launcherExe.isFile) return null
 
-        val home = File(context.filesDir, "runtimes/node-$VERSION/usr")
+        val modules = ensureModules(context) ?: return null
+        val home = modules.parentFile?.parentFile ?: return null
         val marker = File(home, ".daidai-node-ready")
-
-        if (!marker.exists() || !File(home, "lib/node_modules/npm/bin/npm-cli.js").isFile) {
-            try {
-                home.deleteRecursively()
-                home.mkdirs()
-                extractZipAsset(context, home)
-            } catch (e: Exception) { throw IllegalStateException("NODE_RUNTIME_EXTRACT_FAILED", e) }
-        }
-
-        val modules = File(home, "lib/node_modules")
         if (!File(modules, "npm/bin/npm-cli.js").isFile) return null
 
         val compatLibDir = File(home, "compat-lib")
@@ -58,7 +87,7 @@ object AndroidNodeRuntime {
             output = File(home, "bin/node-wrapper.sh"),
             env = mapOf(
                 "LD_LIBRARY_PATH" to "$compatLibDir:$nativeDir:${home}/lib:\$LD_LIBRARY_PATH",
-                "NODE_PATH" to "${modules}:\${NODE_PATH:-}",
+                "NODE_PATH" to "${modules.absolutePath}:\${NODE_PATH:-}",
                 "HOME" to home.absolutePath,
                 "DAIDAI_RUNTIME_LANGUAGE" to "node",
                 "NPM_CONFIG_CACHE" to DependencyStorage.npmCache(context.filesDir).absolutePath,
@@ -76,6 +105,13 @@ object AndroidNodeRuntime {
     }
 
     @Volatile var wrapperPath: String = ""
+
+    private fun moduleHome(context: Context): File =
+        File(context.filesDir, "runtimes/node-$VERSION/usr/lib/node_modules")
+
+    private fun typescriptReady(modules: File): Boolean =
+        File(modules, "typescript/package.json").isFile &&
+            File(modules, "typescript/lib/typescript.js").isFile
 
     private val VERSIONED_LIBS = mapOf(
         "libicudata_v78.so" to listOf("libicudata.so.78"),

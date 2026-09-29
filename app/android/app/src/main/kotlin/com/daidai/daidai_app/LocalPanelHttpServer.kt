@@ -413,7 +413,7 @@ class LocalPanelHttpServer(
                 .put("pip", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/pip3"))
                 .put("node", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/node"))
                 .put("npm", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/npm"))
-                .put("typescript", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc") || File(context.filesDir, "deps/nodejs/node_modules/typescript").isDirectory)
+                .put("typescript", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/tsc") || AndroidNodeRuntime.typescriptInstalled(context))
                 .put("shell", AndroidLinuxRuntime.hasPackagedRootfsRunner(context))
                 .put("git", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/git"))
                 .put("ssh", AndroidLinuxRuntime.guestRuntimeAvailable(context, "/usr/bin/ssh"))
@@ -537,8 +537,16 @@ class LocalPanelHttpServer(
     private fun nodeSmokeCommand(): List<String>? =
         AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/node", "-e", "console.log('NODE_OK')"))
 
-    private fun typeScriptSmokeCommand(): List<String>? =
-        AndroidLinuxRuntime.guestCommand(context, context.filesDir, listOf("/usr/bin/env", "NODE_PATH=/usr/lib/node_modules", "/usr/bin/node", "-e", "const ts=require('typescript');console.log('TS_OK')"))
+    private fun typeScriptSmokeCommand(): List<String>? {
+        // 访客 rootfs 不包含 typescript，模块在 node-runtime.zip 解压后的 /host-files 路径中。
+        AndroidNodeRuntime.ensureModules(context)
+        val probe = "const ts=require('typescript');if(typeof ts.transpileModule!=='function'||!String(ts.version).startsWith('5.')){throw new Error('typescript '+ts.version+' cannot provide CJS transpileModule; packaged runtime is ${AndroidNodeRuntime.TYPESCRIPT_VERSION}')};console.log('TS_OK')"
+        return AndroidLinuxRuntime.guestCommand(
+            context,
+            context.filesDir,
+            listOf("/usr/bin/env", "NODE_PATH=${AndroidNodeRuntime.guestNodeModulePath()}", "/usr/bin/node", "-e", probe),
+        )
+    }
 
     private fun runtimeSmokeItem(name: String, command: List<String>?, expected: String): JSONObject {
         if (command == null) return JSONObject().put("name", name).put("status", "warning").put("message", "Runtime is not packaged or not executable")
