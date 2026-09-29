@@ -3,7 +3,7 @@
 package handler
 
 import (
-	"os/exec"
+	"os"
 	"syscall"
 	"time"
 )
