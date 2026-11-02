@@ -201,10 +201,16 @@ func TestSummarizeTaskSuccessOutputDropsBannersAndMeta(t *testing.T) {
 		"[执行前置脚本]",
 		"[第 1 次重试，等待 5 秒]",
 		"[检测到缺失依赖: requests，正在自动安装...]",
+		// 自动装 npm 包前的兼容映射说明，自 #154 起单独成行。它走不收集输出的 onOutput、今天进不了成功摘录，
+		// 这里守的是「面板自己打的行都要登记进 panelMetaLinePrefixes」这条契约。取自真实生成函数，免得字面量与实现漂移。
+		NodeInstallCompatibilityNotice("axios"),
 		"[安装成功: requests]",
 		"[依赖已安装 (1/5)，自动重试执行]",
 		"签到: 成功",
 		"今日积分: +80",
+		// #159 修复 A 清理残留后台进程时打的那一行。成功的任务最容易出现它，漏登记就会挤进成功通知的摘录；
+		// 取自真实常量（去掉首尾换行），免得字面量与实现漂移。
+		strings.Trim(leftoverProcessCleanupNotice, "\n"),
 		"=== 执行结束 [2026-04-18 00:00:10] 耗时 10.00 秒 退出码 0 ===",
 	}, "\n")
 
@@ -212,7 +218,7 @@ func TestSummarizeTaskSuccessOutputDropsBannersAndMeta(t *testing.T) {
 	if strings.Contains(summary, "=== 开始执行") || strings.Contains(summary, "=== 执行结束") {
 		t.Fatalf("expected banner lines removed, got %q", summary)
 	}
-	for _, meta := range []string{"[执行前置脚本]", "[第 1 次重试", "[检测到缺失依赖", "[安装成功", "[依赖已安装"} {
+	for _, meta := range []string{"[执行前置脚本]", "[第 1 次重试", "[检测到缺失依赖", "[Node.js 依赖]", "[安装成功", "[依赖已安装", "[已结束残留的后台进程："} {
 		if strings.Contains(summary, meta) {
 			t.Fatalf("expected panel meta %q removed, got %q", meta, summary)
 		}
@@ -306,7 +312,7 @@ func TestSummarizeTaskFailureOutputKeepsRecentLines(t *testing.T) {
 }
 
 func TestSummarizeTaskFailureOutputCondensesPythonTraceback(t *testing.T) {
-	output := strings.Join([]string{
+	traceback := []string{
 		"=== 开始执行 [2026-03-23 00:00:00] ===",
 		"Traceback (most recent call last):",
 		`  File "/usr/lib/python3.11/asyncio/runners.py", line 190, in run`,
@@ -316,20 +322,65 @@ func TestSummarizeTaskFailureOutputCondensesPythonTraceback(t *testing.T) {
 		"    sign, accId = await getSign(ticket, session)",
 		"    ^^^^^^^^^^^",
 		"TypeError: cannot unpack non-iterable NoneType object",
-	}, "\n")
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+	}{
+		{name: "只有 traceback", lines: traceback},
+		// #159 修复 A 清理了残留后台进程时，那行提示经 onOutput 进了输出尾部，成了失败输出的最后一行：
+		// 摘要要先丢掉它，Python 摘要才认得出最后一行的异常。取自真实常量（去掉首尾换行），免得字面量与实现漂移。
+		{name: "末尾跟着清理残留进程的提示行", lines: append(append([]string{}, traceback...), strings.Trim(leftoverProcessCleanupNotice, "\n"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := summarizeTaskFailureOutput(strings.Join(tc.lines, "\n"))
+			if strings.Contains(summary, "asyncio/runners.py") {
+				t.Fatalf("expected runtime traceback frames to be removed, got %q", summary)
+			}
+			if strings.Contains(summary, "^^^^^^^^") {
+				t.Fatalf("expected caret indicator lines to be removed, got %q", summary)
+			}
+			if !strings.Contains(summary, "TypeError: cannot unpack non-iterable NoneType object") {
+				t.Fatalf("expected summary to keep final exception, got %q", summary)
+			}
+			if !strings.Contains(summary, "电信营业厅/电信.py:1118") {
+				t.Fatalf("expected summary to keep relevant script frame, got %q", summary)
+			}
+			if !strings.Contains(summary, "定位: 电信营业厅/电信.py:1118 (main)") {
+				t.Fatalf("应走 Python 摘要（异常行 + 「定位: 文件:行 (函数)」），got %q", summary)
+			}
+			if strings.Contains(summary, "[已结束残留的后台进程：") {
+				t.Fatalf("清理残留进程的提示行不该进失败摘要，got %q", summary)
+			}
+		})
+	}
+}
 
-	summary := summarizeTaskFailureOutput(output)
-	if strings.Contains(summary, "asyncio/runners.py") {
-		t.Fatalf("expected runtime traceback frames to be removed, got %q", summary)
-	}
-	if strings.Contains(summary, "^^^^^^^^") {
-		t.Fatalf("expected caret indicator lines to be removed, got %q", summary)
-	}
-	if !strings.Contains(summary, "TypeError: cannot unpack non-iterable NoneType object") {
-		t.Fatalf("expected summary to keep final exception, got %q", summary)
-	}
-	if !strings.Contains(summary, "电信营业厅/电信.py:1118") {
-		t.Fatalf("expected summary to keep relevant script frame, got %q", summary)
+// 通用摘要的「上下文」是从输出末尾往回找到的第一行非错误输出。#159 修复 A 清理残留后台进程时那行提示
+// 经 onOutput 进了输出尾部、成了失败输出的最后一行，不先丢掉它的话「上下文」就成了这行提示。
+// 只丢这一种：主进程被信号杀掉（例如 OOM）、组里还剩后台进程时，「[脚本进程被信号终止：…]」后面紧跟的就是这行提示，
+// 而被信号终止那行对诊断有用，必须照旧能当「上下文」——失败摘要不能整体套 isPanelMetaLine。
+func TestSummarizeTaskFailureOutputGenericContextSkipsLeftoverNotice(t *testing.T) {
+	// 两行都取自真实写法：提示行用真实常量（去掉首尾换行），信号行照 runSingleCommand 的格式
+	notice := strings.Trim(leftoverProcessCleanupNotice, "\n")
+	signalLine := "[脚本进程被信号终止：killed(9)（退出码 -1）。常见原因：内存超限被系统 OOM Killer 杀掉、面板或用户手动停止、外部 kill]"
+	for _, tc := range []struct {
+		name        string
+		lines       []string
+		wantContext string
+	}{
+		{name: "上下文取脚本自己的输出", lines: []string{"请求接口失败", "token expired", notice}, wantContext: "token expired"},
+		{name: "被信号终止那行照旧能当上下文", lines: []string{"请求接口失败", signalLine, notice}, wantContext: signalLine},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := summarizeTaskFailureOutput(strings.Join(tc.lines, "\n"))
+			if strings.Contains(summary, "[已结束残留的后台进程：") {
+				t.Fatalf("清理残留进程的提示行不该进失败摘要，got %q", summary)
+			}
+			if want := "请求接口失败\n上下文: " + tc.wantContext; summary != want {
+				t.Fatalf("通用摘要应为「错误行 + 上下文」，want %q, got %q", want, summary)
+			}
+		})
 	}
 }
 

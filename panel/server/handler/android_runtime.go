@@ -77,22 +77,22 @@ var androidRuntimePresets = []androidRuntimePreset{
 	},
 	{
 		Name:            "node",
-		Label:           "Node.js v20 LTS (nodejs.org)",
+		Label:           "Node.js v24 LTS (nodejs.org)",
 		Arch:            "arm64",
-		URL:             "https://nodejs.org/dist/v20.17.0/node-v20.17.0-linux-arm64.tar.gz",
+		URL:             "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-arm64.tar.gz",
 		StripComponents: 1,
 		CheckBin:        "node/bin/node",
-		SizeMB:          32,
+		SizeMB:          55,
 		Note:            "Android bionic libc 下可能需要 Termux 提供的动态库",
 	},
 	{
 		Name:            "node",
-		Label:           "Node.js v20 LTS (nodejs.org)",
+		Label:           "Node.js v24 LTS (nodejs.org)",
 		Arch:            "amd64",
-		URL:             "https://nodejs.org/dist/v20.17.0/node-v20.17.0-linux-x64.tar.gz",
+		URL:             "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
 		StripComponents: 1,
 		CheckBin:        "node/bin/node",
-		SizeMB:          32,
+		SizeMB:          55,
 	},
 }
 
@@ -160,15 +160,22 @@ func termuxDetected() bool {
 	return false
 }
 
-// probeRuntime 在 androidBinDir + Termux PATH 下查找指定命令。
-func probeRuntime(cmdName string) androidRuntimeItem {
-	item := androidRuntimeItem{Name: cmdName}
-	androidBinDir := resolveAndroidRuntimeBinDir()
-
+// androidRuntimeCandidates 按优先级列出 probeRuntime 要检查的可执行文件路径。
+//
+// 一键安装装到 androidBinDir 的排最前（它在 service.sh 的 PATH 里也排最前，装了就是它在生效），
+// 其次是 Termux，最后是容器自带的解释器。容器自带的分在两处：
+//   - Magisk Debian 版的 Node 是 nodejs.org 官方包，customize.sh 解压到 /usr/local，落在 /usr/local/bin/node；
+//   - Alpine 版 apk 装的 nodejs、python 在 /usr/bin。
+//
+// /usr/local/bin 必须排在 /usr/bin 之前，与 service.sh 的 PATH 顺序一致：两处都有时，卡片显示的才是实际运行的那个。
+// 漏掉 /usr/local/bin 的话，Debian 版容器里明明有 Node，卡片却显示「未安装」并引导用户一键安装，
+// 装进 androidBinDir 的那份会从此盖住容器自带的 Node。
+func androidRuntimeCandidates(androidBinDir, cmdName string) []string {
 	candidates := []string{
 		filepath.Join(androidBinDir, cmdName, "bin", cmdName),
 		filepath.Join(androidBinDir, cmdName),
 		filepath.Join("/data/data/com.termux/files/usr/bin", cmdName),
+		filepath.Join("/usr/local/bin", cmdName),
 		filepath.Join("/usr/bin", cmdName),
 	}
 	if cmdName == "python" {
@@ -177,8 +184,14 @@ func probeRuntime(cmdName string) androidRuntimeItem {
 			filepath.Join(androidBinDir, "python3"),
 		}, candidates...)
 	}
+	return candidates
+}
 
-	for _, c := range candidates {
+// probeRuntime 依次检查 androidRuntimeCandidates 给出的路径，返回第一个存在且可执行的命令。
+func probeRuntime(cmdName string) androidRuntimeItem {
+	item := androidRuntimeItem{Name: cmdName}
+
+	for _, c := range androidRuntimeCandidates(resolveAndroidRuntimeBinDir(), cmdName) {
 		info, err := os.Stat(c)
 		if err != nil || info.IsDir() {
 			continue

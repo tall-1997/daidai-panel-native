@@ -148,7 +148,8 @@ form {
     .qr-code-img {
       width: 200px;
       height: 200px;
-      border-radius: 8px;
+      // 二维码是带描边的图片容器 → surface 档
+      border-radius: var(--dd-radius-surface);
       border: 1px solid var(--el-border-color-light);
     }
   }
@@ -156,7 +157,8 @@ form {
   .secret-display {
     padding: 12px;
     background: var(--el-fill-color-light);
-    border-radius: 4px;
+    // 密钥展示块是弹窗内的独立区块（不贴边）→ surface 档
+    border-radius: var(--dd-radius-surface);
     text-align: center;
 
     code {

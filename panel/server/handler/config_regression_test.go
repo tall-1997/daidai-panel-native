@@ -245,6 +245,88 @@ func TestConfigListReportsCompleteBackupScheduleSelectionDefault(t *testing.T) {
 	}
 }
 
+// TestConfigListExposesPanelShapeStyle 钉死界面圆角开关的对外契约。
+//
+// 这一项是纯客户端消费的：网页端拿它决定 --dd-radius-* 三档令牌取 0 还是取非零像素。
+// 键名、默认值、两个枚举值任何一个改了，Web 都会静默回落到「按未知值处理」——
+// 表现为用户切了没反应，而不是报错，所以必须有一条具名断言拦住。
+func TestConfigListExposesPanelShapeStyle(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	admin := testutil.MustCreateUser(t, "shape-style-admin", "admin")
+	token := testutil.MustCreateAccessToken(t, admin.Username, admin.Role)
+	// 清掉 InitDefaultConfigs 建出来的记录，验证「库里没这行」时也能回落到注册表默认值。
+	database.DB.Where("`key` = ?", "panel_shape_style").Delete(&model.SystemConfig{})
+
+	engine := newProtectedRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	data, ok := payload["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data map, got %T", payload["data"])
+	}
+
+	item, ok := data["panel_shape_style"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected panel_shape_style entry, got %T", data["panel_shape_style"])
+	}
+	if got, _ := item["registered"].(bool); !got {
+		t.Fatalf("expected panel_shape_style to be marked registered")
+	}
+	if got, _ := item["value_type"].(string); got != string(model.SystemConfigTypeEnum) {
+		t.Fatalf("expected panel_shape_style value_type enum, got %q", got)
+	}
+	if got, _ := item["group"].(string); got != "branding" {
+		t.Fatalf("expected panel_shape_style group branding, got %q", got)
+	}
+	if got, _ := item["default_value"].(string); got != "square" {
+		t.Fatalf("expected panel_shape_style default_value square, got %q", got)
+	}
+	// 库里没记录时 value 必须回落成默认值，否则 Web 首帧会拿到空串。
+	if got, _ := item["value"].(string); got != "square" {
+		t.Fatalf("expected panel_shape_style fallback value square, got %q", got)
+	}
+
+	// 选项必须恰好是 square / rounded 两项：多一项 Web 渲染得出来但没有对应刻度，
+	// 少一项则用户切不回去。
+	rawOptions, ok := item["options"].([]interface{})
+	if !ok || len(rawOptions) != 2 {
+		t.Fatalf("expected panel_shape_style to carry 2 options, got %#v", item["options"])
+	}
+	wantOptions := []struct{ value, label string }{
+		{"square", "直角"},
+		{"rounded", "圆角"},
+	}
+	for i, want := range wantOptions {
+		option, ok := rawOptions[i].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected panel_shape_style option %d to be an object, got %#v", i, rawOptions[i])
+		}
+		if got, _ := option["value"].(string); got != want.value {
+			t.Fatalf("expected panel_shape_style option %d value %q, got %#v", i, want.value, option["value"])
+		}
+		if got, _ := option["label"].(string); got != want.label {
+			t.Fatalf("expected panel_shape_style option %d label %q, got %#v", i, want.label, option["label"])
+		}
+	}
+
+	// 非法值必须被注册表 normalize 拒掉，避免脏值流到 Web 变成「不方不圆」。
+	if _, err := model.NormalizeSystemConfigValue("panel_shape_style", "pill"); err == nil {
+		t.Fatalf("expected panel_shape_style to reject unknown value")
+	}
+	if got, err := model.NormalizeSystemConfigValue("panel_shape_style", " ROUNDED "); err != nil || got != "rounded" {
+		t.Fatalf("expected panel_shape_style to normalize \" ROUNDED \" to rounded, got %q err=%v", got, err)
+	}
+}
+
 func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
 	testutil.SetupTestEnv(t)
 

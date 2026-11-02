@@ -161,7 +161,20 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	database.DB.Delete(&user)
+	// 删号要撤销他的全部登录会话：登录令牌每请求只查黑名单、不查用户表，
+	// 不撤销的话，被删的人手里的令牌还能一直调业务接口到自然过期。
+	// 🔴 顺序必须是先删用户行、再撤销，与改密、改名、改角色 / 禁用、重置密码、ddp 两条命令同一个口径：
+	// 登录落会话后会按 id 重读一次用户（handler/auth.go 的 Login），读不到就撤掉刚建的会话、拒绝登录；
+	// 重读若早于这里删行，它的会话行已经在库里，下面的撤销一定遍历得到。
+	// 反过来先撤销后删行，一次登录可以落在撤销的 Find 之后、删行之前：重读时用户还在，token 照发；
+	// 用户行随后被删，这行会话成了孤儿，再没有哪条改用户状态的路径会撤它，
+	// 被删的管理员能拿着这枚 access 调管理员接口到自然过期。
+	// 删不掉就回 500、不撤销：用户还在、状态没变，按同一口径不需要撤销。
+	if err := database.DB.Delete(&user).Error; err != nil {
+		response.InternalError(c, "删除用户失败")
+		return
+	}
+	service.RevokeAllUserSessions(user.ID)
 	response.Success(c, gin.H{"message": "删除成功"})
 }
 

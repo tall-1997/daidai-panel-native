@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Monitor, Refresh } from '@element-plus/icons-vue'
 import { useResponsive } from '@/composables/useResponsive'
+import { formatRelativeTime } from '@/utils/datetime'
 import type { SettingsConfigForm } from '../types'
 
 const { isMobile } = useResponsive()
@@ -69,7 +70,7 @@ defineProps<{
           <div class="dd-mobile-card__title-wrap">
             <span class="dd-mobile-card__title">{{ row.ip }}</span>
             <span class="dd-mobile-card__subtitle">
-              {{ row.client_name || row.client_type_label || '网页端' }} · {{ new Date(row.last_active || row.created_at).toLocaleString() }}
+              {{ row.client_name || row.client_type_label || '网页端' }} · {{ formatRelativeTime(row.last_active || row.created_at) }}
             </span>
           </div>
         </div>
@@ -99,7 +100,7 @@ defineProps<{
       </el-table-column>
       <el-table-column prop="user_agent" label="用户代理" show-overflow-tooltip />
       <el-table-column label="最后活动" width="170">
-        <template #default="{ row }">{{ new Date(row.last_active || row.created_at).toLocaleString() }}</template>
+        <template #default="{ row }">{{ formatRelativeTime(row.last_active || row.created_at) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
@@ -132,7 +133,8 @@ defineProps<{
 
 .card-header-buttons {
   padding: 2px;
-  border-radius: 12px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
   display: flex;
   gap: 8px;

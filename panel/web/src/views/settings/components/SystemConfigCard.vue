@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Document, Setting, Upload } from '@element-plus/icons-vue'
 import type { SettingsConfigForm } from '../types'
+import { resolveConfigOptions, type ParsedSystemConfigItem } from '../systemConfigSchema'
 
 const timezoneOptions = [
   { value: 'Asia/Shanghai', label: '中国时间 Asia/Shanghai' },
@@ -12,15 +14,21 @@ const timezoneOptions = [
   { value: 'Europe/London', label: '伦敦时间 Europe/London' }
 ]
 
-defineProps<{
+const props = defineProps<{
   configsLoading: boolean
   configsSaving: boolean
   form: SettingsConfigForm
+  /** 全部注册项的服务端 schema，按 key 索引（useSettingsConfig 的 configSchema） */
+  configSchema: Record<string, ParsedSystemConfigItem>
   onSave: () => void
   onIconUpload: (file: File) => boolean
   onLogBackgroundUpload: (file: File) => boolean
   onAppearancePreview: () => void
 }>()
+
+// 界面圆角 v3.2.9 从「其它配置项」兜底区挪进本卡：值走 form，
+// 标题、说明、下拉选项仍取服务端 schema，不在 Web 另抄一份；schema 还没加载到时整项不渲染（卡片此时在 loading）
+const shapeStyleItem = computed(() => props.configSchema.panel_shape_style)
 </script>
 
 <template>
@@ -77,13 +85,30 @@ defineProps<{
         </div>
         <span class="form-hint">上传 SVG 格式图标自定义面板图标，留空使用默认图标</span>
       </div>
+      <!--
+        不做选中即预览：预览会顺手把圆角写进本机缓存，没保存也会带到下次首屏。
+        取色等其它预览、切主题也不会带上这里没保存的选择（见 useSettingsConfig 的 appearanceSnapshot）；
+        保存成功后由 useSettingsConfig 的 saveConfigKeys 重跑 applyPanelAppearance，当场生效
+      -->
+      <div v-if="shapeStyleItem" class="form-field">
+        <label>{{ shapeStyleItem.label }}</label>
+        <el-select v-model="form.panel_shape_style" class="shape-style-select">
+          <el-option
+            v-for="option in resolveConfigOptions(shapeStyleItem, form.panel_shape_style)"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <span v-if="shapeStyleItem.description" class="form-hint">{{ shapeStyleItem.description }}</span>
+      </div>
       <div class="form-field">
         <label>编辑器背景颜色</label>
         <div class="log-bg-controls">
           <el-color-picker v-model="form.editor_background_color" @change="onAppearancePreview" />
-          <el-input v-model="form.editor_background_color" placeholder="留空使用默认编辑器背景" @change="onAppearancePreview" />
+          <el-input v-model="form.editor_background_color" placeholder="留空跟随当前主题" @change="onAppearancePreview" />
         </div>
-        <span class="form-hint">统一应用到脚本只读预览和在线编辑器，留空保持默认深色背景</span>
+        <span class="form-hint">统一应用到脚本只读预览和在线编辑器，留空时浅色模式为白底深字，深色模式为深底浅字</span>
       </div>
       <div class="form-field">
         <label>日志背景颜色</label>
@@ -160,6 +185,11 @@ defineProps<{
 .timezone-select {
   width: 100%;
   max-width: 360px;
+}
+
+// 与兜底区的下拉同宽（ExtraConfigCard 的 .extra-config-select），挪过来看起来不变
+.shape-style-select {
+  width: 100%;
 }
 
 .log-bg-upload {

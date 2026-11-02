@@ -44,7 +44,7 @@ const (
 	// currentMagiskShellVersion 是【本仓库 Magisk/service.sh 当前 export 的】外壳版本号。
 	// 每改一次 Magisk/*.sh 或 rootfs 结构就加一；magisk_assets_test.go 静态断言两者一致。
 	// 它只表示「仓库里的外壳长什么样」，不参与任何放行判断。
-	currentMagiskShellVersion = 3
+	currentMagiskShellVersion = 5
 
 	// requiredMagiskShellVersion 是【在线升级放行的最低外壳版本】。
 	//
@@ -352,7 +352,8 @@ func executeMagiskPanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpd
 	if plan.ServerPID == 0 || plan.ServerPID == plan.CurrentPID {
 		go func() {
 			time.Sleep(1500 * time.Millisecond)
-			os.Exit(0)
+			// 走主程序的完整关停（终止并结算任务、关库）再以 0 退出，不再直接 os.Exit。
+			panelProcessExit(0)
 		}()
 	}
 }

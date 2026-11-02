@@ -46,10 +46,9 @@ defineProps<{
 @use './config-card-shared.scss' as *;
 
 .stats-card {
-  // 圆角/阴影对齐设计令牌（原写死阴影在暗色下不会变深，统一为 --dd-shadow-card）
-  border-radius: var(--dd-card-radius);
+  // 扁平化：无阴影，层次只靠 1px 描边表达；卡片本体属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: var(--dd-shadow-card);
   height: 100%;
 }
 
@@ -62,13 +61,14 @@ defineProps<{
 
 .os-item {
   padding: 18px 10px;
-  border-radius: 12px;
-  transition: background 0.18s, transform 0.18s;
+  // 卡片内的统计数字块（可 hover 的小块，格子间有 10px 间距、不贴边）→ control 档
+  border-radius: var(--dd-radius-control);
+  // 扁平化：hover 不再上浮，只换底色
+  transition: background 0.18s;
   background: var(--el-fill-color-light);
 
   &:hover {
     background: color-mix(in srgb, var(--el-color-primary) 6%, var(--el-fill-color-light));
-    transform: translateY(-1px);
   }
 }
 

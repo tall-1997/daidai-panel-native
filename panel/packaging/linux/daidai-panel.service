@@ -47,7 +47,7 @@ Environment=PYTHONUSERBASE=
 # === 进程管理 ============================================================
 Restart=on-failure
 RestartSec=3s
-# 关闭超时：留足时间让 SSE 长连接、备份任务自然结束
+# 关闭超时：面板 8 秒内自行退出，这里只是余量
 TimeoutStopSec=30s
 
 # 日志：journalctl -u daidai-panel

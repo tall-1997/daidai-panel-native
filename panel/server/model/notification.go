@@ -53,8 +53,12 @@ func NormalizeNotifyPushScope(raw string) (string, bool) {
 // 同一个机制作用在 Enabled bool 上就是个坑（false 被换成 true），差别只在于
 // 字符串的零值方向是对的、bool 的零值方向是反的 —— 这正是选字符串枚举的理由。
 type NotifyChannel struct {
-	ID             uint       `gorm:"primarykey" json:"id"`
-	Name           string     `gorm:"size:128;not null" json:"name"`
+	ID uint `gorm:"primarykey" json:"id"`
+	// 渠道名在语义上唯一：任务绑定、脚本里的 notify 都按名字找渠道，同名两条无法区分。
+	// uniqueIndex 是「连点创建按钮」的最后一道兜底（前端按钮锁挡不住 30s timeout 后的重试）。
+	// 老库里可能已经存在同名渠道，启动时由 database.DeduplicateBeforeUniqueIndex() 先改名再建索引，
+	// 否则 AutoMigrate 建唯一索引失败会直接 log.Fatalf，面板起不来。
+	Name           string     `gorm:"size:128;uniqueIndex;not null" json:"name"`
 	Type           string     `gorm:"size:32;not null" json:"type"`
 	Config         string     `gorm:"type:text;default:'{}'" json:"-"`
 	PushScope      string     `gorm:"size:16;not null;default:'default'" json:"push_scope"`

@@ -1,23 +1,27 @@
 package service
 
 import (
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"daidai-panel/config"
 )
 
-// quarantinedScriptDirNames 记录启动期需要自动隔离的异常脚本目录名。
+// quarantinedScriptDirNames 记录启动期需要自动隔离的异常脚本目录名，也是隔离逻辑唯一认的名单。
 // 这些目录不属于正常脚本文件树，一旦混入会污染脚本管理、备份恢复和统计结果。
+// ⚠️ 只放真正的污染目录：命中即 os.Rename 物理搬走。node_modules、__pycache__、.git 都不能加进来（#156）。
 var quarantinedScriptDirNames = map[string]bool{
 	"%systemdrive%": true,
 }
 
 // ShouldIgnoreScriptEntryName 判断脚本目录中的某个顶级/子级名称是否应该在展示、统计、备份等场景忽略。
 // 这里保留统一出口，避免 handler / service / backup 各写一套判断逻辑。
+// 它只管「忽略」，不管「搬走」：启动期隔离只认 quarantinedScriptDirNames。
 func ShouldIgnoreScriptEntryName(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -44,9 +48,9 @@ var hiddenScriptTreeNames = map[string]bool{
 }
 
 // ShouldHideScriptTreeEntryName 判断某个名称是否应该在脚本树展示与访问链路里被隐藏 / 拒绝。
-// ⚠️ 它刻意与 ShouldIgnoreScriptEntryName 分成两套语义：后者被启动期隔离逻辑
-// QuarantineUnexpectedScriptEntriesOnStartup 复用，命中即 os.Rename 物理搬走，
-// 一旦把 .git 加进去，脚本根目录本身是 git 仓库时整个仓库会被搬走。
+// ⚠️ 它刻意与 ShouldIgnoreScriptEntryName 分成两套语义：后者还决定备份打包 / 恢复跳过哪些路径，
+// 把 .git 加进去，订阅仓库的 git 元数据就进不了备份；更不能加进启动期隔离名单 quarantinedScriptDirNames，
+// 那份名单命中即 os.Rename 物理搬走，脚本根目录本身是 git 仓库时整个仓库会被搬走。
 func ShouldHideScriptTreeEntryName(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -170,8 +174,13 @@ func ShouldIgnoreScriptRelativePath(relPath string) bool {
 	return ShouldIgnoreScriptEntryName(firstSegment)
 }
 
-// QuarantineUnexpectedScriptEntriesOnStartup 会在启动时把脚本目录下的已知异常目录隔离到 quarantine 子目录。
+// QuarantineUnexpectedScriptEntriesOnStartup 会在启动时把脚本目录顶层的已知污染目录（quarantinedScriptDirNames，
+// 例如 %SystemDrive%）隔离到 quarantine 子目录，并清掉面板自己建、目标已经不在了的 node_modules 软链。
 // 这样能先把当前污染从用户视野和备份链路里移走，同时保留原始证据方便后续排查根因。
+//
+// node_modules、__pycache__ 只是在展示、统计、备份里被忽略，这里不再搬走（#156）：
+// 脚本根目录的 __pycache__ 是被 import 的模块（例如面板自己放的 notify.py）每次运行都会重新生成的；
+// 用户自己 npm install 出来的真 node_modules 被搬走后 require 直接失败，还每次启动在 quarantine 里多攒一份副本。
 func QuarantineUnexpectedScriptEntriesOnStartup() {
 	if config.C == nil {
 		return
@@ -189,7 +198,7 @@ func QuarantineUnexpectedScriptEntriesOnStartup() {
 	}
 
 	for _, entry := range entries {
-		if !ShouldIgnoreScriptEntryName(entry.Name()) {
+		if !quarantinedScriptDirNames[strings.ToLower(strings.TrimSpace(entry.Name()))] {
 			continue
 		}
 
@@ -210,6 +219,85 @@ func QuarantineUnexpectedScriptEntriesOnStartup() {
 
 		log.Printf("unexpected script entry quarantined: %s -> %s", sourcePath, targetPath)
 	}
+
+	removeLeftoverManagedNodeModulesLinks(scriptsDir, filepath.Join(config.C.Data.Dir, "deps", "nodejs", "node_modules"))
+}
+
+// removeLeftoverManagedNodeModulesLinks 删掉脚本目录树里面板自己建、目标已经不在了的 node_modules 软链（Windows 上是 junction）。
+//
+// 来源：Node / TS 任务运行时，工作目录（脚本所在目录）下没有 node_modules 时，ensureManagedNodeModulesAccess
+// 会建一个指向托管依赖目录的软链，任务结束再删；面板被强杀时来不及删就一直留着，
+// 而 ensureManagedNodeModulesAccess 只在不存在时才建、从不修已有的。以前靠隔离把顶层那个搬走「顺手自愈」，
+// 现在不再隔离 node_modules，改为在这里清理。
+//
+// 只删「悬空的面板式软链」，下面几条同时满足才删，其余一律不动：
+//   - 名字是 node_modules 的软链 / junction，Readlink 得到绝对路径（面板只建绝对路径的，相对路径的算用户自己的）；
+//   - 目标 Clean 后等于当前托管依赖目录，或以 <分隔符>deps<分隔符>nodejs<分隔符>node_modules 结尾
+//     （数据目录搬家、改过 data.dir 之前建的，指向旧数据目录）；
+//   - 目标已经不存在（os.Stat 报不存在）。
+//
+// 为什么只删悬空的：悬空的留着有害——ensureManagedNodeModulesAccess 看到同名项就不再建，ESM 的 import 又没有 NODE_PATH 兜底，
+// 那个目录里的脚本会一直报找不到模块。不悬空的面板软链与面板现在会建的等价，留着无害；而且启动时也不是真没人在用：
+// ddp task run 是另一个进程，二进制 / Magisk 部署下被强杀的面板还可能留下仍在跑的孤儿任务，删掉它们正在用的软链，
+// 正在 require 的依赖会突然消失。真目录、指向别处的软链（悬空的也算）都是用户自己的。
+func removeLeftoverManagedNodeModulesLinks(scriptsDir, managedNodeModules string) {
+	// 脚本目录本身是软链 / junction（把脚本放到别的盘、NAS 上常这么做）时，WalkDir 只看根这一项、不会进到链接里面，
+	// 整棵树一个都清不到。所以先解析成真实目录再遍历：Linux 的软链、Windows 的目录软链交给 EvalSymlinks；
+	// Windows 的 junction 它不解析（Go 1.23 起 junction 不再按软链处理，EvalSymlinks 原样返回），再用 Readlink 补一层。
+	// 解析失败就用原值。
+	root := scriptsDir
+	if resolved, err := filepath.EvalSymlinks(scriptsDir); err == nil {
+		root = resolved
+	}
+	if info, err := os.Lstat(root); err == nil && !info.IsDir() {
+		if target, err := os.Readlink(root); err == nil && filepath.IsAbs(target) {
+			root = target
+		}
+	}
+
+	panelLinkSuffix := string(filepath.Separator) + filepath.Join("deps", "nodejs", "node_modules")
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			// 读不了的目录跳过，不影响其它目录。
+			return nil
+		}
+		if strings.EqualFold(d.Name(), "node_modules") {
+			target, readErr := os.Readlink(path)
+			if readErr != nil {
+				// 不是软链。真的 node_modules 目录不进去：任务不会在它里面跑，里面也就不会有面板建的软链，动辄上千个目录。
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			cleanTarget := filepath.Clean(target)
+			panelStyle := cleanTarget == managedNodeModules || strings.HasSuffix(cleanTarget, panelLinkSuffix)
+			if runtime.GOOS == "windows" {
+				// Windows 路径不分大小写，同一个目录可能写成不同大小写。
+				panelStyle = strings.EqualFold(cleanTarget, managedNodeModules) ||
+					strings.HasSuffix(strings.ToLower(cleanTarget), strings.ToLower(panelLinkSuffix))
+			}
+			// 相对路径必须在 Stat 之前放过：os.Stat 会按面板进程的工作目录去解析它，判不准是不是悬空。
+			if !filepath.IsAbs(target) || !panelStyle {
+				return nil
+			}
+			if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+				// 目标还在（或者查不了）：留着，理由见函数注释。
+				return nil
+			}
+			if removeErr := os.Remove(path); removeErr != nil {
+				log.Printf("remove leftover node_modules link failed: %s: %v", path, removeErr)
+			} else {
+				log.Printf("leftover node_modules link removed: %s -> %s", path, target)
+			}
+			return nil
+		}
+		// .git、__pycache__ 这类目录同理，整棵跳过。
+		if d.IsDir() && ShouldHideScriptTreeEntryName(d.Name()) {
+			return filepath.SkipDir
+		}
+		return nil
+	})
 }
 
 // uniqueQuarantinePath 避免隔离目录重名导致历史证据被覆盖。

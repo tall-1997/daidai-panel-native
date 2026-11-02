@@ -39,7 +39,8 @@ const isMultiLine = computed(() => normalizedExpressions.value.length > 1)
       >
         {{ index + 1 }}
       </span>
-      <code class="task-cron-list__code">{{ expression }}</code>
+      <!-- title 是窄屏单行省略时的兜底：列被压窄后表达式会被截断，鼠标悬停仍能看全 -->
+      <code class="task-cron-list__code" :title="expression">{{ expression }}</code>
     </div>
   </div>
 </template>
@@ -71,7 +72,8 @@ const isMultiLine = computed(() => normalizedExpressions.value.length > 1)
   align-items: center;
   justify-content: center;
   margin-top: 1px;
-  border-radius: 999px;
+  // 18×18 的序号角标，属于天然胶囊那一类 → pill 档（圆角模式下正好是个圆序号）
+  border-radius: var(--dd-radius-pill);
   background: color-mix(in srgb, var(--el-color-primary) 10%, white);
   color: var(--el-color-primary);
   font-size: 11px;
@@ -84,7 +86,8 @@ const isMultiLine = computed(() => normalizedExpressions.value.length > 1)
   min-width: 0;
   width: 100%;
   padding: 6px 10px;
-  border-radius: 8px;
+  // 表格单元格里的 cron 小代码块，尺寸接近输入框 → control 档（不是整块日志面板，不用 surface）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 82%, white);
   border: 1px solid var(--el-border-color-lighter);
   color: var(--el-text-color-secondary);
@@ -99,7 +102,8 @@ const isMultiLine = computed(() => normalizedExpressions.value.length > 1)
   padding: 4px 8px;
   font-size: 11px;
   line-height: 1.45;
-  border-radius: 7px;
+  // 紧凑模式只收内边距和字号，圆角仍与常规态同档
+  border-radius: var(--dd-radius-control);
 }
 
 .task-cron-list--multi .task-cron-list__code {

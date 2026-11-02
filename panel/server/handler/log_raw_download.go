@@ -69,7 +69,7 @@ func (h *LogHandler) RawDownloadTicket(c *gin.Context) {
 		return
 	}
 
-	issueRawLogTicket(c, taskLogRecordResource(logID), target, nil)
+	issueRawLogTicket(c, taskLogRecordResource(logID), target, nil, nil)
 }
 
 // DownloadRawLog 流式下载一条执行日志记录对应的磁盘原始日志文件。
@@ -120,7 +120,7 @@ func (h *TaskHandler) RawLogFileDownloadTicket(c *gin.Context) {
 	if filenameOrPath != c.Param("filename") {
 		extra.Set("path", filenameOrPath)
 	}
-	issueRawLogTicket(c, taskLogFileResource(taskID, filenameOrPath), target, extra)
+	issueRawLogTicket(c, taskLogFileResource(taskID, filenameOrPath), target, extra, nil)
 }
 
 // DownloadRawLogFile 流式下载某个任务日志文件的原始内容。
@@ -254,7 +254,9 @@ func statRawLogFileWithinLogDir(logPath string) (string, int64, error) {
 // 票据签发 / 校验
 // ---------------------------------------------------------------------------
 
-func issueRawLogTicket(c *gin.Context, resource string, target *rawLogTarget, extraQuery url.Values) {
+// extraFields 用于给个别票据补几个专属字段（如日志打包下载的 file_count），
+// 传 nil 表示只返回下面这份公共结构。
+func issueRawLogTicket(c *gin.Context, resource string, target *rawLogTarget, extraQuery url.Values, extraFields gin.H) {
 	ticket, expiresAt, err := dlticket.Issue(config.C.JWT.Secret, resource, c.GetString("username"), rawLogTicketTTL)
 	if err != nil {
 		response.InternalError(c, "签发下载票据失败")
@@ -273,13 +275,18 @@ func issueRawLogTicket(c *gin.Context, resource string, target *rawLogTarget, ex
 	// 这样 /api 与 /api/v1 两套前缀都能自动对上，不用在这里硬编码前缀。
 	downloadPath := strings.TrimSuffix(c.Request.URL.EscapedPath(), rawTicketPathSuffix)
 
-	response.Success(c, gin.H{
+	payload := gin.H{
 		"url":        downloadPath + "?" + query.Encode(),
 		"filename":   target.downloadName,
 		"size":       target.size,
 		"expires_at": expiresAt.Format(time.RFC3339),
 		"expires_in": int(rawLogTicketTTL.Seconds()),
-	})
+	}
+	for key, value := range extraFields {
+		payload[key] = value
+	}
+
+	response.Success(c, payload)
 }
 
 // verifyRawLogTicket 校验 ?ticket= 是否为 resource 签发且未过期。

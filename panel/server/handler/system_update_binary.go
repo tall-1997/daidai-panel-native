@@ -155,7 +155,9 @@ func executeBinaryPanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpd
 	panelUpdater.setRestarting("后台更新脚本已启动，将保留 config.yaml 与数据目录并重启面板")
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		os.Exit(0)
+		// 面板进程里走主程序的完整关停再以 0 退出；helper 脚本会一直等到本进程退出才替换文件，不受多等几十毫秒影响。
+		// `ddp update` 走这里时 panelProcessExit 没被接线，仍是直接 os.Exit（CLI 自己退出），行为不变。
+		panelProcessExit(0)
 	}()
 }
 

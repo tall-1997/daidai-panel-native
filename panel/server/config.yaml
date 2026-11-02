@@ -1,4 +1,5 @@
 server:
+  # host: 127.0.0.1  # 监听地址，不写即全部网卡；可被环境变量 SERVER_HOST 覆盖
   port: 5701
   mode: release
 

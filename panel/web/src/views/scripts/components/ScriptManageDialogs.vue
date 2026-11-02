@@ -2,8 +2,11 @@
 import { Upload } from '@element-plus/icons-vue'
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import type { ScriptVersionRecord } from '../types'
+import { formatDateTime } from '@/utils/datetime'
 
-const MonacoDiffEditor = defineAsyncComponent(() => import('@/components/MonacoDiffEditor.vue'))
+// 差异对比只服务「版本历史 → 对比」这个低频弹窗，而它比普通编辑器多带一套 merge 依赖，
+// 所以仍保持懒加载：不点对比就不下载这块代码。
+const CodeDiffEditor = defineAsyncComponent(() => import('@/components/CodeDiffEditor.vue'))
 
 const showCreateFileDialog = defineModel<boolean>('showCreateFileDialog', { required: true })
 const showCreateDirDialog = defineModel<boolean>('showCreateDirDialog', { required: true })
@@ -23,7 +26,7 @@ const versionDiffModifiedTitle = defineModel<string>('versionDiffModifiedTitle',
 const versionDiffOriginalContent = defineModel<string>('versionDiffOriginalContent', { required: true })
 const versionDiffModifiedContent = defineModel<string>('versionDiffModifiedContent', { required: true })
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   isMobile: boolean
   selectedFile: string
   allFolders: string[]
@@ -31,6 +34,11 @@ const props = defineProps<{
   versions: ScriptVersionRecord[]
   versionsLoading: boolean
   versionDiffLoading: boolean
+  // 三个在途锁由父级（useScriptWorkspaceActions）持有，这里只负责把按钮锁住。
+  // 默认 false：老调用点不传也不会把按钮锁死。
+  creatingFile?: boolean
+  creatingDir?: boolean
+  uploading?: boolean
   onCreateFile: () => void | Promise<void>
   onCreateDir: () => void | Promise<void>
   onRename: () => void | Promise<void>
@@ -39,9 +47,16 @@ const props = defineProps<{
   onClearVersions: () => void | Promise<void>
   onUploadFileChange: (file: any, files: any[]) => void
   onUploadSubmit: () => void | Promise<void>
-}>()
+}>(), {
+  creatingFile: false,
+  creatingDir: false,
+  uploading: false
+})
 
-const nestedFolders = computed(() => props.allFolders.filter(folder => folder && !folder.split('/').some(segment => segment.trim().toLowerCase() === 'node_modules')))
+// 移动/复制的目标目录下拉同样要排掉受控目录，
+// 否则用户能在这里选中 .git 当目标（后端会直接拒绝，白跑一趟）。
+const hiddenTargetFolderSegments = new Set(['node_modules', '__pycache__', '.git', '.svn', '.hg', '.bzr'])
+const nestedFolders = computed(() => props.allFolders.filter(folder => folder && !folder.split('/').some(segment => hiddenTargetFolderSegments.has(segment.trim().toLowerCase()))))
 const ignoreWhitespaceDiff = ref(false)
 
 function normalizeWhitespaceForCompare(content: string) {
@@ -107,7 +122,7 @@ watch(showVersionDiffDialog, (visible) => {
     </el-form>
     <template #footer>
       <el-button @click="showCreateFileDialog = false">取消</el-button>
-      <el-button type="primary" @click="onCreateFile">创建</el-button>
+      <el-button type="primary" :loading="props.creatingFile" :disabled="props.creatingFile" @click="onCreateFile">创建</el-button>
     </template>
   </el-dialog>
 
@@ -135,7 +150,7 @@ watch(showVersionDiffDialog, (visible) => {
     </el-form>
     <template #footer>
       <el-button @click="showCreateDirDialog = false">取消</el-button>
-      <el-button type="primary" @click="onCreateDir">创建</el-button>
+      <el-button type="primary" :loading="props.creatingDir" :disabled="props.creatingDir" @click="onCreateDir">创建</el-button>
     </template>
   </el-dialog>
 
@@ -170,10 +185,12 @@ watch(showVersionDiffDialog, (visible) => {
         清空版本历史
       </el-button>
     </div>
+    <!-- 移动端全屏时底部有「关闭」footer（约 57px），表格最大高度要把它让出来（300 = 无 footer 时的 240 + 60），
+         否则全屏弹窗的 body 会和表格自己的滚动叠成两层。桌面没有这条 footer，320px 不变。 -->
     <el-table
       :data="versions"
       v-loading="versionsLoading"
-      :max-height="isMobile ? 'calc(100dvh - 240px)' : 'calc(100dvh - 320px)'"
+      :max-height="isMobile ? 'calc(100dvh - 300px)' : 'calc(100dvh - 320px)'"
       table-layout="auto"
       class="version-history-table"
     >
@@ -183,7 +200,7 @@ watch(showVersionDiffDialog, (visible) => {
         <template #default="{ row }">{{ (row.content_length / 1024).toFixed(1) }} KB</template>
       </el-table-column>
       <el-table-column prop="created_at" label="时间" width="188">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="156" fixed="right">
         <template #default="{ row }">
@@ -195,6 +212,12 @@ watch(showVersionDiffDialog, (visible) => {
         <el-empty description="当前脚本还没有版本记录" />
       </template>
     </el-table>
+    <!-- 移动端全屏时右上角 × 被全局规则隐藏（F2），关闭入口放到右下角。
+         条件与本弹窗的 :fullscreen 同用 isMobile（父级传入的就是 useResponsive 的 isMobile）；
+         桌面不传 footer 插槽，EP 不渲染 footer，保持原样。 -->
+    <template v-if="isMobile" #footer>
+      <el-button @click="showVersionDialog = false">关闭</el-button>
+    </template>
   </el-dialog>
 
   <el-dialog
@@ -247,7 +270,7 @@ watch(showVersionDiffDialog, (visible) => {
           </template>
         </el-empty>
       </div>
-      <MonacoDiffEditor
+      <CodeDiffEditor
         v-else-if="!props.versionDiffLoading"
         :original-value="versionDiffOriginalContent"
         :modified-value="versionDiffModifiedContent"
@@ -257,6 +280,11 @@ watch(showVersionDiffDialog, (visible) => {
         class="version-diff-editor"
       />
     </div>
+    <!-- 同上：移动端的关闭入口。本弹窗 close-on-click-modal=false，点遮罩关不掉，这颗按钮是移动端唯一的出口。
+         置 false 与点 × 走的是同一条 v-model，上面 watch(showVersionDiffDialog) 的复位逻辑照样执行。 -->
+    <template v-if="isMobile" #footer>
+      <el-button @click="showVersionDiffDialog = false">关闭</el-button>
+    </template>
   </el-dialog>
 
   <el-dialog v-model="showUploadDialog" title="上传文件" :width="isMobile ? '90%' : '480px'" :fullscreen="isMobile" destroy-on-close>
@@ -294,7 +322,7 @@ watch(showVersionDiffDialog, (visible) => {
     </el-form>
     <template #footer>
       <el-button @click="showUploadDialog = false">取消</el-button>
-      <el-button type="primary" @click="onUploadSubmit">上传</el-button>
+      <el-button type="primary" :loading="props.uploading" :disabled="props.uploading" @click="onUploadSubmit">上传</el-button>
     </template>
   </el-dialog>
 </template>
@@ -355,7 +383,8 @@ watch(showVersionDiffDialog, (visible) => {
   gap: 4px;
   padding: 10px 12px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
+  // 版本对比两侧的信息块是弹窗内独立成块的容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: var(--el-fill-color-light);
 }
 
@@ -407,7 +436,8 @@ watch(showVersionDiffDialog, (visible) => {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border-radius: 999px;
+  // 这是包着 el-switch 与说明文字的一小条控件底槽 → control 档
+  border-radius: var(--dd-radius-control);
   background: var(--el-fill-color-light);
   color: var(--el-text-color-secondary);
   font-size: 12px;
@@ -421,7 +451,8 @@ watch(showVersionDiffDialog, (visible) => {
   align-items: center;
   justify-content: center;
   border: 1px dashed var(--el-border-color);
-  border-radius: 14px;
+  // 空态占位区是整块虚线容器（占满 62vh）→ surface 档
+  border-radius: var(--dd-radius-surface);
   background: color-mix(in srgb, var(--el-fill-color-light) 72%, white);
 }
 

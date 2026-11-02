@@ -66,6 +66,29 @@ const (
 	DefaultPanelTimezone   = "Asia/Shanghai"
 )
 
+// 内置 MCP 服务（issue #128）的两个开关。HTTP 模式（handler/mcp.go）与 stdio 模式（ddp mcp）
+// 都按这两个键读，收成常量，避免两边各写一份字面量。
+const (
+	MCPEnabledConfigKey        = "mcp_enabled"
+	MCPAllowMutationsConfigKey = "mcp_allow_mutations"
+)
+
+// 企业微信拉起任务（issue #145，v3.3.2）的两级开关，与上面 MCP 那两项一一对应：
+// 总开关关着时回调路由直接 403（连验签都不做），总开关开着但不允许触发执行时，
+// 企业微信那边配回调 URL 能配通、指令却不会真的跑任务 —— 用来分两步上线。
+const (
+	WecomTriggerEnabledConfigKey  = "wecom_trigger_enabled"
+	WecomTriggerAllowRunConfigKey = "wecom_trigger_allow_run"
+)
+
+// WecomTriggerLinkGenerationConfigKey 是菜单触发链接的「代次」，管理员点「作废全部链接」时 +1。
+//
+// 它**刻意不进注册表**：这是面板运行时自己写的状态（同 auto_update_pending_version 那一类），
+// 不是给人填的配置项。注册了反而有害 —— 它会出现在设置页的兜底区，用户随手改一个数字
+// 就把所有链接作废了，而且 GET /api/configs 只下发 registered=true 的项给设置页渲染，
+// 不注册就天然不会被误改（web/src/views/settings/systemConfigSchema.ts 的 parseSystemConfigItems）。
+const WecomTriggerLinkGenerationConfigKey = "wecom_trigger_link_generation"
+
 const (
 	// DefaultRepoFileExtensions 是订阅扫描任务候选时认的脚本后缀。
 	// LegacyRepoFileExtensions 是 v3.0.5 及之前的默认值，它漏了 mjs。
@@ -74,6 +97,11 @@ const (
 	DefaultRepoFileExtensions = "py js mjs ts sh"
 	LegacyRepoFileExtensions  = "py js sh ts"
 )
+
+// LegacyLogBackgroundColor 是 v1.8.0 ~ v2.2.3 的日志底色默认值（固定深色）。
+// v2.2.4 已把注册表默认改成「留空跟随主题」，但老实例库里存的还是这份旧默认、升级不会自愈；
+// 靠「库里存的正好等于旧默认」判断用户没改过，只有这种情况才抬到新默认。
+const LegacyLogBackgroundColor = "#0f172a"
 
 // defaultBackupScheduleSelection 同时给注册表默认值和 normalizeBackupScheduleSelectionValue 使用。
 //
@@ -87,13 +115,15 @@ const defaultBackupScheduleSelection = "configs,tasks,subscriptions,env_vars,log
 // systemConfigGroupLabels 是分组 slug -> 中文分组名。
 // 新增分组时必须在这里补一条，TestEveryRegisteredConfigGroupHasLabel 会兜底拦截漏补。
 var systemConfigGroupLabels = map[string]string{
-	"tasks":        "任务执行",
+	"tasks":        "任务运行",
 	"network":      "网络代理",
 	"security":     "安全",
 	"branding":     "面板与运行时",
 	"backup":       "定时备份",
 	"alerts":       "告警通知",
 	"subscription": "订阅拉取",
+	"mcp":          "MCP 服务",
+	"wecom":        "企业微信触发",
 }
 
 // finalizeSystemConfigSpecs 补齐无法在单条声明里写死的元信息：注册顺序和分组中文名。
@@ -120,12 +150,21 @@ var registeredSystemConfigSpecs = finalizeSystemConfigSpecs([]systemConfigSpec{
 	// 下限刻意不给到 1 分钟：填 1 会让几乎所有安装都秒失败，看起来像面板坏了。
 	// 上限 720 分钟（12 小时）足够覆盖 ARM 设备上现场编译 opencv 这类极端情况。
 	newIntConfig("dependency_install_timeout_minutes", "依赖安装超时(分钟)", "20", "单个依赖安装/卸载的最长执行时间。安装 opencv 等需要现场编译的大包时可调大", "tasks", 5, 720),
+	// 系统命令行的单条命令超时。与依赖安装分开是因为语义不同：这里跑的是用户临时敲的命令，
+	// 挂死时没人会盯着，必须有个上限；下限给到 1 分钟（敲错命令时不用等）。
+	newIntConfig("console_timeout_minutes", "系统命令行超时(分钟)", "30", "系统命令行里单条命令的最长执行时间，超时会终止整个进程组", "tasks", 1, 720),
 	newBoolConfig("auto_update_enabled", "静默更新", "false", "静默更新开关（每 24 小时自动检查并在有新版本时尝试更新）", "network"),
 	newTrimmedStringConfig("auto_update_last_checked_at", "上次检查更新时间", "", "上次自动检查更新时间", "network"),
 	newIntConfig("random_delay", "随机延迟最大秒数", "0", "任务执行前随机延迟最大秒数", "tasks", 0, 86400),
 	newTrimmedStringConfig("random_delay_extensions", "延迟文件后缀", "", "随机延迟仅对指定脚本后缀生效", "tasks"),
 	newBoolConfig("auto_install_deps", "自动安装缺失依赖", "true", "脚本缺依赖时自动尝试安装", "tasks"),
 	newBoolConfig("detect_silent_exit", "检测脚本半路静默结束", "true", "Node 任务因 Promise 永不完成而提前退出时判定为失败，而不是记成成功", "tasks"),
+	// #159 修复 A 的总开关：定时 / 手动任务的主命令结束后，结束它留在进程组里的后台进程（开机任务按类型豁免）。
+	// 默认开：库里没有这一行时 GetRegisteredConfigBool 回落到 true，存量用户升级后默认生效。
+	// runTask 每次执行现读一次，不需要进 handler.reloadRuntimeConfigKeys。
+	// ⚠️ APP 的系统设置页按 schema 渲染，这个开关会自动出现在 APP 里并能保存，所以说明文字必须对两端都适用，
+	// 不能写「仅网页端生效」之类的措辞。
+	newBoolConfig("cleanup_leftover_processes", "任务结束后清理残留进程", "true", "定时、手动任务的主命令结束后，结束它留在后台的进程（如 nohup、& 启动的），避免越积越多占用内存；开机任务不清理。需要常驻的进程请用 setsid nohup … & 启动，或关闭此项", "tasks"),
 	newEnumConfig(
 		"python_default_version",
 		"默认 Python 版本",
@@ -141,10 +180,17 @@ var registeredSystemConfigSpecs = finalizeSystemConfigSpecs([]systemConfigSpec{
 	newIntConfig("cpu_warn", "CPU 阈值 (%)", "80", "CPU 告警阈值（%）", "alerts", 1, 100),
 	newIntConfig("memory_warn", "内存阈值 (%)", "80", "内存告警阈值（%）", "alerts", 1, 100),
 	newIntConfig("disk_warn", "磁盘阈值 (%)", "90", "磁盘告警阈值（%）", "alerts", 1, 100),
-	newBoolConfig("auto_add_cron", "自动添加定时任务", "true", "自动添加定时任务", "subscription"),
-	newBoolConfig("auto_del_cron", "自动删除失效任务", "true", "自动删除失效任务", "subscription"),
-	newBoolConfig("subscription_force_overwrite", "覆盖拉取", "true", "订阅拉取时覆盖本地修改并清理多余文件", "subscription"),
-	newValidatedStringConfig("default_cron_rule", "默认 Cron 规则", "", "订阅脚本未声明 cron 时使用的默认规则", "subscription", normalizeDefaultCronRule),
+	// 这两项自 v3.2.6 起是「默认值」而不是「总开关」：订阅可以用 auto_add_task_mode /
+	// auto_del_task_mode 单独强制开或强制关，只有留在 inherit 的订阅才回落到这里。
+	newBoolConfig("auto_add_cron", "自动添加定时任务（默认）", "true", "订阅拉取后自动为新脚本创建定时任务（未单独设置的订阅使用此默认值）", "subscription"),
+	newBoolConfig("auto_del_cron", "自动删除失效任务（默认）", "true", "订阅里脚本消失后自动删除对应定时任务（未单独设置的订阅使用此默认值）", "subscription"),
+	// 这项只管 git 工作区里已跟踪文件的覆盖方式（reset --hard）：已跟踪文件会被重置成远端状态、
+	// 远端已删除的也会跟着删掉，但不会删除未跟踪的本地新增文件（日志里「本地新增的文件已保留」说的就是这个）。
+	// 唯一会跑 git clean -fd（连未跟踪文件一起清）的是「目录已存在但不是 git 仓库、原地 init 接管」那条分支，
+	// 它无条件执行、根本不看这个开关，所以说明里不能再写「清理多余文件」。
+	newBoolConfig("subscription_force_overwrite", "覆盖拉取（默认）", "true", "订阅拉取时覆盖本地修改（未单独设置的订阅使用此默认值）", "subscription"),
+	// 留空不是「每天 0 点」：v3.2.9 起未声明 cron 的脚本在留空时不建任务（#134），描述要把留空的真实行为写出来。
+	newValidatedStringConfig("default_cron_rule", "默认 Cron 规则", "", "订阅脚本未声明 cron 时使用；留空则不为这类脚本建定时任务", "subscription", normalizeDefaultCronRule),
 	// 默认值必须含 mjs：ESM 脚本（.mjs）在青龙生态里很常见，
 	// 旧默认 LegacyRepoFileExtensions 漏了它，表现为「仓库拉取成功、.mjs 却一个任务都不建」。
 	// 存量实例的补齐见 system_config.go 的 InitDefaultConfigs。
@@ -169,6 +215,25 @@ var registeredSystemConfigSpecs = finalizeSystemConfigSpecs([]systemConfigSpec{
 	newTrimmedStringConfig("editor_background_color", "编辑器背景颜色", "", "脚本编辑器背景颜色（留空使用默认样式）", "branding"),
 	newTrimmedStringConfig("log_background_color", "日志背景颜色", "", "日志视图背景颜色（留空跟随当前主题）", "branding"),
 	newTrimmedStringConfig("log_background_image", "日志背景图片", "", "日志视图背景图片（data URL）", "branding"),
+	// 界面圆角开关：网页端把全站圆角刻度化成 --dd-radius-* 三档令牌，这一项决定取直角(全 0)还是圆角。
+	// 默认 square 是为了保持 v3.0.0 以来「扁平工具型」的既有观感，升级的实例不会因为加了这项而变样。
+	//
+	// ⚠️ 这项纯粹由客户端消费，服务端没有任何运行时状态依赖它，所以不需要进
+	// handler.reloadRuntimeConfigKeys 的热加载分支。
+	// ⚠️ 注册表是原样下发给 Web 和 APP 的（见本文件顶部 SystemConfigDefinition 的说明），
+	// APP 的 schema 驱动设置页也会渲染出这个开关但点了不会有效果，
+	// 所以 description 里必须写明「仅网页端生效」，避免被当成 APP 的 bug。
+	newEnumConfig(
+		"panel_shape_style",
+		"界面圆角",
+		"square",
+		"网页端界面的圆角风格。直角=扁平工具型（默认）；圆角=各控件与卡片带圆角。仅网页端生效，APP 不受影响。",
+		"branding",
+		[]SystemConfigOption{
+			{Value: "square", Label: "直角"},
+			{Value: "rounded", Label: "圆角"},
+		},
+	),
 	newBoolConfig("backup_schedule_enabled", "启用定时备份", "false", "启用定时备份", "backup"),
 	newEnumConfig(
 		"backup_schedule_frequency",
@@ -249,6 +314,40 @@ var registeredSystemConfigSpecs = finalizeSystemConfigSpecs([]systemConfigSpec{
 			{Value: "open", Label: "宽松放行"},
 			{Value: "strict", Label: "严格拦截"},
 		},
+	),
+	// 内置 MCP 服务（issue #128），两项都默认关闭；只开 mcp_enabled 时 AI 只能用查询类工具。
+	// 这两项对网页、APP 与所有 MCP 客户端都生效，所以说明里不能写「仅网页端生效」。
+	// 服务端每次 HTTP 请求（ddp mcp 则是每次工具调用）都现读数据库，不需要进 reloadRuntimeConfigKeys。
+	newBoolConfig(
+		MCPEnabledConfigKey,
+		"启用 MCP 服务",
+		"false",
+		"开启后，AI 客户端可以通过 POST /api/v1/mcp（HTTP）或容器内的 ddp mcp（stdio）连接面板，用开放 API 应用凭据（app_key / app_secret）或登录令牌鉴权；能访问哪些模块由应用的权限范围决定",
+		"mcp",
+	),
+	newBoolConfig(
+		MCPAllowMutationsConfigKey,
+		"允许写入与执行工具",
+		"false",
+		"开启后，AI 可以运行、停止、启用或禁用任务，增删改环境变量，保存与运行脚本，拉取订阅；关闭时只提供查询类工具。注意：应用拥有 scripts 权限就等于可以执行任意代码",
+		"mcp",
+	),
+	// 企业微信拉起任务（issue #145），两项都默认关闭，口径与上面 MCP 的两级开关完全一致：
+	// 路由本身是公开的，但总开关关着时 handler 第一行就 403，连验签都不做。
+	// 服务端每次 HTTP 请求都现读数据库，管理员改完立即生效，不需要重启。
+	newBoolConfig(
+		WecomTriggerEnabledConfigKey,
+		"启用企业微信触发",
+		"false",
+		"开启后，企业微信自建应用可以通过回调（/api/v1/wecom/callback/:id）或菜单链接（/api/v1/open-api/trigger）拉起面板任务。要求企业微信服务器能访问到面板（公网可达），建议使用 80/443 端口，且在企业微信后台配好回调 URL、Token、EncodingAESKey 与可信 IP",
+		"wecom",
+	),
+	newBoolConfig(
+		WecomTriggerAllowRunConfigKey,
+		"允许企业微信触发执行",
+		"false",
+		"开启后，企业微信侧的指令与菜单链接才会真的运行任务；关闭时回调仍可验签联通（方便先在企业微信后台把配置保存成功），但不会执行任何任务。可触发的任务范围还受每条接入配置的任务白名单限制",
+		"wecom",
 	),
 })
 

@@ -17,6 +17,43 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// normalizeNotificationChannelType 归一化渠道类型：兼容旧客户端拼错的 PludPlus -> pushplus。
+func normalizeNotificationChannelType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "pludplus" {
+		return "pushplus"
+	}
+	return normalized
+}
+
+// preserveRedactedNotificationFields 合并渠道配置时保留脱敏占位符背后的旧值：
+// Flutter APP 编辑渠道时拿到的 config 里密钥是 "********"，直接回写会把真值冲掉。
+// 传 "********" 的键取库中旧值；库里也没有的键直接删掉，不把占位符落库。
+func preserveRedactedNotificationFields(existingConfig, incomingConfig string) (string, error) {
+	var existing map[string]interface{}
+	var incoming map[string]interface{}
+	if err := json.Unmarshal([]byte(existingConfig), &existing); err != nil {
+		return "", fmt.Errorf("现有通知渠道配置无效")
+	}
+	if err := json.Unmarshal([]byte(incomingConfig), &incoming); err != nil {
+		return "", fmt.Errorf("通知渠道配置无效")
+	}
+	for key, value := range incoming {
+		if text, ok := value.(string); ok && text == "********" {
+			if previous, exists := existing[key]; exists {
+				incoming[key] = previous
+			} else {
+				delete(incoming, key)
+			}
+		}
+	}
+	encoded, err := json.Marshal(incoming)
+	if err != nil {
+		return "", fmt.Errorf("通知渠道配置编码失败")
+	}
+	return string(encoded), nil
+}
+
 type NotificationHandler struct{}
 
 func NewNotificationHandler() *NotificationHandler {
@@ -38,6 +75,9 @@ func updateNotificationTestState(channelID uint, status string) {
 	}
 }
 
+
+// notificationChannelResponse 通知渠道对外响应：配置里的密钥字段脱敏后再下发。
+// 与 service.preserveRedactedNotificationFields 配对：APP 拿到的 ******** 回写时会被还原。
 func notificationChannelResponse(ch model.NotifyChannel) map[string]interface{} {
 	item := ch.ToDict()
 	item["config"] = service.RedactNotificationConfig(ch.Config)
@@ -68,16 +108,26 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 		return
 	}
 	req.Type = normalizeNotificationChannelType(req.Type)
-	if _, exists := model.GetNotifyChannelDefinition(req.Type); !exists {
-		response.BadRequest(c, "不支持的通知渠道类型")
-		return
-	}
 
+	// config 的值必须全是字符串，否则 service.sendToChannel 反序列化直接失败，
+	// 该渠道所有通知（含测试按钮）都会挂掉。详见 model.NormalizeNotifyChannelConfig。
 	normalizedConfig, err := model.NormalizeNotifyChannelConfig(req.Config)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
+
+	// 保存期按键校验（#123，目前只有渠道代理 proxy）：代理地址格式错了，发送链路会静默回落直连，
+	// 企业微信「企业可信 IP」场景下表现为没有任何提示的 60020。新建渠道没有「存量值」，一律校验。
+	// 备份恢复与青龙导入刻意不走这里（spec 规定不得因单个渠道整批失败），由发送期显式报错兜底。
+	if err := model.ValidateNotifyChannelConfig(req.Type, normalizedConfig); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// 不带该字段（例如独立发版的 APP）时 req.PushScope 是空串，归一后即「默认推送」，
+	// 与升级前的行为完全一致。拼错的取值一律 400，不做「就近纠正」：
+	// 把 "bind" 悄悄当成 default 落库，等于把用户的隔离意图反着执行。
 	pushScope, ok := model.NormalizeNotifyPushScope(req.PushScope)
 	if !ok {
 		response.BadRequest(c, "推送范围只能是 default（默认推送）或 bound（绑定推送）")
@@ -92,8 +142,10 @@ func (h *NotificationHandler) Create(c *gin.Context) {
 		Enabled:   true,
 	}
 
+	// notify_channels.name 是唯一索引，连点创建按钮的第二发会撞在这里。
+	// 照 security.go 的 AddIPWhitelist 写法翻译成友好 400，不把 GORM 原文透给前端。
 	if err := database.DB.Create(&ch).Error; err != nil {
-		response.InternalError(c, "创建通知渠道失败")
+		response.BadRequest(c, "同名通知渠道已存在")
 		return
 	}
 
@@ -115,13 +167,39 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// 这里是「按键更新」：请求里没出现的键一概不动已有值。
+	// push_scope 必须遵守这条 —— 独立发版的 Flutter APP 编辑渠道时根本不会带这个字段，
+	// 一旦改成「缺省即 default」，用户在 Web 上设的「绑定推送」会被 APP 的一次保存悄悄清掉。
+	//
+	// 另外注意：漏把新键登记进 allowed 的表现极其难查 —— 前端切换后保存提示「更新成功」，
+	// 刷新又变回原值，全程不报错、无日志。加字段时务必同步这张白名单。
 	allowed := map[string]bool{"name": true, "type": true, "config": true, "push_scope": true}
+
+	// config 的保存期校验（#123）要按「这次保存之后渠道的类型」来做，所以进循环前先定下来。
+	// 请求里的 type 只有是**非空字符串**时才采用：PUT 可以不带 type（只改 name / config 的老调用就是这样），
+	// 而且下面的循环对 type 不做任何校验、原样写入，非字符串的 type 也会落进来 —— 这两种情况都按库里的 ch.Type 校验。
+	// 用原值而不是 TrimSpace 之后的值：写进库的就是原值，校验要对齐「实际会存成什么类型」。
+	effectiveType := ch.Type
+	if rawType, ok := req["type"].(string); ok && rawType != "" {
+		effectiveType = normalizeNotificationChannelType(rawType)
+	}
+	// 判断 config 里哪些值算「新值」的基准。只有类型没变时，库里的旧值才算「已经在这个类型下存过」；
+	// 类型变了，旧 config 里的值在新类型下从没被接受过（例如 webhook 不声明 proxy，从来不校验），全部按新值校验。
+	previousConfig := ""
+	if effectiveType == ch.Type {
+		previousConfig = ch.Config
+	}
+
 	updates := make(map[string]interface{})
 	for k, v := range req {
 		if !allowed[k] {
 			continue
 		}
 		if k == "push_scope" {
+			// 显式的 null 一律当成「没提供这个字段」，跳过、不改已有值。
+			// 独立发版的 APP 很可能把未填字段序列化成 null，若按类型错误返回 400，
+			// 它一升级就会全线保存失败，代价远大于这里放行的收益。
+			// 其余非字符串类型（数字、布尔、对象）仍然 400，拼错的字符串值也仍然 400，校验能力不丢。
 			if v == nil {
 				continue
 			}
@@ -138,28 +216,6 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 			updates[k] = scope
 			continue
 		}
-		if k == "config" {
-			rawConfig, ok := v.(string)
-			if !ok {
-				response.BadRequest(c, "通知渠道配置必须是 JSON 字符串")
-				return
-			}
-			if strings.TrimSpace(rawConfig) == "********" {
-				continue
-			}
-			normalizedConfig, err := model.NormalizeNotifyChannelConfig(rawConfig)
-			if err != nil {
-				response.BadRequest(c, err.Error())
-				return
-			}
-			mergedConfig, err := preserveRedactedNotificationFields(ch.Config, normalizedConfig)
-			if err != nil {
-				response.BadRequest(c, err.Error())
-				return
-			}
-			updates[k] = mergedConfig
-			continue
-		}
 		if k == "type" {
 			rawType, ok := v.(string)
 			if !ok {
@@ -174,71 +230,59 @@ func (h *NotificationHandler) Update(c *gin.Context) {
 			updates[k] = rawType
 			continue
 		}
+		if k == "config" {
+			// 与 Create 走同一套归一：老客户端写坏的记录（例如 smtp_ssl 被写成 JSON 布尔）
+			// 只要用户在任意端点一次「编辑 + 保存」就会自动被修好，不需要单独做数据迁移。
+			rawConfig, ok := v.(string)
+			if !ok {
+				response.BadRequest(c, "通知渠道配置必须是 JSON 字符串")
+				return
+			}
+			normalizedConfig, err := model.NormalizeNotifyChannelConfig(rawConfig)
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			// 脱敏占位符回写保护：APP 整份回传的 config 里密钥是 "********"，
+			// 用库里旧值补回，避免一次保存把真密钥清掉。
+			mergedConfig, err := preserveRedactedNotificationFields(ch.Config, normalizedConfig)
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			normalizedConfig = mergedConfig
+			// 保存期按键校验（#123，目前只有 proxy），但**只拦新值**：与库里现存值相同的不再校验。
+			// Web 与 APP 保存时都整份回传 config，若无条件校验，本校验上线前存进去的非法代理地址
+			// 会让用户改任何别的字段都 400 —— 违反「坏记录必须能被编辑保存」。存量非法值由发送期兜底。
+			//
+			// 注意：只改 type、不带 config 的请求走不到这里，不会按新类型重新校验库里的 config。
+			// 这里返回时 updates 还没写库，被拒的请求不会改动任何已有字段。
+			if err := model.ValidateNotifyChannelConfigChange(effectiveType, normalizedConfig, previousConfig); err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			updates[k] = normalizedConfig
+			continue
+		}
 		updates[k] = v
 	}
 
 	if len(updates) > 0 {
-		database.DB.Model(&ch).Updates(updates)
+		// name 加了唯一索引之后，改名撞上别的渠道会在这里报错。
+		// 不接 .Error 的话前端会拿到「更新成功」、刷新又变回原值，属于最难查的一类问题。
+		if err := database.DB.Model(&ch).Updates(updates).Error; err != nil {
+			response.BadRequest(c, "同名通知渠道已存在")
+			return
+		}
 	}
 
 	database.DB.First(&ch, chID)
 	response.Success(c, gin.H{"message": "更新成功", "data": notificationChannelResponse(ch)})
 }
 
-func normalizeNotificationChannelType(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "pludplus" {
-		return "pushplus"
-	}
-	return normalized
-}
-
-func preserveRedactedNotificationFields(existingConfig, incomingConfig string) (string, error) {
-	var existing map[string]interface{}
-	var incoming map[string]interface{}
-	if err := json.Unmarshal([]byte(existingConfig), &existing); err != nil {
-		return "", fmt.Errorf("现有通知渠道配置无效")
-	}
-	if err := json.Unmarshal([]byte(incomingConfig), &incoming); err != nil {
-		return "", fmt.Errorf("通知渠道配置无效")
-	}
-	for key, value := range incoming {
-		if text, ok := value.(string); ok && text == "********" {
-			if previous, exists := existing[key]; exists {
-				incoming[key] = previous
-			} else {
-				delete(incoming, key)
-			}
-		}
-	}
-	encoded, err := json.Marshal(incoming)
-	if err != nil {
-		return "", fmt.Errorf("通知渠道配置编码失败")
-	}
-	return string(encoded), nil
-}
-
 func (h *NotificationHandler) Delete(c *gin.Context) {
 	chID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	transaction := database.DB.Begin()
-	if transaction.Error != nil {
-		response.InternalError(c, "删除通知渠道失败")
-		return
-	}
-	if err := transaction.Model(&model.Task{}).Where("notification_channel_id = ?", chID).Update("notification_channel_id", nil).Error; err != nil {
-		transaction.Rollback()
-		response.InternalError(c, "清理任务通知渠道绑定失败")
-		return
-	}
-	if err := transaction.Where("id = ?", chID).Delete(&model.NotifyChannel{}).Error; err != nil {
-		transaction.Rollback()
-		response.InternalError(c, "删除通知渠道失败")
-		return
-	}
-	if err := transaction.Commit().Error; err != nil {
-		response.InternalError(c, "提交通知渠道删除失败")
-		return
-	}
+	database.DB.Where("id = ?", chID).Delete(&model.NotifyChannel{})
 	response.Success(c, gin.H{"message": "删除成功"})
 }
 
@@ -293,13 +337,74 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 		ChannelID  *uint                  `json:"channel_id"`
 		ChannelIDs []uint                 `json:"channel_ids"`
 		Context    map[string]interface{} `json:"context"`
+		// 下面几项是 issue #135 加的，全部可选、只做加法：不传时请求处理与各渠道报文和以前逐字节一致。
+		// 这里的 content_type 是「正文是什么格式」，和渠道配置里 wxpusher / custom 的同名配置项不是一回事。
+		ContentType  string   `json:"content_type"`
+		ChannelType  *string  `json:"channel_type"`
+		ChannelTypes []string `json:"channel_types"`
+		ChannelName  *string  `json:"channel_name"`
+		ChannelNames []string `json:"channel_names"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
 		return
 	}
 
+	// 空串 = 没声明格式，走老逻辑；空串不能当成 text，否则钉钉默认的 markdown 会被改成文本消息。
+	// text/html 这类 MIME 写法也认（NormalizeNotifyContentType 里处理）。
+	contentType, ok := service.NormalizeNotifyContentType(req.ContentType)
+	if !ok {
+		response.BadRequest(c, "content_type 只能是 text / markdown / html（不传则按渠道配置发送）")
+		return
+	}
+
+	// 按渠道类型过滤。脚本令牌是 operator，列不了渠道（那个接口要 admin，而且渠道配置里有密钥），
+	// 所以「只发邮件」「只发 WxPusher」只能交给服务端按类型筛。
+	// 与 channel_id 同样的收紧口径：显式传了却是空白，直接 400，不静默放宽成「不过滤」。
+	// 类型名与 content_type 一样大小写不敏感，归一成注册表里的写法再过滤（库里存的是注册表写法）。
+	channelTypes := make([]string, 0, len(req.ChannelTypes)+1)
+	rawTypes := req.ChannelTypes
+	if req.ChannelType != nil {
+		rawTypes = append([]string{*req.ChannelType}, rawTypes...)
+	}
+	if len(rawTypes) > 0 {
+		definitions := model.NotifyChannelDefinitions()
+		registeredTypes := make(map[string]string, len(definitions))
+		validTypes := make([]string, 0, len(definitions))
+		for _, definition := range definitions {
+			registeredTypes[strings.ToLower(definition.Type)] = definition.Type
+			validTypes = append(validTypes, definition.Type)
+		}
+		for _, raw := range rawTypes {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				response.BadRequest(c, "通知渠道类型无效：channel_type / channel_types 不能为空")
+				return
+			}
+			channelType, known := registeredTypes[strings.ToLower(trimmed)]
+			if !known {
+				// 直接列出可选类型：GET /notifications/types 要管理员令牌，脚本令牌（operator）调不了，
+				// 报错里只指向那个接口，脚本作者在任务日志里看到了也查不到。
+				response.BadRequest(c, fmt.Sprintf("未知的通知渠道类型：%s（可选：%s）", trimmed, strings.Join(validTypes, "、")))
+				return
+			}
+			channelTypes = append(channelTypes, channelType)
+		}
+	}
+
+	// 调用方点名了渠道、但归一化后一个有效 ID 都不剩时直接 400，不再退化成广播。
+	//
+	// 老行为的问题：service.uniqueNotificationChannelIDs 会丢掉 id == 0，而这里只对单值
+	// channel_id 做了 > 0 校验，channel_ids 数组原样透传。于是脚本传 {"channel_ids":[0]}
+	// 会静默变成广播，响应里 used_all 仍是 false、requested_ids 仍是 [0] —— 接口在说谎。
+	// 引入「绑定推送」后这条路径更危险：本想只发一个专用渠道，结果所有默认推送渠道都收到了。
+	// 合法调用不会传 0，这里是纯收紧。
+	//
+	// 空数组（"channel_ids": []）不算「点名」，仍走广播：它字面上就没指定任何渠道，
+	// 而且这是升级前的既有行为，不该让老客户端突然收到 400。
+	// 面板自带的 notify.py / sendNotify.js 也只在非空时才写入这个键。
 	targeted := req.ChannelID != nil || len(req.ChannelIDs) > 0
+
 	channelIDs := make([]uint, 0, len(req.ChannelIDs)+1)
 	if req.ChannelID != nil && *req.ChannelID > 0 {
 		channelIDs = append(channelIDs, *req.ChannelID)
@@ -314,14 +419,53 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 		return
 	}
 
+	// 按名称点名（渠道名称有唯一索引）。和 ID 同级：属于显式点名，忽略 push_scope，「绑定推送」渠道也能收到。
+	// 有名称查不到时 400 并列出来，绝不退化成广播；这里不看 enabled，禁用的渠道交给下游报「未找到已启用的通知渠道」。
+	rawNames := req.ChannelNames
+	if req.ChannelName != nil {
+		rawNames = append([]string{*req.ChannelName}, rawNames...)
+	}
+	if len(rawNames) > 0 {
+		for _, name := range rawNames {
+			if strings.TrimSpace(name) == "" {
+				response.BadRequest(c, "通知渠道名称无效：channel_name / channel_names 不能为空")
+				return
+			}
+		}
+		var named []model.NotifyChannel
+		if err := database.DB.Select("id", "name").Where("name IN ?", rawNames).Find(&named).Error; err != nil {
+			response.InternalError(c, "查询通知渠道失败")
+			return
+		}
+		idByName := make(map[string]uint, len(named))
+		for _, ch := range named {
+			idByName[ch.Name] = ch.ID
+		}
+		var missing []string
+		for _, name := range rawNames {
+			id, found := idByName[name]
+			if !found {
+				missing = append(missing, "「"+name+"」")
+				continue
+			}
+			channelIDs = append(channelIDs, id)
+		}
+		if len(missing) > 0 {
+			response.BadRequest(c, "未找到名称为"+strings.Join(missing, "")+"的通知渠道")
+			return
+		}
+	}
+
 	context := make(map[string]string, len(req.Context))
 	for key, value := range req.Context {
 		context[key] = fmt.Sprint(value)
 	}
 
 	result, err := service.SendNotificationSyncWithOptions(req.Title, req.Content, service.NotificationDispatchOptions{
-		ChannelIDs: channelIDs,
-		Context:    context,
+		ChannelIDs:   channelIDs,
+		ChannelTypes: channelTypes,
+		Context:      context,
+		ContentType:  contentType,
 	})
 	if err != nil {
 		response.BadRequest(c, "发送失败: "+err.Error())
@@ -338,6 +482,10 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 		message = fmt.Sprintf("%s，失败 %d 个渠道", message, result.FailedCount)
 	}
 
+	// used_all 的语义随「默认推送 / 绑定推送」一起变了：从「发给全部已启用渠道」变成
+	// 「走广播，即发给全部已启用且 push_scope=default 的渠道」。设成「绑定推送」的渠道
+	// 不会出现在广播里，只有被显式点名（channel_id / channel_ids / channel_name / channel_names）时才会收到。
+	// 按名称点名解析出的 ID 也计入 requested_ids；channel_types 只是过滤，used_all 仍按「有没有点名」算。
 	response.Success(c, gin.H{
 		"message": message,
 		"data": gin.H{
@@ -348,10 +496,20 @@ func (h *NotificationHandler) Send(c *gin.Context) {
 			"requested_ids":  channelIDs,
 			"used_all":       len(channelIDs) == 0,
 			"content_length": len([]rune(req.Content)),
+			"content_type":   contentType,
+			"channel_types":  channelTypes,
 		},
 	})
 }
 
+// Types 下发全部通知渠道及其字段定义。
+//
+// 这里以前是一份硬编码的 {type,name} 列表，与 model 里的字段注册表是两处分开维护的，
+// 加渠道时漏改一处就会出现「类型下拉里有，但打开没有任何输入框」。现在统一从注册表取，
+// 结构上不可能再分叉。
+//
+// 响应保持纯可加：老客户端只读 type / name 两个键，多出来的 icon / fields 对它们无感；
+// 老面板不返回 fields 时，新客户端判断 fields 为空即回落本地冻结快照。
 func (h *NotificationHandler) Types(c *gin.Context) {
 	response.Success(c, gin.H{"data": model.NotifyChannelDefinitions()})
 }

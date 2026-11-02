@@ -440,9 +440,8 @@ onBeforeUnmount(() => {
   --dd-restore-accent: #2563eb;
   --dd-restore-accent-soft: rgba(37, 99, 235, 0.16);
   --dd-restore-accent-strong: rgba(37, 99, 235, 0.28);
-  --dd-restore-surface:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.76)),
-    linear-gradient(180deg, rgba(37, 99, 235, 0.06), rgba(15, 23, 42, 0.02));
+  // 扁平化：头图底色改纯色，不再用光晕渐变堆质感
+  --dd-restore-surface: var(--el-fill-color-light);
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -473,10 +472,11 @@ onBeforeUnmount(() => {
   gap: 22px;
   align-items: center;
   padding: 22px;
-  border-radius: 24px;
+  // 弹窗内的主视觉区块，属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
+  // 扁平化：去掉投影，用纯色底 + 1px 描边划分层次
   background: var(--dd-restore-surface);
   border: 1px solid var(--dd-restore-accent-soft);
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
 }
 
 .restore-progress-visual {
@@ -486,6 +486,7 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 
+// 旋转中的加载圆弧：属于运动中的加载指示，方化会变形失去动效意义，保留圆形
 .restore-progress-orbit {
   position: absolute;
   inset: 0;
@@ -496,12 +497,12 @@ onBeforeUnmount(() => {
   animation: restore-spin 5s linear infinite;
 }
 
+// 加载圆弧的同心环，与旋转指示同属一个加载部件，保留圆形；仅去掉 inset 高光
 .restore-progress-rings .ring {
   position: absolute;
   inset: 18px;
   border-radius: 50%;
   border: 1px solid var(--dd-restore-accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
 .restore-progress-rings .ring--outer {
@@ -523,14 +524,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  // 圆弧中心的读数盘，与外圈加载指示共用同一圆心，保留圆形
   border-radius: 50%;
   text-align: center;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.84)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.74));
-  box-shadow:
-    0 14px 28px rgba(15, 23, 42, 0.12),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.9);
+  // 扁平化：去掉渐变与投影，纯色底 + 1px 描边与外圈区分
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
 
   strong {
     font-size: 30px;
@@ -571,7 +570,8 @@ onBeforeUnmount(() => {
 .restore-progress-eyebrow {
   display: inline-flex;
   padding: 6px 10px;
-  border-radius: 999px;
+  // 小标签块（不是状态灯）→ control 档，与 el-tag 保持同档
+  border-radius: var(--dd-radius-control);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -590,33 +590,37 @@ onBeforeUnmount(() => {
     align-items: center;
     min-height: 30px;
     padding: 0 12px;
-    border-radius: 999px;
+    // 元信息小标签属控件类表面 → control 档
+    border-radius: var(--dd-radius-control);
     font-size: 12px;
     color: var(--el-text-color-secondary);
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
   }
 }
 
 .restore-progress-bar {
   padding: 18px 20px;
-  border-radius: 20px;
-  background: rgba(248, 250, 252, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  // 进度区整块是容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .restore-progress-bar__track {
   position: relative;
   height: 12px;
   overflow: hidden;
-  border-radius: 999px;
+  // 进度条轨道是天然胶囊 → pill 档
+  border-radius: var(--dd-radius-pill);
   background: rgba(148, 163, 184, 0.16);
 }
 
 .restore-progress-bar__fill {
   position: relative;
   height: 100%;
-  border-radius: inherit;
+  // 进度条填充跟随轨道 → pill 档
+  border-radius: var(--dd-radius-pill);
   background: linear-gradient(90deg, color-mix(in srgb, var(--dd-restore-accent) 82%, white), var(--dd-restore-accent));
   transition: width 0.45s ease;
 
@@ -656,14 +660,13 @@ onBeforeUnmount(() => {
   gap: 8px;
   min-height: 34px;
   padding: 0 14px;
-  border-radius: 999px;
+  // 恢复目标标签（不是状态灯）→ control 档
+  border-radius: var(--dd-radius-control);
   font-size: 12px;
   font-weight: 600;
   color: var(--el-text-color-primary);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.88));
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
 
   .el-icon {
     color: var(--dd-restore-accent);
@@ -683,21 +686,22 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 16px 12px;
-  border-radius: 18px;
+  // 步骤卡片是独立的容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   text-align: center;
-  background: rgba(248, 250, 252, 0.86);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  // 扁平化：不再上浮与投影，仅靠描边和底色区分步骤状态
+  transition: border-color 0.25s ease, background-color 0.25s ease;
 
   &.is-active {
-    border-color: var(--dd-restore-accent-soft);
-    box-shadow: 0 14px 32px var(--dd-restore-accent-soft);
-    transform: translateY(-2px);
+    border-color: var(--dd-restore-accent);
+    background: var(--dd-restore-accent-soft);
   }
 
   &.is-done {
     border-color: color-mix(in srgb, var(--dd-restore-accent) 36%, white);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), color-mix(in srgb, var(--dd-restore-accent) 8%, white));
+    background: color-mix(in srgb, var(--dd-restore-accent) 8%, var(--el-bg-color));
   }
 
   &.is-failed {
@@ -712,19 +716,19 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 50%;
+  // 静态的步骤序号底块，属控件类表面 → control 档（不做成正圆，避免与状态灯/头像混淆）
+  border-radius: var(--dd-radius-control);
   font-size: 14px;
   font-weight: 700;
   color: var(--el-text-color-secondary);
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .restore-step.is-active .restore-step__badge,
 .restore-step.is-done .restore-step__badge {
   color: var(--dd-restore-accent);
-  border-color: var(--dd-restore-accent-soft);
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--dd-restore-accent) 10%, transparent);
+  border-color: var(--dd-restore-accent);
 }
 
 .restore-step.is-failed .restore-step__badge {
@@ -754,7 +758,8 @@ onBeforeUnmount(() => {
   gap: 12px;
   align-items: start;
   padding: 16px 18px;
-  border-radius: 18px;
+  // 错误提示是弹窗内的独立区块 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: rgba(254, 242, 242, 0.92);
   border: 1px solid rgba(220, 38, 38, 0.18);
   color: #b42318;
@@ -769,6 +774,11 @@ onBeforeUnmount(() => {
     margin: 0;
     line-height: 1.7;
     color: #7f1d1d;
+    // 与 UpdateProgressDialog 的错误区块对齐：errorMessage 直接透传后端文案，
+    // 后端诊断类提示是分行的，不保留换行的话 \n 会被 HTML 折叠成空格，逐条步骤会全挤成一行。
+    // 与下面的 word-break 不冲突：pre-wrap 管「保留换行 + 允许软换行」，
+    // word-break 管「给超长无空格串（长路径、长错误串）补断点」，作用在换行决策的不同环节。
+    white-space: pre-wrap;
     word-break: break-word;
   }
 }
@@ -823,10 +833,8 @@ onBeforeUnmount(() => {
 
 :global(html.dark) {
   .restore-progress-hero {
-    background:
-      radial-gradient(circle at top, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.88)),
-      linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(15, 23, 42, 0.24));
-    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.3);
+    background: var(--el-bg-color-overlay);
+    border-color: var(--el-border-color-darker);
   }
 
   .restore-progress-core,

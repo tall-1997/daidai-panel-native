@@ -11,7 +11,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { PanelUpdateStatus } from '@/api/system'
 import { useResponsive } from '@/composables/useResponsive'
 
-type UpdateVisualStatus = 'idle' | 'running' | 'restarting' | 'failed' | 'timeout'
+type UpdateVisualStatus = 'idle' | 'running' | 'restarting' | 'completed' | 'failed' | 'timeout'
 
 const props = defineProps<{
   visible: boolean
@@ -30,6 +30,19 @@ let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
 const deploymentType = computed(() => props.updateStatus?.deployment_type || 'docker')
 const isBinaryUpdate = computed(() => deploymentType.value === 'binary')
+const isMagiskUpdate = computed(() => deploymentType.value === 'magisk')
+// 二进制部署与 Magisk 模块版都是「下载包 -> 替换文件 -> 重启进程」的形态，
+// 阶段序列一致，进度与步骤索引共用同一套映射。
+const isFileReplaceUpdate = computed(() => isBinaryUpdate.value || isMagiskUpdate.value)
+const isWatchtowerUpdate = computed(() => props.updateStatus?.update_manager === 'watchtower')
+
+const watchtowerSteps = [
+  {
+    key: 'trigger',
+    title: '提交更新检查',
+    hint: '由 Watchtower 接管镜像检查和容器更新',
+  },
+] as const
 
 const dockerSteps = [
   {
@@ -87,13 +100,52 @@ const binarySteps = [
   },
 ] as const
 
-const steps = computed(() => isBinaryUpdate.value ? binarySteps : dockerSteps)
+const magiskSteps = [
+  {
+    key: 'prepare',
+    title: '校验环境',
+    hint: '识别模块目录、外壳版本与 Release 更新包',
+  },
+  {
+    key: 'download',
+    title: '下载更新包',
+    hint: '从 GitHub Release 下载当前架构的面板程序与前端',
+  },
+  {
+    key: 'extract',
+    title: '解压校验',
+    hint: '安全解压并校验面板程序与前端目录',
+  },
+  {
+    key: 'apply',
+    title: '替换并同步模块',
+    hint: '替换容器内的面板程序与前端，并写回模块目录防止重启回滚',
+  },
+  {
+    key: 'wait',
+    title: '等待上线',
+    hint: '轮询检测新版本服务重新连通',
+  },
+] as const
+
+const steps = computed(() =>
+  isWatchtowerUpdate.value
+    ? watchtowerSteps
+    : isMagiskUpdate.value
+    ? magiskSteps
+    : isBinaryUpdate.value
+    ? binarySteps
+    : dockerSteps
+)
 const currentPhase = computed(() => props.updateStatus?.phase || 'preparing')
 const progressPercent = computed(() => {
+  if (props.status === 'completed') {
+    return 100
+  }
   if (props.status === 'timeout') {
     return 96
   }
-  if (isBinaryUpdate.value) {
+  if (isFileReplaceUpdate.value) {
     switch (currentPhase.value) {
       case 'preparing':
         return 12
@@ -101,6 +153,9 @@ const progressPercent = computed(() => {
         return 38
       case 'extracting':
         return 58
+      // syncing 只有 Magisk 模块版会出现：把新文件写回模块目录，防止重启回滚。
+      case 'syncing':
+        return 68
       case 'scheduling':
         return 76
       case 'restarting':
@@ -128,10 +183,13 @@ const progressPercent = computed(() => {
 })
 
 const currentStepIndex = computed(() => {
+  if (isWatchtowerUpdate.value) {
+    return 0
+  }
   if (props.status === 'restarting' || props.status === 'timeout') {
     return 4
   }
-  if (isBinaryUpdate.value) {
+  if (isFileReplaceUpdate.value) {
     switch (currentPhase.value) {
       case 'preparing':
         return 0
@@ -139,6 +197,8 @@ const currentStepIndex = computed(() => {
         return 1
       case 'extracting':
         return 2
+      case 'syncing':
+        return 3
       case 'scheduling':
         return 3
       case 'restarting':
@@ -167,6 +227,8 @@ const currentStepIndex = computed(() => {
 
 const dialogTitle = computed(() => {
   switch (props.status) {
+    case 'completed':
+      return isWatchtowerUpdate.value ? '已交给 Watchtower' : '更新请求已完成'
     case 'restarting':
       return '正在切换新版本'
     case 'failed':
@@ -179,6 +241,8 @@ const dialogTitle = computed(() => {
 
 const statusText = computed(() => {
   switch (props.status) {
+    case 'completed':
+      return isWatchtowerUpdate.value ? '已接管' : '已完成'
     case 'restarting':
       return '重启切换中'
     case 'failed':
@@ -192,6 +256,8 @@ const statusText = computed(() => {
 
 const themeClass = computed(() => {
   switch (props.status) {
+    case 'completed':
+      return 'is-completed'
     case 'failed':
     case 'timeout':
       return 'is-danger'
@@ -204,6 +270,8 @@ const themeClass = computed(() => {
 
 const heroIcon = computed(() => {
   switch (props.status) {
+    case 'completed':
+      return CircleCheckFilled
     case 'failed':
     case 'timeout':
       return WarningFilled
@@ -243,6 +311,9 @@ const elapsedLabel = computed(() => {
 })
 
 function stepState(index: number) {
+  if (props.status === 'completed') {
+    return 'is-done'
+  }
   if (props.status === 'failed') {
     if (index < currentStepIndex.value) {
       return 'is-done'
@@ -263,7 +334,7 @@ function stepState(index: number) {
 }
 
 function phaseLabel(phase: string) {
-  if (isBinaryUpdate.value) {
+  if (isFileReplaceUpdate.value) {
     switch (phase) {
       case 'preparing':
         return '环境校验'
@@ -271,6 +342,8 @@ function phaseLabel(phase: string) {
         return '下载更新包'
       case 'extracting':
         return '解压校验'
+      case 'syncing':
+        return '同步模块目录'
       case 'scheduling':
         return '后台替换'
       case 'restarting':
@@ -282,6 +355,8 @@ function phaseLabel(phase: string) {
     }
   }
   switch (phase) {
+    case 'watchtower-triggered':
+      return 'Watchtower 已接管'
     case 'preparing':
       return '环境校验'
     case 'pulling':
@@ -333,8 +408,8 @@ onBeforeUnmount(() => {
     :fullscreen="dialogFullscreen"
     append-to-body
     :close-on-click-modal="false"
-    :close-on-press-escape="status === 'failed' || status === 'timeout'"
-    :show-close="status === 'failed' || status === 'timeout'"
+    :close-on-press-escape="status === 'completed' || status === 'failed' || status === 'timeout'"
+    :show-close="status === 'completed' || status === 'failed' || status === 'timeout'"
     @close="onClose"
   >
     <div class="update-progress-shell" :class="themeClass">
@@ -375,7 +450,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="update-progress-targets">
-        <span v-if="isBinaryUpdate && updateStatus?.asset_name" class="update-target-chip">
+        <span v-if="isFileReplaceUpdate && updateStatus?.asset_name" class="update-target-chip">
           <el-icon><Download /></el-icon>
           更新包：{{ updateStatus.asset_name }}
         </span>
@@ -387,22 +462,22 @@ onBeforeUnmount(() => {
           <el-icon><Download /></el-icon>
           程序：{{ updateStatus.binary_name }}
         </span>
-        <span v-if="!isBinaryUpdate && updateStatus?.container_name" class="update-target-chip">
+        <span v-if="!isFileReplaceUpdate && updateStatus?.container_name" class="update-target-chip">
           <el-icon><Box /></el-icon>
           容器：{{ updateStatus.container_name }}
         </span>
-        <span v-if="!isBinaryUpdate && updateStatus?.image_name" class="update-target-chip">
+        <span v-if="!isFileReplaceUpdate && updateStatus?.image_name" class="update-target-chip">
           <el-icon><Download /></el-icon>
           镜像：{{ updateStatus.image_name }}
         </span>
         <span
-          v-if="!isBinaryUpdate && updateStatus?.pull_image_name && updateStatus.pull_image_name !== updateStatus.image_name"
+          v-if="!isFileReplaceUpdate && updateStatus?.pull_image_name && updateStatus.pull_image_name !== updateStatus.image_name"
           class="update-target-chip"
         >
           <el-icon><Download /></el-icon>
           拉取：{{ updateStatus.pull_image_name }}
         </span>
-        <span v-if="!isBinaryUpdate && updateStatus?.mirror_host" class="update-target-chip">
+        <span v-if="!isFileReplaceUpdate && updateStatus?.mirror_host" class="update-target-chip">
           <el-icon><RefreshRight /></el-icon>
           镜像源：{{ updateStatus.mirror_host }}
         </span>
@@ -442,7 +517,7 @@ onBeforeUnmount(() => {
           <el-button>查看发布说明</el-button>
         </a>
         <el-button
-          v-if="status === 'failed' || status === 'timeout'"
+          v-if="status === 'completed' || status === 'failed' || status === 'timeout'"
           @click="onClose"
         >
           关闭
@@ -481,12 +556,11 @@ onBeforeUnmount(() => {
   gap: 22px;
   align-items: center;
   padding: 22px;
-  border-radius: 24px;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.78)),
-    linear-gradient(180deg, var(--dd-update-accent-soft), rgba(15, 23, 42, 0.02));
+  // 弹窗内的主视觉区块，属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
+  // 扁平化：去掉光晕渐变与投影，用纯色底 + 1px 描边划分层次
+  background: var(--el-fill-color-light);
   border: 1px solid var(--dd-update-accent-soft);
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
 }
 
 .update-progress-visual {
@@ -496,6 +570,7 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 
+// 旋转中的加载圆弧：属于运动中的加载指示，方化会变形失去动效意义，保留圆形
 .update-progress-orbit {
   position: absolute;
   inset: 0;
@@ -505,12 +580,12 @@ onBeforeUnmount(() => {
   animation: update-spin 5.2s linear infinite;
 }
 
+// 加载圆弧的同心环，与旋转指示同属一个加载部件，保留圆形；仅去掉 inset 高光
 .update-progress-rings .ring {
   position: absolute;
   inset: 18px;
   border-radius: 50%;
   border: 1px solid var(--dd-update-accent-soft);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.54);
 }
 
 .update-progress-rings .ring--outer {
@@ -532,14 +607,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  // 圆弧中心的读数盘，与外圈加载指示共用同一圆心，保留圆形
   border-radius: 50%;
   text-align: center;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.84)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.76));
-  box-shadow:
-    0 14px 28px rgba(15, 23, 42, 0.12),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.92);
+  // 扁平化：去掉渐变与投影，纯色底 + 1px 描边与外圈区分
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
 
   strong {
     font-size: 30px;
@@ -580,7 +653,8 @@ onBeforeUnmount(() => {
 .update-progress-eyebrow {
   display: inline-flex;
   padding: 6px 10px;
-  border-radius: 999px;
+  // 小标签块（不是状态灯）→ control 档，与 el-tag 保持同档
+  border-radius: var(--dd-radius-control);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -599,33 +673,37 @@ onBeforeUnmount(() => {
     align-items: center;
     min-height: 30px;
     padding: 0 12px;
-    border-radius: 999px;
+    // 元信息小标签属控件类表面 → control 档
+    border-radius: var(--dd-radius-control);
     font-size: 12px;
     color: var(--el-text-color-secondary);
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
   }
 }
 
 .update-progress-bar {
   padding: 18px 20px;
-  border-radius: 20px;
-  background: rgba(248, 250, 252, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  // 进度区整块是容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .update-progress-bar__track {
   position: relative;
   height: 12px;
   overflow: hidden;
-  border-radius: 999px;
+  // 进度条轨道是天然胶囊 → pill 档
+  border-radius: var(--dd-radius-pill);
   background: rgba(148, 163, 184, 0.16);
 }
 
 .update-progress-bar__fill {
   position: relative;
   height: 100%;
-  border-radius: inherit;
+  // 进度条填充跟随轨道 → pill 档
+  border-radius: var(--dd-radius-pill);
   background: linear-gradient(90deg, color-mix(in srgb, var(--dd-update-accent) 82%, white), var(--dd-update-accent));
   transition: width 0.45s ease;
 
@@ -672,14 +750,13 @@ onBeforeUnmount(() => {
   gap: 8px;
   min-height: 34px;
   padding: 0 14px;
-  border-radius: 999px;
+  // 更新目标标签（不是状态灯）→ control 档
+  border-radius: var(--dd-radius-control);
   font-size: 12px;
   font-weight: 600;
   color: var(--el-text-color-primary);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.88));
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
 
   .el-icon {
     color: var(--dd-update-accent);
@@ -699,21 +776,22 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 16px 12px;
-  border-radius: 18px;
+  // 步骤卡片是独立的容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   text-align: center;
-  background: rgba(248, 250, 252, 0.86);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  // 扁平化：不再上浮与投影，仅靠描边和底色区分步骤状态
+  transition: border-color 0.25s ease, background-color 0.25s ease;
 
   &.is-active {
-    border-color: var(--dd-update-accent-soft);
-    box-shadow: 0 14px 32px var(--dd-update-accent-soft);
-    transform: translateY(-2px);
+    border-color: var(--dd-update-accent);
+    background: var(--dd-update-accent-soft);
   }
 
   &.is-done {
     border-color: color-mix(in srgb, var(--dd-update-accent) 36%, white);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), color-mix(in srgb, var(--dd-update-accent) 8%, white));
+    background: color-mix(in srgb, var(--dd-update-accent) 8%, var(--el-bg-color));
   }
 
   &.is-failed {
@@ -728,19 +806,19 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 50%;
+  // 静态的步骤序号底块，属控件类表面 → control 档（不做成正圆，避免与状态灯/头像混淆）
+  border-radius: var(--dd-radius-control);
   font-size: 14px;
   font-weight: 700;
   color: var(--el-text-color-secondary);
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .update-step.is-active .update-step__badge,
 .update-step.is-done .update-step__badge {
   color: var(--dd-update-accent);
-  border-color: var(--dd-update-accent-soft);
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--dd-update-accent) 10%, transparent);
+  border-color: var(--dd-update-accent);
 }
 
 .update-step.is-failed .update-step__badge {
@@ -770,7 +848,8 @@ onBeforeUnmount(() => {
   gap: 12px;
   align-items: start;
   padding: 16px 18px;
-  border-radius: 18px;
+  // 错误提示是弹窗内的独立区块 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: rgba(254, 242, 242, 0.92);
   border: 1px solid rgba(220, 38, 38, 0.18);
   color: #b42318;
@@ -785,6 +864,11 @@ onBeforeUnmount(() => {
     margin: 0;
     line-height: 1.7;
     color: #7f1d1d;
+    // 后端的更新失败诊断是分行文案（判定结论 / 根因 / 逐条自查命令 / 原始错误），
+    // 不保留换行的话 \n 会被 HTML 折叠成空格，编号步骤全挤成一行没法照着做。
+    // 与下面的 word-break 不冲突：pre-wrap 管「保留换行 + 允许软换行」，
+    // word-break 管「给超长无空格串（长 URL、长错误串）补断点」，作用在换行决策的不同环节。
+    white-space: pre-wrap;
     word-break: break-word;
   }
 }
@@ -843,10 +927,8 @@ onBeforeUnmount(() => {
 
 :global(html.dark) {
   .update-progress-hero {
-    background:
-      radial-gradient(circle at top, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.88)),
-      linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(15, 23, 42, 0.24));
-    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.3);
+    background: var(--el-bg-color-overlay);
+    border-color: var(--el-border-color-darker);
   }
 
   .update-progress-core,

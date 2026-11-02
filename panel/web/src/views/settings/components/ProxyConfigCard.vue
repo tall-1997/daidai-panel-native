@@ -1,13 +1,26 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Connection, Document, InfoFilled } from '@element-plus/icons-vue'
+import { useResponsive } from '@/composables/useResponsive'
+import { formatDateTime } from '@/utils/datetime'
 import type { SettingsConfigForm } from '../types'
 
-defineProps<{
+const props = defineProps<{
+  configsLoading: boolean
   configsSaving: boolean
   form: SettingsConfigForm
+  /** 服务端的 auto_update_last_checked_at 原值（ISO 时间或空串），只读展示、不回写 */
+  autoUpdateLastCheckedAt: string
   onSave: () => void
 }>()
+
+// issue #144 / v3.3.2：下面三个说明弹窗在移动端必须整屏。
+// 遮罩只有 24% 暗度，弹窗不铺满视口的话，sticky 顶栏会从遮罩后面透出来；
+// 而它的层级又低于遮罩、点了没反应，观感就是「顶栏卡住了」。
+const { dialogFullscreen } = useResponsive()
+
+// 空值文案用「从未检查」而不是 "-"：说明是一次都没查过，而不是查了没记下来
+const lastCheckedDisplay = computed(() => formatDateTime(props.autoUpdateLastCheckedAt, '从未检查'))
 
 const dockerMirrorDialogVisible = ref(false)
 const binaryProxyDialogVisible = ref(false)
@@ -31,7 +44,7 @@ const binaryProxyOptions = [
 </script>
 
 <template>
-  <el-card shadow="never">
+  <el-card shadow="never" v-loading="configsLoading">
     <template #header>
       <div class="card-header">
         <span class="card-title"><el-icon><Connection /></el-icon> 网络代理</span>
@@ -76,7 +89,7 @@ const binaryProxyOptions = [
         </el-button>
       </div>
       <span class="form-hint">
-        Docker 部署更新使用，可填写镜像加速地址或自建镜像源；也可以到 status.anye.xyz 查看更多镜像源状态；留空则直接从默认镜像仓库拉取更新镜像。
+        仅用于旧 Docker Socket 一键更新。Watchtower 部署请在 .env 中设置 DAIDAI_PANEL_IMAGE，让容器镜像与 IMAGE_NAME 同步使用镜像加速或自建仓库。
       </span>
     </div>
 
@@ -108,6 +121,8 @@ const binaryProxyOptions = [
       </div>
     </div>
     <span class="form-hint">开启后每 24 小时自动检查一次新版本；若检测到更新，将按当前镜像渠道自动尝试更新并通过通知渠道反馈结果。</span>
+    <!-- 巡检与概览页「检查系统更新」都会写这个时间，巡检按它判断是否满 24 小时；排查「为什么没自动更新」时有用 -->
+    <span class="form-hint last-checked-hint">上次检查更新时间：{{ lastCheckedDisplay }}</span>
 
     <div class="form-field">
       <label>可信代理 CIDR</label>
@@ -122,7 +137,7 @@ const binaryProxyOptions = [
       </span>
     </div>
 
-    <el-dialog v-model="proxyHelpDialogVisible" title="代理地址说明" width="560px">
+    <el-dialog v-model="proxyHelpDialogVisible" title="代理地址说明" width="560px" :fullscreen="dialogFullscreen">
       <div class="proxy-help">
         <p>
           这里配置的是面板服务器的出站代理。填写后，面板后台访问外部网络时会优先经过这个代理，例如拉取订阅仓库、下载脚本、安装 Python / Node / 系统依赖、健康检查以及部分通知请求。
@@ -139,13 +154,19 @@ const binaryProxyOptions = [
         <p class="proxy-help-note">
           这里填写的是“面板服务器能访问到的代理地址”。如果面板运行在 Docker 容器内，127.0.0.1 指的是容器内部，不是宿主机；宿主机代理通常需要填写宿主机在容器内可访问的地址。
         </p>
+        <!-- issue #111：开代理后 Python 的 notify.py 把发往面板自身的回调请求也交给了代理，代理回 502。
+             修复方式是给脚本注入的 NO_PROXY / no_proxy 里合并追加回环地址，这里把这条行为讲清楚，
+             免得用户以为“填了代理连本机接口也要走代理”。 -->
+        <p class="proxy-help-note">
+          面板会自动为 localhost / 127.0.0.1 / ::1 放行直连，脚本回调面板自身不经过代理。这三条是面板强制注入的：你在“环境变量”页设置的 NO_PROXY 会与它们合并（你的值不会被覆盖，但也无法把这三条移除）；确实要让某个本机服务走代理，需要在脚本内部自行指定 proxies。
+        </p>
       </div>
       <template #footer>
         <el-button type="primary" @click="proxyHelpDialogVisible = false">知道了</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="dockerMirrorDialogVisible" title="系统更新镜像源" width="520px">
+    <el-dialog v-model="dockerMirrorDialogVisible" title="系统更新镜像源" width="520px" :fullscreen="dialogFullscreen">
       <div class="mirror-source-tip">
         可到
         <a href="https://status.anye.xyz/" target="_blank" rel="noopener noreferrer">
@@ -170,7 +191,7 @@ const binaryProxyOptions = [
       </template>
     </el-dialog>
 
-    <el-dialog v-model="binaryProxyDialogVisible" title="二进制更新加速源" width="520px">
+    <el-dialog v-model="binaryProxyDialogVisible" title="二进制更新加速源" width="520px" :fullscreen="dialogFullscreen">
       <div class="mirror-option-list">
         <button
           v-for="url in binaryProxyOptions"
@@ -198,6 +219,11 @@ const binaryProxyOptions = [
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+// 静默更新这一组（开关 + 说明 + 上次检查时间）不在 .form-field 里，自己补上与下一项之间的间距
+.last-checked-hint {
+  margin-bottom: 20px;
 }
 
 .field-label-row {
@@ -239,13 +265,15 @@ const binaryProxyOptions = [
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  // 帮助说明区块属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: var(--el-fill-color-lighter);
 
   code {
     display: block;
     padding: 7px 9px;
-    border-radius: 6px;
+    // 区块内的代码块（四周有 12px 留白、不贴边）→ surface 档
+    border-radius: var(--dd-radius-surface);
     background: var(--el-bg-color);
     color: var(--el-text-color-primary);
     font-family: var(--dd-font-mono);
@@ -272,7 +300,8 @@ const binaryProxyOptions = [
   margin-bottom: 12px;
   padding: 10px 12px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  // 镜像来源提示块属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: var(--el-fill-color-lighter);
   color: var(--el-text-color-secondary);
   font-size: 13px;
@@ -294,7 +323,8 @@ const binaryProxyOptions = [
   min-height: 40px;
   padding: 9px 12px;
   border: 1px solid var(--el-border-color);
-  border-radius: 8px;
+  // 可点击的镜像选项是控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
   background: var(--el-bg-color);
   color: var(--el-text-color-primary);
   cursor: pointer;

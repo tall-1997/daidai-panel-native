@@ -160,8 +160,10 @@ func (h *PlatformTokenHandler) Create(c *gin.Context) {
 		Enabled:     true,
 	}
 
+	// platform_tokens 的唯一键是「platform_id + name」，连点创建按钮的第二发会撞在这里。
+	// 只在同一平台内判重：不同平台下各有一条「主号」是正常用法。
 	if err := database.DB.Create(&token).Error; err != nil {
-		response.InternalError(c, "创建令牌失败")
+		response.BadRequest(c, "该平台下已存在同名令牌")
 		return
 	}
 
@@ -224,7 +226,11 @@ func (h *PlatformTokenHandler) Update(c *gin.Context) {
 	}
 
 	if len(updates) > 0 {
-		database.DB.Model(&token).Updates(updates)
+		// 改名撞上同平台下的另一条令牌会在这里报错；不接 .Error 就会出现「提示更新成功、刷新又变回去」。
+		if err := database.DB.Model(&token).Updates(updates).Error; err != nil {
+			response.BadRequest(c, "该平台下已存在同名令牌")
+			return
+		}
 	}
 
 	database.DB.Preload("Platform").First(&token, tokenID)

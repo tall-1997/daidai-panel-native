@@ -17,6 +17,8 @@ const {
   isMobile,
   isCompactLayout,
   mobileShowEditor,
+  isSidebarCollapsed,
+  toggleSidebarCollapsed,
   fileTree,
   selectedFile,
   fileContent,
@@ -27,6 +29,7 @@ const {
   treeLoading,
   isEditing,
   editorAutoFocusTicket,
+  treeRevealTicket,
   showCreateFileDialog,
   showCreateDirDialog,
   showRenameDialog,
@@ -47,6 +50,10 @@ const {
   versionDiffOriginalContent,
   versionDiffModifiedContent,
   formatting,
+  // 新建文件 / 新建目录 / 上传的在途锁，透传给弹窗组件绑按钮 loading
+  creatingFile,
+  creatingDir,
+  uploading,
   editorLanguage,
   hasChanges,
   allFolders,
@@ -151,10 +158,22 @@ async function handleCancelEdit() {
       </div>
     </div>
 
-    <div class="scripts-workspace" :class="{ 'mobile-show-editor': isCompactLayout && mobileShowEditor }">
+    <div
+      class="scripts-workspace"
+      :class="{
+        'mobile-show-editor': isCompactLayout && mobileShowEditor,
+        'sidebar-collapsed': isSidebarCollapsed
+      }"
+    >
+      <!-- current-file / reveal-ticket / sidebar-collapsed 三个给目录树定位用（issue #136）：
+           侧栏据此展开祖先、高亮当前文件、滚到可见；侧栏看不见时只高亮，等它重新可见再滚 -->
       <ScriptsSidebar
         :is-mobile="isCompactLayout"
         :mobile-show-editor="mobileShowEditor"
+        :sidebar-collapsed="isSidebarCollapsed"
+        :current-file="selectedFile"
+        :reveal-ticket="treeRevealTicket"
+        :on-toggle-collapse="toggleSidebarCollapsed"
         :tree-loading="treeLoading"
         :file-tree="fileTree"
         :allow-drag="allowDrag"
@@ -176,6 +195,8 @@ async function handleCancelEdit() {
         v-model:is-editing="isEditing"
         :is-mobile="isCompactLayout"
         :mobile-show-editor="mobileShowEditor"
+        :sidebar-collapsed="isSidebarCollapsed"
+        :on-expand-sidebar="toggleSidebarCollapsed"
         :selected-file="selectedFile"
         :is-binary="isBinary"
         :has-changes="hasChanges"
@@ -222,6 +243,9 @@ async function handleCancelEdit() {
       :versions="versions"
       :versions-loading="versionsLoading"
       :version-diff-loading="versionDiffLoading"
+      :creating-file="creatingFile"
+      :creating-dir="creatingDir"
+      :uploading="uploading"
       :on-create-file="handleCreateFile"
       :on-create-dir="handleCreateDir"
       :on-rename="handleRename"
@@ -298,6 +322,11 @@ async function handleCancelEdit() {
 
 /* ---- Workspace（两卡容器：透明 flex，卡片间留间隙）---- */
 .scripts-workspace {
+  /* 目录树卡宽度的【单一真源】。
+     以前这个 300px 被两处同时钉死（这里的 flex-basis + ScriptsSidebar.vue 的 width/min-width），
+     只改一处会被另一处压住、卡片根本收不起来，所以收敛成这一个变量，两边都来消费它。 */
+  --scripts-sidebar-width: 300px;
+
   display: flex;
   flex: 1 1 auto;
   width: 100%;
@@ -306,29 +335,53 @@ async function handleCancelEdit() {
   min-height: 0;
   /* 目录树卡与编辑器卡之间的间隙 */
   gap: 14px;
-  /* 容器本身透明，圆角/边框/阴影下放到两张子卡 */
+  /* 折叠时 gap 要一起收掉，否则编辑器卡左边会凭空留 14px 空档；
+     只有两个不换行的子项，逐帧重算 gap 不会引起整页重排 */
+  transition: gap var(--dd-motion-normal) var(--dd-ease-standard);
+  /* 容器本身透明，边框下放到两张子卡 */
   background: transparent;
 }
 
-/* ---- 目录树卡（独立圆角卡片）---- */
+/* ---- 目录树卡（靠 1px 边框划分层次，圆角跟随 --dd-radius-surface）---- */
 :deep(.scripts-sidebar) {
-  flex: 0 0 300px;
+  flex: 0 0 var(--scripts-sidebar-width);
   min-height: 0;
-  overflow: hidden; /* 裁切卡片圆角 */
+  overflow: hidden; /* 裁切内部溢出内容，顺带把内部贴边元素裁成同样的角 */
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--dd-card-radius);
-  box-shadow: var(--dd-shadow-card);
+  /* 整张目录树卡是容器类表面 → surface 档 */
+  border-radius: var(--dd-radius-surface);
+  /* 折叠动画只动宽度，【绝不能用 transform】：
+     残留 transform 会让这张卡成为编辑器内部 position:fixed 浮层（补全 / 搜索面板 /
+     悬浮提示）的包含块，弹层会飘位 —— 与文末入场动画那条「只能 backwards」是同一个坑。
+     border-width 也要一起过渡：box-sizing 是 border-box，1px 边框压不掉，
+     只收 flex-basis 的话完全折叠后会留下一条 2px 竖线。 */
+  transition:
+    flex-basis var(--dd-motion-normal) var(--dd-ease-standard),
+    border-width var(--dd-motion-normal) var(--dd-ease-standard);
 }
 
-/* ---- 编辑器卡（独立圆角卡片）---- */
+/* ---- 目录树折叠态（只在桌面宽屏出现，见 useScriptWorkspaceBrowser 的 isSidebarCollapsed）---- */
+.scripts-workspace.sidebar-collapsed {
+  --scripts-sidebar-width: 0px;
+  gap: 0;
+
+  :deep(.scripts-sidebar) {
+    border-width: 0;
+    /* 收到 0 宽后卡片仍留在 DOM 里（留着才有宽度过渡），
+       这里禁掉命中，避免鼠标点到看不见的搜索框/按钮上 */
+    pointer-events: none;
+  }
+}
+
+/* ---- 编辑器卡（靠 1px 边框划分层次，圆角跟随 --dd-radius-surface）---- */
 :deep(.scripts-editor) {
   min-height: 0;
-  overflow: hidden; /* 裁切卡片圆角 */
+  overflow: hidden; /* 裁切内部溢出内容，顺带把内部贴边的 hero / 状态条裁成同样的角 */
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--dd-card-radius);
-  box-shadow: var(--dd-shadow-card);
+  /* 整张编辑器卡是容器类表面 → surface 档 */
+  border-radius: var(--dd-radius-surface);
 }
 
 :deep(.editor-hero) {
@@ -355,7 +408,7 @@ async function handleCancelEdit() {
     }
   }
 
-  /* 移动端：两卡纵向堆叠，各占满宽度并保留卡片圆角 */
+  /* 移动端：两卡纵向堆叠，各占满宽度 */
   .scripts-workspace {
     flex-direction: column;
     flex: 1 1 auto;
@@ -369,7 +422,7 @@ async function handleCancelEdit() {
       min-width: unset;
       flex: 1 1 auto;
       min-height: 0;
-      overflow: hidden; /* 裁圆角；目录滚动由内部 .sidebar-tree 负责 */
+      overflow: hidden; /* 目录滚动由内部 .sidebar-tree 负责 */
     }
 
     :deep(.scripts-editor) {
@@ -433,5 +486,43 @@ async function handleCancelEdit() {
       height: 100%;
     }
   }
+}
+
+// ===== 入场动画 =====
+// 与全站 dd-*-rise-in 同一语汇：只对两张卡片级容器（目录树卡 / 编辑器卡）做淡入上移，
+// ≤60ms 轻微错落；时长与缓动全部走令牌，prefers-reduced-motion 下令牌降为 1ms、
+// delay 被全局补丁归零，等效关闭。目录树里的文件节点属于列表行，绝不逐行 stagger。
+//
+// 只动 opacity + translateY，不碰 height / flex：
+// .scripts-workspace 的 `flex + min-height: 0 + height: 0` 内嵌滚动链完全不受影响。
+//
+// fill-mode 用 backwards 而不是列表页惯用的 both：
+// 编辑器卡里装着代码编辑器，both 会把 `transform: translateY(0)` 永久留在 .scripts-editor 上，
+// 让它成为编辑器内部 position:fixed 浮层（搜索面板 / 补全 / 悬浮提示）的包含块 → 弹层错位，
+// 与 ScriptExecutionDialogs.vue 里那条「不加 both」的注释是同一个坑。
+// backwards 只在 delay 期间铺 from 帧，动画结束后回到自然样式（opacity 1、无 transform），
+// 末态与 to 帧完全一致，视觉上没有区别。
+@keyframes dd-scripts-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+:deep(.scripts-sidebar),
+:deep(.scripts-editor) {
+  animation: dd-scripts-rise-in var(--dd-motion-page) var(--dd-ease-decelerate)
+    backwards;
+}
+
+// 轻微错落：目录树卡先入，编辑器卡略晚。
+// 移动端两卡是 display 切换（sidebar / editor 互斥），切换时动画会重放一次，
+// 正好充当「文件列表 ↔ 编辑器」的页面级进场，属于预期行为。
+:deep(.scripts-editor) {
+  animation-delay: 60ms;
 }
 </style>

@@ -41,7 +41,8 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 	}
 
 	key := model.SSHKey{
-		Name: req.Name,
+		Name:       req.Name,
+		PrivateKey: req.PrivateKey,
 	}
 
 	tx := database.DB.Begin()
@@ -51,9 +52,10 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 	}
 	if err := tx.Create(&key).Error; err != nil {
 		tx.Rollback()
-		response.InternalError(c, "创建 SSH 密钥失败")
+		response.BadRequest(c, "同名 SSH 密钥已存在")
 		return
 	}
+	// Android 端密钥不落明文：交给运行时 SecretStore 密封，库里只留密文与 provider 标记。
 	if err := service.SealSSHKeyPrivateKey(c.Request.Context(), &key, req.PrivateKey); err != nil {
 		tx.Rollback()
 		response.InternalError(c, "创建 SSH 密钥失败")
@@ -68,10 +70,7 @@ func (h *SSHKeyHandler) Create(c *gin.Context) {
 		response.InternalError(c, "创建 SSH 密钥失败")
 		return
 	}
-	if err := tx.Commit().Error; err != nil {
-		response.InternalError(c, "创建 SSH 密钥失败")
-		return
-	}
+	tx.Commit()
 
 	response.Created(c, gin.H{"message": "创建成功", "data": key.ToDict()})
 }
@@ -109,7 +108,11 @@ func (h *SSHKeyHandler) Update(c *gin.Context) {
 	}
 
 	if len(updates) > 0 {
-		database.DB.Model(&key).Updates(updates)
+		// 改名撞上别的密钥会在这里报错；不接 .Error 就会出现「提示更新成功、刷新又变回去」。
+		if err := database.DB.Model(&key).Updates(updates).Error; err != nil {
+			response.BadRequest(c, "同名 SSH 密钥已存在")
+			return
+		}
 	}
 
 	database.DB.First(&key, keyID)

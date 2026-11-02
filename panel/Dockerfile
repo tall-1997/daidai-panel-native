@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM node:20.19.0-bookworm-slim AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:24.21.0-bookworm-slim AS frontend-builder
 
 WORKDIR /build
 COPY web/package.json web/package-lock.json ./
@@ -27,7 +27,7 @@ RUN GOARM=$(case "${TARGETVARIANT}" in v7) echo 7;; v6) echo 6;; v5) echo 5;; *)
     go build -ldflags="-s -w -X daidai-panel/handler.Version=${VERSION}" -o ddp ./cmd/ddp
 
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 ARG TARGETARCH
 ARG TARGETVARIANT
@@ -63,8 +63,9 @@ COPY --from=backend-builder /build/config.yaml .
 COPY --from=frontend-builder /build/dist /app/web
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
 COPY docker/entrypoint.sh /app/entrypoint.sh
+COPY docker/healthcheck.sh /app/healthcheck.sh
 
-RUN chmod +x /app/entrypoint.sh /usr/local/bin/ddp && sed -i 's/\r$//' /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh /app/healthcheck.sh /usr/local/bin/ddp && sed -i 's/\r$//' /app/entrypoint.sh /app/healthcheck.sh
 
 ENV TZ=Asia/Shanghai
 # 统一字符编码，避免 docker exec 终端中文文件名/输出乱码（Alpine musl ≥1.2.3 内置 C.UTF-8）。
@@ -79,8 +80,8 @@ EXPOSE ${PANEL_PORT}
 
 VOLUME ["/app/Dumb-Panel"]
 
-# 容器健康检查：飞牛 OS / 群晖等 NAS 容器面板依赖此标记容器状态。
+# 容器健康检查：飞牛 OS / 群晖等 NAS 容器面板依赖此标记容器状态。探测地址跟着 PANEL_HOST 走（#162）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl --fail --silent --output /dev/null "http://127.0.0.1:${PANEL_PORT}/api/v1/health" || exit 1
+  CMD /app/healthcheck.sh || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]

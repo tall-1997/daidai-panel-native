@@ -8,3 +8,18 @@
 
 # Linux/Magisk/容器脚本必须保持 LF，避免 /bin/sh/bash 解析异常
 *.sh text eol=lf
+
+# 二进制产物显式标注，不依赖 `* text=auto` 的内容嗅探。
+# 这些文件是【跑一次脚本然后提交进版本库】的构建输入：
+#   - web/public/fonts/*.woff2 由 web/scripts/fetch-fonts.mjs 抓取，
+#     CI 只跑 `npm ci && vite build` 不联网，缺文件会被 vite.config.ts 的
+#     selfHostedFontsPlugin 直接判构建失败；
+#   - web/public/favicon-512.webp 是面板图标。
+# 嗅探本身对它们是有效的（都含 NUL 字节），但一旦哪天有人给 .gitattributes
+# 加了更激进的 text 规则，被换行归一化损坏的二进制在 git diff 里是看不出来的。
+*.woff2 binary
+*.woff binary
+*.webp binary
+*.png binary
+*.jpg binary
+*.ico binary

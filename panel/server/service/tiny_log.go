@@ -46,7 +46,17 @@ func (l *TinyLog) Write(p []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	}
 
-	data := append(l.remainder, p...)
+	// 【必须用新的底层数组拼，不能写成 append(l.remainder, p...)】
+	// 那种写法在 l.remainder 还有富余容量时会【原地】追加，于是 data 与 l.remainder
+	// 共用同一块底层数组。接着下面 UTF-8 收尾那段做的是
+	// `l.remainder = l.remainder[:0]` 再 `append(l.remainder, data[i:]...)`，
+	// 等于把切下来的尾巴拷回同一块数组的开头，把 data 的头部字节直接覆写掉 ——
+	// 最终 l.writer.Write(data) 写出去的是被污染的内容（日志前几个字节变成上一段的尾巴）。
+	// 只在「上一次留了不完整 UTF-8 尾巴」时才触发，所以平时看不出来，一旦触发就是内容错乱。
+	// 这里先分配一块新数组再拼，data 与 l.remainder 从此互不相干，对外行为完全不变。
+	data := make([]byte, 0, len(l.remainder)+len(p))
+	data = append(data, l.remainder...)
+	data = append(data, p...)
 	l.remainder = l.remainder[:0]
 
 	if len(data) > 0 && !utf8.Valid(data) {
@@ -72,6 +82,25 @@ func (l *TinyLog) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+// broadcast 把新写入的数据推给所有实时订阅者（SSE 连接）。
+//
+// 【这里的 default 分支是有意丢弃，不是 bug】
+// 订阅通道有 100 的缓冲，慢消费者（网络差、浏览器标签在后台）撑满之后就丢。
+// 换成阻塞发送会更糟：一个卡住的 SSE 连接会把 Write 卡住，而 Write 在脚本输出的
+// 同步路径上 —— 等于让一个慢浏览器把整个任务执行拖死。
+//
+// 丢的只是【运行中那一瞬间的实时观感】，不影响最终结果：
+//   - 落盘是同步的（上面 l.writer 那条路径），文件里一个字节都不少；
+//   - 任务结束时 Close() 把完整日志压缩存进 task_logs；
+//   - 前端在收到 SSE 的 done 事件后会 fetchLatestLog 重新拉一次完整日志
+//     （web/src/views/tasks/components/LogViewer.vue 的 onEvent），把实时流覆盖掉。
+// 所以这条路径是「最终一致」的。
+//
+// ⚠️ 注意与 issue #102 区分：那个 bug 是【源头就没读到数据】
+// （cmd.Wait() 抢在读协程前关闭了管道，见 script_runner.go 的 pumpAndWait），
+// 丢的内容既不在文件里也不在数据库里，重新拉也补不回来。
+// 如果又有人报「日志显示不全」，先确认是「刷新后还缺」（源头丢，是真 bug）
+// 还是「只有运行中缺、结束后完整」（这里丢，符合预期）。
 func (l *TinyLog) broadcast(data []byte) {
 	l.subLock.RLock()
 	defer l.subLock.RUnlock()

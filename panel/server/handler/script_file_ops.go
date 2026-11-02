@@ -98,24 +98,30 @@ func buildTree(baseDir, prefix string) []map[string]interface{} {
 			continue
 		}
 
+		info, _ := entry.Info()
+		mtime := float64(0)
+		if info != nil {
+			mtime = float64(info.ModTime().Unix())
+		}
+
+		var node map[string]interface{}
 		if entry.IsDir() {
 			children := buildTree(baseDir, rel)
-			dirs = append(dirs, map[string]interface{}{
+			node = map[string]interface{}{
 				"key":      rel,
 				"title":    name,
 				"isLeaf":   false,
 				"type":     "directory",
 				"children": children,
-			})
+				"mtime":    mtime,
+			}
+			dirs = append(dirs, node)
 		} else {
-			info, _ := entry.Info()
 			size := int64(0)
-			mtime := float64(0)
 			if info != nil {
 				size = info.Size()
-				mtime = float64(info.ModTime().Unix())
 			}
-			files = append(files, map[string]interface{}{
+			node = map[string]interface{}{
 				"key":       rel,
 				"title":     name,
 				"isLeaf":    true,
@@ -123,7 +129,12 @@ func buildTree(baseDir, prefix string) []map[string]interface{} {
 				"extension": strings.ToLower(filepath.Ext(name)),
 				"size":      size,
 				"mtime":     mtime,
-			})
+			}
+			files = append(files, node)
+		}
+		// 创建时间拿不到就不带 btime 键，前端按 mtime 兜底排序
+		if btime, ok := fileBirthTime(filepath.Join(dir, name), info); ok {
+			node["btime"] = btime
 		}
 	}
 

@@ -1,6 +1,8 @@
 package handler_test
 
 import (
+	"context"
+	"encoding/base64"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +16,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// handlerSecretStore 是 SSH 密钥密封/开启链路回归测试用的内存密钥存储替身。
+type handlerSecretStore struct{}
+
+func (handlerSecretStore) Seal(_ context.Context, _ string, payload []byte) (service.SealedValue, error) {
+	return service.SealedValue{Provider: "test", Cipher: []byte("sealed:" + base64.StdEncoding.EncodeToString(payload))}, nil
+}
+
+func (handlerSecretStore) Open(_ context.Context, _ string, value service.SealedValue) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.TrimPrefix(string(value.Cipher), "sealed:"))
+}
+
+func (handlerSecretStore) Status() service.SecretStoreStatus {
+	return service.SecretStoreStatus{Provider: "test", Ready: true}
+}
 
 func TestSSHKeyRoutesRequireAdminUserToken(t *testing.T) {
 	testutil.SetupTestEnv(t)

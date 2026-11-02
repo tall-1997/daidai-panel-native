@@ -338,25 +338,46 @@ func TestBatchReinstallRunsSequentially(t *testing.T) {
 	}
 }
 
-func TestBuildDependencyExportLinesUsesExpectedFormat(t *testing.T) {
+// 导出按安装时填写的原样输出（#150）：当初带版本号的才带，没带的就不带，每行一个、按名称排序，
+// 只含已安装的记录，Python 按页签上的版本过滤。以前的格式是「名称==>现场查到的已装版本」，
+// 要真跑 pip / npm 才能测；现在导出不碰任何外部命令，直接走 HTTP 断言响应体。
+func TestDependencyExportOutputsNamesAsEntered(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	deps := []model.Dependency{
-		{Name: "requests"},
-		{Name: "httpx"},
-		{Name: "pendulum"},
+		{Name: "requests", Type: model.DepTypePython, PythonVersion: "3.12", Status: model.DepStatusInstalled},
+		{Name: "httpx==0.28.1", Type: model.DepTypePython, PythonVersion: "3.12", Status: model.DepStatusInstalled},
+		{Name: "pendulum", Type: model.DepTypePython, PythonVersion: "3.12", Status: model.DepStatusFailed},
+		{Name: "numpy", Type: model.DepTypePython, PythonVersion: "3.11", Status: model.DepStatusInstalled},
+		{Name: "axios@0.27.2", Type: model.DepTypeNodeJS, Status: model.DepStatusInstalled},
+	}
+	for i := range deps {
+		if err := database.DB.Create(&deps[i]).Error; err != nil {
+			t.Fatalf("create dep %d: %v", i, err)
+		}
 	}
 
-	lines := buildDependencyExportLinesFromVersions(deps, map[string]string{
-		"requests": "2.32.3",
-		"httpx":    "0.28.1",
-	})
-
-	want := []string{
-		"requests==>2.32.3",
-		"httpx==>0.28.1",
-		"pendulum==>未知版本",
+	engine := newDepsTestRouter()
+	token := testutil.MustCreateAccessToken(t, "admin", "admin")
+	cases := []struct {
+		query string
+		want  string
+	}{
+		{"type=python&python_version=3.12", "httpx==0.28.1\nrequests"},
+		{"type=python&python_version=3.11", "numpy"},
+		{"type=nodejs", "axios@0.27.2"},
 	}
-	if !slices.Equal(lines, want) {
-		t.Fatalf("expected export lines %v, got %v", want, lines)
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/deps/export?"+tc.query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		engine.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", tc.query, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != tc.want {
+			t.Fatalf("%s: expected export body %q, got %q", tc.query, tc.want, got)
+		}
 	}
 }
 

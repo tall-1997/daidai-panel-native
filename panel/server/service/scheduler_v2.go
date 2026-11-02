@@ -1,11 +1,8 @@
 package service
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +12,6 @@ import (
 	panelcron "daidai-panel/pkg/cron"
 
 	"github.com/robfig/cron/v3"
-	"gorm.io/gorm"
 )
 
 type SchedulerConfig struct {
@@ -32,24 +28,26 @@ const (
 )
 
 type ExecutionRequest struct {
-	TaskID             uint
-	Task               *model.Task
-	TriggerType        string
-	RetryIndex         int
-	LogID              string
-	TaskLogID          uint
-	OperationID        string
-	ScheduleInstanceID uint
-	ScheduledUTC       time.Time
-	CommandPlan        *CommandExecutionPlan
+	TaskID      uint
+	Task        *model.Task
+	TriggerType string
+	RetryIndex  int
+	LogID       string
+	TaskLogID   uint
+	CommandPlan *CommandExecutionPlan
+	// OperationID 是本机版（Android）任务操作记录：OnTaskExecuting 认领后写回，
+	// RunTask / OnTaskCompleted / OnTaskFailed 用它把同一条记录收口。
+	OperationID string
+	// executionDone 是「Go 任务已在 OnTaskExecuting 里异步启动」的完成信号：
+	// gomobile 适配层直接调 OnTaskExecuting 时也保留异步语义，调度器 RunTask 等它结束再释放 worker 槽位。
+	executionDone chan struct{}
 	// DelayResolved 标记本次请求已经完成过随机延迟判定。
 	// 延迟等待通过“重新入队”实现，这个标记用于防止重新入队后再次延迟。
 	DelayResolved bool
 
 	// taskLog / tinyLog 由 OnTaskExecuting 准备、交给 RunTask 使用，只在包内流转。
-	taskLog       *model.TaskLog
-	tinyLog       *TinyLog
-	executionDone chan struct{}
+	taskLog *model.TaskLog
+	tinyLog *TinyLog
 }
 
 type ExecutionResult struct {
@@ -247,6 +245,11 @@ func (s *SchedulerV2) Stop() {
 	log.Println("scheduler v2 stopped")
 }
 
+// schedulerCronCallbackWait 是 SignalStop 等「正在跑的 cron 回调」的上限。
+// 回调只做两件事：定时触发入队（stopped 已经置位，入队本来就会被拒）与定时停止，不值得无限等。
+// 回调要读写数据库：唯一的连接被恢复备份这类长事务占着时它会一直卡住，而关停的下一步（杀任务）排在它后面。
+const schedulerCronCallbackWait = time.Second
+
 // SignalStop 停掉 cron、关闭 stopCh 并拒绝新的入队，但不等待正在执行的任务。
 func (s *SchedulerV2) SignalStop() {
 	if s == nil {
@@ -257,8 +260,11 @@ func (s *SchedulerV2) SignalStop() {
 		s.stopped.Store(true)
 
 		if s.cron != nil {
-			ctx := s.cron.Stop()
-			<-ctx.Done()
+			select {
+			case <-s.cron.Stop().Done():
+			case <-time.After(schedulerCronCallbackWait):
+				log.Printf("scheduler v2: cron callbacks still running after %s, not waiting for them", schedulerCronCallbackWait)
+			}
 		}
 
 		if s.stopCh != nil {
@@ -373,7 +379,14 @@ func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
 		// 最大并发数现在靠 worker 阻塞实现，只会让请求排队、不会丢弃；
 		// 走到这里的唯一原因是「不允许多实例」。日志必须说清是哪条规则，
 		// 否则用户会误以为是并发数把任务吃掉了。
-		log.Printf("task %d: previous run still in progress and multiple instances are disabled, skipping this trigger", req.TaskID)
+		log.Printf("任务 %d 本次触发被跳过：%s", req.TaskID, SkipReasonSingleInstance)
+		// 这条分支是整个调度链路上唯一一处「返回正常、却既不执行也不留任何痕迹」的地方，
+		// 用户看到的就是「点了运行提示已启动 / 到点了却什么都没发生」+ 日志一片空白。
+		// 所以必须留一条看得见的记录，否则只能靠翻面板日志才知道原因。
+		recordSkippedTrigger(req, SkipReasonSingleInstance)
+		// 本次触发已经在生产端被置成「排队中」，这里不执行就必须放回去，
+		// 否则任务会一直停在排队中假象上。
+		releaseQueuedTaskStatus(req)
 		return
 	}
 	defer s.removeRunningTask(req.TaskID, goid)
@@ -410,12 +423,6 @@ func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
 // acquireRunningSlot 在同一把写锁内完成“多实例检查 + 登记运行中”。
 // 两步必须原子，否则两个 worker 可能同时通过检查、把不允许多实例的任务跑成两份。
 // 返回的标识用于任务结束时精确移除自己的登记。
-func (s *SchedulerV2) isTaskRunning(taskID uint) bool {
-	s.runningLock.RLock()
-	defer s.runningLock.RUnlock()
-	return len(s.runningTasks[taskID]) > 0
-}
-
 func (s *SchedulerV2) acquireRunningSlot(req *ExecutionRequest) (int64, bool) {
 	s.runningLock.Lock()
 	defer s.runningLock.Unlock()
@@ -480,7 +487,7 @@ func (s *SchedulerV2) EnqueueDelayed(delay time.Duration, reqFunc func() *Execut
 			return
 		}
 		if err := s.Enqueue(req); err != nil {
-			log.Printf("task %d delayed enqueue failed: %v", req.TaskID, err)
+			log.Printf("任务 %d 随机延迟结束后重新入队失败（本次不会执行）: %v", req.TaskID, err)
 			// 生产端在首次入队成功时已经把任务置为「排队中」。
 			// 延迟到期后重新入队失败意味着这次触发不会再被执行，
 			// 必须把状态放回去，否则任务会一直停在 queued 假象上。
@@ -503,7 +510,41 @@ func releaseQueuedTaskStatus(req *ExecutionRequest) {
 	}
 }
 
+// SkipReasonSingleInstance 是「上一次还在跑、本次触发被多实例闸门拦下」的原因文案。
+// 面板列表、任务详情和文档都引用这句话，改动时要一起改。
+const SkipReasonSingleInstance = "上一次执行仍在进行中，且该任务未开启「允许多实例」，本次触发没有执行"
+
+// recordSkippedTrigger 把「到点了但这次没执行」的原因记在任务行上。
+//
+// 刻意**不**建 task_logs 行，尽管那样在日志页里更显眼：
+//   - 跳过意味着压根没执行，建成日志会一并混进仪表板的「已终止」统计与耗时统计；
+//   - 跳过记录的时间比它所阻塞的那次执行更晚，会顶掉「最近一次日志」，
+//     用户点开日志看到的是「本次触发被跳过」，而不是真正的执行输出；
+//   - 每分钟触发一次的任务撞上长跑任务，一次阻塞期能被拦几百次，还得额外做去重。
+//
+// 记成任务上的两个字段就没有这些问题：天然幂等（同一个任务反复写同一行）、
+// 不需要去重、不进任何统计，列表与任务详情直接展示。
+func recordSkippedTrigger(req *ExecutionRequest, reason string) {
+	if req == nil || req.TaskID == 0 || database.DB == nil {
+		return
+	}
+
+	if err := database.DB.Model(&model.Task{}).Where("id = ?", req.TaskID).Updates(map[string]interface{}{
+		"last_skip_at":     time.Now(),
+		"last_skip_reason": reason,
+	}).Error; err != nil {
+		log.Printf("任务 %d 记录跳过原因失败: %v", req.TaskID, err)
+	}
+}
+
 func (s *SchedulerV2) AddJob(task *model.Task) error {
+	// 调度器为 nil 时直接返回，与 HasJob / ScheduledEntryCount / Enqueue 一致：面板关停时 ShutdownSchedulerV2
+	// 已经把全局调度器置空，还在跑的订阅拉取照样会自动添加任务；ddp 进程里调度器本来就没起。
+	// 任务行已经在库里，面板下次启动时 InitSchedulerV2 会按库注册，这里不算失败。
+	if s == nil {
+		return nil
+	}
+
 	s.entryLock.Lock()
 	defer s.entryLock.Unlock()
 
@@ -516,7 +557,24 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 		delete(s.entryMap, task.ID)
 	}
 
-	if task.Status != model.TaskStatusEnabled {
+	// 只有「真正被禁用」才不再注册。
+	// 刻意不写成 `!= TaskStatusEnabled`：排队中(0.5) 与 运行中(2) 是启用态任务的瞬时状态，
+	// 而上面已经无条件把旧 entry 摘掉了 —— 一旦在这两个瞬间走到这里就直接 return，
+	// 这个任务从此再也不会被 cron 触发，而且列表里依然显示「已启用 + 有下次运行时间」，
+	// 用户完全无从察觉。编辑任务保存（handler/task_mutate.go 重载真实状态后调 UpdateJob）、
+	// 订阅同步、备份恢复的 ReloadAllJobs 都可能正好撞上这两个瞬间。
+	// 更坏的是复合后果：entry 没了 -> HasJob 为 false -> 本次跑完时 ResolveTaskInactiveStatus
+	// 会把「运行中 + 没有 job」判成已禁用，等于编辑一次正在跑的任务就把它静默关掉了。
+	//
+	// 「运行中被禁用、等这次跑完再生效」的任务同样不能挂回去：它的 status 还停在运行中，
+	// 但用户的意图已经是禁用。漏掉这一条的话，只要中途有任何一次 AddJob（编辑保存、订阅同步、
+	// 备份恢复的全量重载）把条目加回来，这个任务就会带着活着的 cron 条目落成「已禁用」，
+	// 之后一直按点被触发执行 —— 比原来的缺陷更糟。
+	// 禁用中的任务被手动运行（RunNow 打的是同一笔标记，issue #133）同理：排队 / 运行期间编辑保存一次，
+	// 不能把它重新注册回去。
+	// 标记只在排队中 / 运行中作数（pendingDisableInEffect）：status 已经是明确的启用时以 status 为准，
+	// 残留的标记不能把一条被显式启用的任务挡在调度器外面。
+	if task.Status == model.TaskStatusDisabled || pendingDisableInEffect(task) {
 		return nil
 	}
 	if !task.UsesCronSchedule() {
@@ -532,7 +590,6 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 	taskID := task.ID
 	entryIDs := make([]cron.EntryID, 0, len(expressions))
 	for _, expression := range expressions {
-		expression := expression
 		schedule, err := panelcron.ParseSchedule(expression)
 		if err != nil {
 			for _, entryID := range entryIDs {
@@ -542,10 +599,19 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 		}
 
 		entryID := s.cron.Schedule(schedule, cron.FuncJob(func() {
-			if _, err := s.enqueueScheduleInstance(taskID, expression, time.Now()); err != nil {
-				log.Printf("task %d enqueue failed: %v", taskID, err)
+			var t model.Task
+			database.DB.First(&t, taskID)
+			req := &ExecutionRequest{
+				TaskID:      taskID,
+				Task:        &t,
+				TriggerType: TriggerTypeCron,
+				RetryIndex:  0,
+			}
+			if err := s.Enqueue(req); err != nil {
+				log.Printf("任务 %d 定时触发入队失败（本次不会执行）: %v", taskID, err)
 				return
 			}
+			database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
 		}))
 		entryIDs = append(entryIDs, entryID)
 	}
@@ -581,263 +647,24 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 	return nil
 }
 
-func scheduleExpressionHash(expression string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(expression)))
-	return hex.EncodeToString(sum[:])
-}
-
-func (s *SchedulerV2) enqueueScheduleInstance(taskID uint, expression string, scheduledAt time.Time) (*model.ScheduleInstance, error) {
-	if s == nil {
-		return nil, fmt.Errorf("scheduler stopped")
-	}
-	var task model.Task
-	if err := database.DB.First(&task, taskID).Error; err != nil {
-		return nil, err
-	}
-	if task.Status != model.TaskStatusEnabled && task.Status != model.TaskStatusQueued && task.Status != model.TaskStatusRunning {
-		return nil, fmt.Errorf("task disabled")
-	}
-
-	scheduledUTC := scheduledAt.UTC().Truncate(time.Second)
-	instance := &model.ScheduleInstance{
-		TaskID:         taskID,
-		ScheduledUTC:   scheduledUTC,
-		ExpressionHash: scheduleExpressionHash(expression),
-		Expression:     strings.TrimSpace(expression),
-		State:          model.ScheduleInstanceStatePending,
-		Policy:         task.EffectiveSchedulePolicy(),
-		CreatedAt:      time.Now().UTC(),
-	}
-	if err := database.DB.Where("task_id = ? AND scheduled_utc = ? AND expression_hash = ?", instance.TaskID, instance.ScheduledUTC, instance.ExpressionHash).
-		FirstOrCreate(instance).Error; err != nil {
-		return nil, err
-	}
-
-	claimed, err := claimScheduleInstance(instance.ID)
-	if err != nil {
-		return nil, err
-	}
-	if claimed == nil {
-		return instance, nil
-	}
-	if !task.AllowMultipleInstances && task.EffectiveSchedulePolicy() == model.SchedulePolicySkip && s.isTaskRunning(taskID) {
-		_ = markScheduleInstanceSkipped(claimed.ID, "policy_skip_running")
-		return claimed, nil
-	}
-
-	operationID, err := NewTaskRunOperation(taskID)
-	if err != nil {
-		_ = markScheduleInstanceUnknown(claimed.ID, "operation_create_failed")
-		return nil, err
-	}
-	if err := bindScheduleInstanceOperation(claimed.ID, operationID); err != nil {
-		return nil, err
-	}
-	req := &ExecutionRequest{
-		TaskID:             taskID,
-		Task:               &task,
-		TriggerType:        TriggerTypeCron,
-		RetryIndex:         0,
-		OperationID:        operationID,
-		ScheduleInstanceID: claimed.ID,
-		ScheduledUTC:       scheduledUTC,
-	}
-	if err := s.Enqueue(req); err != nil {
-		_ = markScheduleInstanceUnknown(claimed.ID, "enqueue_failed")
-		return nil, err
-	}
-	if task.Status != model.TaskStatusRunning {
-		database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
-	}
-	return claimed, nil
-}
-
-func claimScheduleInstance(instanceID uint) (*model.ScheduleInstance, error) {
-	var claimed model.ScheduleInstance
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
-		result := tx.Model(&model.ScheduleInstance{}).
-			Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStatePending).
-			Updates(map[string]interface{}{
-				"state":      model.ScheduleInstanceStateLaunching,
-				"claimed_at": now,
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return nil
-		}
-		return tx.First(&claimed, instanceID).Error
-	})
-	if err != nil || claimed.ID == 0 {
-		return nil, err
-	}
-	return &claimed, nil
-}
-
-func bindScheduleInstanceOperation(instanceID uint, operationID string) error {
-	return database.DB.Model(&model.ScheduleInstance{}).
-		Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStateLaunching).
-		Updates(map[string]interface{}{"operation_id": strings.TrimSpace(operationID)}).Error
-}
-
-func markScheduleInstanceLaunched(instanceID uint) error {
-	if instanceID == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	return database.DB.Model(&model.ScheduleInstance{}).
-		Where("id = ? AND state = ?", instanceID, model.ScheduleInstanceStateLaunching).
-		Updates(map[string]interface{}{
-			"state":      model.ScheduleInstanceStateLaunched,
-			"started_at": now,
-		}).Error
-}
-
-func markScheduleInstanceFinished(instanceID uint) error {
-	if instanceID == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	return database.DB.Model(&model.ScheduleInstance{}).
-		Where("id = ?", instanceID).
-		Updates(map[string]interface{}{"state": model.ScheduleInstanceStateLaunched, "ended_at": now}).Error
-}
-
-func markScheduleInstanceSkipped(instanceID uint, reason string) error {
-	if instanceID == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	var instance model.ScheduleInstance
-	if err := database.DB.Select("task_id", "operation_id").First(&instance, instanceID).Error; err == nil && instance.OperationID != "" {
-		_ = DefaultOperationStore().Cancel(instance.OperationID, reason, CurrentTaskLogCursor(instance.TaskID))
-		clearTaskOperation(instance.TaskID, instance.OperationID)
-	}
-	return database.DB.Model(&model.ScheduleInstance{}).
-		Where("id = ?", instanceID).
-		Updates(map[string]interface{}{
-			"state":    model.ScheduleInstanceStateSkipped,
-			"reason":   strings.TrimSpace(reason),
-			"ended_at": now,
-		}).Error
-}
-
-func markScheduleInstanceUnknown(instanceID uint, reason string) error {
-	if instanceID == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	var instance model.ScheduleInstance
-	if err := database.DB.Select("task_id", "operation_id").First(&instance, instanceID).Error; err == nil && instance.OperationID != "" {
-		_ = DefaultOperationStore().Unknown(instance.OperationID, reason, CurrentTaskLogCursor(instance.TaskID))
-		clearTaskOperation(instance.TaskID, instance.OperationID)
-	}
-	return database.DB.Model(&model.ScheduleInstance{}).
-		Where("id = ?", instanceID).
-		Updates(map[string]interface{}{
-			"state":    model.ScheduleInstanceStateResultUnknown,
-			"reason":   strings.TrimSpace(reason),
-			"ended_at": now,
-		}).Error
-}
-
-func RecoverLaunchingScheduleInstances() int64 {
-	if database.DB == nil {
-		return 0
-	}
-	var instances []model.ScheduleInstance
-	if err := database.DB.Where("state = ?", model.ScheduleInstanceStateLaunching).Find(&instances).Error; err != nil {
-		return 0
-	}
-	var running []model.ScheduleInstance
-	if err := database.DB.Where("state = ? AND ended_at IS NULL", model.ScheduleInstanceStateLaunched).Find(&running).Error; err == nil {
-		instances = append(instances, running...)
-	}
-	var count int64
-	for i := range instances {
-		if err := markScheduleInstanceUnknown(instances[i].ID, "result_unknown_after_restart"); err == nil {
-			count++
-		}
-	}
-	return count
-}
-
-func (s *SchedulerV2) EnqueueRecentMissedSchedules(window time.Duration) int {
-	if s == nil || window <= 0 {
-		return 0
-	}
-	now := time.Now()
-	from := now.Add(-window)
-	var tasks []model.Task
-	database.DB.Where("status = ? AND task_type = ?", model.TaskStatusEnabled, model.TaskTypeCron).Find(&tasks)
-	compensated := 0
-	for i := range tasks {
-		task := tasks[i]
-		for _, expression := range panelcron.SplitExpressions(task.CronExpression) {
-			schedule, err := panelcron.ParseSchedule(expression)
-			if err != nil {
-				continue
-			}
-			misses := make([]time.Time, 0, 4)
-			cursor := from.Add(-time.Second)
-			for {
-				next := schedule.Next(cursor)
-				if next.IsZero() || next.After(now) {
-					break
-				}
-				if !next.Before(from) {
-					misses = append(misses, next)
-				}
-				cursor = next
-				if len(misses) > 512 {
-					break
-				}
-			}
-			if len(misses) == 0 {
-				continue
-			}
-			for _, missed := range misses[:len(misses)-1] {
-				_ = createMissedScheduleRecord(task.ID, expression, missed, task.EffectiveSchedulePolicy(), "older_miss_recorded")
-			}
-			if _, err := s.enqueueScheduleInstance(task.ID, expression, misses[len(misses)-1]); err == nil {
-				compensated++
-			}
-		}
-	}
-	return compensated
-}
-
-func createMissedScheduleRecord(taskID uint, expression string, scheduledAt time.Time, policy, reason string) error {
-	instance := &model.ScheduleInstance{
-		TaskID:         taskID,
-		ScheduledUTC:   scheduledAt.UTC().Truncate(time.Second),
-		ExpressionHash: scheduleExpressionHash(expression),
-		Expression:     strings.TrimSpace(expression),
-		State:          model.ScheduleInstanceStateSkipped,
-		Policy:         model.NormalizeSchedulePolicy(policy),
-		Reason:         strings.TrimSpace(reason),
-		CreatedAt:      time.Now().UTC(),
-	}
-	return database.DB.Where("task_id = ? AND scheduled_utc = ? AND expression_hash = ?", instance.TaskID, instance.ScheduledUTC, instance.ExpressionHash).
-		FirstOrCreate(instance).Error
-}
-
 func (s *SchedulerV2) stopTaskBySchedule(taskID uint) {
+	stopped := false
 	executor := GetTaskExecutor()
 	if executor != nil {
-		executor.StopTask(taskID)
+		stopped = executor.StopTask(taskID)
 	}
 
 	var task model.Task
 	if database.DB.First(&task, taskID).Error != nil {
 		return
 	}
-	if task.PID != nil && *task.PID > 0 {
+	// #159 修复 B：执行器认领了这次停止（StopTask 返回 true），就已经对整组发过 TERM、安排了 5 秒后的 KILL，
+	// 这里不能再按库里的 PID 补一刀：立即 SIGKILL 会让宽限形同虚设，再发一个 TERM 会打断脚本正在跑的收尾。
+	// 只有执行器不认识这次执行（例如 ddp task run 在别的进程里跑起来的）时才按 PID 兜底，同样先 TERM。
+	if !stopped && task.PID != nil && *task.PID > 0 {
 		// 定时停止按 PID 兜底时也要先打停止标记，避免被结算成普通脚本失败。
 		markManualStop(taskID)
-		KillProcessByPid(*task.PID)
+		TerminateProcessByPid(*task.PID)
 	}
 	if task.Status == model.TaskStatusRunning {
 		inactiveStatus := ResolveTaskInactiveStatus(&task)
@@ -877,6 +704,11 @@ func (s *SchedulerV2) UpdateJob(task *model.Task) error {
 }
 
 func (s *SchedulerV2) RemoveJob(taskID uint) {
+	// 调度器为 nil 时没有条目可摘，直接返回（理由同 AddJob）。
+	if s == nil {
+		return
+	}
+
 	s.entryLock.Lock()
 	defer s.entryLock.Unlock()
 
@@ -910,6 +742,26 @@ func (s *SchedulerV2) HasJob(taskID uint) bool {
 	return exists
 }
 
+// ScheduledEntryCount 返回该任务当前在 cron 里真正挂了几个触发条目。
+// 和 HasJob 的区别很关键：非 cron 类型的任务也会在 entryMap 里留一个空切片（见 AddJob），
+// HasJob 对它返回 true，但它一个 cron entry 都没有、永远不会自动触发。
+// 任务列表用这个数来判断「显示着下次运行时间、实际却不会跑」的静默失联状态。
+// 返回 -1 表示这个任务压根不在调度器里（从未注册或已被 RemoveJob 摘掉）。
+func (s *SchedulerV2) ScheduledEntryCount(taskID uint) int {
+	if s == nil {
+		return -1
+	}
+
+	s.entryLock.RLock()
+	defer s.entryLock.RUnlock()
+
+	entryIDs, exists := s.entryMap[taskID]
+	if !exists {
+		return -1
+	}
+	return len(entryIDs)
+}
+
 func (s *SchedulerV2) RunNow(taskID uint) error {
 	var task model.Task
 	if err := database.DB.First(&task, taskID).Error; err != nil {
@@ -923,7 +775,36 @@ func (s *SchedulerV2) RunNow(taskID uint) error {
 		RetryIndex:  0,
 	}
 
+	// 禁用中的任务也允许手动运行（handler 只拒绝「正在运行」），但这次运行不能顺手把它启用（issue #133）。
+	// 排队 / 运行期间 status 会被改写成 0.5 / 2，和启用任务一模一样；原来「跑完回到禁用」只靠
+	// 「调度器里没有这条任务」反推，而运行期间只要编辑保存一次（task_mutate 重载出 status=2 再 UpdateJob），
+	// AddJob 就会把它重新注册进调度器 —— 跑完被结算成启用、cron 条目也是活的，任务被静默重新启用。
+	// 所以入队前把「这次跑完仍是禁用」记成显式的待禁用标记：AddJob 认它不再注册，
+	// 执行结束 / 准备失败 / 停止 / 排队中被停止都认它落回禁用，用户点「启用」时照旧清掉。
+	// 批量运行、`ddp task run` 都走这里，一起覆盖。
+	// 已经有标记（更早一次、还没结算的运行打的）就不重打，入队失败时也只撤回自己这次打的。
+	markedPendingDisable := false
+	if task.Status == model.TaskStatusDisabled && !hasPendingDisable(&task) {
+		MarkPendingDisable(taskID)
+		markedPendingDisable = true
+	}
+
+	// 请求里这份快照要和下面写进库的「排队中」对齐（必须在入队前改，入队后 worker 可能已经在读它）。
+	// 准备阶段失败（OnTaskFailed）与放弃执行（releaseQueuedTaskStatus）都直接拿这份快照结算；
+	// 停在「禁用」的话会被一律判成禁用 —— 排队期间用户点了「启用」（撤掉标记、注册回调度器），
+	// 结果却是库里写着禁用、cron 条目活着，到点照样触发。对齐成排队中之后，
+	// 结算走 ResolveTaskInactiveStatus 的排队中分支：有标记（没人启用）落回禁用，没有标记回到启用。
+	// 正在运行的任务 handler 已经拒绝了，这里照 UPDATE 的条件保持原样。
+	if task.Status != model.TaskStatusRunning {
+		task.Status = model.TaskStatusQueued
+	}
+
 	if err := s.Enqueue(req); err != nil {
+		// 这次根本没入队、也就不会有结算，刚打的标记必须撤回，否则会一直挂在任务上：
+		// 等这条任务哪天被别的路径写回启用、再进入排队 / 运行时，会被错当成禁用意图。
+		if markedPendingDisable {
+			ClearPendingDisable(taskID)
+		}
 		return err
 	}
 
@@ -974,7 +855,7 @@ func (s *SchedulerV2) EnqueueStartupTasks() int {
 			RetryIndex:  0,
 		}
 		if err := s.Enqueue(req); err != nil {
-			log.Printf("startup task %d enqueue failed: %v", task.ID, err)
+			log.Printf("开机任务 %d 入队失败（本次不会执行）: %v", task.ID, err)
 			continue
 		}
 
@@ -994,27 +875,37 @@ func (s *SchedulerV2) EnqueueStartupTasks() int {
 }
 
 func (s *SchedulerV2) ReloadAllJobs() {
-	s.entryLock.Lock()
-	for taskID, entryIDs := range s.entryMap {
-		for _, entryID := range entryIDs {
-			if entryID != 0 {
-				s.cron.Remove(entryID)
-			}
-		}
-		delete(s.entryMap, taskID)
-	}
-	s.entryLock.Unlock()
-
 	var tasks []model.Task
-	database.DB.Where("status = ?", model.TaskStatusEnabled).Find(&tasks)
+	// 与 AddJob 的早退条件保持同一口径：排队中/运行中的任务也要重新注册，
+	// 否则备份恢复恰好撞上有任务在跑时，那条任务会连 entry 一起丢掉。
+	database.DB.Where("status <> ?", model.TaskStatusDisabled).Find(&tasks)
 
+	// 刻意不先清空 entryMap 再逐条重建：AddJob 本来就会先摘掉这个任务的旧条目再挂新的，
+	// 提前清空只会多出一个「所有任务都查不到条目」的空窗口 ——
+	// 恰好在这期间刷新任务列表，整屏都会误报「未注册到调度器」。
+	// 改成先逐条重建、最后再摘掉这次没出现的（已删除 / 已禁用），中间任何一刻都不会出现空窗。
+	reloaded := make(map[uint]struct{}, len(tasks))
 	for i := range tasks {
+		reloaded[tasks[i].ID] = struct{}{}
 		if err := s.AddJob(&tasks[i]); err != nil {
-			log.Printf("reload job failed for task %d: %v", tasks[i].ID, err)
+			log.Printf("任务 %d 重新注册调度失败: %v", tasks[i].ID, err)
 		}
 	}
 
-	log.Printf("scheduler reloaded: %d jobs", len(tasks))
+	s.entryLock.RLock()
+	stale := make([]uint, 0, len(s.entryMap))
+	for taskID := range s.entryMap {
+		if _, ok := reloaded[taskID]; !ok {
+			stale = append(stale, taskID)
+		}
+	}
+	s.entryLock.RUnlock()
+
+	for _, taskID := range stale {
+		s.RemoveJob(taskID)
+	}
+
+	log.Printf("scheduler reloaded: %d jobs, %d stale removed", len(tasks), len(stale))
 }
 
 func getGoroutineID() int64 {

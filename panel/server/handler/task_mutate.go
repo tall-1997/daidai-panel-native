@@ -2,9 +2,11 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
+	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/model"
 	panelcron "daidai-panel/pkg/cron"
@@ -12,6 +14,7 @@ import (
 	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func normalizeTaskRandomDelaySecondsValue(value interface{}) (*int, error) {
@@ -40,66 +43,113 @@ func normalizeTaskRandomDelaySecondsValue(value interface{}) (*int, error) {
 	}
 }
 
-func validateTaskExecutionOptions(taskID uint, timeout, maxRetries, retryInterval int, dependsOn *uint, stopSchedule string) error {
-	if timeout < 0 || timeout > 7*24*60*60 {
-		return fmt.Errorf("任务超时需在 0-604800 秒之间")
+// normalizeTaskLogRetentionDaysValue 把任务级日志保留天数统一成两态：nil = 跟随全局、>0 = 自定义天数。
+// 结构照抄上面的 normalizeTaskRandomDelaySecondsValue：Create 解引用后传的是 int，
+// Update 与导入走 JSON、数字一律是 float64，两条路共用这一个函数（issue #144 / v3.3.2）。
+//
+// 0 与负数刻意归成 nil 而不是报错：前端「跟随全局」那一档提交的是 null，但 el-input-number
+// 被清空、旧客户端、导入的旧文件都可能送来 0，把它们当「不自定义」处理用户才存得上。
+// 上下限与全局 log_retention_days（system_config_registry.go 里登记的 1-3650）对齐。
+func normalizeTaskLogRetentionDaysValue(value interface{}) (*int, error) {
+	if value == nil {
+		return nil, nil
 	}
-	if maxRetries < 0 || maxRetries > 20 {
-		return fmt.Errorf("重试次数需在 0-20 之间")
-	}
-	if retryInterval < 0 || retryInterval > 24*60*60 {
-		return fmt.Errorf("重试间隔需在 0-86400 秒之间")
-	}
-	if strings.TrimSpace(stopSchedule) != "" {
-		if err := panelcron.ValidateExpressions(panelcron.NormalizeExpressions(stopSchedule)); err != nil {
-			return fmt.Errorf("定时停止表达式无效: %w", err)
+
+	switch typed := value.(type) {
+	case float64:
+		days := int(typed)
+		if float64(days) != typed {
+			return nil, fmt.Errorf("日志保留天数必须为整数")
 		}
+		if days <= 0 {
+			return nil, nil
+		}
+		if days > 3650 {
+			return nil, fmt.Errorf("日志保留天数需在 1-3650 之间")
+		}
+		return &days, nil
+	case int:
+		if typed <= 0 {
+			return nil, nil
+		}
+		if typed > 3650 {
+			return nil, fmt.Errorf("日志保留天数需在 1-3650 之间")
+		}
+		days := typed
+		return &days, nil
+	default:
+		return nil, fmt.Errorf("日志保留天数无效")
 	}
-	if dependsOn != nil {
-		if *dependsOn == 0 || (taskID > 0 && *dependsOn == taskID) {
-			return fmt.Errorf("任务依赖不能指向自身")
-		}
-		var dependency model.Task
-		if err := database.DB.First(&dependency, *dependsOn).Error; err != nil {
-			return fmt.Errorf("依赖任务不存在")
-		}
-		seen := map[uint]bool{taskID: true}
-		for dependency.DependsOn != nil {
-			if seen[*dependency.DependsOn] {
-				return fmt.Errorf("任务依赖存在循环")
+}
+
+// normalizeTaskEnvListValue 把 env_groups / env_names 的入参统一成去空、去重的字符串切片（#168）。
+// 网页、APP 发字符串数组；开放 API 手写时也兼容逗号拼接的字符串；null 当空列表。
+// Create 解出来的是 interface{}，Update、导入走 JSON map，三条路共用这一个函数。
+func normalizeTaskEnvListValue(value interface{}, field string) ([]string, error) {
+	raw := []string{}
+	switch typed := value.(type) {
+	case nil:
+	case string:
+		raw = append(raw, typed)
+	case []interface{}:
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s 只能是字符串数组", field)
 			}
-			seen[*dependency.DependsOn] = true
-			if err := database.DB.First(&dependency, *dependency.DependsOn).Error; err != nil {
-				return fmt.Errorf("依赖链包含不存在的任务")
-			}
+			raw = append(raw, text)
+		}
+	default:
+		return nil, fmt.Errorf("%s 只能是字符串数组", field)
+	}
+	// JoinEnvGroups 按逗号等分隔符拆开、去首尾空白、去空、去重，分组与变量名共用同一套规整
+	return model.SplitEnvGroups(model.JoinEnvGroups(raw)), nil
+}
+
+// resolveTaskEnvScope 校验并算出要落库的三列（#168）：env_scope 只收 all / selected；
+// 变量名必须符合 envNamePattern，不符合时点名是哪个；最终是 all 时两列清空，不留下看不见的旧选择。
+func resolveTaskEnvScope(scope string, groups, names []string) (string, string, string, error) {
+	for _, name := range names {
+		if !envNamePattern.MatchString(name) {
+			return "", "", "", fmt.Errorf("变量名 '%s' 格式无效：只能包含字母、数字和下划线，且不能以数字开头", name)
 		}
 	}
-	return nil
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case model.TaskEnvScopeAll:
+		return model.TaskEnvScopeAll, "", "", nil
+	case model.TaskEnvScopeSelected:
+		return model.TaskEnvScopeSelected, model.JoinEnvGroups(groups), strings.Join(names, ","), nil
+	default:
+		return "", "", "", fmt.Errorf("env_scope 只能是 all 或 selected")
+	}
 }
 
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req struct {
-		Name                   string   `json:"name" binding:"required"`
-		Command                string   `json:"command" binding:"required"`
-		PythonVersion          string   `json:"python_version"`
-		CronExpression         string   `json:"cron_expression"`
-		TaskType               string   `json:"task_type"`
-		Timeout                *int     `json:"timeout"`
-		SuccessExitCodes       *string  `json:"success_exit_codes"`
-		RandomDelaySeconds     *int     `json:"random_delay_seconds"`
-		MaxRetries             *int     `json:"max_retries"`
-		RetryInterval          *int     `json:"retry_interval"`
-		NotifyOnFailure        *bool    `json:"notify_on_failure"`
-		NotifyOnSuccess        *bool    `json:"notify_on_success"`
-		NotifyOnAbort          *bool    `json:"notify_on_abort"`
-		NotificationChannelID  *uint    `json:"notification_channel_id"`
-		Labels                 []string `json:"labels"`
-		DependsOn              *uint    `json:"depends_on"`
-		TaskBefore             *string  `json:"task_before"`
-		TaskAfter              *string  `json:"task_after"`
-		AllowMultipleInstances *bool    `json:"allow_multiple_instances"`
-		SchedulePolicy         *string  `json:"schedule_policy"`
-		StopSchedule           *string  `json:"stop_schedule"`
+		Name                   string      `json:"name" binding:"required"`
+		Command                string      `json:"command" binding:"required"`
+		PythonVersion          string      `json:"python_version"`
+		CronExpression         string      `json:"cron_expression"`
+		TaskType               string      `json:"task_type"`
+		Timeout                *int        `json:"timeout"`
+		SuccessExitCodes       *string     `json:"success_exit_codes"`
+		RandomDelaySeconds     *int        `json:"random_delay_seconds"`
+		LogRetentionDays       *int        `json:"log_retention_days"`
+		MaxRetries             *int        `json:"max_retries"`
+		RetryInterval          *int        `json:"retry_interval"`
+		NotifyOnFailure        *bool       `json:"notify_on_failure"`
+		NotifyOnSuccess        *bool       `json:"notify_on_success"`
+		NotifyOnAbort          *bool       `json:"notify_on_abort"`
+		NotificationChannelID  *uint       `json:"notification_channel_id"`
+		Labels                 []string    `json:"labels"`
+		DependsOn              *uint       `json:"depends_on"`
+		TaskBefore             *string     `json:"task_before"`
+		TaskAfter              *string     `json:"task_after"`
+		AllowMultipleInstances *bool       `json:"allow_multiple_instances"`
+		StopSchedule           *string     `json:"stop_schedule"`
+		EnvScope               *string     `json:"env_scope"`
+		EnvGroups              interface{} `json:"env_groups"` // 字符串数组，也兼容逗号字符串，见 normalizeTaskEnvListValue
+		EnvNames               interface{} `json:"env_names"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
@@ -141,6 +191,31 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		SuccessExitCodes: model.DefaultSuccessExitCodes,
 		RetryInterval:    60,
 		NotifyOnFailure:  false,
+		EnvScope:         model.TaskEnvScopeAll,
+	}
+
+	// 任务级「可用环境变量」（#168）：三项都不带时（旧网页缓存、旧版 APP、开放 API）按默认「全部」。
+	// 只带了分组 / 变量名而没带 env_scope 时也按 all 算，两列随之清空——不能凭列表猜用户想「指定」。
+	if req.EnvScope != nil || req.EnvGroups != nil || req.EnvNames != nil {
+		scope := model.TaskEnvScopeAll
+		if req.EnvScope != nil {
+			scope = *req.EnvScope
+		}
+		envGroups, err := normalizeTaskEnvListValue(req.EnvGroups, "env_groups")
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		envNames, err := normalizeTaskEnvListValue(req.EnvNames, "env_names")
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		task.EnvScope, task.EnvGroups, task.EnvNames, err = resolveTaskEnvScope(scope, envGroups, envNames)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
 	}
 
 	if req.Timeout != nil {
@@ -161,6 +236,14 @@ func (h *TaskHandler) Create(c *gin.Context) {
 			return
 		}
 		task.RandomDelaySeconds = randomDelayValue
+	}
+	if req.LogRetentionDays != nil {
+		logRetentionValue, err := normalizeTaskLogRetentionDaysValue(*req.LogRetentionDays)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		task.LogRetentionDays = logRetentionValue
 	}
 	if req.MaxRetries != nil {
 		task.MaxRetries = *req.MaxRetries
@@ -202,33 +285,31 @@ func (h *TaskHandler) Create(c *gin.Context) {
 	if req.AllowMultipleInstances != nil {
 		task.AllowMultipleInstances = *req.AllowMultipleInstances
 	}
-	if req.SchedulePolicy != nil {
-		policy := model.NormalizeSchedulePolicy(*req.SchedulePolicy)
-		if policy != *req.SchedulePolicy {
-			response.BadRequest(c, "无效的调度并发策略")
-			return
-		}
-		task.SchedulePolicy = policy
-	}
 	if req.StopSchedule != nil {
-		task.StopSchedule = panelcron.NormalizeExpressions(*req.StopSchedule)
-	}
-	if err := validateTaskExecutionOptions(0, task.Timeout, task.MaxRetries, task.RetryInterval, task.DependsOn, task.StopSchedule); err != nil {
-		response.BadRequest(c, err.Error())
-		return
+		task.StopSchedule = *req.StopSchedule
 	}
 	if err := database.DB.Select("*").Create(&task).Error; err != nil {
 		response.InternalError(c, "创建任务失败")
 		return
 	}
 
-	if h.schedulerEffects {
-		addTaskToScheduler(&task)
+	// 注册调度失败必须留痕：此前这里把 error 整个丢掉，然后无条件回「创建成功」，
+	// 用户看到的是一个「已启用」的任务，实际上 cron 里一个触发条目都没有，永远不会自动跑。
+	// 今天这条 error 出口恰好不可达（上面的 panelcron.ValidateExpressions 与 AddJob 里的
+	// panelcron.ParseSchedule 共用同一个 parser，判定必然一致），但这纯靠两处代码同源维持，
+	// 没有任何测试钉住，一旦哪天分叉就会重新变成静默失败。
+	// 刻意不改成返回 500：任务已经落库，报错回滚对用户更难解释；用户侧的可见性由任务详情的
+	// schedule_hint 承担，这里只负责让运维在面板日志页看得见。
+	// 文案里的「失败」会被 service/panel_log.go 的 detectPanelLogLevel 判成 ERROR 级。
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		if err := scheduler.AddJob(&task); err != nil {
+			log.Printf("任务 %d 注册调度失败（它不会自动触发）: %v", task.ID, err)
+		}
 	}
 
 	response.Created(c, gin.H{
 		"message": "创建成功",
-		"data":    task.ToDict(),
+		"data":    taskDictWithEnabledSwitch(&task),
 	})
 }
 
@@ -242,9 +323,24 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	var req map[string]interface{}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// 请求体是字面量 null 时 JSON 解码不报错，只是把 req 留成 nil map：以前往下走到给 req 赋值的地方
+	// （例如手动 / 开机任务那句 req["cron_expression"] = ""）就 panic，被 gin.Recovery 兜成一个空的 500。
+	// 与其它参数错误同口径回 400，什么都不写。
+	if err := c.ShouldBindJSON(&req); err != nil || req == nil {
 		response.BadRequest(c, "请求参数错误")
 		return
+	}
+
+	// name / command 在库里都是 NOT NULL：显式传 null 会让下面那条 Updates 整条失败，
+	// 同一个请求里的 labels 等其它字段也跟着一起没改，以前这个错误被吞掉、照样回 200「task updated」（#157）。
+	// 网页、APP、MCP 都不会这样发，只有开放 API 的调用方可能传 null，所以在写库之前直接回 400，什么都不写。
+	// 按固定顺序检查，两个字段同时是 null 时提示稳定落在第一个上。
+	// cron_expression 同样是 NOT NULL，但它要看更新后的任务类型，放到下面解析完 task_type 之后再判。
+	for _, key := range []string{"name", "command"} {
+		if value, exists := req[key]; exists && value == nil {
+			response.BadRequest(c, key+" 不能为空")
+			return
+		}
 	}
 
 	if labels, ok := req["labels"].([]interface{}); ok {
@@ -271,6 +367,14 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	}
 
 	if resolvedTaskType == model.TaskTypeCron {
+		// 只有这次更新之后是常规定时任务（本来就是，或同一个请求里改成 cron）时，cron_expression 显式传 null 才回 400，
+		// 理由同上面的 name / command。
+		// 手动 / 开机任务（含同一个请求里把 task_type 改成 manual / startup）走下面的 else：
+		// 服务端一律把 cron_expression 写成空串，传 null 就是清空，保持改动前回 200 的行为。
+		if value, exists := req["cron_expression"]; exists && value == nil {
+			response.BadRequest(c, "cron_expression 不能为空")
+			return
+		}
 		cronExpr := task.CronExpression
 		if value, ok := req["cron_expression"].(string); ok {
 			cronExpr = panelcron.NormalizeExpressions(value)
@@ -317,17 +421,6 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 		req["success_exit_codes"] = normalized
 	}
-	if rawSchedulePolicy, exists := req["schedule_policy"]; exists {
-		value, ok := rawSchedulePolicy.(string)
-		if !ok || model.NormalizeSchedulePolicy(value) != value {
-			response.BadRequest(c, "无效的调度并发策略")
-			return
-		}
-		req["schedule_policy"] = value
-	}
-	if value, ok := req["stop_schedule"].(string); ok {
-		req["stop_schedule"] = panelcron.NormalizeExpressions(value)
-	}
 
 	allowedFields := map[string]bool{
 		"name": true, "command": true, "python_version": true, "cron_expression": true,
@@ -335,7 +428,7 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		"timeout":   true, "success_exit_codes": true, "random_delay_seconds": true, "max_retries": true, "retry_interval": true,
 		"notify_on_failure": true, "notify_on_success": true, "notify_on_abort": true, "notification_channel_id": true, "labels": true, "depends_on": true,
 		"sort_order": true, "task_before": true, "task_after": true,
-		"allow_multiple_instances": true, "schedule_policy": true, "stop_schedule": true,
+		"allow_multiple_instances": true, "stop_schedule": true, "log_retention_days": true,
 	}
 
 	updates := make(map[string]interface{})
@@ -347,6 +440,17 @@ func (h *TaskHandler) Update(c *gin.Context) {
 				return
 			}
 			updates[key] = randomDelayValue
+			continue
+		}
+		if key == "log_retention_days" {
+			logRetentionValue, err := normalizeTaskLogRetentionDaysValue(value)
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			// 这里刻意把 nil 也写进 updates：map 形式的 Updates 不会跳过 nil，
+			// 所以「从自定义天数改回跟随全局」全靠这一句把列写回 NULL（issue #144 / v3.3.2）。
+			updates[key] = logRetentionValue
 			continue
 		}
 		if key == "notification_channel_id" {
@@ -366,86 +470,76 @@ func (h *TaskHandler) Update(c *gin.Context) {
 			updates[key] = value
 		}
 	}
-	resolvedTimeout := task.Timeout
-	resolvedRetries := task.MaxRetries
-	resolvedRetryInterval := task.RetryInterval
-	resolvedDependsOn := task.DependsOn
-	resolvedStopSchedule := task.StopSchedule
-	if value, ok := updates["timeout"].(float64); ok {
-		resolvedTimeout = int(value)
-	}
-	if value, ok := updates["max_retries"].(float64); ok {
-		resolvedRetries = int(value)
-	}
-	if value, ok := updates["retry_interval"].(float64); ok {
-		resolvedRetryInterval = int(value)
-	}
-	if value, exists := updates["depends_on"]; exists {
-		if value == nil {
-			resolvedDependsOn = nil
-		} else if numeric, ok := value.(float64); ok {
-			id := uint(numeric)
-			resolvedDependsOn = &id
+
+	// 任务级「可用环境变量」（#168）。这三项刻意不进上面的 allowedFields 白名单原样写：
+	// Update 是局部更新，三项任一出现时，按「库里旧值 + 本次请求」算出最终值再三项一起写（改回 all 时两列一并清空）；
+	// 一项都不带（旧网页缓存、旧版 APP、开放 API）时三列都不碰，保持原值。
+	_, hasEnvScope := req["env_scope"]
+	_, hasEnvGroups := req["env_groups"]
+	_, hasEnvNames := req["env_names"]
+	if hasEnvScope || hasEnvGroups || hasEnvNames {
+		scope := task.GetEnvScope()
+		if hasEnvScope {
+			value, ok := req["env_scope"].(string)
+			if !ok {
+				response.BadRequest(c, "env_scope 只能是 all 或 selected")
+				return
+			}
+			scope = value
 		}
+		envGroups := task.GetEnvGroups()
+		if hasEnvGroups {
+			normalized, err := normalizeTaskEnvListValue(req["env_groups"], "env_groups")
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			envGroups = normalized
+		}
+		envNames := task.GetEnvNames()
+		if hasEnvNames {
+			normalized, err := normalizeTaskEnvListValue(req["env_names"], "env_names")
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			envNames = normalized
+		}
+		finalScope, finalGroups, finalNames, err := resolveTaskEnvScope(scope, envGroups, envNames)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		updates["env_scope"] = finalScope
+		updates["env_groups"] = finalGroups
+		updates["env_names"] = finalNames
 	}
-	if value, ok := updates["stop_schedule"].(string); ok {
-		resolvedStopSchedule = value
-	}
-	if err := validateTaskExecutionOptions(uint(taskID), resolvedTimeout, resolvedRetries, resolvedRetryInterval, resolvedDependsOn, resolvedStopSchedule); err != nil {
-		response.BadRequest(c, err.Error())
+
+	// 写库与回读放在同一个事务里，任何一步失败都回 500「更新任务失败」、库里保持原样，调度也不去动（#157）：
+	//   - 写库失败：以前这里不接 .Error，没写进去也照样回 200「task updated」，前端弹「任务更新成功」、
+	//     刷新后什么都没变，和「填了标签却没保存」的症状一模一样，很难排查；
+	//   - 回读失败：写进去的值读不回来时（例如开放 API 往整数列 timeout 里传了 "abc"，SQLite 照收、读的时候才报错），
+	//     单独提交就会留下一行读不出来的坏数据，任务列表整页 500、这条任务连改都改不回来，所以要整体回滚。
+	// 底层报错不透给前端；GORM 的日志器（database.Init）会把失败的 SQL 与原因打到进程标准输出。
+	// 事务里只能用 tx：连接池只有一条连接（SetMaxOpenConns(1)），在这里再用 database.DB 会把自己卡死。
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if len(updates) > 0 {
+			if err := tx.Model(&task).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		return tx.First(&task, taskID).Error
+	}); err != nil {
+		response.InternalError(c, "更新任务失败")
 		return
 	}
-
-	// 用户在面板手动改过任务名或定时 → 打上订阅锁：之后订阅同步不再覆盖 name/cron，
-	// 也不会在候选集缺失时把这个任务连同历史日志删掉。
-	// 刻意由服务端自己推导，subscription_locked 不在 allowedFields 里，前端传什么都会被忽略。
-	// 注意「把任务改成手动执行」这一场景：上面 :234 会把 cron_expression 强制置空，
-	// 与原值不同同样算用户改动，一并加锁，避免订阅每次拉取偷偷回灌订阅源的 cron。
-	if !task.SubscriptionLocked {
-		if name, ok := updates["name"].(string); ok && name != task.Name {
-			updates["subscription_locked"] = true
-		}
-		if cronExpr, ok := updates["cron_expression"].(string); ok && cronExpr != task.CronExpression {
-			updates["subscription_locked"] = true
-		}
-	}
-
-	if len(updates) > 0 {
-		database.DB.Model(&task).Updates(updates)
-	}
-
-	database.DB.First(&task, taskID)
-	if h.schedulerEffects {
-		updateTaskInScheduler(&task)
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		scheduler.UpdateJob(&task)
 	}
 
 	response.Success(c, gin.H{
 		"message": "task updated",
-		"data":    task.ToDict(),
-	})
-}
-
-// RestoreSubscriptionDefault 清除订阅锁，让任务重新跟随订阅源。
-// 用户手动改过名称/定时的任务会被自动加锁，这里是唯一的解锁入口；
-// 解锁后下一次订阅拉取会用订阅源的名称与 cron 覆盖回来，候选集缺失时也会重新按 autoDelete 处理。
-func (h *TaskHandler) RestoreSubscriptionDefault(c *gin.Context) {
-	taskID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-
-	var task model.Task
-	if err := database.DB.First(&task, taskID).Error; err != nil {
-		response.NotFound(c, "任务不存在")
-		return
-	}
-
-	if err := database.DB.Model(&task).Update("subscription_locked", false).Error; err != nil {
-		response.InternalError(c, "恢复为订阅默认失败")
-		return
-	}
-
-	database.DB.First(&task, taskID)
-	response.Success(c, gin.H{
-		"message": "已恢复为订阅默认，下次拉取将重新跟随订阅源",
-		"data":    task.ToDict(),
+		"data":    taskDictWithEnabledSwitch(&task),
 	})
 }
 
@@ -458,13 +552,35 @@ func (h *TaskHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if h.schedulerEffects {
-		removeTaskFromScheduler(uint(taskID))
+	// 可选开关 delete_script（#124）：不带时整段不进入，下面的删除语句与响应和改动前逐字节一致。
+	// 带了则先校验应用令牌的 scripts scope 并拍快照（此时任务还没删），删完任务再判定、删脚本。
+	var scriptCleanup *taskScriptCleanupCtx
+	if on, confirm := parseDeleteScriptQuery(c); on {
+		var ok bool
+		if scriptCleanup, ok = beginTaskScriptCleanup(c, []uint{uint(taskID)}, confirm); !ok {
+			return
+		}
 	}
-	database.DB.Where("task_id = ?", taskID).Delete(&model.TaskLog{})
+
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		scheduler.RemoveJob(uint(taskID))
+	}
+	// 任务的历史日志先经 DeleteTaskLogs 并入执行趋势的按天计数再删（#158），仪表板不跟着变少。
+	// 出错照旧不拦流程（与改动前一致）；路径不用取回，下面整目录收走。
+	_ = database.DB.Transaction(func(tx *gorm.DB) error {
+		_, _, err := service.DeleteTaskLogs(tx, "task_id = ?", taskID)
+		return err
+	})
+	// 任务都删了，logs/task_<ID>_* 留着只会变成永远没人认领的垃圾目录（issue #144 / v3.3.2）。
+	// 必须在删行之后调：日志行还在的时候清理目录，会让「记录还在、文件没了」更难排查。
+	service.RemoveTaskLogDirs(uint(taskID), config.C.Data.LogDir)
 	database.DB.Delete(&task)
 
-	response.Success(c, gin.H{"message": "删除成功"})
+	resp := gin.H{"message": "删除成功"}
+	if scriptCleanup != nil {
+		resp["scripts"] = finishTaskScriptCleanup(c, scriptCleanup)
+	}
+	response.Success(c, resp)
 }
 
 func (h *TaskHandler) Pin(c *gin.Context) {
@@ -499,6 +615,7 @@ func (h *TaskHandler) Copy(c *gin.Context) {
 		Timeout:                task.Timeout,
 		SuccessExitCodes:       task.GetSuccessExitCodes(),
 		RandomDelaySeconds:     task.RandomDelaySeconds,
+		LogRetentionDays:       task.LogRetentionDays,
 		MaxRetries:             task.MaxRetries,
 		RetryInterval:          task.RetryInterval,
 		NotifyOnFailure:        task.NotifyOnFailure,
@@ -509,9 +626,18 @@ func (h *TaskHandler) Copy(c *gin.Context) {
 		TaskBefore:             task.TaskBefore,
 		TaskAfter:              task.TaskAfter,
 		AllowMultipleInstances: task.AllowMultipleInstances,
-		SchedulePolicy:         task.EffectiveSchedulePolicy(),
 		StopSchedule:           task.StopSchedule,
+		// 可用环境变量（#168）跟着复制：副本是同一个脚本，限定范围不能在复制时悄悄放宽成「全部」
+		EnvScope:  task.GetEnvScope(),
+		EnvGroups: task.EnvGroups,
+		EnvNames:  task.EnvNames,
 	}
-	database.DB.Select("*").Create(&newTask)
-	response.Created(c, gin.H{"message": "复制成功", "data": newTask.ToDict()})
+	// 原来这行没接 .Error：插入失败也照样返回 201 + 一个没有 id 的空壳，用户以为复制成功了。
+	// 注意 tasks 表刻意不加名称唯一键（同名任务合法，这里本来就是产出「XX (副本)」），
+	// 所以这里报的一定是真实的写库故障，按 500 返回。
+	if err := database.DB.Select("*").Create(&newTask).Error; err != nil {
+		response.InternalError(c, "复制任务失败")
+		return
+	}
+	response.Created(c, gin.H{"message": "复制成功", "data": taskDictWithEnabledSwitch(&newTask)})
 }

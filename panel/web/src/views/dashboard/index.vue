@@ -5,7 +5,6 @@ import {
   onMounted,
   onUnmounted,
   onActivated,
-  onDeactivated,
   defineComponent,
   h,
   watch,
@@ -37,6 +36,8 @@ import {
 } from "@element-plus/icons-vue";
 import { useResponsive } from "@/composables/useResponsive";
 import { canAdminister, hasRequiredRole } from "@/utils/roles";
+import { formatDuration } from "@/utils/duration";
+import { formatDateTime } from "@/utils/datetime";
 
 const ExecutionTrendChart = defineAsyncComponent(
   () => import("./components/ExecutionTrendChart.vue"),
@@ -142,7 +143,7 @@ const greetingSub = computed(() => {
   return "辛苦一天啦，看看任务运行情况吧~";
 });
 
-// hero 内的日期/星期小胶囊：用 new Date() 直接推导，无需新增数据源
+// hero 内的日期/星期文案：用 new Date() 直接推导，无需新增数据源
 const heroDateLabel = computed(() => {
   void refreshTimestamp.value; // 刷新时一并更新展示
   const now = new Date();
@@ -358,7 +359,8 @@ const resourceItems = computed(() => {
       iconBg: "rgba(59, 130, 246, 0.12)",
       detail: `${s.num_cpu || "-"} 核心`,
       percent: Number(s.cpu_usage) || 0,
-      barColor: "linear-gradient(90deg, #3b82f6, #60a5fa)",
+      // 进度条用纯色，不用渐变，保持整体扁平观感
+      barColor: "#3b82f6",
     },
     {
       key: "memory",
@@ -368,7 +370,7 @@ const resourceItems = computed(() => {
       iconBg: "rgba(6, 182, 212, 0.12)",
       detail: `${formatBytes(s.memory_used)} / ${formatBytes(s.memory_total)}`,
       percent: Number(s.memory_usage) || 0,
-      barColor: "linear-gradient(90deg, #06b6d4, #67e8f9)",
+      barColor: "#06b6d4",
     },
     {
       key: "disk",
@@ -378,7 +380,7 @@ const resourceItems = computed(() => {
       iconBg: "rgba(16, 185, 129, 0.12)",
       detail: `${formatBytes(s.disk_used)} / ${formatBytes(s.disk_total)}`,
       percent: Number(s.disk_usage) || 0,
-      barColor: "linear-gradient(90deg, #10b981, #34d399)",
+      barColor: "#10b981",
     },
   ];
 });
@@ -395,11 +397,6 @@ function formatBytes(bytes: number) {
   return val.toFixed(1) + " " + units[i];
 }
 
-function formatTime(t: string) {
-  if (!t) return "-";
-  return new Date(t).toLocaleString("zh-CN", { hour12: false });
-}
-
 function lastUpdatedText() {
   const diff = (Date.now() - refreshTimestamp.value.getTime()) / 1000;
   if (diff < 60) return "刚刚";
@@ -409,8 +406,6 @@ function lastUpdatedText() {
 
 const lastUpdatedTick = ref(0);
 let lastUpdatedTimer: number | null = null;
-let dashboardLoadGeneration = 0;
-let sysInfoLoadGeneration = 0;
 
 const filteredLogs = computed(() => {
   const list = recentLogs.value;
@@ -456,56 +451,35 @@ const taskStats = computed(() => {
   };
 });
 
-const avgDuration = computed(() => {
+// 平均执行时长（秒）。没有可用样本时返回 null，交给 formatDuration 显示 "-"，
+// 避免把「没数据」渲染成 0，让人误以为任务是瞬间跑完的。
+// 这里刻意不做预先四舍五入：提前把 59.96 修成 60.0 会让格式化结果跳成 "1m"，
+// 精度统一交给 formatDuration 处理。
+const avgDuration = computed<number | null>(() => {
   const list = recentLogs.value;
-  if (!list.length) return 0;
+  if (!list.length) return null;
   const valid = list.filter((l: any) => l.duration != null);
-  if (!valid.length) return 0;
+  if (!valid.length) return null;
   const sum = valid.reduce((s: number, l: any) => s + (l.duration || 0), 0);
-  return Math.round((sum / valid.length) * 10) / 10;
+  return sum / valid.length;
 });
 
-function donutSegments() {
-  const radius = 50;
-  const circ = 2 * Math.PI * radius;
-  const stats = taskStats.value;
-  // gradient 指向 <defs> 中各段渐变，使环形更精致；color 保留用于兜底
-  const segs = [
-    { color: "#10b981", gradient: "url(#donutSuccess)", percent: stats.successPct },
-    { color: "#3b82f6", gradient: "url(#donutRunning)", percent: stats.runningPct },
-    { color: "#ef4444", gradient: "url(#donutFailed)", percent: stats.failedPct },
-    { color: "#f59e0b", gradient: "url(#donutAborted)", percent: stats.abortedPct },
-  ];
-  let offset = 0;
-  return segs.map((s) => {
-    const length = (s.percent / 100) * circ;
-    const dasharray = `${length} ${circ - length}`;
-    const dashoffset = -offset;
-    offset += length;
-    return { ...s, dasharray, dashoffset, circ };
-  });
-}
-
 const loadDashboard = async () => {
-  const generation = ++dashboardLoadGeneration;
   try {
     const res = (await systemApi.dashboard(trendRange.value)) as any;
-    if (generation !== dashboardLoadGeneration) return;
     dashboardData.value = res.data || {};
     refreshTimestamp.value = new Date();
   } catch {
-    if (generation === dashboardLoadGeneration) ElMessage.error("加载仪表盘数据失败");
+    ElMessage.error("加载仪表盘数据失败");
   }
 };
 
 const loadSysInfo = async () => {
-  const generation = ++sysInfoLoadGeneration;
   try {
     const res = (await systemApi.info()) as any;
-    if (generation !== sysInfoLoadGeneration) return;
     sysInfo.value = res.data || {};
   } catch {
-    if (generation === sysInfoLoadGeneration) ElMessage.error("加载系统信息失败");
+    ElMessage.error("加载系统信息失败");
   }
 };
 
@@ -554,19 +528,6 @@ function loadDashboardPage() {
   loadSysInfo();
 }
 
-function startLastUpdatedTimer() {
-  if (lastUpdatedTimer) return;
-  lastUpdatedTimer = window.setInterval(() => {
-    lastUpdatedTick.value++;
-  }, 30 * 1000);
-}
-
-function stopLastUpdatedTimer() {
-  if (!lastUpdatedTimer) return;
-  clearInterval(lastUpdatedTimer);
-  lastUpdatedTimer = null;
-}
-
 function handleRefresh() {
   loadDashboardPage();
 }
@@ -575,7 +536,9 @@ onMounted(() => {
   loadDashboardPage();
   hasLoadedOnce.value = true;
   scheduleTrendChartRender();
-  startLastUpdatedTimer();
+  lastUpdatedTimer = window.setInterval(() => {
+    lastUpdatedTick.value++;
+  }, 30 * 1000);
 });
 
 onActivated(() => {
@@ -585,18 +548,6 @@ onActivated(() => {
     loadDashboardPage();
   }
   scheduleTrendChartRender();
-  startLastUpdatedTimer();
-});
-
-onDeactivated(() => {
-  dashboardLoadGeneration += 1;
-  sysInfoLoadGeneration += 1;
-  stopObservingTrendChart();
-  if (trendChartTimer) {
-    clearTimeout(trendChartTimer);
-    trendChartTimer = null;
-  }
-  stopLastUpdatedTimer();
 });
 
 onUnmounted(() => {
@@ -605,7 +556,10 @@ onUnmounted(() => {
     clearTimeout(trendChartTimer);
     trendChartTimer = null;
   }
-  stopLastUpdatedTimer();
+  if (lastUpdatedTimer) {
+    clearInterval(lastUpdatedTimer);
+    lastUpdatedTimer = null;
+  }
 });
 
 const updatedHint = computed(() => {
@@ -679,7 +633,7 @@ function rerunLog(log: any) {
 
 <template>
   <div class="dashboard-page dd-scroll-page">
-    <!-- ============ 轻量问候条：坐在页面底色上，问候语 + 快捷操作胶囊 ============ -->
+    <!-- ============ 轻量问候条：坐在页面底色上，问候语 + 快捷操作按钮 ============ -->
     <section class="dash-welcome animate-fade-in-up">
       <!-- 左侧：问候语 + 日期/副标题元信息 -->
       <div class="dash-welcome__greet">
@@ -690,7 +644,7 @@ function rerunLog(log: any) {
           >{{ heroDateLabel }} · {{ greetingSub }}</span
         >
       </div>
-      <!-- 右侧：快捷操作胶囊按钮，复用 quickActions 数据与点击逻辑 -->
+      <!-- 右侧：快捷操作按钮，复用 quickActions 数据与点击逻辑 -->
       <div class="dash-welcome__actions">
         <button
           v-for="action in quickActions"
@@ -758,7 +712,7 @@ function rerunLog(log: any) {
       </div>
     </section>
 
-    <!-- ============ 焦点行：执行趋势（大）+ 执行统计环形 ============ -->
+    <!-- ============ 焦点行：执行趋势（大）+ 执行统计占比条 ============ -->
     <section class="focus-grid animate-fade-in-up delay-100">
       <!-- 执行趋势 -->
       <div class="panel panel--trend">
@@ -806,7 +760,7 @@ function rerunLog(log: any) {
         </div>
       </div>
 
-      <!-- 执行统计环形 -->
+      <!-- 执行统计：横向堆叠占比条 -->
       <div class="panel panel--stats">
         <div class="panel-header">
           <div class="panel-header__title">
@@ -826,104 +780,80 @@ function rerunLog(log: any) {
           </div>
         </div>
         <div class="task-stats-body">
-          <div class="task-donut">
-            <svg viewBox="0 0 140 140">
-              <defs>
-                <!-- 各段渐变：成功绿 / 运行蓝 / 失败红 / 终止黄，各一套，更精致 -->
-                <linearGradient id="donutSuccess" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#34d399" />
-                  <stop offset="100%" stop-color="#059669" />
-                </linearGradient>
-                <linearGradient id="donutRunning" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#60a5fa" />
-                  <stop offset="100%" stop-color="#2563eb" />
-                </linearGradient>
-                <linearGradient id="donutFailed" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#f87171" />
-                  <stop offset="100%" stop-color="#dc2626" />
-                </linearGradient>
-                <linearGradient id="donutAborted" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#fbbf24" />
-                  <stop offset="100%" stop-color="#f59e0b" />
-                </linearGradient>
-              </defs>
-              <!-- 轨道底环 -->
-              <circle
-                cx="70"
-                cy="70"
-                r="50"
-                fill="none"
-                stroke="var(--el-fill-color)"
-                stroke-width="14"
-              />
-              <!-- 数据段：stroke 引用对应渐变，整体加柔和投影 -->
-              <g class="task-donut__segments">
-                <circle
-                  v-for="(seg, idx) in donutSegments()"
-                  :key="idx"
-                  cx="70"
-                  cy="70"
-                  r="50"
-                  fill="none"
-                  :stroke="seg.gradient"
-                  stroke-width="14"
-                  stroke-linecap="round"
-                  :stroke-dasharray="seg.dasharray"
-                  :stroke-dashoffset="seg.dashoffset"
-                  transform="rotate(-90 70 70)"
-                  style="
-                    transition:
-                      stroke-dasharray 0.6s ease,
-                      stroke-dashoffset 0.6s ease;
-                  "
-                />
-              </g>
-            </svg>
-            <div class="task-donut__center">
-              <span class="task-donut__value">
-                <CountUp :end-val="taskStats.total" :duration="1.2" />
-              </span>
-              <span class="task-donut__label">总执行数</span>
-            </div>
+          <div class="task-stats__total">
+            <span class="task-stats__total-label">总执行数</span>
+            <span class="task-stats__total-value">
+              <CountUp :end-val="taskStats.total" :duration="1.2" />
+            </span>
           </div>
-          <div class="task-legend">
-            <div class="legend-row">
-              <span class="legend-row__dot" style="background: #10b981"></span>
-              <span class="legend-row__label">成功</span>
-              <span class="legend-row__value">{{
+          <!-- 横向堆叠占比条：各段宽度直接取 taskStats 已算好的百分比；
+               总执行数为 0 时四段宽度均为 0，只剩条底的空态色，不存在除零 -->
+          <div class="task-stats__bar">
+            <span
+              class="task-stats__seg is-success"
+              :style="{ width: taskStats.successPct + '%' }"
+            ></span>
+            <span
+              class="task-stats__seg is-failed"
+              :style="{ width: taskStats.failedPct + '%' }"
+            ></span>
+            <span
+              class="task-stats__seg is-running"
+              :style="{ width: taskStats.runningPct + '%' }"
+            ></span>
+            <span
+              class="task-stats__seg is-aborted"
+              :style="{ width: taskStats.abortedPct + '%' }"
+            ></span>
+          </div>
+          <div class="task-stats__legend">
+            <div class="task-stats__legend-item">
+              <span class="task-stats__swatch is-success"></span>
+              <span class="task-stats__legend-label">成功</span>
+              <span class="task-stats__legend-value">{{
                 taskStats.success.toLocaleString()
               }}</span>
-              <span class="legend-row__pct">({{ taskStats.successPct }}%)</span>
+              <span class="task-stats__legend-pct"
+                >({{ taskStats.successPct }}%)</span
+              >
             </div>
-            <div class="legend-row">
-              <span class="legend-row__dot" style="background: #ef4444"></span>
-              <span class="legend-row__label">失败</span>
-              <span class="legend-row__value">{{
+            <div class="task-stats__legend-item">
+              <span class="task-stats__swatch is-failed"></span>
+              <span class="task-stats__legend-label">失败</span>
+              <span class="task-stats__legend-value">{{
                 taskStats.failed.toLocaleString()
               }}</span>
-              <span class="legend-row__pct">({{ taskStats.failedPct }}%)</span>
+              <span class="task-stats__legend-pct"
+                >({{ taskStats.failedPct }}%)</span
+              >
             </div>
-            <div class="legend-row">
-              <span class="legend-row__dot" style="background: #3b82f6"></span>
-              <span class="legend-row__label">运行中</span>
-              <span class="legend-row__value">{{
+            <div class="task-stats__legend-item">
+              <span class="task-stats__swatch is-running"></span>
+              <span class="task-stats__legend-label">运行中</span>
+              <span class="task-stats__legend-value">{{
                 taskStats.running.toLocaleString()
               }}</span>
-              <span class="legend-row__pct">({{ taskStats.runningPct }}%)</span>
+              <span class="task-stats__legend-pct"
+                >({{ taskStats.runningPct }}%)</span
+              >
             </div>
-            <div class="legend-row">
-              <span class="legend-row__dot" style="background: #f59e0b"></span>
-              <span class="legend-row__label">终止</span>
-              <span class="legend-row__value">{{
+            <div class="task-stats__legend-item">
+              <span class="task-stats__swatch is-aborted"></span>
+              <span class="task-stats__legend-label">终止</span>
+              <span class="task-stats__legend-value">{{
                 taskStats.aborted.toLocaleString()
               }}</span>
-              <span class="legend-row__pct">({{ taskStats.abortedPct }}%)</span>
+              <span class="task-stats__legend-pct"
+                >({{ taskStats.abortedPct }}%)</span
+              >
             </div>
           </div>
         </div>
         <div class="task-stats-footer">
           <span class="task-stats-footer__label">平均执行时长</span>
-          <span class="task-stats-footer__value">{{ avgDuration }}s</span>
+          <span class="task-stats-footer__value">{{
+            formatDuration(avgDuration)
+          }}</span>
         </div>
       </div>
     </section>
@@ -980,9 +910,9 @@ function rerunLog(log: any) {
               </span>
             </div>
             <div class="log-mobile-card__meta">
-              <span>{{ formatTime(log.created_at) }}</span>
+              <span>{{ formatDateTime(log.created_at) }}</span>
               <span v-if="log.duration != null"
-                >耗时 {{ log.duration.toFixed(1) }}s</span
+                >耗时 {{ formatDuration(log.duration) }}</span
               >
             </div>
           </div>
@@ -1012,7 +942,10 @@ function rerunLog(log: any) {
             <tr v-if="filteredLogs.length === 0">
               <td colspan="7" class="empty-cell">暂无记录</td>
             </tr>
-            <tr v-for="(log, rowIndex) in filteredLogs" :key="log.id" :style="{ animationDelay: `${Number(rowIndex) * 36}ms` }" class="log-table__row-cinematic">
+            <!-- 这里刻意【不】给每一行做 stagger 入场，见 design-system.md「入场动画」一条：
+                 行数一多逐行动画就会卡，而且这张表是轮询刷新的，每次刷新都会整表重放，
+                 表现为规律性闪烁。整块入场由外层 .panel 的 dd-panel-in 负责，一次就够。 -->
+            <tr v-for="log in filteredLogs" :key="log.id">
               <td>
                 <span class="log-cell-name">{{
                   log.task_name || "未命名任务"
@@ -1028,12 +961,12 @@ function rerunLog(log: any) {
               </td>
               <td>
                 <span class="log-cell-time">{{
-                  formatTime(log.created_at)
+                  formatDateTime(log.created_at)
                 }}</span>
               </td>
               <td class="col-center">
                 <span class="log-cell-duration">{{
-                  log.duration != null ? log.duration.toFixed(1) + "s" : "-"
+                  formatDuration(log.duration)
                 }}</span>
               </td>
               <td class="col-center">
@@ -1187,7 +1120,7 @@ function rerunLog(log: any) {
   line-height: 1.4;
 }
 
-// 快捷操作胶囊：复用页面令牌，明暗双主题自动适配
+// 快捷操作按钮：复用页面令牌，明暗双主题自动适配
 .dash-welcome__actions {
   display: flex;
   flex-wrap: wrap;
@@ -1199,7 +1132,9 @@ function rerunLog(log: any) {
   align-items: center;
   gap: 7px;
   padding: 7px 14px;
-  border-radius: var(--dd-radius-sm);
+  /* 注意：类名叫 pill，实际是问候条右侧的快捷操作按钮（可点击）→ control 档，
+     不吃 pill 档，否则会和状态 chip 混成一类 */
+  border-radius: var(--dd-radius-control);
   border: 1px solid var(--el-border-color-lighter);
   background: var(--el-bg-color);
   color: var(--el-text-color-regular);
@@ -1207,23 +1142,17 @@ function rerunLog(log: any) {
   font-weight: 600;
   cursor: pointer;
   transition:
-    transform var(--dd-motion-fast) var(--dd-ease-spring),
     color var(--dd-motion-fast) var(--dd-ease-standard),
     border-color var(--dd-motion-fast) var(--dd-ease-standard);
 
   &:hover {
-    // 边框/文字转品牌色，轻微上浮
+    // 只换边框与文字颜色，不做位移与缩放
     border-color: color-mix(
       in srgb,
       var(--el-color-primary) 45%,
       var(--el-border-color)
     );
     color: var(--el-color-primary);
-    transform: translateY(-1px);
-  }
-
-  &:active {
-    transform: scale(var(--dd-press-scale));
   }
 }
 
@@ -1238,29 +1167,22 @@ function rerunLog(log: any) {
 .stat-card {
   background: var(--el-bg-color);
   position: relative;
+  // 扁平风格下靠 1px 边框与背景色分层，不再使用阴影与上浮
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 14px;
+  // 统计卡片是容器类表面 →「卡片」角色令牌（issue #144 / v3.3.2 起与 global.scss 的 .dd-stat-card 同档）。
+  // 走角色令牌而不是 surface 档：桌面 --dd-radius-card 恒等于 surface（10px，零变化），
+  // ≤768 被重指到 --dd-radius-surface-mobile 自动抬到 20px，直角模式下两边都是 0。
+  border-radius: var(--dd-radius-card);
   padding: 16px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
-  // 对齐全局表面令牌：弹簧 hover + 标准缓动，静置/悬浮阴影随明暗自动切换
-  transition:
-    transform var(--dd-motion-fast) var(--dd-ease-spring),
-    box-shadow var(--dd-motion-normal) var(--dd-ease-standard),
-    border-color var(--dd-motion-fast) var(--dd-ease-standard);
-  box-shadow: var(--dd-shadow-card);
+  transition: border-color var(--dd-motion-fast) var(--dd-ease-standard);
 
   &:hover {
-    transform: translateY(-4px);
-    box-shadow: var(--dd-shadow-card-hover);
     border-color: color-mix(in srgb, var(--el-color-primary) 20%, var(--el-border-color));
-  }
-
-  &:active {
-    transform: scale(0.988);
   }
 }
 
@@ -1321,7 +1243,8 @@ function rerunLog(log: any) {
   gap: 2px;
   font-weight: 600;
   padding: 1px 6px;
-  border-radius: 6px;
+  // 涨跌幅是卡片里的小标签，归控件类 → control 档（与 global.scss 的 .dd-stat-card__delta 同档）
+  border-radius: var(--dd-radius-control);
 
   &.is-up {
     color: #10b981;
@@ -1343,7 +1266,8 @@ function rerunLog(log: any) {
 .stat-card__icon {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  // 44×44 的图标色底属控件类表面 → control 档（不做成正圆，避免与头像混淆）
+  border-radius: var(--dd-radius-control);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1360,7 +1284,7 @@ function rerunLog(log: any) {
   }
 }
 
-// ============ 焦点行 Grid（趋势图大 + 环形）============
+// ============ 焦点行 Grid（趋势图大 + 执行统计占比条）============
 .focus-grid {
   display: grid;
   grid-template-columns: 1.8fr 1fr;
@@ -1378,13 +1302,15 @@ function rerunLog(log: any) {
 .panel {
   background: var(--el-bg-color);
   animation: dd-panel-rise-in 420ms var(--dd-ease-emphasized) both;
+  // 面板与页面底色的分隔完全由 1px 边框承担，不再叠加阴影
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 14px;
+  // 面板外壳是容器类表面 →「卡片」角色令牌（issue #144 / v3.3.2，与 .stat-card 同档：
+  // 桌面仍是 10px，≤768 自动抬到 20px，直角模式为 0）；下面的 overflow:hidden 会把贴边内嵌的
+  // .panel-header / 表格 / 移动端列表自动裁掉四角，所以那些子块刻意不写圆角
+  border-radius: var(--dd-radius-card);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  // 对齐全局表面令牌：静置阴影随明暗自动切换
-  box-shadow: var(--dd-shadow-card);
 }
 
 .panel-header {
@@ -1433,19 +1359,20 @@ function rerunLog(log: any) {
   color: var(--el-color-primary);
   font-size: 12px;
   padding: 4px 6px;
-  border-radius: 6px;
-  transition: background 0.15s, transform 0.18s ease, border-color 0.18s ease;
+  // 文字链接按钮属控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
+  transition: background 0.15s, border-color 0.18s ease;
 
   &:hover {
     background: var(--el-color-primary-light-9);
-    transform: translateX(1px);
   }
 }
 
 .seg-btn-group {
   display: inline-flex;
   background: var(--el-fill-color-light);
-  border-radius: 8px;
+  // 分段控件的灰底槽 → control 档（与槽内的 .seg-btn 同档，两者一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   padding: 2px;
   gap: 2px;
 
@@ -1459,20 +1386,21 @@ function rerunLog(log: any) {
   background: transparent;
   padding: 4px 10px;
   font-size: 12px;
-  border-radius: 6px;
+  // 分段项属控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
   cursor: pointer;
   color: var(--el-text-color-secondary);
-  transition: all 0.18s;
+  transition: background-color 0.18s, color 0.18s;
 
   &:hover {
     color: var(--el-text-color-primary);
   }
 
+  // 选中态只靠底色与字色区分，不再用投影抬起
   &.is-active {
     background: var(--el-bg-color);
     color: var(--el-color-primary);
     font-weight: 600;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   }
 }
 
@@ -1486,9 +1414,12 @@ function rerunLog(log: any) {
 
 .trend-chart-placeholder {
   height: 300px;
-  border-radius: 10px;
+  // 图表骨架屏是面板内的独立区块 → surface 档。
+  // 面板内嵌块，刻意低父级一档：.panel 已抬到 card 档（移动端 20px），这里不跟（issue #144 / v3.3.2）。
+  border-radius: var(--dd-radius-surface);
   padding: 18px;
-  background: linear-gradient(180deg, rgba(64, 158, 255, 0.04), transparent);
+  // 骨架屏用纯色底，不再用渐变
+  background: var(--el-fill-color-lighter);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -1497,12 +1428,9 @@ function rerunLog(log: any) {
 
 .placeholder-bar {
   height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(59, 130, 246, 0.15),
-    rgba(16, 185, 129, 0.08)
-  );
+  // 骨架屏占位条属小型块 → control 档（8px 高时半径会被自动夹到 4px，呈圆头条）
+  border-radius: var(--dd-radius-control);
+  background: rgba(59, 130, 246, 0.15);
   animation: placeholderPulse 1.6s ease-in-out infinite;
 }
 
@@ -1519,7 +1447,8 @@ function rerunLog(log: any) {
 .placeholder-legend span {
   width: 48px;
   height: 6px;
-  border-radius: 999px;
+  // 骨架屏图例占位块，与 .placeholder-bar 同类 → control 档
+  border-radius: var(--dd-radius-control);
   background: rgba(140, 140, 140, 0.12);
 }
 
@@ -1544,18 +1473,21 @@ function rerunLog(log: any) {
 
 .resource-row {
   display: flex;
-  border-radius: 12px;
+  // 资源列表的每一行是独立内容块（hover 换底色），归容器类表面 → surface 档。
+  // 面板内嵌块，刻意低父级一档：.panel 已抬到 card 档（移动端 20px），这里不跟（issue #144 / v3.3.2）。
+  // 父级 .resource-list 有 16px 18px 内边距，行不贴边，可以安全吃圆角
+  border-radius: var(--dd-radius-surface);
   padding: 8px 10px;
-  transition: background-color 0.18s ease, transform 0.18s ease;
+  transition: background-color 0.18s ease;
   align-items: flex-start;
   gap: 12px;
 }
 
 .resource-row__icon {
   width: 36px;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
   height: 36px;
-  border-radius: 10px;
+  // 36×36 的图标色底属控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1603,26 +1535,19 @@ function rerunLog(log: any) {
 
 .resource-bar {
   height: 6px;
-  border-radius: 999px;
+  // 进度条轨道是天然胶囊 → pill 档
+  border-radius: var(--dd-radius-pill);
   background: var(--el-fill-color);
   overflow: hidden;
 }
 
+// 进度条为纯色实心，去掉了原来的流光高亮层
 .resource-bar__fill {
   height: 100%;
-  border-radius: 999px;
-  position: relative;
-  overflow: hidden;
+  // 与轨道同档（pill）：轨道虽有 overflow:hidden 兜住两端，但填充未满时右侧前沿在轨道中间，
+  // 需要自己带圆头才和 el-progress 的 __inner 观感一致
+  border-radius: var(--dd-radius-pill);
   transition: width 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
-    transform: translateX(-120%);
-    animation: dd-resource-sheen 2.8s ease-in-out infinite;
-  }
 }
 
 .uptime-detail {
@@ -1641,24 +1566,23 @@ function rerunLog(log: any) {
   font-size: 11.5px;
 }
 
+// 白名单：形状承载语义 —— 8×8 的状态灯（面板持续运行中），与 global.scss 的 .pulse-dot、
+// api-docs 的 .status-dot 同类，方化后与旁边文字糊成一小块色斑，认不出是状态灯。
+// 两种 shape 模式下都固定圆形，不吃 --dd-radius-* 刻度。
 .uptime-track__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #f59e0b;
-  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14);
   flex-shrink: 0;
 }
 
 .uptime-track__line {
   height: 6px;
   flex: 1;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(245, 158, 11, 0.35),
-    rgba(245, 158, 11, 0.08)
-  );
+  // 状态灯后面的运行轨道线，与进度条同类 → pill 档
+  border-radius: var(--dd-radius-pill);
+  background: rgba(245, 158, 11, 0.28);
   overflow: hidden;
 }
 
@@ -1713,17 +1637,13 @@ function rerunLog(log: any) {
   }
 
   tbody tr {
-    transition: background 0.15s, transform 0.18s ease, box-shadow 0.18s ease;
+    transition: background 0.15s;
 
+    // 行悬浮只换底色，不做位移与投影
     &:hover {
       background: color-mix(in srgb, var(--el-color-primary-light-9) 76%, white);
-      box-shadow: inset 2px 0 0 var(--el-color-primary);
     }
   }
-}
-
-.log-table__row-cinematic {
-  animation: dd-table-row-in 320ms var(--dd-ease-emphasized) both;
 }
 
 .log-table td {
@@ -1792,7 +1712,8 @@ function rerunLog(log: any) {
   justify-content: center;
   min-width: 44px;
   padding: 2px 10px;
-  border-radius: 999px;
+  // 执行状态 chip 是天然胶囊 → pill 档（与 global.scss 的 .dd-status-chip 同档）
+  border-radius: var(--dd-radius-pill);
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1.4;
@@ -1824,7 +1745,8 @@ function rerunLog(log: any) {
   justify-content: center;
   max-width: 100%;
   padding: 2px 8px;
-  border-radius: 6px;
+  // 环境标记是标签而不是状态灯，归控件类 → control 档（与 global.scss 的 .dd-env-chip 同档）
+  border-radius: var(--dd-radius-control);
   font-size: 11.5px;
   font-weight: 500;
   font-family: "Inter", var(--dd-font-ui), sans-serif;
@@ -1836,7 +1758,8 @@ function rerunLog(log: any) {
 
 .log-cell-actions {
   display: inline-flex;
-  border-radius: 999px;
+  // 操作按钮组的灰底槽 → control 档（与槽内的 .icon-btn 同档，两者一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   padding: 2px;
   background: color-mix(in srgb, var(--el-fill-color-light) 82%, transparent);
   align-items: center;
@@ -1846,9 +1769,9 @@ function rerunLog(log: any) {
 
 .icon-btn {
   width: 26px;
-  transition: all 0.15s ease;
   height: 26px;
-  border-radius: 6px;
+  // 图标按钮属控件类表面 → control 档（与 global.scss 的 .dd-icon-btn 同档）
+  border-radius: var(--dd-radius-control);
   border: none;
   background: transparent;
   display: inline-flex;
@@ -1856,16 +1779,11 @@ function rerunLog(log: any) {
   justify-content: center;
   cursor: pointer;
   color: var(--el-text-color-placeholder);
-  transition: all 0.15s;
+  transition: background-color 0.15s ease, color 0.15s ease;
 
   &:hover {
     background: var(--el-fill-color);
     color: var(--el-color-primary);
-    transform: translateY(-1px);
-  }
-
-  &:active {
-    transform: scale(0.95);
   }
 }
 
@@ -1878,7 +1796,10 @@ function rerunLog(log: any) {
 
 .log-mobile-card {
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px;
+  // 面板内嵌的小卡片，刻意低父级一档 → surface 档（issue #144 / v3.3.2：.panel 与 global.scss 的
+  // .dd-mobile-card 都已改吃 card 档、移动端 20px，这里不跟，嵌套圆角本就该逐层递减）；
+  // 父级 .log-mobile-list 有内边距，卡片不贴边，可以安全吃圆角
+  border-radius: var(--dd-radius-surface);
   padding: 10px 12px;
   background: var(--el-fill-color-light);
 }
@@ -1904,43 +1825,27 @@ function rerunLog(log: any) {
   color: var(--el-text-color-secondary);
 }
 
-// ============ Task Stats ============
+// ============ Task Stats（总数 + 横向堆叠占比条 + 图例）============
 .task-stats-body {
   flex: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 14px;
   padding: 14px 18px;
 }
 
-.task-donut {
-  position: relative;
-  width: 140px;
-  height: 140px;
-  flex-shrink: 0;
-
-  svg {
-    width: 100%;
-    height: 100%;
-  }
-}
-
-// 给环形数据段加柔和投影，更精致
-.task-donut__segments {
-  filter: drop-shadow(0 4px 8px rgba(15, 23, 42, 0.14));
-}
-
-.task-donut__center {
-  position: absolute;
-  inset: 0;
+.task-stats__total {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.task-donut__value {
+.task-stats__total-label {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.task-stats__total-value {
   font-size: 22px;
   font-weight: 700;
   color: var(--el-text-color-primary);
@@ -1950,45 +1855,98 @@ function rerunLog(log: any) {
   letter-spacing: -0.01em;
 }
 
-.task-donut__label {
-  font-size: 11px;
-  color: var(--el-text-color-placeholder);
+.task-stats__bar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  // 横向堆叠占比条与进度条同类，是天然胶囊 → pill 档；
+  // 下面的 overflow:hidden 会把内部 .task-stats__seg 各分段裁进这个圆头轨道，
+  // 所以分段本身刻意不写圆角（贴边内嵌，写了反而露角）
+  border-radius: var(--dd-radius-pill);
+  // 总执行数为 0 时四段宽度都是 0，这里的底色就是空态表现
+  background: var(--el-fill-color);
+  overflow: hidden;
 }
 
-.task-legend {
-  flex: 1;
+.task-stats__seg {
+  height: 100%;
+  min-width: 0;
+  transition: width 0.4s var(--dd-ease-standard);
+
+  &.is-success {
+    background: #10b981;
+  }
+
+  &.is-failed {
+    background: #ef4444;
+  }
+
+  &.is-running {
+    background: #3b82f6;
+  }
+
+  &.is-aborted {
+    background: #f59e0b;
+  }
+}
+
+.task-stats__legend {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.legend-row {
+.task-stats__legend-item {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12.5px;
 }
 
-.legend-row__dot {
-  width: 8px;
-  height: 8px;
+.task-stats__swatch {
+  width: 10px;
+  height: 10px;
+  // 🔴 固定 2px，不吃令牌（v3.1.0 新立的「≤12px 小色标」判据）。
+  //
+  // 图例色块只做「颜色对应」用（对应上面那条堆叠占比条的四个分段），不是表达运行状态的
+  // 状态灯，所以不进圆形白名单——这一层判断没变。但原来写「吃 control 档」是错的：
+  // 10×10 的盒子上，control 的 6px 会触发 CSS 圆角等比收缩（6+6=12 > 10 ⇒ 全部夹到 5px），
+  // 结果正好是一个【正圆】，跟上面 .uptime-track__dot 那类状态灯长得一模一样，
+  // 「不进白名单以便区分形状」的意图在圆角模式下自动失效。
+  // 写死一个小于半边长的值才稳得住方形轮廓。
   border-radius: 2px;
   flex-shrink: 0;
+
+  &.is-success {
+    background: #10b981;
+  }
+
+  &.is-failed {
+    background: #ef4444;
+  }
+
+  &.is-running {
+    background: #3b82f6;
+  }
+
+  &.is-aborted {
+    background: #f59e0b;
+  }
 }
 
-.legend-row__label {
+.task-stats__legend-label {
   flex: 1;
   color: var(--el-text-color-regular);
 }
 
-.legend-row__value {
+.task-stats__legend-value {
   font-weight: 700;
   color: var(--el-text-color-primary);
   font-family: "Inter", var(--dd-font-ui), sans-serif;
   font-variant-numeric: tabular-nums;
 }
 
-.legend-row__pct {
+.task-stats__legend-pct {
   font-size: 11.5px;
   color: var(--el-text-color-placeholder);
 }
@@ -2035,7 +1993,22 @@ function rerunLog(log: any) {
 }
 
 @media (max-width: 768px) {
-  // 窄屏：问候条竖排，actions 占满宽度、胶囊换行不溢出
+  // issue #144 / v3.3.2：卡片（.stat-card / .panel）在移动端抬到 card 档 20px 后，
+  // 按钮跟着从 control 档 6px 抬到 surface 档（圆角模式 10px），免得圆角落差太大。
+  // 不写死 10px：直角模式下 --dd-radius-surface 是 0，写死会把方形面板破掉。
+  // --dd-radius-surface 在 ≤768 没有被重指，手机上仍解析为 10px，所以这里直接吃它即可。
+  // 本页没有一个 el-button，全是原生 button，global.scss 那条移动端 `html .el-button` 规则够不着它们。
+  // 槽与槽内项必须同值（.seg-btn-group/.seg-btn、.log-cell-actions/.icon-btn），否则会露出内外错位的角。
+  .dash-pill,
+  .text-link,
+  .seg-btn-group,
+  .seg-btn,
+  .log-cell-actions,
+  .icon-btn {
+    border-radius: var(--dd-radius-surface);
+  }
+
+  // 窄屏：问候条竖排，actions 占满宽度、按钮换行不溢出
   .dash-welcome {
     flex-direction: column;
     align-items: flex-start;
@@ -2082,16 +2055,8 @@ function rerunLog(log: any) {
   }
 
   .task-stats-body {
-    flex-direction: column;
     gap: 16px;
     padding: 16px;
-  }
-  .task-donut {
-    width: 120px;
-    height: 120px;
-  }
-  .task-legend {
-    width: 100%;
   }
 }
 
@@ -2118,32 +2083,25 @@ function rerunLog(log: any) {
   }
 }
 
-@keyframes dd-table-row-in {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 10px, 0);
+// 页面自带的「减少动效」规则统一走这个包装（C8 动效偏好）：
+// - 跟随系统：媒体查询里带 :root:not(.dd-motion-force)，个人设置选「始终开启」时不生效；
+// - 个人设置选「减少动效」：html.dd-motion-off 下不看系统同样生效。
+// 与 global.scss 末尾「减少动效」段同一口径；前缀包在 :where() 里，特异性与改动前的裸选择器相同，层叠结果不变。
+@mixin dd-page-reduced-motion {
+  @media (prefers-reduced-motion: reduce) {
+    :where(:root:not(.dd-motion-force)) {
+      @content;
+    }
   }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
+
+  :where(html.dd-motion-off) {
+    @content;
   }
 }
 
-@keyframes dd-resource-sheen {
-  0%,
-  100% {
-    transform: translateX(-120%);
-  }
-  55% {
-    transform: translateX(120%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
+@include dd-page-reduced-motion {
   .stat-card--cinematic,
-  .panel,
-  .log-table__row-cinematic,
-  .resource-bar__fill::after {
+  .panel {
     animation: none;
   }
 }

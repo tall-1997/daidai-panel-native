@@ -68,6 +68,9 @@
   display: inline-block;
   width: 6px;
   height: 6px;
+  // 白名单：形状承载语义 —— 6×6 的呼吸点是「运行中」的状态指示，
+  // 方化后与旁边的文字/标签糊成一小块色斑，认不出是状态灯。
+  // 两种 shape 模式下都固定圆形，不吃 --dd-radius-* 刻度。
   border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
@@ -88,8 +91,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  // 给 body 也铺页面底色：外壳 .layout-container 的 margin-top 因 #app 未形成 BFC 会向上塌陷穿透到 body，
-  // 若 body 是默认白底，外壳顶部那条间隙会露出白色。这里让 body 底色 = 页面底色，任何间隙都显示灰蓝，根治顶部白条。
+  // body 铺页面底色：布局外壳已全屏铺满，正常情况下看不到 body，
+  // 但 100dvh 在移动端地址栏收放时会短暂露出底部，用页面底色兜底避免闪白。
   background: var(--el-bg-color-page);
 }
 
@@ -102,7 +105,7 @@ body {
 
 #app {
   height: 100%;
-  // 外壳留白处露出的页面底色（外壳本身用 --el-bg-color）
+  // 页面底色兜底：布局外壳（--el-bg-color）铺满视口，此处仅在外壳未渲染/尺寸抖动时可见
   background: var(--el-bg-color-page);
 }
 
@@ -158,42 +161,121 @@ body {
   --el-color-primary-light-7: #c6e2ff;
   --el-color-primary-light-9: #ecf5ff;
   --el-color-primary-dark-2: #337ecc;
-  --el-border-radius-base: 8px;
-  --el-border-radius-small: 4px;
-  --el-border-radius-round: 20px;
+  // ===== 形状契约：三档圆角刻度（v3.1.0 起可配置）=====
+  // v3.0.0 ~ v3.0.10 是「全站硬直角」；v3.1.0 起改成可切换：系统配置 panel_shape_style
+  // 取 square（默认，直角）或 rounded（圆角），由 utils/panelAppearance.ts 在运行时
+  // 往 documentElement 上写下面这三条私有刻度。这里只写 square 档（全 0）。
+  //
+  // 🔴 这三条【绝对不能带 !important】：运行时用的是 documentElement.style.setProperty()，
+  //    内联声明是普通重要级；一旦这里带了 !important，内联值就压不过来，圆角模式会整个失效。
+  //    （下面派生出去的 --el-* 三条则相反，必须带 !important，理由见那一段。）
+  //
+  // 三档的适用范围 —— 新写样式一律从这三档里挑一个，不要再写死像素：
+  //   control  按钮、输入框、select、tag、分段项、图标按钮、下拉/浮层菜单项、日期控件
+  //   surface  卡片、表格容器、弹窗、浮层容器、通知、消息框、移动端卡片、日志面板
+  //   pill     状态 chip、计数角标、进度条、滚动条
+  // 例外有三类：①「贴边内嵌于已圆角容器」的元素保持 0（各处都写了注释）；
+  //            ② 形状承载语义的白名单（开关、状态灯、头像、单选点、加载弧、标签关闭键）
+  //               固定圆形，不吃令牌；
+  //            ③ 🔴 **边长 ≤12px 的分类/装饰色标固定 2px**，也不吃令牌。
+  //
+  // 第 ③ 类是 v3.1.0 浏览器实测后新立的判据，理由是 CSS 的圆角收缩规则：
+  //   一条边上两个半径之和超过边长时，全部半径按同一系数等比缩小。
+  //   ⇒ control 档的 6px 落在 10×10 上会被夹成 5px、落在 8×8 上夹成 4px，两者都是【正圆】。
+  // 所以「刻意不进白名单、吃 control 以便和圆形状态灯区分形状」这种写法在圆角模式下
+  // 会自动失效，注释写的理由和实际渲染结果正好相反。这类小色标（文件类型标、分组色标、
+  // 图例色块）表达的是分类/装饰、不随运行状态变，固定 2px 才能稳定保住方形轮廓。
+  //   判据速查：形状承载语义 → 50%；≤12px 且只表达分类/装饰 → 2px；其余 → 吃三档令牌。
+  //
+  // 注：旧的 --dd-card-radius / --dd-radius-shell / --dd-radius-sm 三个令牌已删除。
+  // 它们全仓 0 处引用（是 v3.0.0 归零时留下的死令牌），职责已被上面这三档刻度完全取代。
+  --dd-radius-control: 0;
+  --dd-radius-surface: 0;
+  --dd-radius-pill: 0;
+  // 移动端刻度（v3.3.1，issue #143）：≤768px 下「按钮」「卡片」两个角色的圆角，
+  // rounded 档由 applyPanelShapeStyle() 运行时写成 16px / 20px，square 档写 0。
+  // 🔴 与上面三档同理【绝不能带 !important】：JS 写的是内联普通声明，带了就永远切不动。
+  // 组件不直接吃这两条，统一经下面的角色令牌 --dd-radius-button / --dd-radius-card 取用。
+  --dd-radius-control-mobile: 0;
+  --dd-radius-surface-mobile: 0;
+  // 角色令牌：「卡片级表面」与「按钮」。桌面上就是 surface / control 两档，
+  // ≤768px 在文件后部的移动端媒体查询里改指上面两条移动端刻度 ——
+  // 所以页面里想要「手机上卡片 20px、按钮 16px」的地方引用它们即可，不要自己写 media 和像素值。
+  // 自定义属性里的 var() 在【声明它的元素】上代换，后代继承的是代换后的结果。
+  // 这里声明在 :root（即 <html>），JS 的内联刻度也写在 <html> 上，所以能取到运行时的值；
+  // 🔴 因此不要在 :root 以外的元素上重声明这两条角色令牌，否则那一支子树会绕开运行时刻度。
+  --dd-radius-card: var(--dd-radius-surface);
+  --dd-radius-button: var(--dd-radius-control);
+  // Element Plus 的三条基础圆角令牌全部派生自上面的刻度，切 shape 时它们跟着一起变。
+  //
+  // ⚠️ 这三条【必须带 !important】，2026-08-24 浏览器实测才发现的静默失效：
+  //    EP 在 theme-chalk/base.css 与 el-var.css 里也写了 `:root{--el-border-radius-base:4px}`，
+  //    与这里【特异性完全相同】(0,1,0)。而 ElementPlusResolver 的 importStyle:'css'
+  //    让组件样式随 SFC 懒注入，必然排在入口包的 global.scss 之后 —— 同特异性后来者赢，
+  //    去掉 !important 拿到的就是 EP 自带的 4px，而不是这里写的值（看着「生效了」只是巧合）。
+  //
+  //    影响面比看上去大，因为凡是【没有被单独写死 border-radius】的地方都在吃这个令牌：
+  //      - `.el-button--small{border-radius:calc(var(--el-border-radius-base) - 1px)}`
+  //        → 圆角档是 calc(6px - 1px)=5px；直角档 calc(0px - 1px) 会被夹到 0，与现状一致
+  //      - `.el-select-dropdown` / `.el-dropdown-menu` / `.el-date-editor` → 直接吃令牌
+  //    历史实测：不带 !important 时一个普通页面能数出 39 处非零圆角。
+  //
+  //    `!important` 对自定义属性声明是有效的，且与加载顺序无关（同 --el-dialog-margin-top
+  //    那一处的处理方式），所以这是唯一能钉死结果的写法。
+  //    注意：--el-border-radius-circle 属白名单，两种模式下都刻意不动（见下方注释）。
+  --el-border-radius-base: var(--dd-radius-control) !important;
+  --el-border-radius-small: var(--dd-radius-control) !important;
+  --el-border-radius-round: var(--dd-radius-pill) !important;
+  // 浮层（tooltip / dropdown / select 下拉 / date-picker 面板）的圆角是另一条独立链：
+  //   .el-popper 的 --el-popper-border-radius 取自 --el-popover-border-radius（缺省回退 4px）
+  // 它绕开 --el-border-radius-base；浮层是「容器」类表面，所以吃 surface 档。
+  // EP 没有在 :root 定义 --el-popover-border-radius，所以这里补一条能兜住全部普通 popper；
+  // el-popover 自身另有同名令牌声明（写在元素上、会赢过继承值），见下方 .el-popover 那一处。
+  --el-popover-border-radius: var(--dd-radius-surface);
+  // 注意：--el-border-radius-circle 属白名单（el-radio 圆点的来源），刻意不动。
   --dd-sidebar-width: 220px;
   --dd-header-height: 56px;
   --dd-page-padding: 20px;
-  // 卡片圆角统一为 14px：与设计基线 / dd-stat-card / dd-data-card 一致（原 12px 偏小不统一）
-  --dd-card-radius: 14px;
+  // 内容区（.layout-main）的横向内边距：桌面 20px、≤768px 为 12px（见移动端媒体查询）。
+  // 目前只有移动端的 .layout-main padding 引用它（MainLayout.vue）；桌面端 padding 仍是原来的
+  // 20px / 矮屏 16px 字面值（本版不动桌面）。
+  // v3.3.2 / issue #144 起 .dd-mobile-bleed 不再用等量负外边距抵消它（那会把横栏顶到屏幕边缘、吃掉侧滑返回），
+  // 改成跟着这条留白走，所以这个令牌现在是单一消费方，不再有「两边像素必须对齐」的耦合。
+  --dd-page-gutter-x: 20px;
   --dd-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  // ===== 表面质感令牌（A+C 混搭，预览 data-scheme="d"）=====
-  // 圆角刻度：外壳 22px、卡片沿用 14px、小控件 10px。
-  --dd-radius-shell: 22px;
-  --dd-radius-sm: 10px;
-  // 外壳四周留白（桌面），矮屏 media 内会收小、移动端归零。
-  --dd-shell-margin: 18px;
-  // 阴影刻度（明色用 rgba(15,23,42,...)，暗色在 html.dark 覆盖为 rgba(0,0,0,...)）。
-  //  - card：卡片静置；card-hover：在静置基础上叠品牌色辉光；shell：外壳更大更柔。
-  --dd-shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 20px rgba(15, 23, 42, 0.05);
-  --dd-shadow-card-hover: 0 2px 6px rgba(15, 23, 42, 0.06), 0 16px 36px rgba(64, 158, 255, 0.1);
-  --dd-shadow-shell: 0 1px 2px rgba(15, 23, 42, 0.05), 0 24px 60px rgba(15, 23, 42, 0.08);
-  // 页面底色（外壳留白处可见，对齐预览）：映射 Element Plus 页底变量。
+  // ===== 表面质感令牌 =====
+  // 阴影刻度：纯扁平方案下不再用阴影制造悬浮层次，一律 none；
+  // 需要区分层级的地方改用 1px 边框（--el-border-color-lighter）。
+  --dd-shadow-card: none;
+  --dd-shadow-card-hover: none;
+  --dd-shadow-shell: none;
+  // 页面底色：布局外壳铺满视口后，它主要作为内容区（.layout-main）的背景色。
   --el-bg-color-page: #f4f6fb;
-  // 全局动效 token（A+C 混搭方案）：
+  // 全局动效 token：
   //  - 切页 / 布局 / 浮层这类“位移到位”的动画走 decelerate / emphasized，求顺滑、不越界；
-  //  - 按钮按下、卡片与图标 hover 这类“缩放 / 浮起”的微交互走 spring，带轻回弹，更灵动有高级感。
+  //  - 纯扁平方案下不再有缩放 / 浮起类微交互，hover 只做颜色变化，无需缓动区分。
   --dd-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --dd-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
   --dd-ease-decelerate: cubic-bezier(0.16, 1, 0.3, 1);
-  // 温和弹簧：只用于 scale / translateY 浮起类微交互（按钮按下、卡片与图标 hover）。
+  // 温和弹簧：保留定义供未来使用，当前不再被任何形变类微交互引用。
   // 注意：不要用在抽屉、侧栏这种“滑动到屏幕边缘”的动画上，spring 的回弹会越过边缘露出空隙。
   --dd-ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
   --dd-motion-fast: 160ms;
   --dd-motion-normal: 240ms;
   --dd-motion-page: 240ms;
   --dd-motion-slow: 360ms;
-  --dd-press-scale: 0.96;
+  // v3.2.8（#132）新增的五档：切页进出场、弹层进出场、下拉浮层与遮罩。
+  // 刻意【新增】而不是改上面四档的值：--dd-motion-page 被十几个页面的 dd-*-rise-in 与脚本工作区弹窗共用，
+  // --dd-motion-normal 还管着 toast、状态切换，改值会连带改掉它们。
+  // 进场长、离场短：进场要让人看清东西从哪来，离场只需尽快让位。
+  --dd-motion-page-enter: 280ms;
+  --dd-motion-page-leave: 120ms;
+  --dd-motion-overlay: 280ms;
+  --dd-motion-overlay-leave: 180ms;
+  // 下拉类浮层的展开、弹窗遮罩的淡入：都是比主体更轻的一层，比主体快一拍先到位。
+  --dd-motion-popper: 200ms;
+  // 按下缩放已取消（纯扁平不做形变反馈），保留令牌避免引用点报错。
+  --dd-press-scale: 1;
   --dd-font-mono:
     "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
   --dd-font-ui:
@@ -220,7 +302,8 @@ a {
 
 ::-webkit-scrollbar-thumb {
   background: var(--el-border-color);
-  border-radius: 3px;
+  // 滚动条滑块只有 6px 宽，pill 档在圆角模式下正好是两端半圆的细条
+  border-radius: var(--dd-radius-pill);
   &:hover {
     background: var(--el-text-color-placeholder);
   }
@@ -231,58 +314,27 @@ a {
 }
 
 .el-button {
-  border-radius: var(--el-border-radius-base);
+  // 与 --el-border-radius-base 同值（它也派生自 control 档），写在这里只是让意图显式；
+  // size="small" 仍走 EP 自己的 calc(base - 1px)，不在这条规则的管辖范围内。
+  border-radius: var(--dd-radius-control);
   font-weight: 500;
+  // 纯扁平：按钮只做颜色过渡，不再有按下缩放与浮起阴影
   transition:
     background-color var(--dd-motion-fast) var(--dd-ease-standard),
     color var(--dd-motion-fast) var(--dd-ease-standard),
-    border-color var(--dd-motion-fast) var(--dd-ease-standard),
-    box-shadow var(--dd-motion-fast) var(--dd-ease-standard),
-    transform 140ms var(--dd-ease-spring);
-
-  &:active {
-    // 按下回弹用 spring：松手时轻微越过原尺寸再归位，手感更跟手、更有质感
-    transform: scale(var(--dd-press-scale));
-  }
+    border-color var(--dd-motion-fast) var(--dd-ease-standard);
 }
 
-// 主按钮：A+C 混搭——柔和品牌渐变 + 轻微浮起辉光。
-// 只作用于实心 primary，排除 plain / text / link / disabled，避免破坏这些变体的原生样式。
-.el-button--primary:not(.is-plain):not(.is-text):not(.is-link):not(.is-disabled) {
-  background-image: linear-gradient(
-    135deg,
-    var(--el-color-primary),
-    var(--el-color-primary-dark-2)
-  );
-  border-color: transparent;
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.26);
+// 主按钮不再做渐变 + 辉光覆盖，直接沿用 Element Plus 原生实心色：
+// 静置 --el-color-primary、hover 换浅一档底色，符合「hover 只换颜色」的扁平规则。
 
-  &:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(64, 158, 255, 0.4);
-  }
-
-  &:active {
-    transform: scale(var(--dd-press-scale));
-  }
-}
-
+// 圆角走 --el-card-border-radius，刻度化见文件末尾的「Element Plus 圆角兜底」一块。
 .el-card {
-  border-radius: var(--dd-card-radius);
+  // 去阴影后，卡片与页面底色的分隔完全依赖这条 1px 边框
   border: 1px solid var(--el-border-color-lighter);
-  // 静置阴影统一引用令牌（明暗各一套）
-  box-shadow: var(--dd-shadow-card);
-  transition:
-    border-color var(--dd-motion-fast) var(--dd-ease-standard),
-    box-shadow var(--dd-motion-normal) var(--dd-ease-standard),
-    transform var(--dd-motion-fast) var(--dd-ease-spring);
+  transition: border-color var(--dd-motion-fast) var(--dd-ease-standard);
+  // 表格等宽内容溢出时靠它裁切，与圆角无关，不能删
   overflow: hidden;
-
-  &:hover {
-    // 上浮用 spring 轻回弹，阴影叠一层淡淡的品牌色辉光，质感更高级（统一引用令牌）
-    transform: translateY(-2px);
-    box-shadow: var(--dd-shadow-card-hover);
-  }
 
   .el-card__header {
     padding: 16px 20px;
@@ -297,10 +349,22 @@ a {
 
 .el-dialog {
   --el-dialog-margin-top: clamp(16px, 4vh, 40px) !important;
-  animation: dd-dialog-surface-in var(--dd-motion-normal) var(--dd-ease-emphasized);
-  transform-origin: center top;
-  border-radius: 16px;
+  // ⚠️ 这里原来有一条 `animation: dd-dialog-surface-in ...`，已移除。
+  //    .el-dialog 不是 <transition> 的作用元素，它上面的 animation 只在【元素首次创建】
+  //    时跑一次；EP 的 el-dialog 默认 destroy-on-close=false，同一个弹窗第二次打开
+  //    DOM 被复用，动画不会重放。实测过：第 2、3 次打开时 getAnimations() 返回空数组。
+  //    进场位移已改挂到 `.dialog-fade-enter-active .el-overlay-dialog`，见下方浮层动画段。
+  // 弹窗属容器类表面，吃 surface 档
+  border-radius: var(--dd-radius-surface);
   overflow: hidden;
+  // 注意：这条 margin-bottom 不能删。Element Plus 原生写的是
+  //     `margin: var(--el-dialog-margin-top, 15vh) auto 50px;`
+  // ——下边距是写死的 50px，跟上边距不对称。而下面的 max-height 是按「上下等距」算的
+  // （margin-top × 2），于是弹窗的垂直实占是 (margin-top + 50px)，永远比预留的
+  // (margin-top × 2) 多出 (50px - margin-top)；margin-top 取到 clamp 上限 40px 时正好差 10px。
+  // .el-overlay-dialog 自带 overflow:auto，这点差额不会让内容在弹窗内滚动，
+  // 而是变成「整个弹窗能上下挪一点」的无意义滚动条。这里把下边距显式对齐回上边距，把差额消掉。
+  margin-bottom: var(--el-dialog-margin-top);
   max-height: calc(100dvh - (var(--el-dialog-margin-top) * 2));
   display: flex;
   flex-direction: column;
@@ -319,56 +383,245 @@ a {
     overflow: auto;
   }
 
+  // Element Plus 原生只给了 `text-align: right`，不是 flex 容器。
+  // 后果：footer 里想靠 `margin-right: auto` 把状态标签推到最左的写法（订阅「拉取日志」用过）
+  // 从来就不生效——`margin: auto` 只在 flex/grid 上下文里吃掉剩余空间，
+  // 在 inline 布局里对 inline-block 元素等于 0。
+  // 这里统一改成 flex，让 footer 具备「左侧状态 + 右侧按钮」的能力。
+  //
+  // 全库 37 处 <template #footer> 逐个核过，只有两种形态：
+  //   a) 直接放若干 <el-button>（32 处）——flex + justify-content:flex-end 与原 text-align:right 等价；
+  //   b) 外面套一层已经是 `display:flex; justify-content:flex-end` 的 wrapper div（5 处：
+  //      login .totp-dialog-footer / logs .detail-footer / profile .setup-dialog-footer /
+  //      RestoreProgressDialog .restore-progress-footer / UpdateProgressDialog .update-progress-footer）
+  //      ——wrapper 变成 flex item 后按 max-content 收宽并靠右，视觉不变。
+  // 没有裸文本节点的 footer（纯空白不会生成匿名 flex item），也没有用 `center` prop 的弹窗
+  // （`.el-dialog--center .el-dialog__footer { text-align: inherit }` 因此不会被影响）。
   .el-dialog__footer {
     padding: 16px 24px 20px;
     border-top: 1px solid var(--el-border-color-lighter);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    // 按钮多的 footer（脚本调试弹窗有 4 个）在窄屏要能换行，
+    // 否则 flex 默认 nowrap 会把按钮压扁——原来的 inline 布局是会换行的。
+    flex-wrap: wrap;
+    // 间距对齐 Element Plus 原生的 `.el-button+.el-button{margin-left:12px}`，
+    // 并在下面把那条 margin 清零，避免 gap 与 margin 叠成 24px 双倍间距。
+    gap: 12px;
+  }
+
+  // 只清直接子级：套了 wrapper div 的那 5 处，按钮不是 footer 的直接子元素，
+  // 其间距仍由各自 wrapper 的 gap + EP margin 决定，维持现状不动。
+  .el-dialog__footer > .el-button + .el-button {
+    margin-left: 0;
   }
 
   &.is-fullscreen {
-    // 全屏模式复位上面对 .el-dialog 的通用装饰，确保真正边到边铺满：
-    // - margin-top 抵消 :299 那条带 !important 的留白，否则全屏框被顶下来一截露缝
-    // - 去圆角，避免四角留白看起来像浮窗
+    // 全屏模式复位上面的通用留白，确保真正边到边铺满：
+    // margin-top 抵消上面那条带 !important 的留白，否则全屏框被顶下来一截露缝。
+    // 这里的 margin 简写（.el-dialog.is-fullscreen，特异性 0,2,0）高于上面那条
+    // .el-dialog { margin-bottom }（0,1,0），所以上面的下边距对齐不会漏进全屏态；
+    // 与源码顺序无关，不要因为「后写的覆盖先写的」而把这条挪走。
     max-height: 100dvh;
     --el-dialog-margin-top: 0 !important;
     margin: 0;
-    border-radius: 0;
   }
 }
 
+// 🔴 遮罩只有 24% 暗度 + 1.5px 模糊，压不住底下的内容（v3.3.2 / issue #144）：
+// 任何没铺满视口的弹窗，移动端那条 sticky 顶栏都会从遮罩后面清晰透出来，观感上就是「顶栏还在占地方」。
+// 所以移动端不能指望遮罩去挡顶栏，必须靠弹窗自己铺满——见文件末尾 ≤768 媒体查询里的 `.el-dialog` 整屏规则。
+// 层级不归这里管：v3.3.3（issue #148）起移动端 .layout-main 不再自成层叠上下文（见 MainLayout.vue），
+// 原地渲染的遮罩直接在根上下文里用 EP 的 2000+ 压过顶栏；整屏规则只管几何，解决的是「弹窗没盖到那块区域」。
 .el-overlay {
   background-color: rgba(15, 23, 42, 0.24) !important;
   backdrop-filter: blur(1.5px);
-  transition:
-    background-color var(--dd-motion-fast) var(--dd-ease-standard),
-    backdrop-filter var(--dd-motion-fast) var(--dd-ease-standard);
+  // 只过渡底色。原来连 backdrop-filter 一起过渡：它的值在开关过程中根本不变，过渡它没有任何可见收益，
+  // 却会让低端机（Magisk 版用手机浏览器访问）在遮罩淡入的每一帧都重新模糊一次整屏。
+  transition: background-color var(--dd-motion-fast) var(--dd-ease-standard);
 }
 
-// 统一接管 Element Plus 浮层动画，让弹窗、抽屉、遮罩的镜头感一致
+// ============================================================================
+// Element Plus 浮层动画接管
+// ----------------------------------------------------------------------------
+// ⚠️ 2026-08-23 修复的静默失效，改这一段前务必读完。
+//
+// 这里原本引用了四个关键帧：dd-dialog-surface-in / -out、dd-dialog-overlay-in / -out，
+// 但【全仓一个 @keyframes dd-dialog-* 都没有】。CSS 里 animation-name 指向不存在的
+// 关键帧是完全合法的——不报错、不告警、构建全绿，只是什么都不发生。
+// 而这几条又都带 !important，把 EP 原生的 modal-fade-in / dialog-fade-in 一并压掉了，
+// 于是全站 48 个弹窗【既没有自己的动画，也没有 EP 的动画】，一直是瞬现瞬消。
+//
+// 教训：给 animation 写一个新名字时，必须同时确认 @keyframes 真的落了地。
+// 这类失效连 vue-tsc 和 vite build 都发现不了，只能靠肉眼看或者浏览器实测。
+//
+// 【两个动画各自挂在哪个元素上，为什么必须是 transition 元素】
+// EP 的 DOM 是 .el-overlay > .el-overlay-dialog > .el-dialog，
+// <transition name="dialog-fade"> 包的是最外层的 .el-overlay，所以：
+//   .dialog-fade-*-active                     → 遮罩层本身
+//   .dialog-fade-*-active .el-overlay-dialog  → 弹窗的定位容器
+//
+// 原来的命名把这两者【写反了】（surface 挂遮罩、overlay 挂容器），这次一并摆正：
+//   遮罩淡入淡出  → .dialog-fade-*-active                     （dd-dialog-overlay-in/-out，纯 opacity）
+//   弹窗进出位移  → .dialog-fade-*-active .el-overlay-dialog  （dd-dialog-surface-in/-out）
+//
+// ⚠️ 位移【不能】挂在 .el-dialog 上（第一版就是这么写的，浏览器实测才发现）：
+//    .el-dialog 不是 transition 元素，它上面的 animation 只在【元素首次创建】时跑一次。
+//    EP 的 el-dialog 默认 destroy-on-close=false，同一个弹窗第二次打开时 DOM 被复用，
+//    animation 不会重放——表现为「第一次打开有动效，之后就只剩遮罩淡入」。
+//    实测确认：第 2、3 次打开时 .el-dialog.getAnimations() 是空数组。
+//    挂在 .el-overlay-dialog 上才每次 enter 都重放，因为它在 transition 的作用域里。
+//
+// 【为什么进场不写 both、离场写 both】
+// 进场不写：动画收尾后 transform 自然清空。残留的 transform 会让 .el-overlay-dialog
+// 成为内部 position:fixed 元素的包含块，代码编辑器的搜索面板这类浮层会飘到错误位置
+// （脚本调试弹窗在 Monaco 时代踩过这个坑，换成 CodeMirror 之后这条约束依然成立）。
+// 离场写 both 是安全的——元素紧接着就被卸载了。
+// ============================================================================
+
+// 抽屉的根节点（.el-drawer-fade-*-active）原来也列在这里，v3.2.8 拿掉了：抽屉全程走 transition
+// （见下方 el-drawer 一段），给它的根节点挂 animation-duration 只会让 Vue 按这个时长去等一个
+// 根本不会发生的 animationend，离场时透明的遮罩要多挡几十毫秒的点击。
 .el-overlay-dialog,
 .v-modal,
-.el-drawer-fade-enter-active,
-.el-drawer-fade-leave-active,
 .dialog-fade-enter-active,
 .dialog-fade-leave-active {
-  animation-duration: var(--dd-motion-normal) !important;
+  animation-duration: var(--dd-motion-overlay) !important;
   animation-timing-function: var(--dd-ease-emphasized) !important;
 }
 
-.dialog-fade-enter-active .el-overlay-dialog {
-  animation: dd-dialog-overlay-in var(--dd-motion-fast) var(--dd-ease-standard) both !important;
-}
-
-.dialog-fade-leave-active .el-overlay-dialog {
-  animation: dd-dialog-overlay-out 180ms var(--dd-ease-standard) both !important;
-}
-
+// 遮罩：只做透明度。它上面已经有 backdrop-filter，再叠位移会让整屏跟着晃。
+// 进场吃 --dd-motion-popper（200ms），比弹窗本体（--dd-motion-overlay，280ms）快一拍先把底铺好；
+// 离场与本体同为 --dd-motion-overlay-leave，两者一起收尾。
+//
+// ⚠️ Vue 只按【根节点】（也就是遮罩）的时长决定何时摘掉 -enter-active。200ms 摘掉的那一刻，
+//    挂在 `.dialog-fade-enter-active .el-overlay-dialog` 上的本体动画会跟着被拿掉。
+//    按 emphasized 曲线算，280ms 的动画在 200ms 处已走完约 99.5%，剩余位移不到 0.1px，肉眼无感。
+//    所以两边的比例别随手改：本体比遮罩长太多，摘类名时本体还没走完就会「跳」一下；
+//    为了等长把遮罩也拉到 280ms，又会变成弹窗先于背景出现。
 .dialog-fade-enter-active {
-  animation: dd-dialog-surface-in var(--dd-motion-normal) var(--dd-ease-emphasized) both !important;
+  animation: dd-dialog-overlay-in var(--dd-motion-popper) var(--dd-ease-standard) both !important;
 }
 
 .dialog-fade-leave-active {
-  animation: dd-dialog-surface-out 180ms var(--dd-ease-standard) both !important;
+  animation: dd-dialog-overlay-out var(--dd-motion-overlay-leave) var(--dd-ease-standard) both !important;
+}
+
+// 弹窗本体的进场：从下方 16px 升起、同时从 0.98 放大到位。
+// （v3.2.8 之前只有 10px 位移 + 240ms，配合前段极陡的缓动，肉眼可见的变化只有头 50~80ms，观感是「傻快」。）
+// 挂在这里而不是 .el-dialog 上的原因见上方大段说明（.el-dialog 的 animation 只在首次创建时跑一次）。
+// 刻意不写 both，让 transform 在动画收尾后自然清空。
+// 缩放原点是 .el-overlay-dialog 自己（铺满视口的定位容器）的中心，弹窗会轻微地向中间收拢，
+// 与位移叠在一起读起来就是「从下方浮上来」，不需要另设 transform-origin。
+.dialog-fade-enter-active .el-overlay-dialog {
+  animation: dd-dialog-surface-in var(--dd-motion-overlay) var(--dd-ease-emphasized) !important;
+}
+
+// 全屏弹窗（含移动端 dialogFullscreen 自动切成全屏的那一批）不缩放：它贴满视口四边，
+// 一缩放四条边会同时露出底下的遮罩。只换关键帧（只位移），时长与缓动沿用上一条。
+// 用 :where() 把 :has() 的特异性吃掉，整条保持 (0,2,0)：
+//   - 与上一条通用规则打平，靠同一文件里的源码顺序（写在它后面）胜出，结果是确定的；
+//   - 仍低于脚本工作区的 `.dialog-fade-enter-active .el-overlay-dialog:has(.script-execution-fullscreen-dialog)`
+//     (0,3,0)，那个弹窗自己的 sheet-up 覆盖不会被这里抢走。
+// 只认直接子级：.el-overlay-dialog 的直接子元素就是 .el-dialog（中间的 ElFocusTrap 不产生 DOM）。
+// 写成后代选择器的话，非全屏弹窗 body 里再嵌一个全屏弹窗，外层也会被误判成全屏。
+.dialog-fade-enter-active .el-overlay-dialog:where(:has(> .el-dialog.is-fullscreen)) {
+  animation-name: dd-dialog-surface-in-flat !important;
+}
+
+.dialog-fade-leave-active .el-overlay-dialog {
+  animation: dd-dialog-surface-out var(--dd-motion-overlay-leave) var(--dd-ease-standard) both !important;
+}
+
+// ============================================================================
+// 确认框（ElMessageBox）进出场接管
+// ----------------------------------------------------------------------------
+// EP 默认走 msgbox-fade-in：从上方 -20px 落下、时长写死 --el-transition-duration（0.3s），
+// 方向与弹窗的「从下方升起」正好相反，也不吃令牌。这里复用弹窗那组关键帧。
+//
+// DOM：<transition name="fade-in-linear"> 包的是 .el-overlay.is-message-box（遮罩 = 根节点），
+//      里面的 .el-overlay-message-box 是铺满视口的居中定位容器（相当于弹窗的 .el-overlay-dialog）。
+// 选择器全部钉在 is-message-box / .el-overlay-message-box 上：fade-in-linear 这组类名
+// tooltip 等别的组件也在用，不能改全局。
+// ============================================================================
+
+// 根节点（遮罩）：EP 用 base.css 的 `.fade-in-linear-enter-active{transition:opacity .2s linear}`。
+// 但上面 .el-overlay 那条也写了 transition，两条都是 (0,1,0)，谁赢取决于 CSS 注入顺序 ——
+// 输给 .el-overlay 时遮罩的 opacity 根本不过渡，离场第一帧整个确认框就直接消失。
+// 这里用 (0,3,0) 把它钉死，与加载顺序无关；时长吃令牌，所以不需要 !important 去对抗 reduce 补丁。
+.el-overlay.is-message-box.fade-in-linear-enter-active {
+  transition: opacity var(--dd-motion-popper) var(--dd-ease-standard);
+}
+
+.el-overlay.is-message-box.fade-in-linear-leave-active {
+  transition: opacity var(--dd-motion-overlay-leave) var(--dd-ease-standard);
+}
+
+// 本体：与 EP 那两条 (0,2,0) 打平，而 el-message-box.css 与 base.css 的注入顺序不固定
+// （前者在 main.ts 静态引入，后者随组件懒注入），只能靠 !important 钉死结果，同弹窗那两条。
+// 进场同样不写 both，理由同弹窗。确认框永远居中、不会全屏，直接用带缩放的那组关键帧。
+.fade-in-linear-enter-active .el-overlay-message-box {
+  animation: dd-dialog-surface-in var(--dd-motion-overlay) var(--dd-ease-emphasized) !important;
+}
+
+.fade-in-linear-leave-active .el-overlay-message-box {
+  animation: dd-dialog-surface-out var(--dd-motion-overlay-leave) var(--dd-ease-standard) both !important;
+}
+
+// —— 关键帧定义。位移方向与全站 dd-*-rise-in 一致：从下方轻微升起、向下退出。——
+@keyframes dd-dialog-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dd-dialog-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes dd-dialog-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+// 全屏弹窗专用：只位移、不缩放（理由见上方 :has(> .el-dialog.is-fullscreen) 那一条）
+@keyframes dd-dialog-surface-in-flat {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+// 离场不缩放：元素紧接着就被隐藏，缩放在这么短的时间里读不出来，只会让全屏弹窗露边。
+@keyframes dd-dialog-surface-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
 .el-drawer-fade-enter-from .rtl,
@@ -391,10 +644,30 @@ a {
   transform: translate3d(0, 100%, 0) !important;
 }
 
+// 抽屉：v3.2.8 起吃弹层令牌，与弹窗同一档节奏。滑入走 --dd-motion-overlay + emphasized，
+// 离场换成更短的 --dd-motion-overlay-leave，尽快让位。
+// !important：EP 的 `.el-drawer{transition:all var(--el-transition-duration)}` 与这里打平且懒注入排在后面。
 .el-drawer {
   transition:
-    transform var(--dd-motion-normal) var(--dd-ease-emphasized),
+    transform var(--dd-motion-overlay) var(--dd-ease-emphasized),
     box-shadow var(--dd-motion-fast) var(--dd-ease-standard) !important;
+}
+
+.el-drawer-fade-leave-active .el-drawer {
+  transition:
+    transform var(--dd-motion-overlay-leave) var(--dd-ease-standard),
+    box-shadow var(--dd-motion-fast) var(--dd-ease-standard) !important;
+}
+
+// 抽屉的根节点（遮罩）。EP 写的是 `transition: all .3s`：不吃令牌，而且 Vue 是按【根节点】的时长
+// 决定离场何时隐藏的 —— 根节点 300ms、面板 180ms，面板滑走后透明遮罩还要多挡 120ms 的点击。
+// 这里收成只过渡底色，并与面板取同一时长。!important 的理由同上。
+.el-drawer-fade-enter-active {
+  transition: background-color var(--dd-motion-overlay) var(--dd-ease-standard) !important;
+}
+
+.el-drawer-fade-leave-active {
+  transition: background-color var(--dd-motion-overlay-leave) var(--dd-ease-standard) !important;
 }
 
 .el-table {
@@ -443,23 +716,241 @@ a {
   }
 }
 
+// el-tag 的圆角走 EP 自己的私有令牌（--el-tag-border-radius / -rounded），
+// 刻度化统一放到文件末尾的「Element Plus 圆角兜底」一块，这里只留排版相关的声明。
 .el-tag {
-  border-radius: 6px;
   font-weight: 500;
+}
+
+// EP 有一条 `.el-tag .el-icon { display: flex; cursor: pointer; border-radius: 50% }`，
+// 本意是给「可关闭标签」的关闭按钮用，但选择器命中的是标签里的**任意** el-icon。
+// `.el-tag__content` 作为 flex item 会被 blockify 成 display:block，里面的图标又是块级 flex 盒，
+// 于是「图标 + 文字」型标签会被拆成两行、高度翻倍。
+// 这里用 :has() 只作用于「确实塞了图标」的标签内容区，纯文字标签零影响。
+// 注意：`.el-tag__content` 由 EP 渲染、不带 data-v，只能写在全局块里，scoped 命中不到。
+.el-tag__content:has(> .el-icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+// 同一条 EP 规则还把非关闭按钮的图标改成了手型指针，纯展示图标不该有点击暗示。
+.el-tag .el-icon:not(.el-tag__close) {
+  cursor: inherit;
+}
+
+// ===== 任务状态标签的两个修饰类（#133，任务页列表与任务详情弹窗共用，所以放全局）=====
+// EP 的 --el-tag-* 声明在 .el-tag--primary / .el-tag--info 这些【元素自身】的选择器上，:root 管不到，
+// 只能在同一元素上就地覆盖；两段式 .el-tag.xxx 与 EP 打平、EP 又懒注入排在后面，所以要 !important。
+// 全部取 EP 语义令牌，暗色由 EP 的 dark css-vars 自动变深，不写十六进制（design-system.md 硬规则 1）。
+
+// 空闲中：配合 type="primary" 用。边框从 EP 默认的 primary-light-8 加深一档到 light-7，
+// 让浅蓝标签在白底上有明确的轮廓。
+.el-tag.dd-tag--idle {
+  --el-tag-border-color: var(--el-color-primary-light-7) !important;
+}
+
+// 已终止：配合 type="info" 用。字、底、边三项都比「未运行」（info 浅色）深一档，
+// 两者并排时一眼能分开；暗色下三项同样换成更醒目的一档，不会糊进背景。
+// 刻意不借用 warning 橙：橙色留给「排队中」。
+.el-tag.dd-tag--aborted {
+  --el-tag-text-color: var(--el-text-color-regular) !important;
+  --el-tag-bg-color: var(--el-fill-color-darker) !important;
+  --el-tag-border-color: var(--el-border-color-darker) !important;
 }
 
 .el-input {
   .el-input__wrapper {
-    border-radius: var(--el-border-radius-base);
+    // 输入框属控件类表面
+    border-radius: var(--dd-radius-control);
+    // 注意：这里的 box-shadow 过渡针对的是 Element Plus 用 inset box-shadow 画的输入框边框，
+    // 属于功能性描边（不是悬浮阴影），不在去阴影范围内。
     transition: box-shadow var(--dd-transition);
   }
 }
 
 .el-select {
   .el-select__wrapper {
-    border-radius: var(--el-border-radius-base);
+    // select 触发器属控件类表面，与 .el-input__wrapper 同档
+    border-radius: var(--dd-radius-control);
+    // EP 只给了 `transition: var(--el-transition-duration)`（= all 0.3s）。
+    // all 会把 inset 描边、字色、背景一起过渡，而且 0.3s 不吃项目令牌。
+    // 这里按属性收紧：inset box-shadow 是 EP 用来画输入框边框的功能性描边，
+    // 不属于被禁的悬浮阴影（同 .el-input__wrapper 的处理）。
+    transition:
+      box-shadow var(--dd-motion-fast) var(--dd-ease-standard),
+      background-color var(--dd-motion-fast) var(--dd-ease-standard);
+  }
+
+  // 展开时箭头翻转。EP 自己就有 `.is-reverse{transform:rotate(-180deg)}`，
+  // 但过渡走的是 all 0.3s，这里换成只过渡 transform 并吃令牌。
+  .el-select__caret {
+    transition: transform var(--dd-motion-fast) var(--dd-ease-emphasized);
   }
 }
+
+// ============================================================================
+// 下拉面板的展开 / 收起
+// ----------------------------------------------------------------------------
+// EP 给 select / dropdown / date-picker 三类浮层统一用了 `el-zoom-in-top` 过渡，
+// 做的是 `transform: scaleY(0) -> scaleY(1)`（transform-origin: top）——卷帘式展开。
+// 它在 enter/leave 过渡里并不违反扁平规则（R3-c 只禁 hover/active 态形变），
+// 但 scaleY 会把面板里的文字先压扁再拉开，与全站「淡入 + 轻微上移」的语汇不是一路。
+//
+// 【为什么用 popper class 限定，而不是直接改 .el-zoom-in-top-*】
+// 那组类是全局共享的：cascader、autocomplete、color-picker、el-menu 的子菜单，
+// 以及【el-form-item 的字段校验错误提示】都吃同一份。改全局会顺手改掉表单报错的动效，
+// 影响面远超本次意图。这里用「过渡类名 + 浮层根节点类名」的两段式选择器把范围钉死在三类下拉面板上。
+//
+// 🔴 v3.2.8 查明的两处静默失效（构建全绿、只能读 EP 源码或实测量出来），改这一段前务必读完：
+//   1. 【dropdown 的位移从来没生效过】EP 用 popper.js 给浮层定位。gpuAcceleration 开着时，位置写在
+//      根节点的【内联 transform: translate(x, y)】上，class 里写的任何 transform 都输给内联样式。
+//      三类浮层走的不是同一条路（改之前先去 EP 源码确认，别凭印象）：
+//        - el-dropdown：用默认值（开）⇒ 原来的 translateY(±6px) 与 EP 的 scaleY 卷帘在它身上只剩 opacity 在动；
+//        - el-select（select2.mjs）与日期面板（time-picker/common/picker.vue）：显式传了 gpu-acceleration=false，
+//          靠内联 top/left 定位，class 里的 transform 在它们身上【照常生效】—— 下面的 transform: none 就是给它们用的。
+//      ⇒ 位移改用 CSS 的 `translate` 独立属性：它与 transform 叠加计算、互不覆盖，两种定位方式下都成立。
+//        （EP 自己也知道这个冲突：el-popover 只在 fade 过渡时才开 gpuAcceleration。）
+//      ⚠️ 不要再叠 `scale` 独立属性做「轻微放大」：在 dropdown 身上 scale 会把内联 transform 里的定位偏移一起缩放，
+//         浮层在动画期间会朝页面左上角漂出几像素到十几像素，收尾时再跳回原位。
+//         所以这里只有位移、没有缩放，transform-origin 也就不需要按 placement 去设。
+//   2. 【select 那一支从来没命中过】原来写的是 `.el-zoom-in-top-enter-active.el-select-dropdown`，
+//      但 select 的浮层根节点是 `.el-select__popper`（select 传给 tooltip 的 popper-class），
+//      `.el-select-dropdown` 只是里面那层菜单，身上从来不会出现过渡类名。
+//
+// 特异性 (0,2,0) 高于 EP 的 (0,1,0)，与 CSS 加载顺序无关，因此不需要 !important
+// ——这是本文件里少数几个可以不靠 !important 就压住 EP 的地方。
+// ============================================================================
+
+// 进场 / 离场期间的过渡声明：进场吃 --dd-motion-popper + decelerate（落位要稳），
+// 离场用更短的 --dd-motion-fast + standard（尽快让位）。
+// transform: none 只在「根节点没有内联定位 transform」时才轮得到 —— 也就是关了 gpuAcceleration 的
+// select 与日期面板；它压住 EP 的 scaleY(0)，不写的话这两类面板会先被卷成一条线再展开。
+.el-zoom-in-top-enter-active:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper) {
+  transform: none;
+  translate: 0 0;
+  transition:
+    opacity var(--dd-motion-popper) var(--dd-ease-decelerate),
+    translate var(--dd-motion-popper) var(--dd-ease-decelerate);
+}
+
+.el-zoom-in-top-leave-active:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper) {
+  transform: none;
+  transition:
+    opacity var(--dd-motion-fast) var(--dd-ease-standard),
+    translate var(--dd-motion-fast) var(--dd-ease-standard);
+}
+
+// 起止态：enter-from 是进场起点；leave-active 直接就是离场终点（EP 原本就是这个写法）。
+// 朝下弹出时从上方 8px 处落下、收起时退回上方，位移方向始终指向触发器。
+// 这一条必须写在上面两条之后：leave-active 同时出现在两处，靠同特异性下「后写的赢」让终点值生效。
+.el-zoom-in-top-enter-from:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper),
+.el-zoom-in-top-leave-active:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper) {
+  opacity: 0;
+  translate: 0 -8px;
+}
+
+// 朝上弹出时位移要反向，否则面板会「从触发器里钻出来」再往回走，方向拧着。
+.el-zoom-in-top-enter-from:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper)[data-popper-placement^="top"],
+.el-zoom-in-top-leave-active:is(.el-select__popper, .el-dropdown__popper, .el-picker__popper)[data-popper-placement^="top"] {
+  translate: 0 8px;
+}
+
+// 选项 hover / 选中态：EP 用 `transition: var(--el-transition-duration)`（all 0.3s），
+// 收紧成按属性 + 令牌，让 hover 反馈跟手。扁平规则下这里只允许改颜色。
+//
+// 要 !important：EP 那两条也是单类选择器（0,1,0），与这里【特异性打平】，
+// 而 EP 组件 CSS 是随 SFC 懒注入的、必然排在入口包里的 global.scss 之后，
+// 打平时后加载者赢 —— 不加就是一条静默失效的死样式。
+.el-select-dropdown__item,
+.el-dropdown-menu__item {
+  transition:
+    background-color var(--dd-motion-fast) var(--dd-ease-standard),
+    color var(--dd-motion-fast) var(--dd-ease-standard) !important;
+}
+
+// ============================================================================
+// Split Button（components/ui/DdSplitButton.vue 用的 el-dropdown split-button）
+// ----------------------------------------------------------------------------
+// 圆角不用管：EP 的 split-button 内部是 el-button-group，它那一组圆角规则全部
+// 取自 --el-border-radius-base，已在 :root 派生自 --dd-radius-control；主体与 caret
+// 之间的 -1px 负边距也由 el-button-group 自己处理，不需要额外处理形状。
+//
+// 唯一要补的是【中缝的可见度】。EP 用一个 1px 的 ::before 伪元素画中缝
+// （而不是 border-left，因为 border 会被 button-group 的负边距压掉），
+// 但取色是 `var(--el-border-color)` 再乘 opacity: .5 —— 那是一条很淡的灰线，
+// 叠在 primary 这类实心底色上基本看不见，两半会糊成一个长条按钮，
+// 用户看不出「右边这一截是可以单独点开的」，Split Button 也就白做了。
+// ============================================================================
+
+// EP 那条规则是 `.el-dropdown .el-dropdown__caret-button.el-button:before`（0,3,1），
+// 与这里特异性打平；EP 组件 CSS 又是懒注入、排在本文件之后，不加 !important 会被它赢掉。
+.el-dropdown .el-dropdown__caret-button.el-button::before {
+  opacity: 1 !important;
+}
+
+// 实心按钮（非 plain）上改用 EP 自带的分隔线令牌 #ffffff80，
+// 它本来就是给 button-group 在实心底色上画分隔用的，明暗两套都合适。
+// plain / 默认按钮是浅底，继续用上面那条灰线，白线在它们身上等于没有。
+.el-dropdown .el-dropdown__caret-button.el-button--primary:not(.is-plain)::before,
+.el-dropdown .el-dropdown__caret-button.el-button--success:not(.is-plain)::before,
+.el-dropdown .el-dropdown__caret-button.el-button--warning:not(.is-plain)::before,
+.el-dropdown .el-dropdown__caret-button.el-button--danger:not(.is-plain)::before,
+.el-dropdown .el-dropdown__caret-button.el-button--info:not(.is-plain)::before {
+  background: var(--el-button-divide-border-color) !important;
+}
+
+// 菜单普通项的字色（#133）：EP 默认取 --el-text-color-regular，在浮层白底上偏浅，不像可点的操作。
+// 这里在 popper 根节点上把这个令牌改指 --el-text-color-primary，菜单里吃它的地方一起加深。
+// 刻意不写 `.el-dropdown-menu__item { color }`：那样要和 EP 的 hover / focus 规则拼特异性，
+// 谁赢取决于注入顺序，赢了还会把 hover 时的主题色字压掉。改令牌不参与这场比较：
+//   - hover / focus：EP 写的是 --el-dropdown-menuItem-hover-color（主题色），照旧；
+//   - disabled：EP 写的是 --el-text-color-disabled，照旧；
+//   - 危险项：下面那条 (0,2,0) 直接写 color，不经过这个令牌，照旧是红字（hover 淡红底）。
+// 明暗两套都成立：--el-text-color-primary 在 html.dark 下由 EP 的 dark css-vars 换成浅色。
+// 作用范围 = 全站所有 DdSplitButton 的下拉菜单，外加显式挂了同一个 popper-class 的普通 el-dropdown
+// （任务页移动端卡片的「更多」菜单）。
+.dd-split-button__popper {
+  --el-text-color-regular: var(--el-text-color-primary);
+}
+
+// 菜单里的危险项（删除 / 卸载 / 清空）。
+// 这类操作【不允许】出现在 Split Button 的主体上——主体是点了就执行的，
+// 把删除放在那里等于给用户一个一击致命的按钮。统一进菜单、标红、上方加分隔线。
+//
+// 菜单被 teleport 到 body，带不上 scoped 的 data-v 属性，所以只能写在全局块里。
+.dd-split-button__popper .dd-split-button__item--danger {
+  color: var(--el-color-danger);
+
+  &:not(.is-disabled):hover,
+  &:not(.is-disabled):focus {
+    color: var(--el-color-danger);
+    background-color: var(--el-color-danger-light-9);
+  }
+}
+
+// 菜单里「可撤销的正向操作」（任务的「启用」，与「禁用」的红色对称）。
+// v3.3.2（issue #144）把 #143 D2 的口径翻了过来：常态就写绿字，与上面 danger 的常态红字完全对称。
+// 原先【刻意不写常态色】是怕它比同菜单中性项抢眼一档（#133「菜单项字色统一」），
+// 但用户反馈常态看不出这是正向操作，现按用户要求常驻着色；桌面操作列 ▾ 与移动端卡片「···」一起变。
+// 特异性：常态这条 (0,2,0) 压得过 EP 的 `.el-dropdown-menu__item`(0,1,0)；
+// hover 那两条 (0,4,0) 高于 EP 的 `.el-dropdown-menu__item:not(.is-disabled):hover`(0,3,0)，都不需要 !important。
+// 取值只用令牌：暗色下 --el-color-success / --el-color-success-light-9 由 EP 的 dark css-vars 换值，
+// 写死 #67c23a / #f0f9eb 会在暗色下失真（EP 的 --el-color-success 明色恰好就是 #67C23A）。
+// 使用方：DdSplitButton / DdMoreMenu 菜单项的 success 字段（目前是任务页桌面操作列与移动端卡片「···」）。
+.dd-split-button__popper .dd-split-button__item--success {
+  color: var(--el-color-success);
+
+  &:not(.is-disabled):hover,
+  &:not(.is-disabled):focus {
+    color: var(--el-color-success);
+    background-color: var(--el-color-success-light-9);
+  }
+}
+
+// el-switch 的形状处理统一放到文件末尾的「Element Plus 圆角兜底」一块。
+// v3.1.0 起它进了白名单：轨道与滑块两种 shape 模式下都保持 EP 原本的圆形，
+// 但仍要按尺寸变体逐档写（特异性问题见那一块的说明）。
 
 .el-form-item__label {
   font-weight: 500;
@@ -470,20 +961,23 @@ a {
   border-right: none !important;
 
   .el-menu-item {
-    border-radius: 8px;
+    // 侧栏菜单项属控件类表面（与下拉菜单项同档）
+    border-radius: var(--dd-radius-control);
     margin: 2px 8px;
     height: 44px;
     line-height: 44px;
-    transition: all 0.2s;
+    // 只过渡会变的两项并吃令牌。原来是 `all 0.2s`：时长写死、绕过减少动效的降级；
+    // all 还会把 font-weight 这类不该动的属性一起带进来（选中态加粗时文字会「挤」一下）。
+    // (0,2,0) 同时压住了 EP 自带的 border-color / background-color / color 各 0.3s 的过渡。
+    transition:
+      background-color var(--dd-motion-fast) var(--dd-ease-standard),
+      color var(--dd-motion-fast) var(--dd-ease-standard);
     position: relative;
     overflow: hidden;
 
     &.is-active {
-      background: linear-gradient(
-        135deg,
-        var(--el-color-primary-light-8),
-        var(--el-color-primary-light-9)
-      );
+      // 纯扁平：选中态用单一浅底色，不再叠品牌色渐变与图标辉光
+      background: var(--el-color-primary-light-9);
       color: var(--el-color-primary);
       font-weight: 600;
 
@@ -495,17 +989,17 @@ a {
         height: 60%;
         width: 3px;
         background: var(--el-color-primary);
-        border-radius: 0 3px 3px 0;
-      }
-
-      .el-icon {
-        filter: drop-shadow(0 0 4px var(--el-color-primary-light-3));
+        // 选中竖条从中点向上下两端长出来（#132）。伪元素随 .is-active 生成、随它消失，
+        // 所以每次切到新菜单都会重放，不需要任何 JS；只动 transform / opacity，不触发重排。
+        // 这是「选中」这个状态的入场动效，不是 hover / active 态的形变，不违反扁平规则。
+        transform-origin: center;
+        animation: dd-menu-indicator-in var(--dd-motion-normal) var(--dd-ease-emphasized);
       }
     }
 
+    // hover 只换底色，不再做横向位移
     &:hover:not(.is-active) {
       background: var(--el-fill-color-light);
-      transform: translateX(2px);
     }
   }
 
@@ -520,22 +1014,130 @@ a {
       .el-icon {
         margin: 0;
       }
-
-      &:hover:not(.is-active) {
-        transform: none;
-      }
     }
   }
 }
 
+@keyframes dd-menu-indicator-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+// 圆角走 --el-messagebox-border-radius，刻度化见文件末尾的「Element Plus 圆角兜底」一块。
 .el-message-box {
-  border-radius: 16px;
   padding: 24px;
 }
 
 .el-notification {
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  // 通知是浮层容器，吃 surface 档
+  border-radius: var(--dd-radius-surface);
+  // 去掉浮层阴影后，靠 1px 边框与页面内容分隔
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+// ============================================================================
+// 轻提示（el-message）
+// ----------------------------------------------------------------------------
+// 这里是【全站几百处 ElMessage 调用的唯一观感来源】。之前本文件对 .el-message
+// 一条覆盖都没有，它一直吃 EP 裸默认样式。改这一段等于同时改掉所有调用点，
+// 不需要去各页面逐个替换 —— 也正因为如此，改动要克制。
+// ============================================================================
+
+.el-message {
+  // 轻提示是浮层容器，与 el-notification 同属 surface 档
+  border-radius: var(--dd-radius-surface);
+
+  // EP 把 transform / top / bottom 的时长【写死成 .4s】（见 theme-chalk/el-message.css），
+  // 不走任何 CSS 变量：400ms 比全站的 240ms 慢一档，多条提示堆叠上移时明显拖沓。
+  // 必须用 !important：EP 组件 CSS 是懒注入的，位置排在 global.scss 之后，
+  // 同特异性的覆盖会被后加载者赢掉（同 el-switch / el-tag / el-pagination 三处的成因）。
+  // 减少动效：文件末尾 reduce 段通配那一半的 transition-duration: 1ms !important 包在 :where() 里、特异性 (0,0,0)，
+  // 压得住 EP 那条不带 !important 的原规则，却压不过这里 (0,1,0) 的 !important。
+  // 这条覆盖只能靠令牌那一半把 --dd-motion-normal 压成 1ms 来降级，所以时长只能写令牌、不能写死。
+  transition:
+    opacity var(--dd-motion-normal) var(--dd-ease-decelerate),
+    transform var(--dd-motion-normal) var(--dd-ease-decelerate),
+    top var(--dd-motion-normal) var(--dd-ease-standard),
+    bottom var(--dd-motion-normal) var(--dd-ease-standard) !important;
+
+  // 左缘语义色实心条。
+  // 扁平方案下不能用阴影或圆角做层次，而 EP 默认只靠「浅一档的底色 + 同色图标」
+  // 区分成功/失败，在明色下两者差别很小。加一条 3px 实心边把语义拉到可扫读的强度。
+  // --el-message-text-color 由 .el-message--success/error/... 各自声明，缺省回落中性色。
+  //
+  // 要 !important：EP 在同一个 `.el-message`（0,1,0）上写了 border-width / -style / -color
+  // 三个长手属性，其中 border-*-width 与这里的 border-left 简写落在同一个具体属性上，
+  // 特异性打平 + EP 后加载 = 这条色条会静默消失。
+  border-left: 3px solid var(--el-message-text-color, var(--el-color-info)) !important;
+}
+
+// EP 写死 .el-message__content{line-height:1}。单行没问题，但后端报错动辄二三十字，
+// 一旦换行两行文字就会贴在一起几乎糊成一团。
+// 同样是单类打平，同样需要 !important。
+.el-message__content {
+  line-height: 1.5 !important;
+}
+
+// grouping 计数徽标默认贴在右上角外侧（top:-8px;right:-8px），
+// 在直角提示条上会显得脱离。收进条内，与左缘色条形成呼应。
+// EP 那条是 `.el-message .el-message__badge`（0,2,0），与这里打平，同样要 !important。
+.el-message .el-message__badge {
+  top: 50% !important;
+  right: 8px !important;
+  transform: translateY(-50%) !important;
+}
+
+// ===== 带操作的轻提示 =====
+// 结构由 utils/toast.ts 用 h() 渲出：.dd-toast > .dd-toast__text + .dd-toast__action。
+// 必须写在全局块里 —— toast.ts 不是 SFC，没有 scoped 作用域可挂。
+.dd-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dd-toast__text {
+  flex: 1 1 auto;
+}
+
+.dd-toast__action {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  // 边框与文字都取提示条的语义色：成功提示上是绿框，失败提示上是红框，自动成套。
+  // 这里刻意【不用 currentcolor】——见下面 hover 的说明。
+  border: 1px solid var(--el-message-text-color, var(--el-color-info));
+  // 提示条里的操作按钮属控件类表面
+  border-radius: var(--dd-radius-control);
+  background: transparent;
+  color: var(--el-message-text-color, var(--el-color-info));
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  // 扁平规则：hover 只允许改颜色，不做位移与缩放
+  transition:
+    background-color var(--dd-motion-fast) var(--dd-ease-standard),
+    color var(--dd-motion-fast) var(--dd-ease-standard);
+
+  // hover 反色：底填语义色，文字取提示条自身的浅底色。
+  // ⚠️ 不能写 `background-color: currentcolor` —— currentcolor 解析的是该元素 color 的
+  //    【计算值】，而同一条规则里 color 也被改了，两者会一起变成同一个颜色，
+  //    结果是「深底 + 同色文字」，按钮 hover 时直接读不出字。必须两边都写具体令牌。
+  &:hover {
+    background-color: var(--el-message-text-color, var(--el-color-info));
+    color: var(--el-message-bg-color, var(--el-bg-color));
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--el-message-text-color, var(--el-color-info));
+    outline-offset: 1px;
+  }
 }
 
 .el-drawer {
@@ -550,39 +1152,323 @@ a {
   }
 }
 
+// 圆角走 --el-pagination-border-radius，刻度化见文件末尾的「Element Plus 圆角兜底」一块。
 .el-pagination {
   .el-pager li {
-    border-radius: 6px;
     min-width: 32px;
     height: 32px;
     line-height: 32px;
     font-weight: 500;
   }
+}
 
-  .btn-prev,
-  .btn-next {
-    border-radius: 6px;
-  }
+// ============================================================================
+// Element Plus 圆角兜底
+// ----------------------------------------------------------------------------
+// EP 有三类机制会绕过 :root 里的 --el-border-radius-* 基础令牌，前两轮排查各只
+// 覆盖了一类，所以一直有漏网的圆角。这里集中处理，新增覆盖请一律加到本块内。
+//
+// 🔴 v3.1.0 起本块不再是「一律 0」，而是【按类别取 --dd-radius-* 三档刻度】：
+//    直角模式下三档都是 0（等价于原来的写法），圆角模式下由运行时改写成 6/10/999px。
+//    新增覆盖时先判断它是控件（control）、容器（surface）还是天然胶囊（pill），
+//    再挑对应的档；只有「贴边内嵌于已圆角容器」和「形状承载语义」两类才写死值。
+//
+// 机制 A：私有圆角令牌，且声明在**组件根元素**上而不是 :root
+//   例：`.el-tag{--el-tag-border-radius:4px}`、`.el-pagination{--el-pagination-border-radius:2px}`
+//   在 :root 补 0 无效——元素上的同名声明会赢过继承值，必须在同名选择器上就地覆盖。
+//
+// 机制 B：硬编码像素圆角直接写在基础选择器上
+//   例：`.el-switch__core{10px}`、`.el-progress-bar__outer{100px}`、`.el-scrollbar__bar{4px}`
+//   这类按令牌名去枚举根本扫不到，只能逐个组件读 theme-chalk 的 CSS 才能发现。
+//
+// 机制 C：硬编码像素圆角写在**尺寸变体**选择器上
+//   例：`.el-switch--small .el-switch__core{8px}`、`.el-switch--large .el-switch__core{12px}`
+//   这类选择器是 (0,2,0)，和朴素写法 `.el-switch .el-switch__core` 正好打平。
+//
+// 为什么本块统一用 !important（其它地方仍应尽量不用）：
+//   vite.config.ts 里 ElementPlusResolver 配的是 `importStyle: 'css'`，EP 组件样式是
+//   跟着 SFC 懒注入的；而 router/index.ts 里所有路由都是动态 import()。于是组件 CSS
+//   必然排在入口包中的 global.scss **之后**。CSS 在特异性相同时由后加载者获胜，
+//   凡是跟 EP 打平的覆盖都会静默失效——上面 el-switch / el-tag / el-pagination 三处
+//   就是这么失效的。源码顺序在这里不可靠，只能靠 !important 把结果钉死。
+//   （同类先例：上面 .el-dialog 的 --el-dialog-margin-top、下面的暗色补丁段。）
+//
+// 白名单（形状承载语义/可供性，两种 shape 模式下都保持圆形），别顺手改成吃令牌：
+//   - `--el-border-radius-circle`：el-radio 圆点的取值来源，圆=单选是通用可供性。
+//   - el-switch 的轨道与滑块：轨道保留 EP 原值（10px / small 8px / large 12px），
+//     滑块保留 --el-border-radius-circle。圆头轨道 + 圆滑块是「可拨动」的通用可供性，
+//     方化后与两段式标签按钮无法区分。见下方 el-switch 那一段。
+//   - el-badge 的 dot 模式（8×8 小红点）与 .pulse-dot（6×6 呼吸点）：状态灯，见各自注释。
+//   - el-tag 的图标底与关闭键 hover 底（50%）：圆底是「可点」的暗示。
+//   - loading 旋转圆弧（.el-loading-spinner / .el-button .el-icon.is-loading / LoadingMotion.vue）。
+//   - 更新与恢复进度弹窗的 .update-progress-orbit / .ring / .update-progress-core
+//     （三者共用圆心，方化会穿破内圈环；它们是自绘 div，不走 el-progress）。
+//   - views/login/Characters.vue 的插画。
+//
+// 只覆盖项目实际用到的组件。以下变体项目未使用，故意不覆盖以免样式膨胀：
+//   el-tabs 的 card / border-card 模式与可关闭、可新增标签页；el-table 的列筛选浮层
+//   （无 :filters）与必填表头红点；el-upload 的 picture / picture-card；
+//   el-button 的 is-circle（模板里的 circle 属性已全部移除）；
+//   以及 el-slider / el-carousel / el-timeline / el-steps / el-tour / el-rate /
+//   el-cascader / el-segmented / el-avatar 等未引入的组件。
+//
+// ⚠️ el-badge 与 el-date-picker 曾在上面这份名单里，v3.0.8 起【已经引入】
+//    （侧栏角标 + 日期范围筛选），它们的圆角覆盖见本块末尾单独的一段。
+//    引入一个新 EP 组件时，请照那一段的做法先去 theme-chalk 里 grep 一遍 border-radius，
+//    而不是假设 :root 的基础令牌能兜住——这三类机制里有两类是兜不住的。
+// ============================================================================
+
+// —— 机制 A：组件私有令牌，在组件根元素上就地改派生 ——
+// 下面这几个是全部用到的组件里仅有的「硬编码像素值」私有圆角令牌，其余（--el-input-border-radius /
+// --el-dialog-border-radius / --el-alert-border-radius-base）都取自 --el-border-radius-base|small，
+// 已在 :root 派生自 control 档，不必重复处理。
+// ⚠️ --el-checkbox-border-radius 也取自 --el-border-radius-small，但它【尺寸太小、不能吃整档】，
+//    需要单独缩比例，见本段末尾的 .el-checkbox 一处。
+.el-card {
+  // `.el-card{--el-card-border-radius:4px}`——整个系统设置页都是 el-card，漏了很显眼。
+  // 卡片是容器类表面 → 吃「卡片」角色令牌（桌面 = surface 档；≤768 的 rounded 面板为 20px，v3.3.1 #143）。
+  --el-card-border-radius: var(--dd-radius-card) !important;
+}
+
+.el-tag {
+  // .el-tag 取 --el-tag-border-radius（4px）；.el-tag.is-round 取 -rounded（9999px 胶囊）。
+  // 标签属控件类表面，两条都收到 control 档：这样模板里散落的 `round` 属性不会在
+  // 圆角模式下突然变成长胶囊、和旁边的方角标签混着出现，观感统一。
+  --el-tag-border-radius: var(--dd-radius-control) !important;
+  --el-tag-border-radius-rounded: var(--dd-radius-control) !important;
+}
+
+.el-pagination {
+  // 一条令牌同时管 .el-pager li 与 .btn-prev / .btn-next（EP 两处都是 2px）。
+  // 页码按钮属控件类表面 → control 档。
+  --el-pagination-border-radius: var(--dd-radius-control) !important;
+}
+
+// 🔴 --el-messagebox-border-radius(4px) 原来在这里是靠 `:root` 压的，
+//    但去 theme-chalk 核对后确认：EP 是写在【组件根元素】上的
+//    （`.el-message-box{--el-messagebox-border-radius:4px; ... border-radius:var(...)}`），
+//    不是写在 :root。元素上的声明会赢过从 :root 继承来的值，跟 !important 无关
+//    ——也就是说原来那条 `:root{--el-messagebox-border-radius:0 !important}` 是一条死 CSS，
+//    运行时 el-message-box 一直是 4px 圆角。这里改成在 .el-message-box 上就地覆盖。
+//    弹出确认框属容器类表面 → surface 档。
+.el-message-box {
+  --el-messagebox-border-radius: var(--dd-radius-surface) !important;
+}
+
+// 🔴 复选框：吃整档 control 会把「方=多选 / 圆=单选」这条可供性削掉，必须按比例缩小。
+//
+// EP 的 .el-checkbox__inner 是 14×14（本文件上方还给表格里的复选框加了 scale(1.15)，
+// 视觉约 16px），而 --el-checkbox-border-radius 取自 --el-border-radius-small，
+// v3.1.0 起 -small 已派生自 control 档 ⇒ 圆角模式下复选框拿到 6px。
+// 6/14 ≈ 43%，四角圆到只剩一小片直边，远看几乎就是 el-radio 那颗圆点。
+// 白名单里保留 el-radio 圆点的理由正是「方化后与复选框无法区分」，反过来同样成立：
+// 复选框圆化到这个程度，两种控件就分不出来了。这里按比例缩到 1/3（圆角档 2px），
+// 保住「基本还是个方块，只是角软了一点」的观感。
+//
+// 🔴 必须写在 .el-checkbox 元素上，不能写 :root ——
+//    EP 是 `@include b(checkbox){ @include set-component-css-var('checkbox', $checkbox) }`，
+//    即 `.el-checkbox{--el-checkbox-border-radius:var(--el-border-radius-small)}`。
+//    元素上的声明会赢过从 :root 继承来的值，:root 覆盖是一条死 CSS
+//    （与上面 .el-message-box 踩过的是同一个坑，已回 theme-chalk/src/checkbox.scss 核对）。
+// 🔴 !important 同样不能省：这条与 EP 那条特异性打平 (0,1,0)，而 EP 组件 CSS 懒注入、
+//    排在 global.scss 之后，打平时后来者赢。
+//
+// ⚠️ 直角档的 --dd-radius-control 是【无单位 0】（panelAppearance.ts 写的就是 '0'），
+//    于是这里会算成 calc(0 / 3) —— CSS calc 里无单位 0 是 <number> 不是 <length>，
+//    结果对 border-radius 属于「计算值时无效」，浏览器按 unset 处理；border-radius
+//    不可继承 ⇒ 回落到初始值 0，直角档照样是绝对直角。EP 自己的
+//    `.el-button--small{calc(var(--el-border-radius-base) - 1px)}` 走的是同一条回落路径，
+//    行为一致。别为了「更保险」把它改成 min()/clamp()，那些混用数字与长度会直接失效。
+.el-checkbox {
+  --el-checkbox-border-radius: calc(var(--dd-radius-control) / 3) !important;
+}
+
+// —— 机制 B / C：硬编码像素圆角 ——
+
+// 🔴 el-switch 属白名单：轨道与滑块在两种 shape 模式下都保持 EP 原本的圆形。
+// 「圆头轨道 + 圆滑块」是拨动开关的通用可供性，v3.0.0 一刀切方化属于误伤——
+// 方掉之后它和「两段式标签按钮」长得一样，用户看不出这是可拨动的。
+//
+// EP 的三档轨道值（已回 theme-chalk/el-switch.css 核对）：
+//   .el-switch__core{10px} / .el-switch--small .el-switch__core{8px} / --large{12px}
+// 这里必须【三档各写一条 + 全部带 !important】，不能只写 .el-switch__core：
+// 单独一条 `.el-switch__core{10px !important}`(0,1,0) 会把两条尺寸变体(0,2,0) 一起压掉，
+// 结果 size="small" 的开关拿到 10px 轨道，比 16px 的高度还大，两端会被裁出直边。
+.el-switch__core {
+  border-radius: 10px !important;
+}
+.el-switch--small .el-switch__core {
+  border-radius: 8px !important;
+}
+.el-switch--large .el-switch__core {
+  border-radius: 12px !important;
+}
+
+// 滑块：EP 写的是 `.el-switch__core .el-switch__action`，取值来自 --el-border-radius-circle。
+// 同样属白名单，这里显式写回那个令牌（而不是删掉规则），是为了留住「刻意保持圆形」的意图，
+// 避免后人看到没规则又顺手补一条 0 上去。全局令牌 --el-border-radius-circle 依旧不动。
+.el-switch__core .el-switch__action {
+  border-radius: var(--el-border-radius-circle) !important;
+}
+
+// el-progress：线形进度条的轨道与填充都写死 100px（胶囊）。
+// 全库无 type="circle"，不存在需要保留的环形进度。
+// 进度条是天然胶囊 → pill 档（直角模式仍是 0，圆角模式回到 EP 那种药丸形）。
+.el-progress-bar__outer,
+.el-progress-bar__inner {
+  border-radius: var(--dd-radius-pill) !important;
+}
+
+// el-scrollbar：.el-scrollbar__bar 写死 4px，thumb 是 border-radius:inherit，压住 bar 即可。
+// 影响面很大——select 下拉、table、drawer、tree 内部都嵌了 el-scrollbar。
+// 滚动条只有 6px 宽，与文件开头那条 ::-webkit-scrollbar-thumb 同属 pill 档。
+.el-scrollbar__bar {
+  border-radius: var(--dd-radius-pill) !important;
+}
+
+// 🔴 el-tag 的图标底与关闭键属白名单：EP 写死 50%（TaskForm 的标签编辑区在用）。
+// 这两个是「鼠标移上去会出现的圆形底」，圆底本身就是「这里可以点」的暗示，
+// 而且直径只有 14~16px，方化后与标签文字挤成一片，看不出是独立的关闭热区。
+.el-tag .el-icon,
+.el-tag .el-tag__close {
+  border-radius: 50% !important;
+}
+
+// el-upload：ScriptManageDialogs 用了 drag + 文件列表，拖拽区 6px、列表项 4px。
+// 拖拽区是一整块虚线容器 → surface；文件列表项是一行条目 → control。
+.el-upload-dragger {
+  border-radius: var(--dd-radius-surface) !important;
+}
+.el-upload-list__item {
+  border-radius: var(--dd-radius-control) !important;
+}
+
+// el-color-picker：SystemConfigCard 的两个取色器。触发块与展开面板各 4px。
+// 触发块是控件 → control；展开面板是浮层容器 → surface。
+// 面板内部的色相/透明度滑块（1px）与取色游标（50%，仅 4×4px）保持原样：
+// 它们是取值精度指示器，且尺寸小到方圆不可辨，改了只增加规则不改变观感。
+.el-color-picker__trigger {
+  border-radius: var(--dd-radius-control) !important;
+}
+.el-color-picker-panel.is-border {
+  border-radius: var(--dd-radius-surface) !important;
+}
+// 触发块【内部】那块色块（.el-color-picker__color）是 --el-border-radius-small 的第二个消费方，
+// v3.1.0 起会跟着派生到 control 档。它不能吃整档：
+// el-color-picker 默认 32×32，触发块 1px 边框 + 4px 内边距 ⇒ 色块只有 22×22，
+// 而且它是【同心内嵌】在一个已经取 control 档的触发块里。同心圆角的正确取值是
+// 「外圈半径 − 内外间距」= 6 − 4 = 2px；内外都写 6px 的话，四角会露出一圈忽宽忽窄的白边。
+// 2px 正好是 control 档的 1/3，与上面复选框用同一个表达式（无单位 0 的回落说明见那一处）。
+.el-color-picker__color {
+  border-radius: calc(var(--dd-radius-control) / 3) !important;
+}
+// 注：--el-border-radius-small 的第三个消费方 `.el-menu--popup`（折叠侧栏弹出的子菜单容器，
+// 按语义应走 surface）在本项目【不会渲染】—— MainLayout 的侧栏只有 el-menu-item，没有
+// el-sub-menu，弹不出这个容器。故意不加覆盖以免样式膨胀；将来真加了二级菜单，
+// 记得在这里补一条 `.el-menu--popup{border-radius:var(--dd-radius-surface) !important}`。
+
+// el-input：内部滚动条 thumb 写死 5px，比文件开头那条全局 ::-webkit-scrollbar-thumb 更特异。
+// 同属滚动条 → pill 档。
+.el-input::-webkit-scrollbar-thumb {
+  border-radius: var(--dd-radius-pill) !important;
+}
+
+// el-tabs：键盘焦点环 3px（settings / api-docs / TaskForm 的标签页都可键盘切换）。
+// 焦点环贴着标签项本身，跟着控件走 → control 档。
+.el-tabs__item:focus-visible {
+  border-radius: var(--dd-radius-control) !important;
+}
+
+// ---------------------------------------------------------------------------
+// v3.0.8 动效交互升级新引入的两个组件，圆角一并在此兜底。
+//
+// ⚠️ 本块上方那段长注释里，曾把 el-badge 与 el-date-picker 列进「项目未使用、
+//    故意不覆盖」的名单。它们现在都用上了（角标 + 日期范围筛选），所以名单已过时——
+//    别再照那份旧名单判断「这个组件不用管」。
+// ---------------------------------------------------------------------------
+
+// —— el-badge ——
+// 机制 A：--el-badge-radius(10px) 声明在 .el-badge{} 上，:root 补值无效，必须就地覆盖。
+// 命中范围不止我们自己写的角标：ElMessage 的 grouping 计数徽标（.el-message__badge）
+// 内部渲染的就是一个 el-badge。
+// 计数角标是天然胶囊 → pill 档（EP 原值 10px 配 18px 高，本来就是胶囊）。
+.el-badge {
+  --el-badge-radius: var(--dd-radius-pill) !important;
+}
+
+// 🔴 dot 模式属白名单：8×8 的小红点是「有未读」的状态灯，形状即语义，
+// 两种 shape 模式下都保持正圆。它与上面的私有令牌是两条独立的链，改一条不够。
+.el-badge__content.is-dot {
+  border-radius: 50% !important;
+}
+
+// —— el-date-picker / el-time-picker ——
+// 这一组全是机制 B 的硬编码像素/百分比，按令牌名去枚举一个都扫不到。
+// 不覆盖的话，日期面板会在一片直角界面里冒出一格一格的圆形日期，非常突兀。
+//
+// 面板自身（.el-picker-panel）走 --el-popper-border-radius，已在 :root 派生自 surface 档，不在此列。
+// 日期格是控件类表面 → control 档（EP 原值是 50% / 15px / 18px / 24px 的圆形与胶囊，
+// 圆角模式下也不还原成正圆：一格一格的圆日期在这种工具型后台里过于花哨）。
+.el-date-table td .el-date-table-cell .el-date-table-cell__text,
+.el-date-table td.selected .el-date-table-cell,
+.el-date-table td.selected .el-date-table-cell__text,
+.el-month-table td .el-date-table-cell__text,
+.el-month-table td.current:not(.disabled) .el-date-table-cell,
+.el-year-table td .el-date-table-cell__text {
+  border-radius: var(--dd-radius-control) !important;
+}
+
+// 范围选择（daterange / monthrange）的起止端另有一套【分角】圆角，
+// 与上面那组 selected 是不同的选择器，容易漏（已回 theme-chalk 核对）：
+//   .el-date-table  td.start-date .el-date-table-cell{border-top/bottom-left-radius:15px;margin-left:5px}
+//   .el-date-table  td.end-date   .el-date-table-cell{border-top/bottom-right-radius:15px;margin-right:5px}
+//   .el-month-table 同形状，取值 24px / margin 3px
+// EP 靠「起止端做成半个胶囊 + 中间格填浅底」拼出一条药丸形的范围条。
+// 两端各 5px 的外边距会让范围条在首尾缩进一截、看起来像断了两个口子，
+// 所以【两种 shape 模式下都把外边距清掉】，范围才是一条连贯的实心条带。
+//
+// 圆角这里刻意沿用 EP 的【长手分角】写法而不是 border-radius 简写：
+// 起端只圆左侧、末端只圆右侧，中间的 in-range 格保持直角，条带才不会在接缝处被咬出缺口；
+// 用简写把四角一起圆掉的话，圆角模式下起止格的内侧会出现两个明显的白色凹口。
+// 长手还顺带解决「起止是同一天」的情况——那一格同时命中两条规则，左右各自生效。
+.el-date-table td.start-date .el-date-table-cell,
+.el-month-table td.start-date .el-date-table-cell {
+  border-top-left-radius: var(--dd-radius-control) !important;
+  border-bottom-left-radius: var(--dd-radius-control) !important;
+  margin-left: 0 !important;
+}
+.el-date-table td.end-date .el-date-table-cell,
+.el-month-table td.end-date .el-date-table-cell {
+  border-top-right-radius: var(--dd-radius-control) !important;
+  border-bottom-right-radius: var(--dd-radius-control) !important;
+  margin-right: 0 !important;
+}
+
+// 日期面板底部的「此刻 / 确定」按钮 2px → 按钮属 control 档。
+.el-picker-panel__btn {
+  border-radius: var(--dd-radius-control) !important;
+}
+
+// 时间面板与时间范围面板 2px → 它们是独立的浮层容器，走 surface 档。
+.el-time-panel,
+.el-time-range-picker__body {
+  border-radius: var(--dd-radius-surface) !important;
 }
 
 html.dark {
   --dd-log-bg-color: #0f172a;
   --dd-log-text-color: #e2e8f0;
   --dd-log-theme-mode: dark;
-  // ===== 表面质感令牌暗色版（明色用 rgba(15,23,42,...)，暗色用 rgba(0,0,0,...)）=====
-  --dd-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.28);
-  --dd-shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 36px rgba(64, 158, 255, 0.1);
-  --dd-shadow-shell: 0 1px 2px rgba(0, 0, 0, 0.3), 0 24px 60px rgba(0, 0, 0, 0.45);
-  // 暗色页面底色（对齐预览）
+  // ===== 表面质感令牌暗色版：纯扁平方案下阴影同样一律 none，层级只靠边框 =====
+  --dd-shadow-card: none;
+  --dd-shadow-card-hover: none;
+  --dd-shadow-shell: none;
+  // 暗色页面底色
   --el-bg-color-page: #0b1120;
 
   .el-card {
+    // 暗色下边框加深一档，保证去阴影后仍能与页面底色分开
     border-color: var(--el-border-color-darker);
-
-    // 静置/hover 阴影改为引用暗色令牌（与 :root 写死值统一）
-    &:hover {
-      box-shadow: var(--dd-shadow-card-hover);
-    }
   }
 
   ::-webkit-scrollbar-thumb {
@@ -593,16 +1479,17 @@ html.dark {
   }
 
   // ===== 全局深色模式补丁：覆盖各页面 hardcoded 浅色，避免文字与浅色背景冲突 =====
-  // Element Plus 表头 inline-style 写死 #f8fafc / #64748b，需要 !important 覆盖
+  // 表头兜底：各列表页的 :header-cell-style 已统一改用这对令牌；这条留着，防以后又有表头内联样式写死浅色（内联只有 !important 压得住）
   .el-table th.el-table__cell,
   .el-table th.el-table__cell.is-leaf {
     background-color: var(--el-fill-color-light) !important;
     color: var(--el-text-color-regular) !important;
   }
 
-  // Profile 页面顶部紫色 hero
+  // Profile 页面顶部 hero：去装饰渐变，改纯色底 + 深一档描边
   .profile-hero {
-    background: linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%) !important;
+    background: #1e293b !important;
+    border-color: var(--el-border-color-darker) !important;
   }
 
   // 通用 stat-card：dark 下统一边框/底色，避免出现亮白卡片
@@ -625,16 +1512,12 @@ html.dark {
     border-color: var(--el-border-color-darker);
   }
 
+  // 更新 / 还原进度头图：去光晕渐变与投影，改纯色底 + 1px 描边
   .update-progress-hero,
   .restore-progress-hero {
-    background:
-      radial-gradient(
-        circle at top,
-        rgba(30, 41, 59, 0.96),
-        rgba(15, 23, 42, 0.88)
-      ),
-      linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(15, 23, 42, 0.24)) !important;
-    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.3) !important;
+    background: var(--el-bg-color-overlay) !important;
+    border: 1px solid var(--el-border-color-darker) !important;
+    box-shadow: none !important;
   }
 
   .update-progress-core,
@@ -654,6 +1537,20 @@ html.dark {
     ) !important;
     border-color: var(--el-border-color-darker) !important;
     box-shadow: none !important;
+  }
+
+  // 「当前步骤」必须比上面那条基础 !important 更强，否则暗色下所有步骤长得一模一样、
+  // 进度指示完全丢失（亮色的 .is-active 是「主色边框 + 浅色底」，无 !important，压不过基础规则）。
+  // 与 .is-done 的区分：is-active 用 26% 主色底 + 主色边框（更亮、边框被点亮），
+  // is-done 用 12% 主色底 + 中性深色描边（更暗、边框不点亮），两者在暗色下可清晰区分。
+  .update-step.is-active,
+  .restore-step.is-active {
+    background: color-mix(
+      in srgb,
+      var(--el-color-primary) 26%,
+      var(--el-bg-color-overlay)
+    ) !important;
+    border-color: var(--el-color-primary) !important;
   }
 
   .update-step.is-done,
@@ -683,18 +1580,13 @@ html.dark {
     color: #fecaca !important;
   }
 
-  // 侧边栏 logo 区域：color-mix(..., white) 在暗色下偏亮，覆盖为深色适配
+  // 侧边栏 logo 区域：暗色下用纯色底，避免 color-mix(..., white) 偏亮
   .sidebar-logo {
-    background: linear-gradient(
-      180deg,
-      var(--el-bg-color-overlay) 0%,
-      var(--el-bg-color) 100%
-    ) !important;
+    background: var(--el-bg-color) !important;
   }
   .logo-inner {
     background: var(--el-bg-color) !important;
     border-color: var(--el-border-color-darker) !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
   }
   .logo-version {
     background: color-mix(
@@ -705,11 +1597,11 @@ html.dark {
     color: var(--el-color-primary-light-3) !important;
   }
 
-  // 仪表盘面板容器：深色下增加边框对比度和阴影深度
+  // 仪表盘面板容器：深色下加深边框对比度（去阴影后层级完全由边框承担）
   .panel,
   .log-panel {
     border-color: var(--el-border-color-darker) !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+    box-shadow: none !important;
   }
 
   // 快捷操作区域
@@ -723,19 +1615,9 @@ html.dark {
     background-color: var(--el-fill-color) !important;
   }
 
+  // 赞助墙：去掉两层光晕 + 底色渐变，改纯色底，仅保留橙色描边点题
   .sponsor-wall {
-    background:
-      radial-gradient(
-        circle at top right,
-        rgba(249, 115, 22, 0.12),
-        transparent 28%
-      ),
-      radial-gradient(
-        circle at bottom left,
-        rgba(250, 204, 21, 0.1),
-        transparent 25%
-      ),
-      linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.94)) !important;
+    background: #1e293b !important;
     border-color: rgba(249, 115, 22, 0.18) !important;
   }
 
@@ -763,19 +1645,169 @@ html.dark {
   }
 
   .sponsor-wall .podium-base {
-    background: linear-gradient(
-      180deg,
-      rgba(71, 85, 105, 0.9),
-      rgba(51, 65, 85, 0.88)
-    ) !important;
+    background: #334155 !important;
     border-color: rgba(249, 115, 22, 0.16) !important;
   }
 }
 
+// el-popover 在 `.el-popover` 元素上把 --el-popover-border-radius 重新声明为 4px，
+// 会赢过 :root 的继承值，因此必须就地覆盖（tooltip / dropdown 已由 :root 那条兜住）。
+// 浮层容器 → surface 档，与 :root 上那条保持同一个来源，两处漏一处就是死 CSS。
+// !important 是必需的：两条选择器都是 `.el-popover`(0,1,0)，而 EP 组件 CSS 懒注入、
+// 排在 global.scss 之后，特异性打平时后加载者赢（同本文件其它 EP 覆盖的成因）。
+.el-popover {
+  --el-popover-border-radius: var(--dd-radius-surface) !important;
+}
+
+// ============================================================================
+// 下拉类浮层毛玻璃（#132，v3.2.8）
+// ----------------------------------------------------------------------------
+// ⚠️ 这是「全屏纯扁平」基调里唯一一处半透明表面，范围刻意收得很窄：只给 select / dropdown /
+//    日期面板 / 浅色 popover 这四类【teleport 到 body、面积小】的浮层。顶栏、弹窗遮罩、页面容器一律不加：
+//      - 顶栏下方没有内容滚过（各页在自己的 .dd-scroll-page 里滚），模糊了也看不出来；
+//      - backdrop-filter 会让元素成为 fixed / absolute 后代的包含块。加到 .layout-main、.route-shell、
+//        页面根、.el-overlay-dialog 这类装着内联弹窗或编辑器浮层的容器上，那些浮层会整体错位；
+//      - 大面积 backdrop-filter 在底下内容重绘（日志流式输出）时每帧都要重新模糊一遍。
+//    暗色 tooltip（.is-dark）不在范围内：它是深底浅字的小标签，半透明只会降低可读性。
+//
+// 【兜底】
+//   1. @supports：backdrop-filter 与 color-mix() 缺一个就整段不生效（含下面清内层底色、箭头那几条），
+//      保持 EP 原本的实色底（门槛为什么要带上 color-mix，见 @supports 那一行上方的说明）；
+//   2. prefers-reduced-transparency: reduce（系统「降低透明度」）：令牌退回实色、模糊关掉；
+//      较新的浏览器才认识这个媒体查询，不认识时整条不匹配，照常渲染玻璃；
+//   3. 明暗两套令牌：暗色下底色更实一点，否则浅色文字背后透出来的内容太抢眼。
+//
+// 【只能有一层半透明】
+//   dropdown 与日期面板在 popper 根节点里还各有一层自带实色底的容器（.el-dropdown-menu、
+//   .el-picker-panel 及其 footer）。不清掉的话玻璃被内层盖住，等于没做；
+//   反过来把 --el-bg-color-overlay 整体改成半透明也不行：两层半透明叠起来又接近不透明，
+//   还会连带把面板里【必须实心】的叠层（日期时间面板里弹出的时间选择层）一起变透明。
+//   所以做法是：根节点上玻璃，只把【直属】的内层清成透明。
+//
+// 特异性：这里的根节点选择器是 (0,3,0)，高于 EP 那几条底色规则的 (0,2,0)
+// （`.el-popper.is-light` / `.el-dropdown__popper.el-popper` / `.el-picker__popper.el-popper` /
+// `.el-popover.el-popper`），与注入顺序无关，所以整段都不需要 !important。
+// ============================================================================
+:root {
+  --dd-glass-bg: color-mix(in srgb, var(--el-bg-color-overlay) 82%, transparent);
+  --dd-glass-blur: blur(12px) saturate(1.2);
+}
+
+html.dark {
+  --dd-glass-bg: color-mix(in srgb, var(--el-bg-color-overlay) 86%, transparent);
+  --dd-glass-blur: blur(14px) saturate(1.1);
+}
+
+// 两个选择器都要写：html.dark (0,1,1) 比 :root (0,1,0) 高，只写 :root 的话暗色下关不掉。
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  html.dark {
+    --dd-glass-bg: var(--el-bg-color-overlay);
+    --dd-glass-blur: none;
+  }
+}
+
+// 四类浮层的根节点。只认浅色（.is-light）：select / dropdown / 日期面板默认就是浅色，
+// 万一哪处给 el-dropdown 传了 effect="dark"，也不会被这里套上一层浅色玻璃。
+$dd-glass-poppers: ":is(.el-select__popper, .el-dropdown__popper, .el-picker__popper, .el-popover).el-popper.is-light";
+
+// 门槛是 backdrop-filter 与 color-mix() 【都】支持。color-mix 那一半不能省：
+// Vite 7 默认构建目标（chrome107 / edge107 / firefox104 / safari16）里，Chrome/Edge 107~110、
+// Safari 16.0~16.1、Firefox 104~112 认 backdrop-filter 却不认 color-mix()。--dd-glass-bg 在那里是
+// 「计算期无效值」，background 会退成 transparent，下面又把内层清成透明 —— 面板只剩一层模糊，文字直接压在页面上。
+// 检测值刻意写 currentColor 而不是 var(...)：@supports 里只要带 var() 就一律判为支持，测不出 color-mix。
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background-color: color-mix(in srgb, currentColor 50%, transparent)) {
+  #{$dd-glass-poppers} {
+    background: var(--dd-glass-bg);
+    -webkit-backdrop-filter: var(--dd-glass-blur);
+    backdrop-filter: var(--dd-glass-blur);
+  }
+
+  // 直属内层清成透明（理由见上方「只能有一层半透明」）。日期面板只动根节点的直接子级：
+  // 日期时间范围面板里弹出的时间选择层也是 .el-picker-panel，但藏在更深处，必须保持实心。
+  .el-dropdown__popper.el-popper.is-light .el-dropdown-menu,
+  .el-picker__popper.el-popper.is-light > .el-picker-panel,
+  .el-picker__popper.el-popper.is-light > .el-picker-panel > .el-picker-panel__footer {
+    background: transparent;
+  }
+
+  // 箭头底色同步。箭头是一个旋转 45° 的 10×10 小方块，一半探出面板、一半压在面板里
+  // （EP 用 z-index:-1 把它垫在内容下面、面板底色上面）。
+  #{$dd-glass-poppers} > .el-popper__arrow::before {
+    background: var(--dd-glass-bg);
+  }
+
+  // 面板变半透明后，压在面板里的那一半会和面板自己的底色叠成一块更实的小三角。
+  // 按弹出方向把里面那一半裁掉，只留探出去的尖角。坐标是旋转【之前】的方块坐标系：
+  //   朝下弹出 → 箭头在面板顶边，EP 只画了上、左两条边 → 留左上三角；其余三个方向同理。
+  #{$dd-glass-poppers}[data-popper-placement^="bottom"] > .el-popper__arrow::before {
+    clip-path: polygon(0 0, 100% 0, 0 100%);
+  }
+
+  #{$dd-glass-poppers}[data-popper-placement^="top"] > .el-popper__arrow::before {
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  }
+
+  #{$dd-glass-poppers}[data-popper-placement^="left"] > .el-popper__arrow::before {
+    clip-path: polygon(0 0, 100% 0, 100% 100%);
+  }
+
+  #{$dd-glass-poppers}[data-popper-placement^="right"] > .el-popper__arrow::before {
+    clip-path: polygon(0 0, 100% 100%, 0 100%);
+  }
+}
+
+// ===== 暗色浮层（tooltip）=====
+// 命中范围：el-tooltip（effect 缺省就是 dark）、el-table 的 show-overflow-tooltip
+// （内部走 createTablePopper，仍旧是一个 ElTooltip）、侧栏折叠时 el-menu-item 的标题气泡。
+//
+// 【限高为什么不能直接写在 .el-popper 上】
+// element-plus/theme-chalk/el-popper.css 里，箭头是 popper 的**直接子元素**，
+// 且四个方向都靠 -5px 负偏移挂在盒子外侧：
+//   .el-popper[data-popper-placement^="top"] > .el-popper__arrow { bottom: -5px }
+// 一旦在 .el-popper 上开 overflow，它就变成滚动容器：朝上/朝左的负偏移会被直接裁掉，
+// 朝下/朝右的则被算进滚动区域，凭空多出一条没有意义的滚动条。
+// 所以滚动容器必须下沉一层，挂到内容元素上，把箭头留在滚动容器外面。
+//
+// 【内容元素是哪一个】
+// ElPopperContent 渲染的就是单个 div.el-popper，里面直接放 ElFocusTrap（renderless，
+// 只 renderSlot 不产生额外 DOM）和箭头 span。ElTooltip 的 content 缺省渲染成
+// <span>{{ content }}</span>，表格的 show-overflow-tooltip 同样是把 cell.innerText
+// 当 content 传进来，所以 `> *:not(.el-popper__arrow)` 命中的正是那个 span。
+// （折叠菜单把 #title 直接透传成裸文本节点，选不中——但它只有几个字，本就不会超高。）
 .el-popper.is-dark {
   max-width: 400px;
   word-break: break-all;
   line-height: 1.6;
+  // 日志类内容自带 \n，默认 white-space: normal 会把换行折成空格挤成一坨。
+  // 站内暗色 tooltip 的内容全是单行短语（复制 / 编辑 / 折叠菜单标题…），既不含换行，
+  // 也没有哪处靠折叠空白来排版，pre-wrap 对它们等价于 normal。
+  // 与既有的 word-break: break-all 不冲突：pre-wrap 管的是「保留空白 + 允许软换行」，
+  // break-all 管的是「给超长无空格串补断点」，两者作用在换行决策的不同环节。
+  white-space: pre-wrap;
+
+  > *:not(.el-popper__arrow) {
+    // span 默认 inline，不吃 max-height / overflow，必须先转块级。
+    // popper 是 shrink-to-fit 的绝对定位盒，块级子元素不改变它的收缩宽度。
+    display: block;
+    // 上限取 min(42vh, 360px)：EP 的 popper 只开了 preventOverflow 的主轴（水平），
+    // 垂直方向仅有 flip 兜底，触发点落在视口正中时上下各只剩约 50vh。
+    // 800px 视口下 42vh = 336px，加 popper 的 10px 内边距 + 2px 边框 + 12px offset
+    // 约 360px，仍小于可用的 400px —— 触发点在任何位置都不会顶出视口。
+    max-height: min(42vh, 360px);
+    overflow: auto;
+    // 滚到底不要把底下的表格 / 弹窗一起带着滚。
+    overscroll-behavior: contain;
+    // is-dark 的底色取自 --el-text-color-primary，明暗两套主题下正好是反的
+    // （亮色主题深底浅字，暗色主题浅底深字）。文件开头那条固定色的滚动条 thumb
+    // 必然在其中一套里贴近底色看不见，这里改用 currentColor 派生，两套都有对比度。
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, currentColor 45%, transparent) transparent;
+
+    &::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, currentColor 45%, transparent);
+    }
+  }
 }
 
 .dd-log-surface {
@@ -823,10 +1855,20 @@ html.dark {
   background-repeat: no-repeat, no-repeat, no-repeat;
   background-size: cover, auto, auto;
   border: 1px solid var(--dd-log-border-color);
-  border-radius: 16px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 12px 28px rgba(15, 23, 42, 0.16);
+  // 日志窗口是一整块容器类表面 → surface 档。
+  //
+  // 🔴 这条只对「自己就是最外层日志窗口」的用法成立。把 .dd-log-surface 用成
+  //    【铺满父容器的内层】时（弹窗 body 内边距为 0 直接顶到弹窗边、或塞进一个已经
+  //    带 surface 圆角 + overflow:hidden 的外框），【必须在使用点写回 border-radius: 0】：
+  //      - 顶到外层边框：圆角模式下深色日志底会被自己的 10px 圆角切出缺口、露出弹窗白底；
+  //      - 嵌在已圆角外框里：内外两条 10px 圆角只差 1px 同心叠着，四角线宽看起来变粗。
+  //    圆角交给外层容器 + overflow:hidden 去裁才是对的。
+  //    已按 flush 处理的使用点：logs/index.vue 的 .detail-log（只在详情弹窗那一支写 0，
+  //    另一支嵌在有内边距的 body 里、仍吃 surface）、ScriptExecutionDialogs.vue 的
+  //    .debug-log-content、LogViewer.vue 的 .viewer-log、LogFileBrowser.vue 的 .content-text。
+  //    其余使用点（deps / subscriptions / PanelLogCard / SystemConfigCard）四周都有留白，
+  //    自己就是最外层日志面板，继续吃 surface 档。新增使用点时先判断属于哪一种。
+  border-radius: var(--dd-radius-surface);
   color: var(--dd-log-text-color);
   scrollbar-color: var(--dd-log-scrollbar-thumb-color)
     var(--dd-log-scrollbar-track-color);
@@ -840,13 +1882,17 @@ html.dark {
 
   &::-webkit-scrollbar-track {
     background: var(--dd-log-scrollbar-track-color);
-    border-radius: 999px;
+    // 保持 0，不吃令牌：轨道是贴着日志窗口右/下内边铺满的一条，
+    // 圆角会在它与已经圆角的窗口边框之间露出一线底色，反而更脏。
+    border-radius: 0;
   }
 
+  // 这里的 border 是给 thumb 留出的“内缩留白”，属于功能性写法，只改圆角不要删
   &::-webkit-scrollbar-thumb {
     min-height: 40px;
     border: 3px solid var(--dd-log-scrollbar-track-color);
-    border-radius: 999px;
+    // 滑块与全局滚动条同档
+    border-radius: var(--dd-radius-pill);
     background: var(--dd-log-scrollbar-thumb-color);
   }
 
@@ -1015,30 +2061,20 @@ html.dark {
 
 .dd-stat-card {
   background: var(--el-bg-color);
+  // 去阴影后靠这条边框与页面底色分隔
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 14px;
+  // 统计卡片是容器类表面 → 「卡片」角色令牌（桌面 = surface 档，移动端 rounded 为 20px）
+  border-radius: var(--dd-radius-card);
   padding: 16px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  transition:
-    transform var(--dd-motion-fast) var(--dd-ease-spring),
-    box-shadow var(--dd-motion-normal) var(--dd-ease-standard),
-    border-color var(--dd-motion-fast) var(--dd-ease-standard);
-  // 静置阴影统一引用令牌
-  box-shadow: var(--dd-shadow-card);
+  transition: border-color var(--dd-motion-fast) var(--dd-ease-standard);
 
+  // hover 只让描边偏向品牌色，不做上浮 / 缩放
   &:hover {
-    // 上浮 + 品牌色辉光 + 描边微亮，hover 时统计卡片更有“浮起来”的层次感（阴影引用令牌）
-    transform: translateY(-3px);
-    box-shadow: var(--dd-shadow-card-hover);
     border-color: color-mix(in srgb, var(--el-color-primary) 26%, var(--el-border-color-lighter));
-  }
-
-  // hover 时图标轻微放大并带一点点旋转，呼应灵动方案的微交互
-  &:hover .dd-stat-card__icon {
-    transform: scale(1.06) rotate(-3deg);
   }
 }
 
@@ -1089,7 +2125,9 @@ html.dark {
   gap: 2px;
   font-weight: 600;
   padding: 1px 6px;
-  border-radius: 6px;
+  // 涨跌幅是卡片里的小标签，归控件类 → control 档
+  // （不是 pill：它和 .dd-status-chip 常出现在同一屏，全做成胶囊会分不清主次）
+  border-radius: var(--dd-radius-control);
   font-size: 11.5px;
 
   &.is-up {
@@ -1111,12 +2149,12 @@ html.dark {
 .dd-stat-card__icon {
   width: 44px;
   height: 44px;
-  border-radius: 12px;
+  // 44×44 的图标色底属控件类表面 → control 档（不做成正圆，避免与头像混淆）
+  border-radius: var(--dd-radius-control);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: transform var(--dd-motion-normal) var(--dd-ease-spring);
 
   &.is-blue {
     background: rgba(59, 130, 246, 0.12);
@@ -1151,31 +2189,40 @@ html.dark {
 .dd-seg-group {
   display: inline-flex;
   background: var(--el-fill-color-light);
-  border-radius: 10px;
+  // 分段控件的灰底槽 → control 档（与槽内的项同档，两者圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   padding: 3px;
   gap: 2px;
 }
 
 .dd-seg-btn {
-  border: none;
+  // 透明 1px 边框占位：选中态只换 border-color，避免加边框时按钮尺寸跳动
+  border: 1px solid transparent;
   background: transparent;
   padding: 6px 14px;
   font-size: 13px;
-  border-radius: 7px;
+  // 分段项属控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
   cursor: pointer;
   color: var(--el-text-color-secondary);
-  transition: all 0.18s;
+  // 按属性列而不是 all：扁平方案下这里只会变颜色，用 all 会把将来任何新增属性
+  // （尺寸、间距）也一起过渡，出现意料外的位移。时长走令牌才吃得到 reduced-motion 降级。
+  transition:
+    background-color var(--dd-motion-fast) var(--dd-ease-standard),
+    border-color var(--dd-motion-fast) var(--dd-ease-standard),
+    color var(--dd-motion-fast) var(--dd-ease-standard);
   font-weight: 500;
 
   &:hover {
     color: var(--el-text-color-primary);
   }
 
+  // 去掉选中态微阴影，改用描边把选中项从灰底分组里托出来
   &.is-active {
     background: var(--el-bg-color);
+    border-color: var(--el-border-color-lighter);
     color: var(--el-color-primary);
     font-weight: 600;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   }
 }
 
@@ -1184,7 +2231,8 @@ html.dark {
   align-items: center;
   gap: 4px;
   padding: 2px 10px;
-  border-radius: 999px;
+  // 状态 chip 是天然胶囊 → pill 档
+  border-radius: var(--dd-radius-pill);
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1.5;
@@ -1220,7 +2268,8 @@ html.dark {
 .dd-env-chip {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 6px;
+  // 环境标记是标签而不是状态灯，归控件类 → control 档（与 el-tag 保持同档）
+  border-radius: var(--dd-radius-control);
   font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -1250,11 +2299,13 @@ html.dark {
 
 .dd-data-card {
   background: var(--el-bg-color);
+  // 去阴影后靠这条边框与页面底色分隔
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 14px;
+  // 数据卡片是容器类表面 → 「卡片」角色令牌（桌面 = surface 档，移动端 rounded 为 20px）
+  border-radius: var(--dd-radius-card);
+  // overflow:hidden 让内部贴边的 toolbar / 表格 / 分页条自动被圆角裁掉四角，
+  // 所以 .dd-data-card__toolbar 与 .dd-pagination 刻意不写圆角（贴边内嵌，写了反而露角）
   overflow: hidden;
-  // 静置阴影统一引用令牌
-  box-shadow: var(--dd-shadow-card);
 }
 
 .dd-data-card__toolbar {
@@ -1299,7 +2350,8 @@ html.dark {
 .dd-icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  // 图标按钮属控件类表面 → control 档
+  border-radius: var(--dd-radius-control);
   border: none;
   background: transparent;
   display: inline-flex;
@@ -1340,14 +2392,11 @@ html.dark {
 
 .dd-mobile-card {
   padding: var(--dd-mobile-card-padding);
-  border-radius: 18px;
+  // 移动端卡片是容器类表面 → 「卡片」角色令牌（rounded 面板在 ≤768 下为 20px，square 仍是直角）
+  border-radius: var(--dd-radius-card);
+  // 去掉底色渐变与投影，纯色底 + 1px 边框划分卡片
   border: 1px solid var(--el-border-color-lighter);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--el-bg-color) 96%, white) 0%,
-    var(--el-bg-color) 100%
-  );
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  background: var(--el-bg-color);
 }
 
 .dd-mobile-card__header {
@@ -1460,11 +2509,331 @@ html.dark {
   min-height: 24px;
 }
 
+// ============================================================================
+// 移动端列表页共享类（v3.3.1，issue #143）
+// ----------------------------------------------------------------------------
+// tasks / subscriptions / envs / logs / deps 五个列表页的移动端工具栏与卡片统一用这一组，
+// 页面 scoped 里不要再各写一份同类样式。类名与规格是跨页面的契约，改之前先全仓 grep 使用方。
+// 🔴 只新增、不改上面的旧类：.dd-mobile-card__field / __title / __actions / __grid 被 13 个文件共用
+//    （含本期不改的设置页卡片、users、notifications、open-api），新布局一律用这里的新类。
+// 🔴 横向滚动行一律不要加 -webkit-overflow-scrolling: touch（WebKit 会把它强制成层叠上下文，
+//    v3.3.0 iOS 上弹窗被顶栏盖住就是它挂在 .layout-main 上造成的，见 MainLayout.vue 的 F1）。
+// 圆角只吃角色令牌 --dd-radius-button / --dd-radius-card，不写死像素。
+// .dd-mobile-bleed（批量栏 .dd-mobile-batch-bar 与它共用几何）只在 ≤768 生效，写在文件后部的移动端媒体查询里。
+// 🔴 类名里的 bleed（出血/贴边）在 v3.3.2 / issue #144 之后已经名不副实：这几条横栏改回了跟随页面 12px 留白，
+//    屏幕最边上那 12px 要让给系统侧滑返回手势。改名要动 4 处模板 + 规范 6 处，本轮不改，看到类名别按字面理解。
+// ============================================================================
+
+// 移动端工具栏第一行：搜索框占满剩余宽度，后面跟 32px 图标按钮，单行不换行。
+// 上外边距刻意为 0：「第一行离顶栏」的 12px 统一由移动端 .layout-main 的上内边距给（见 MainLayout.vue），
+// 这样有工具栏和没工具栏的页面离顶栏一样远；这里再给上外边距就会与它叠出双倍空隙（issue #143「上边距改 0」说的就是这个）。
+// 使用方：tasks / subscriptions / envs / logs / deps 的移动端工具栏（非批量态）。
+.dd-mobile-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  min-width: 0;
+
+  > .el-input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  // 间距只由 gap 决定：EP 自带 .el-button + .el-button { margin-left: 12px }，不清零会与 gap 叠加
+  .el-button + .el-button {
+    margin-left: 0;
+  }
+}
+
+// 32×32 纯图标按钮：挂在 el-button 上，配 :icon prop 且不传默认插槽，并且必须带 aria-label / title。
+// 圆角由移动端媒体查询里的 `html .el-button` 规则决定：rounded 移动端 16px 即正圆，square 仍是直角。
+// 🔴 不要用 el-button 的 circle 属性凑圆：EP 的 is-circle 写死 50%，会绕过形状开关（项目已全部移除）。
+// 选择器带上 .el-button：EP 的 .el-button { padding; height } 与单类选择器打平且懒注入排在后面，写成单类会被顶掉。
+// 使用方：tasks / subscriptions / envs / logs / deps / config-file 的移动端图标按钮。
+.el-button.dd-icon-only-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+// 横向滑动、隐藏滚动条的一行，子项不换行也不被压缩。
+// 使用方：tasks 视图分组栏、subscriptions / logs 的 status-tabs 第二行，以及五页的 .dd-mobile-batch-bar。
+// 与页面 scoped 的 .status-tabs 同挂时，display / gap 以页面那条 (0,2,0) 为准；
+// 宽度一律要有 width: 100%（同挂 .dd-mobile-bleed 时由那条规则给，单挂本类时页面自己给），
+// 否则页面 scoped 那句 inline-flex(0,2,0) 会压过这里的 flex(0,1,0)，整条按内容收宽、根本滚不起来。
+// 滚动条两种写法都要：Chrome 121+ 设了 scrollbar-width 就忽略 ::-webkit-scrollbar，Safari 只认后者。
+.dd-scroll-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  // 🔴 必须是 auto，不要改回 contain（v3.3.2 / issue #144）：contain 会把横滑到尽头后的滚动链断在这一行，
+  //    iOS 的系统边缘返回手势热区比 12px 留白宽，落在横栏上的那一段会被它整个吃掉，用户表现为「这里划不回上一页」。
+  //    代价是横滑到尽头再继续滑会带动页面 / 触发系统返回——这正是本次想要的行为。
+  overscroll-behavior-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  // 缺了 flex-shrink: 0，汉字按钮会被压成一字一行；nowrap 防止单个子项内部折行
+  > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  > .el-button + .el-button {
+    margin-left: 0;
+  }
+}
+
+// 移动端批量栏：与 .dd-scroll-row 同挂，批量态时整行替换 .dd-mobile-toolbar。
+// 上下外边距与高度下限都与 .dd-mobile-toolbar 一致（上 0、下 10px、32px 高），两支切换时下面的内容不跳。
+// 左右跟随页面 12px 留白（v3.3.2 / issue #144 改回，此前是贴屏幕边缘）：几何与 .dd-mobile-bleed 共用一条规则，
+// 写在文件后部的移动端媒体查询里。但它刻意【不】吃圆角，理由见那条规则旁的说明。
+// 内容顺序固定：全选/取消全选 → 批量按钮（图标 + 短文字，default 尺寸）→ 取消（最后）；不显示「已选 N 项」。
+// 使用方：tasks / subscriptions / envs / logs / deps。
+.dd-mobile-batch-bar {
+  align-items: center;
+  margin: 0 0 10px;
+  min-height: 32px;
+}
+
+// 卡片首行：复选框 → 名称 → 状态 / 分组等小标签 → 右上角「···」（DdMoreMenu，自带 margin-left:auto 贴右）。
+// 使用方：tasks / subscriptions / envs / logs / deps 的移动端卡片。
+.dd-mobile-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+// 卡片名称：16px 单行省略；模板上必须挂 :title 显示全称（省略后没有别的途径看全）。
+// 字色必须显式写：body / .dd-mobile-card 都没有定字色，不写会落成浏览器默认色，和主文字色对不上（暗色下尤其刺眼）。
+// 页面 scoped 里的字色（链接色、禁用卡的降档色等）带 data-v 属性、特异性更高，照样能覆盖这里。
+// 使用方：同上五页（tasks 同挂 .task-name-link，那个类写了 font: inherit，任务页自己保证 16px）。
+.dd-mobile-card__name {
+  color: var(--el-text-color-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  min-width: 0;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// 名称右侧的小标签组（状态 / 类型 / 分组等），标签统一 el-tag size="small"（20px）。
+// 放不下时由 overflow:hidden 裁掉，不换行、不把卡片首行撑高。
+// 使用方：subscriptions / envs 的卡片首行（多枚标签）；只有一个状态标签的页面也可以直接放进 __head。
+.dd-mobile-card__head-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+// 卡片右上角「···」触发器（原生 <button>），由 DdMoreMenu 渲染，页面不要自己再写一份。
+// 只换字色、不加底色：卡片末行已经有「运行 / 日志」这类实体按钮，这里再铺一块底会抢视觉。
+// margin-right:5px 是按「最右那个圆点到卡角的距离两边相等」倒推的（v3.3.2 / issue #144，原先是 -6px 贴角）：
+// 卡片内边距 12px + 这里 5px + 图标自带 8px 留白 + 圆点比图标框内缩 1px = 最右圆点距卡片右边 26px，
+// 与它距卡片上边的 12 + 8 + 6.5 = 26.5px 视觉等距（严格等距是 5.5px，差半像素 DPR≥2 看不出，不引小数）。
+// 按钮本身仍是 32×32 的点击热区，正外边距只是把它整体往左推，不缩热区。
+// 使用方：DdMoreMenu（tasks / subscriptions / envs / logs / deps 的卡片首行，五页一起变）。
+.dd-mobile-card__more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  margin-right: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dd-radius-button);
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color var(--dd-motion-fast) var(--dd-ease-standard);
+
+  &:hover {
+    color: var(--el-color-primary);
+  }
+
+  // 第二个选择器是给 el-dropdown 里的情形加特异性：EP 会给自定义触发器挂 .el-dropdown-selfdefine，
+  // 并写 `.el-dropdown .el-dropdown-selfdefine { outline: none }`(0,2,0)，与单类的 :focus-visible 打平后 EP 赢，
+  // 键盘用户就看不到焦点在哪。
+  &:focus-visible,
+  .el-dropdown &:focus-visible {
+    outline: 2px solid var(--el-color-primary);
+    outline-offset: -2px;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    color: var(--el-text-color-disabled);
+  }
+}
+
+// DdMoreMenu 的根元素（el-dropdown）：在 .dd-mobile-card__head 里靠 margin-left:auto 贴到最右。
+// 使用方：DdMoreMenu。
+.dd-mobile-card__more-wrap {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+// 字段区：若干「标签 值」横排行。使用方：五个列表页的移动端卡片。
+.dd-mobile-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+// 标签与值横排的一行（旧类 __field 是纵向排列，两者不要混用）。使用方：同上。
+.dd-mobile-card__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+// 行内标签：最小 4.5em 让各行的值左对齐；刻意不大写、不加粗（与旧类 __label 的 11px 大写粗体区分）。
+// 使用方：同上。
+.dd-mobile-card__row-label {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+// 行内值：默认单行省略。字色显式取 regular 档，理由同 .dd-mobile-card__name（不写就是浏览器默认色）。
+// 使用方：同上。
+.dd-mobile-card__row-value {
+  color: var(--el-text-color-regular);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 行内值的两行截断版（envs 卡片的「值」）：anywhere 让没有空格的长 token / URL 也能在任意位置折行，
+// 否则 -webkit-line-clamp 对一整串不可断的字符不起作用，会直接顶出卡片。
+.dd-mobile-card__row-value--clamp2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+// 卡片末行：左侧主信息（「上次结果」tag、耗时等），右侧操作按钮组。使用方：五个列表页的移动端卡片。
+.dd-mobile-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+// 末行左侧。使用方：同上。
+.dd-mobile-card__footer-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+// 末行右侧按钮组：default 尺寸（32px）靠右排，不用 size="small"、不设 width:100%。
+// 刻意不复用 __actions：≤768 下它会把 1~3 个子元素切成等分 grid、按钮 width:100%，与「靠右」正相反。
+// 使用方：同上。
+.dd-mobile-card__footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+
+  > .el-button + .el-button {
+    margin-left: 0;
+  }
+}
+
 .dd-mono {
   font-family: var(--dd-font-mono);
 }
 
 @media screen and (max-width: 768px) {
+  // 角色令牌切到移动端刻度（v3.3.1，issue #143 R1）：rounded 面板在手机上卡片 20px、按钮 16px，
+  // square 面板两条移动端刻度都是 0，照旧直角。刻度值由 applyPanelShapeStyle() 运行时写在 <html> 上。
+  // 与文件开头的 :root 同特异性、源码在后，同属入口包的 global.scss，先后顺序是确定的。
+  :root {
+    --dd-radius-card: var(--dd-radius-surface-mobile);
+    --dd-radius-button: var(--dd-radius-control-mobile);
+    --dd-page-gutter-x: 12px;
+  }
+
+  // 按钮圆角吃「按钮」角色令牌。特异性 (0,1,1) 是刻意算过的：
+  //   - 压过 EP 懒注入的 .el-button / .el-button--small（都是 (0,1,0)，写成单类会被同特异性后注入顶掉）；
+  //   - 低于 el-button-group 首尾项的 (0,3,0) 规则，Split Button 中缝两侧的内侧直角保持不变；
+  //   - 低于 .el-button.is-round (0,2,0)，模板里显式要胶囊的按钮不受影响。
+  // 只写在移动端：桌面仍由上面那条 .el-button { border-radius: var(--dd-radius-control) } 与 EP 令牌管，零变化。
+  html .el-button {
+    border-radius: var(--dd-radius-button);
+  }
+
+  // 移动端工具栏里的搜索框与同排 32px 圆按钮同吃「按钮」角色令牌：rounded 下 16px（32px 高即胶囊），
+  // 不然搜索框还是 control 档的小圆角，挨着正圆按钮很不协调；square 下两条令牌都是 0，照旧直角。
+  // 特异性 (0,3,0) 是刻意算过的：要压过上面全局那条 `.el-input .el-input__wrapper`（(0,2,0)，control 档）
+  // 与 EP 懒注入的 .el-input__wrapper（(0,1,0)）。只写在移动端：.dd-mobile-toolbar 本来也只在移动端渲染。
+  .dd-mobile-toolbar .el-input .el-input__wrapper {
+    border-radius: var(--dd-radius-button);
+  }
+
+  // 跟随页面 12px 留白（v3.3.2 / issue #144 对 #143 的纠正：上一版是用负外边距抵消 .layout-main 的横向内边距、
+  //   把整条顶到屏幕左右边缘）。改回来的理由：屏幕最边上那 12px 要让给系统侧滑返回手势，横滑行盖到屏幕边缘时
+  //   那一整段都划不回上一页。⚠️ 留白只是让开热区，真正吃掉手势的是 .dd-scroll-row 的 overscroll-behavior-x，
+  //   已一并改成 auto，两处缺一不可。
+  // 只在 ≤768 生效，所以与桌面共用同一个元素时（如某页的 status-tabs）可以无条件挂这个类，桌面零影响。
+  // !important：它要接管同一元素上页面 scoped 规则写的横向几何（.view-seg / .status-tabs 的宽度与外边距，
+  //   特异性 (0,2,0) 且随页面 chunk 注入在后），不加就被静默顶掉。
+  // 🔴 width: 100% 不能删：这几条槽的 scoped 样式都是 display: inline-flex (0,2,0)，压过全局 .dd-scroll-row 的
+  //   display: flex (0,1,0)，没有显式宽度就会按内容收宽、横滑整个失效。文件开头的 * { box-sizing: border-box }
+  //   保证槽自己那 3px 内边距算进 100% 里，不会溢出。
+  // 左右内边距不再由这里接管，交还给各自的槽（.view-seg / .status-tabs 的 padding: 3px），与桌面口径一致。
+  // .dd-mobile-batch-bar 直接并进来、不要求页面再挂 .dd-mobile-bleed；它的上下外边距仍由自己那条规则给。
+  // 使用方：tasks 视图分组栏、subscriptions / logs / deps 的 status-tabs 第二行，以及五页的批量栏。
+  .dd-mobile-bleed,
+  .dd-mobile-batch-bar {
+    width: 100% !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  // 两条灰底槽（视图分组栏 / 状态筛选栏）吃「按钮」角色令牌（v3.3.2 / issue #144）：与移动端按钮、卡片右上角
+  //   「···」、工具栏搜索框同一档（rounded 16px / square 0），所以只吃令牌、不写死 16px。
+  // 槽内分段项必须同步抬到 calc(var(--dd-radius-button) - 3px) 与槽同心，四周灰边才恒为 3px；那一条按本仓惯例
+  //   落在各页自己的移动端媒体查询里（ViewManager / subscriptions / logs / deps），不在这里再加一条全局 !important。
+  // 🔴 .dd-mobile-batch-bar 刻意【不】并进来：它同挂 .dd-scroll-row 是滚动容器，给它圆角等于加了一层圆角裁剪蒙版，
+  //    而它高 32px、圆角 16px 正好是左右两个半圆帽，横滑时经过两端的按钮会被削成月牙——它又没有底色，
+  //    削掉的部分没有任何视觉补偿。两条灰底槽有底色，内容被槽的圆角裁住反而正是想要的效果。
+  .dd-mobile-bleed {
+    border-radius: var(--dd-radius-button) !important;
+  }
+
   .dd-page-header {
     flex-direction: column;
     align-items: stretch;
@@ -1483,7 +2852,6 @@ html.dark {
 
   .dd-mobile-card {
     padding: 12px;
-    border-radius: 16px;
   }
 
   .dd-mobile-card__actions {
@@ -1512,10 +2880,31 @@ html.dark {
     gap: 10px;
   }
 
+  // 移动端一律铺满整屏，不再区分 is-fullscreen（v3.3.2 / issue #144）。原先这里只管宽度（92vw）不管高度，
+  //   于是那 6 个没绑 :fullscreen 的弹窗在手机上是「92vw 悬浮小窗」，顶栏整条露在它上面。
+  // 为什么光靠层级不够：遮罩只有 24% 暗度 + 1.5px 模糊（见 .el-overlay），没铺满的弹窗背后那条 54px sticky 顶栏
+  //   会清清楚楚透出来。层级由遮罩在根上下文里的 2000+ 压过顶栏（20）保证（v3.3.3 起 .layout-main 不再自成
+  //   层叠上下文，见 MainLayout.vue），这条规则只管几何，解决的是「弹窗没盖到那块区域」。
+  // 为什么不再留 .el-dialog:not(.is-fullscreen) 分支：两支取值现在完全一样，分支没有意义。原先那条推理
+  //   （非全屏弹窗会回落到组件自己写死的 600px / 1100px 而在窄屏溢出）依然成立，只是改由这条无差别的 100% 兜住。
+  // 🔴 高度用 100% 不用 100dvh：包含块是 EP 原生的 .el-overlay-dialog（position:fixed + 四边 0），100% 即视口高。
+  //    这正是 EP `.el-dialog.is-fullscreen{height:100%}` 的取值，52 个已全屏的弹窗一直跑在它上面；换成 100dvh
+  //    等于凭空给这批本来正常的弹窗引入 iOS 地址栏收放这个新变量，属于自找回归。
+  // 🔴 border-radius: 0 必须显式写：.el-dialog 的圆角来源 --dd-radius-surface 在移动端【没有】被重映射
+  //    （上面 :root 里重映射的只有 --dd-radius-card / --dd-radius-button），不归零的话拉满屏后四角会露遮罩底色。
+  // margin / max-height 都带 !important：要压掉通用块里按 --el-dialog-margin-top 算的上下外边距与 max-height，
+  //   否则整屏之后又会冒出「弹窗能上下挪一点」的无意义滚动条。
+  // 配套：ProxyConfigCard ×3 与 OverviewHeroCard 仍要各自补 :fullscreen="dialogFullscreen"——这条规则只管几何，
+  //   :fullscreen 管 EP 自己的 border-radius / overflow 与组件内 `dialogFullscreen ? 'top' : 'right'` 这类布局分支，
+  //   两者不能互相替代。登录页 2FA 与动效演示页若不想整屏，在各自的移动端块里覆写回去，别在这里写 :not()。
   .el-dialog {
-    --el-dialog-width: 92vw !important;
-    width: 92vw !important;
-    margin: 4vh auto !important;
+    --el-dialog-width: 100% !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
 
     .el-dialog__body {
       padding: 16px;
@@ -1528,6 +2917,42 @@ html.dark {
     .el-dialog__footer {
       padding: 10px 16px 14px;
     }
+  }
+
+  // 🔴 弹窗 / 抽屉开着时锁住真正在滚的 .layout-main（v3.3.3 / issue #148 下半「滑的是背后的页面」）。
+  // 移动端整页滚的是 .layout-main（MainLayout.vue），不是 body；EP 的 lock-scroll 只给 body 加 overflow:hidden，锁不到它。
+  //   弹窗原地渲染在 .layout-main 里，iOS 上手指落在弹窗不可滚的区域（标题栏、表单标签、底栏，或弹窗 body 已滚到头）时，
+  //   手势会交给背后的列表：弹窗纹丝不动、列表在滚。Chromium 按包含块链分派滚动，模拟器里复现不了。
+  // 为什么用 :has 而不挂在 body 的 el-popup-parent--hidden 类上：
+  //   ① tasks 页一批弹窗是 :lock-scroll="false"（v3.3.3 时 9 个，v2.1.6 为修桌面日志弹层打开时表格右移而关掉），
+  //      它们根本不给 body 加类；
+  //   ② 弹窗开着时切路由（手机上就是侧滑返回），keep-alive 停用旧页后这个类会残留在 body 上（实测），
+  //      挂在它上面会把新页面的列表锁死。:has 只看当前 DOM 里有没有显示中的遮罩，没有残留问题。
+  // 为什么用 hidden 不用 clip：hidden 在 CSS 上仍算滚动容器，scrollTop 原样保留，关弹窗后列表停在原位置；
+  //   clip 不再是滚动容器，位置会丢。
+  // 顺带的第三重保险：hidden 之后用户滚不动它，WebKit 也不再把它当可触摸滚动的容器，弹窗开着期间又少了一个
+  //   bug 160953（「可滚动 + 层叠上下文」的容器裁剪 fixed 后代，见 MainLayout.vue）的触发条件——
+  //   前两重是 .layout-main 去掉 z-index、手机上撤掉 body 的 transform（public/assets/optimization.css）。
+  // [style*="display: none"] 对的是 EP 遮罩关闭后的 v-show；teleport 到 body 的弹窗与确认框不在这里面，由 EP 的 body 锁管。
+  // 特异性 (0,3,0) 高于 MainLayout 的 scoped `.layout-main[data-v]`（(0,2,0)），不需要 !important。
+  .layout-main:has(.el-overlay:not([style*="display: none"])) {
+    overflow-y: hidden;
+  }
+
+  // F2（v3.3.1，issue #143）：移动端弹窗的关闭入口统一放到右下角 footer，有 footer 的弹窗隐藏右上角 ×。
+  // 理由：移动端弹窗几乎都是全屏，× 落在屏幕右上角、离拇指最远；iOS 上还曾被顶栏整块盖住（F1）。
+  // 用 :has(> footer) 做安全网：将来有人新增了没有 footer 的弹窗，× 仍然在，不会出现关不掉的弹窗。
+  // 所以【新增弹窗一律要带底部「关闭 / 取消」】，只读型弹窗用 <template v-if="dialogFullscreen" #footer>。
+  // 只认 EP 自己的 .el-dialog__headerbtn；自定义头部里的 ×（logs 的 .detail-hero-close、
+  // LogViewer 的 .tool-btn--close）由各页在自己的移动端媒体查询里隐藏。
+  .el-dialog:has(> .el-dialog__footer) > .el-dialog__header > .el-dialog__headerbtn {
+    display: none;
+  }
+
+  // EP 给 × 预留的右内边距（.el-dialog__header.show-close，(0,2,0) 且懒注入在后）一起收回到 16px，
+  // 与上面移动端 header 的左右内边距对称。特异性 (0,4,0)，必须 ≥ (0,3,0) 才压得过它与上面那条 header padding。
+  .el-dialog:has(> .el-dialog__footer) > .el-dialog__header.show-close {
+    padding-right: 16px;
   }
 
   .el-message-box {
@@ -1567,6 +2992,25 @@ html.dark {
     width: 100% !important;
   }
 
+  // O1（v3.3.1，issue #143）：主布局的移动端侧栏抽屉（MainLayout.vue 的 class="layout-mobile-drawer"）
+  // 是上面那条 100% 的唯一例外，占半屏、右侧露出遮罩可点关闭。
+  // (0,2,0) + !important 压过上面 (0,1,0) + !important；其它抽屉（api-docs / dev-motion）仍是 100%。
+  // 最小 220px = 桌面侧栏宽（--dd-sidebar-width），桌面已证明放得下全部菜单与 Logo；
+  // 所以 360~430px 的手机上实际占 51~61%，严格的 50% 只在 ≥440px 时成立。最大 320px 防平板上过宽。
+  .el-drawer.layout-mobile-drawer {
+    width: 50% !important;
+    min-width: 220px;
+    max-width: 320px;
+  }
+
+  // 抽屉 body 清掉全局那条 24px 内边距（左右白吃 48px），并改成 flex 列：
+  // 这样菜单区的 flex:1 才生效，用户卡贴到底部，与桌面侧栏一致。
+  .el-drawer.layout-mobile-drawer .el-drawer__body {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   .el-card {
     .el-card__header {
       padding: 14px 16px;
@@ -1579,22 +3023,88 @@ html.dark {
 }
 
 
+// ============================================================================
+// 减少动效：系统偏好 + 个人设置页「界面动效」三档（v3.2.8 起）
+// ----------------------------------------------------------------------------
+// 三档由 utils/panelAppearance.ts 的 applyMotionPreference() 在 createApp 之前同步挂到 <html> 上
+// （localStorage 键 dd:appearance:motion）：
+//   system（默认）→ 什么 class 都不挂，下面的媒体查询照常跟随系统 prefers-reduced-motion；
+//   always → html.dd-motion-force：媒体查询里的选择器全部带 :not(.dd-motion-force)，
+//            系统开着「减少动态效果」也照常播放。Windows 关掉「动画效果」时 Chromium 就会报 reduce，
+//            这类用户原来在面板里看不到任何动效，也没有任何办法打开；
+//   reduce → html.dd-motion-off：不看系统，直接走同一套压缩。
+// 两处的压缩内容用同一对 mixin 生成，保证逐条一致；要改压缩内容只改 mixin。
+//
+// 🔴 通配那一半必须包在 :where() 里，让整条选择器的特异性保持 (0,0,0)，与改版前的裸 `*` 相同：
+//    写成 `:root:not(.dd-motion-force) *` 会变成 (0,2,0)，而 !important 之间照样比特异性，
+//    各组件里 (0,1,0)~(0,2,0) 的 `animation: ... !important` 会被它反压，行为悄悄变样。
+//    令牌那一半反而不能包：它就是要以 (0,2,0) / (0,1,1) 赢过 :root 上的原值。
+//    <html> 自身也要列进来：裸 `*` 原本就包含它（html 上的 scroll-behavior 靠这一条压回 auto）。
+//
+// 注：页面自带的 reduce 段（dashboard / logs / LogViewer / LoadingMotion / ScriptsEditorPane）也按这套三档改过：
+// 各文件里有一份本地 mixin dd-page-reduced-motion，媒体查询里包 :where(:root:not(.dd-motion-force))，
+// 媒体查询外再输出一份 :where(html.dd-motion-off)，特异性与原来的裸选择器相同。登录页插画跟随鼠标的判断
+// 改用 shouldReduceMotion()：先读 readMotionPreference()，「跟随系统」时才看 matchMedia。
+// SFC 引不到这里的 mixin（vite 没配 additionalData），新增页面级 reduce 段时照这个写法在自己文件里写一份，
+// 否则「始终开启 / 减少动效」管不到它。
+// ============================================================================
+@mixin dd-reduced-motion-tokens {
+  // 把动效压缩到几乎不可见；新增 --dd-motion-* 令牌时必须同步加进来
+  --dd-motion-fast: 1ms;
+  --dd-motion-normal: 1ms;
+  --dd-motion-page: 1ms;
+  --dd-motion-slow: 1ms;
+  --dd-motion-page-enter: 1ms;
+  --dd-motion-page-leave: 1ms;
+  --dd-motion-overlay: 1ms;
+  --dd-motion-overlay-leave: 1ms;
+  --dd-motion-popper: 1ms;
+  --dd-press-scale: 1;
+}
+
+@mixin dd-reduced-motion-universal {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
+
+  // delay 必须一起压掉，只压 duration 是不够的 —— 而且会适得其反。
+  //
+  // 错落入场普遍写成 `animation: xxx 240ms ... both` + `animation-delay: 100ms`：
+  // fill-mode 的 `both` 会让元素在 delay 期间就套用 from 帧（opacity: 0）。
+  // 只把 duration 压到 1ms 的话，元素仍要先隐身整整 100ms，然后「啪」地出现——
+  // 对要求减少动态效果的用户来说，这比原来的平滑淡入更刺眼。
+  // 把 delay 也归零，元素才是真正的「直接就在那儿」。
+  animation-delay: 0ms !important;
+  transition-delay: 0ms !important;
+}
+
+// 跟随系统（没选「始终开启」时）
 @media (prefers-reduced-motion: reduce) {
-  :root {
-    // 系统要求减少动态效果时，把动效压缩到几乎不可见
-    --dd-motion-fast: 1ms;
-    --dd-motion-normal: 1ms;
-    --dd-motion-page: 1ms;
-    --dd-motion-slow: 1ms;
-    --dd-press-scale: 1;
+  :root:not(.dd-motion-force) {
+    @include dd-reduced-motion-tokens;
   }
 
-  *,
-  *::before,
-  *::after {
-    animation-duration: 1ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
-    scroll-behavior: auto !important;
+  :where(:root:not(.dd-motion-force)),
+  :where(:root:not(.dd-motion-force))::before,
+  :where(:root:not(.dd-motion-force))::after,
+  :where(:root:not(.dd-motion-force)) *,
+  :where(:root:not(.dd-motion-force)) *::before,
+  :where(:root:not(.dd-motion-force)) *::after {
+    @include dd-reduced-motion-universal;
   }
+}
+
+// 个人设置里选了「减少动效」：不看系统，同一套压缩
+html.dd-motion-off {
+  @include dd-reduced-motion-tokens;
+}
+
+:where(html.dd-motion-off),
+:where(html.dd-motion-off)::before,
+:where(html.dd-motion-off)::after,
+:where(html.dd-motion-off) *,
+:where(html.dd-motion-off) *::before,
+:where(html.dd-motion-off) *::after {
+  @include dd-reduced-motion-universal;
 }

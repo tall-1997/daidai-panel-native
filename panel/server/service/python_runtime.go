@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"daidai-panel/config"
@@ -303,6 +304,102 @@ func ApplySinglePythonRuntimePolicyOnStartup() error {
 		return fmt.Errorf("reset task python versions: %w", err)
 	}
 	return nil
+}
+
+// magiskPythonInterpreterProbeFunc 判断某个 Python 小版本在当前容器里是否真有解释器。
+// 抽成包级变量只为让模块版迁移的单测注入假探测：真实探测会 exec `python3.X --version`，
+// 结果跟着宿主机走（CI 自带 python3.12、纯净构建容器里一个都没有），同一个用例两边结论会相反。
+var magiskPythonInterpreterProbeFunc = func(version string) bool {
+	return discoverSystemPythonForVersion(version) != ""
+}
+
+// ApplyMagiskPythonRuntimeMigrationOnStartup 把模块版里「解释器已经不存在的 Python 小版本」
+// 名下的依赖记录、任务和默认版本，搬到容器当前的真实小版本上。
+//
+// 背景：Magisk Alpine 版的 rootfs 从 3.18（python3 = 3.11）换到 3.23（python3 = 3.12），
+// 刷模块会重装 rootfs，但数据库与 deps 目录原样回填。运行时回退只解决了「任务挑得到解释器」，
+// 依赖记录仍挂在 3.11 上：启动校验判缺失后按 3.11 重装必然报「Python 3.11 不可用」；
+// 任务回退到 3.12 后，3.12 的 venv 又是空的，照样 ModuleNotFoundError。
+//
+// 判定刻意保守，宁可漏搬也不误搬：
+//   - 只在模块运行态生效。Docker / Windows / 普通 Linux 上用户显式选的版本一律不碰；
+//   - 当前版本只认 service.sh 按真实 python3 导出的 DAIDAI_PYTHON_VERSION，而且必须真能探测到解释器，
+//     否则说明容器本身不健康，这时搬数据只会把记录搬到另一个同样用不了的版本上；
+//   - 只迁比当前版本旧的小版本，而且它的解释器必须确实不存在（例如 3.12 容器里用户自己装回了 python3.11 就原样保留）；
+//   - 比当前版本新的小版本一律不动。模块版的当前版本只会因为 rootfs 升级而变新；反过来，Debian 版 python3 仍是 3.11，
+//     InitDefaultConfigs 写入的默认值 3.12、以及用户选了 3.12 的任务与依赖，都可以靠一键安装 Python 3.12 补回来——
+//     若在补回之前就把它们迁到 3.11，装上 3.12 之后 3.11 解释器还在，就再也迁不回去了。
+//
+// 每次启动都按条件执行，不打「已迁移」标记：前端运行时列表仍会列出 3.10 / 3.11，
+// 用户之后照样能提交旧版本的依赖，一次性标记挡不住这条写入路径。条件不满足时一条都不改，重复执行无副作用。
+//
+// 只改 python_version，不动 status：搬过来的记录由随后的 MergeDuplicatePythonDependencies 合并同名重复，
+// 仍标着 installed 的再由 ReconcileDependenciesAfterRestart 发现当前版本 venv 里没有而排队重装。
+// 旧的 deps/python/<旧版本> 目录不删，留着便于刷回旧版模块。
+func ApplyMagiskPythonRuntimeMigrationOnStartup() {
+	if database.DB == nil || !IsMagiskModuleRuntime() {
+		return
+	}
+
+	current := strings.TrimSpace(os.Getenv("DAIDAI_PYTHON_VERSION"))
+	if !slices.Contains(allPythonRuntimeVersions, current) {
+		return
+	}
+	if !magiskPythonInterpreterProbeFunc(current) {
+		return
+	}
+
+	// allPythonRuntimeVersions 按升序排列（有单测守着），遇到当前版本就停：只处理比它旧的版本。
+	for _, version := range allPythonRuntimeVersions {
+		if version == current {
+			break
+		}
+		if magiskPythonInterpreterProbeFunc(version) {
+			continue
+		}
+		migrateMagiskPythonVersionRecords(version, current)
+	}
+}
+
+// migrateMagiskPythonVersionRecords 把 from 版本名下的记录改到 to 版本。
+// 用裸 SQL 而不是 Model().Update：后者会顺手刷新 updated_at，
+// 合并同名重复依赖时「最近更新」是挑保留行的依据之一，迁移本身不该改变那个判断。
+// 匹配只认精确的版本字符串：写入路径都会先归一化，宁可漏掉脏值，也不去猜它原本指哪个版本。
+func migrateMagiskPythonVersionRecords(from, to string) {
+	var depCount, taskCount int64
+
+	depResult := database.DB.Exec("UPDATE dependencies SET python_version = ? WHERE type = ? AND python_version = ?", to, model.DepTypePython, from)
+	if depResult.Error != nil {
+		log.Printf("warn: 模块版 Python 迁移：依赖记录从 %s 改到 %s 失败: %v", from, to, depResult.Error)
+	} else {
+		depCount = depResult.RowsAffected
+	}
+
+	taskResult := database.DB.Exec("UPDATE tasks SET python_version = ? WHERE python_version = ?", to, from)
+	if taskResult.Error != nil {
+		log.Printf("warn: 模块版 Python 迁移：任务从 %s 改到 %s 失败: %v", from, to, taskResult.Error)
+	} else {
+		taskCount = taskResult.RowsAffected
+	}
+
+	defaultMoved := false
+	if strings.TrimSpace(model.GetRegisteredConfig("python_default_version")) == from {
+		if err := model.SetConfig("python_default_version", to); err != nil {
+			log.Printf("warn: 模块版 Python 迁移：默认 Python 版本从 %s 改到 %s 失败: %v", from, to, err)
+		} else {
+			defaultMoved = true
+		}
+	}
+
+	if depCount == 0 && taskCount == 0 && !defaultMoved {
+		return
+	}
+	defaultNote := "未涉及默认版本"
+	if defaultMoved {
+		defaultNote = "默认 Python 版本已一并切换"
+	}
+	log.Printf("模块版 Python 迁移：容器里已没有 Python %s 解释器，已迁到当前 Python %s：依赖记录 %d 条、任务 %d 条，%s（同名依赖随后合并，缺失的依赖由启动校验自动重装）",
+		from, to, depCount, taskCount, defaultNote)
 }
 
 func PythonRuntimeInfos() []PythonRuntimeInfo {

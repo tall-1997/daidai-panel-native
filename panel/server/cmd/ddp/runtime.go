@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,9 +39,9 @@ func (rt *cliRuntime) bootstrap() error {
 	if err := service.EnsureBuiltinNotifyHelpers(cfg.Data.ScriptsDir); err != nil {
 		rt.warnings = append(rt.warnings, "内置通知辅助脚本准备失败: "+err.Error())
 	}
-	if err := service.CleanupManagedHelperCopiesUnderRoot(cfg.Data.ScriptsDir); err != nil {
-		rt.warnings = append(rt.warnings, "内置通知辅助脚本清理失败: "+err.Error())
-	}
+	// 不再整棵遍历脚本目录清理通知脚本副本（#158，慢盘上每条命令都要多等几秒）：会跑脚本的 ddp python、ddp task run
+	// 运行前各自清掉工作目录、脚本所在目录里的副本，整棵清理留给面板启动时的后台协程。
+	// 例外：ddp shell 的工作目录就是脚本根目录，按次清理什么都不清；进 shell 后到子目录手动跑脚本，旧副本要等面板下次启动才清。
 
 	rt.cfg = cfg
 	return nil
@@ -74,6 +75,15 @@ func (rt *cliRuntime) backendPort() int {
 		}
 	}
 	return 5701
+}
+
+// backendBaseURL 是 ddp 调面板后端的地址（#162）：全部网卡 / 回环用 127.0.0.1，指定了非回环监听地址就用它。
+func (rt *cliRuntime) backendBaseURL() string {
+	host := "127.0.0.1"
+	if rt.cfg != nil {
+		host = rt.cfg.Server.SelfHost()
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.backendPort()))
 }
 
 func (rt *cliRuntime) panelPort() int {

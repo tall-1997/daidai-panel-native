@@ -31,7 +31,7 @@ const mockData = {
     { id: 5, task_name: '更新IP数据库', status: 0, duration: 8.7, created_at: '2024-06-20T23:00:00Z' },
   ] } },
   '/api/system/info': { data: { os: 'linux', arch: 'amd64', cpu_usage: 12.5, memory_usage: 45.2, disk_usage: 32.1, num_cpu: 4, goroutines: 28, uptime: '3d 12h 45m', memory_used: 1073741824, memory_total: 2147483648, disk_used: 10737418240, disk_total: 32212254720, go_version: '1.21.5' } },
-  '/api/system/panel-settings': { data: { panel_title: '呆呆面板', panel_icon: '' } },
+  '/api/system/panel-settings': { data: { panel_title: '呆呆面板', panel_icon: '', panel_shape_style: 'square' } },
   '/api/tasks': { data: tasksMock, total: tasksMock.length },
   '/api/tasks/views': [],
   '/api/tasks/notification-channels': { data: [] },

@@ -221,6 +221,62 @@ func TestNotifyChannelTypesRemainBackwardCompatible(t *testing.T) {
 	}
 }
 
+// TestPushplusQQChannelStaysWiredToOptionField 钉住 PushPlus 的 QQ 机器人渠道。
+//
+// 这个渠道要能用，两件事必须**同时**成立，而它们是分开声明的：
+//
+//   - channel 下拉里有 qq，否则用户根本选不到 QQ 机器人；
+//   - option 的 show_when 命中 qq，否则选了 qq 之后「群配置编码」那个输入框不出现，
+//     用户只能发个人消息，群消息连填的地方都没有。
+//
+// 缺任何一半都不会报错、不会崩，只是功能少一块 —— 正是最容易在后续改动里被顺手删掉
+// 又没人发现的那种。所以钉在这里，而不是靠人记着两处同步。
+func TestPushplusQQChannelStaysWiredToOptionField(t *testing.T) {
+	channel, exists := model.GetNotifyChannelDefinition("pushplus")
+	if !exists {
+		t.Fatal("pushplus 应当是已注册渠道")
+	}
+
+	var channelField, optionField *model.NotifyFieldDefinition
+	for i := range channel.Fields {
+		switch channel.Fields[i].Key {
+		case "channel":
+			channelField = &channel.Fields[i]
+		case "option":
+			optionField = &channel.Fields[i]
+		}
+	}
+	if channelField == nil || optionField == nil {
+		t.Fatal("pushplus 应当同时声明 channel 和 option 两个字段")
+	}
+
+	hasQQ := false
+	for _, option := range channelField.Options {
+		if option.Value == "qq" {
+			hasQQ = true
+			break
+		}
+	}
+	if !hasQQ {
+		t.Error("pushplus 的 channel 下拉里没有 qq，用户选不到官方的 QQ 机器人渠道")
+	}
+
+	if optionField.ShowWhen == nil || optionField.ShowWhen.Key != "channel" {
+		t.Fatalf("pushplus 的 option 应当按 channel 显隐，实际 %#v", optionField.ShowWhen)
+	}
+	matchedQQ := false
+	for _, value := range optionField.ShowWhen.Values {
+		if value == "qq" {
+			matchedQQ = true
+			break
+		}
+	}
+	if !matchedQQ {
+		t.Errorf("pushplus 的 option 在 channel=qq 时不显示，QQ 群配置编码没有输入框可填。当前命中值：%v",
+			optionField.ShowWhen.Values)
+	}
+}
+
 // TestNotifyChannelDefinitionsReturnsDeepCopy 保证调用方改不坏全局注册表。
 // Options 是切片、ShowWhen 是指针，浅拷贝挡不住。
 func TestNotifyChannelDefinitionsReturnsDeepCopy(t *testing.T) {
@@ -418,5 +474,64 @@ func TestNotifyChannelDefinitionsSerializeWithStableJSONKeys(t *testing.T) {
 		if _, ok := webhookField[key]; ok {
 			t.Errorf("webhook.url 不该带空的 %q 键", key)
 		}
+	}
+}
+
+// TestNotifyChannelProxyFieldDeclared 单独锁住「telegram 与 wecom_app 都声明了 proxy」（#123）。
+//
+// 为什么需要单独一条：TestNotifySchemaCoversAllConfigKeysReadByNotifier 比的是全渠道键的并集。
+// telegram 早就读取并声明了 proxy，所以 wecom_app 这一侧「读了没声明」（用户没有输入框可填）
+// 或「声明了没读」（假字段）都不会让它变红。读取那一半由 service 包的 TestSendWecomApp*Proxy* 行为用例兜住，
+// 声明这一半靠这里。
+func TestNotifyChannelProxyFieldDeclared(t *testing.T) {
+	var labels, placeholders []string
+	for _, channelType := range []string{"telegram", "wecom_app"} {
+		channel, exists := model.GetNotifyChannelDefinition(channelType)
+		if !exists {
+			t.Fatalf("%s 应当是已注册渠道", channelType)
+		}
+
+		proxyIndex, baseURLIndex, count := -1, -1, 0
+		for i, field := range channel.Fields {
+			switch field.Key {
+			case "proxy":
+				proxyIndex = i
+				count++
+			case "base_url":
+				baseURLIndex = i
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s 应当恰好声明一次 proxy，实际 %d 次", channelType, count)
+		}
+
+		field := channel.Fields[proxyIndex]
+		if field.Widget != model.NotifyWidgetInput {
+			t.Errorf("%s.proxy 应当是 input，实际 %q", channelType, field.Widget)
+		}
+		// notifier.go 不对 proxy 判空（留空就回落系统代理），按注册表的 required 口径不能标必填。
+		if field.Required {
+			t.Errorf("%s.proxy 不应标 required", channelType)
+		}
+		// 留空的语义是「回落系统设置 proxy_url」，没有固定的回退值；写了 Default 会让客户端预填出一个假值。
+		if field.Default != "" {
+			t.Errorf("%s.proxy 不应带 Default，实际 %q", channelType, field.Default)
+		}
+		// 代理与消息类型无关，任何分支下都得能填。
+		if field.ShowWhen != nil {
+			t.Errorf("%s.proxy 不应带 show_when，实际 %#v", channelType, field.ShowWhen)
+		}
+		// wecom_app 的 proxy 紧跟在 base_url 后面：两者都管「请求从哪儿出去」，放在一起用户才看得出二者可以叠加。
+		if channelType == "wecom_app" && proxyIndex != baseURLIndex+1 {
+			t.Errorf("wecom_app.proxy 应当紧跟在 base_url 之后，实际 base_url=%d proxy=%d", baseURLIndex, proxyIndex)
+		}
+
+		labels = append(labels, field.Label)
+		placeholders = append(placeholders, field.Placeholder)
+	}
+
+	// 两个渠道的 proxy 语义完全一致，文案也必须一致，免得用户以为两边规则不同。
+	if labels[0] != labels[1] || placeholders[0] != placeholders[1] {
+		t.Errorf("telegram 与 wecom_app 的 proxy 文案应当一致，实际 label=%q placeholder=%q", labels, placeholders)
 	}
 }

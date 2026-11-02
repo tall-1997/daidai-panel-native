@@ -7,8 +7,8 @@
   },
   "panel": {
     "repository": "https://github.com/linzixuanzz/daidai-panel",
-    "version": "3.0.6",
-    "commit": "9a7c27e2a03ed30d3ac632adf58fec60009e601c"
+    "version": "3.4.0",
+    "commit": "9deab3cf45e54e564eaee35d8799aff63fc96930"
   },
   "integration": "source-merge-with-android-mobilecore-and-kotlin-fallback"
 }

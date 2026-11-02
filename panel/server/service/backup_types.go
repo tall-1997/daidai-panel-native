@@ -76,6 +76,21 @@ type BackupTwoFactorAuth struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// BackupUserPreference 是 per-user 的界面偏好（Editor、List 两组 JSON，各对应 model.UserPreference 的一列）。
+// 和 BackupTwoFactorAuth 一样跟着用户走，所以刻意**不**给 BackupSelection 加新开关：
+// 用户在恢复界面看到的仍然是原来那几项，勾「配置」就一起带上。
+//
+// ⚠️ 这是手写平铺的结构体，不是嵌入 model：TestBackupPayloadModelsHaveNoJSONHiddenFields 那道反射护栏
+// 管不到它，model.UserPreference 以后每加一列偏好，这里、导出、restoreUserPreferences 三处都要手工跟上。
+type BackupUserPreference struct {
+	UserID uint   `json:"user_id"`
+	Editor string `json:"editor"`
+	// 列表页偏好（issue #143）。omitempty：v3.3.1 之前的备份没有这个键，反序列化成空串 = 一个键都没存过，与升级前一致。
+	List      string    `json:"list,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // BackupEnvVar 用指针保存 enabled，区分「老备份缺少 enabled 字段」和「新备份明确 disabled」。
 type BackupEnvVar struct {
 	ID        uint      `json:"id"`
@@ -86,7 +101,7 @@ type BackupEnvVar struct {
 	Position  float64   `json:"position"`
 	SortOrder int       `json:"sort_order"`
 	Group     string    `json:"group"`
-	Secret    bool      `json:"secret,omitempty"`
+	Important bool      `json:"important,omitempty"` // 「重要」标记（APP #16）；omitempty：普通变量不写这个键，老备份 / 青龙备份没有它，读出来都是 false
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -110,6 +125,42 @@ type BackupTaskLog struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// BackupTask = model.Task + 备份专用的 labels。
+// model.Task.Labels 是 json:"-"，直接序列化 model.Task 会把标签整列丢掉 —— 这就是 issue #112。
+// 外层 Labels 层级更浅会遮蔽被提升的同名字段（而且 json:"-" 的字段本来就不参与序列化），
+// 所以清单里落的是数组形态，与 /api/tasks/export 和 ToDict() 口径一致。
+// 老备份没有这个键 → 反序列化为 nil → SetLabelsFromSlice(nil) 得空串 = 升级前行为。
+//
+// 用嵌入而不是把字段一个个平铺：平铺以后 model.Task 每加一个字段都要手工跟，漏一个就是新的丢数据。
+// 嵌入的已知代价是「以后再给 model 加 json:"-" 字段又会静默丢」，
+// 由 TestBackupPayloadModelsHaveNoJSONHiddenFields 这条反射护栏兜住。
+//
+// ⚠️ 取值一律用外层的 Labels，不要用嵌入体提升上来的 GetLabels()：
+// 后者读的是 model.Task.Labels 那个逗号串，反序列化出来的 BackupTask 里它恒为空。
+// 要转回 model.Task 就走 modelTaskFromBackup。
+type BackupTask struct {
+	model.Task
+	Labels []string `json:"labels"`
+}
+
+// BackupSubscription = model.Subscription + 备份专用的 auth_token。
+// model.Subscription.AuthToken 同样是 json:"-"（接口响应只下发 has_auth_token，从不回显 PAT），
+// 以前备份包里根本没有它，恢复后所有 token 鉴权的订阅都拉不动，得手工重填一遍。
+// ⚠️ 代价：PAT 会以明文进入备份包，备份文件不能外发。
+//
+// ⚠️ 同 BackupTask：取值用外层的 AuthToken，不要用提升上来的 HasAuthToken()，
+// 后者读的是嵌入体里那个恒为空的字段。要转回 model.Subscription 走 modelSubscriptionFromBackup。
+type BackupSubscription struct {
+	model.Subscription
+	AuthToken string `json:"auth_token"`
+	// 本机版（Android）扩展：订阅的密封凭据（模型里是 json:"-"）。
+	// 备份/恢复必须带出去，否则换机恢复后订阅鉴权全部失效。
+	AuthTokenSecretProvider string `json:"auth_token_secret_provider,omitempty"`
+	AuthTokenSecretCipher   string `json:"auth_token_secret_cipher,omitempty"`
+	SSHKeySecretProvider    string `json:"ssh_key_secret_provider,omitempty"`
+	SSHKeySecretCipher      string `json:"ssh_key_secret_cipher,omitempty"`
+}
+
 type BackupConfigBundle struct {
 	SystemConfigs     []model.SystemConfig      `json:"system_configs,omitempty"`
 	OpenApps          []BackupOpenApp           `json:"open_apps,omitempty"`
@@ -117,19 +168,20 @@ type BackupConfigBundle struct {
 	Users             []BackupUser              `json:"users,omitempty"`
 	IPWhitelists      []model.IPWhitelist       `json:"ip_whitelists,omitempty"`
 	TwoFactorAuths    []BackupTwoFactorAuth     `json:"two_factor_auths,omitempty"`
+	UserPreferences   []BackupUserPreference    `json:"user_preferences,omitempty"`
 	DependencyMirrors *DependencyMirrorSettings `json:"dependency_mirrors,omitempty"`
 }
 
 type BackupPayload struct {
-	Configs       BackupConfigBundle   `json:"configs,omitempty"`
-	Tasks         []model.Task         `json:"tasks,omitempty"`
-	EnvVars       []BackupEnvVar       `json:"env_vars,omitempty"`
-	Subscriptions []model.Subscription `json:"subscriptions,omitempty"`
-	SSHKeys       []BackupSSHKey       `json:"ssh_keys,omitempty"`
-	Dependencies  []BackupDependency   `json:"dependencies,omitempty"`
-	TaskLogs      []BackupTaskLog      `json:"task_logs,omitempty"`
-	TaskViews     []model.TaskView     `json:"task_views,omitempty"`
-	Scripts       []ScriptFile         `json:"scripts,omitempty"`
+	Configs           BackupConfigBundle       `json:"configs,omitempty"`
+	Tasks             []BackupTask             `json:"tasks,omitempty"`
+	EnvVars           []BackupEnvVar           `json:"env_vars,omitempty"`
+	Subscriptions     []BackupSubscription     `json:"subscriptions,omitempty"`
+	SSHKeys           []BackupSSHKey           `json:"ssh_keys,omitempty"`
+	Dependencies      []BackupDependency       `json:"dependencies,omitempty"`
+	TaskLogs          []BackupTaskLog          `json:"task_logs,omitempty"`
+	TaskViews         []model.TaskView         `json:"task_views,omitempty"`
+	TaskLogDailyStats []model.TaskLogDailyStat `json:"task_log_daily_stats,omitempty"` // 执行趋势里已删日志的按天计数（#158），跟着「日志」勾选项走；老备份没有这个键 = nil
 }
 
 type BackupManifest struct {

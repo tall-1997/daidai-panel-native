@@ -2,12 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 换文件名要同步 server/static_frontend.go 的 staticFaviconFile（内嵌部署按它托管图标）：漏改的话图标会 404。 -->
+    <link rel="icon" type="image/webp" href="/favicon-512.webp" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
     <link rel="stylesheet" href="/assets/optimization.css" />
-    <link rel="preconnect" href="https://fonts.loli.net" crossorigin />
-    <link href="https://fonts.loli.net/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- 字体自托管（原为 fonts.loli.net）。缘由与约束见 public/fonts/fonts.css 顶部注释。 -->
+    <link rel="stylesheet" href="/fonts/fonts.css" />
     <title>呆呆面板</title>
   </head>
   <body>

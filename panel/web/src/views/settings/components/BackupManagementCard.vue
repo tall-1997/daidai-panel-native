@@ -3,6 +3,7 @@ import { Clock, Connection, Delete, Document, Download, Files, Setting, Timer, U
 import { ref } from 'vue'
 import type { BackupSelection } from '@/api/system'
 import { useResponsive } from '@/composables/useResponsive'
+import { formatDateTime } from '@/utils/datetime'
 import RestoreProgressDialog from './RestoreProgressDialog.vue'
 
 const showBackupDialog = defineModel<boolean>('showBackupDialog', { required: true })
@@ -13,7 +14,7 @@ const backupScheduleSelection = defineModel<BackupSelection>('backupScheduleSele
 const showRestoreDialog = defineModel<boolean>('showRestoreDialog', { required: true })
 const restorePassword = defineModel<string>('restorePassword', { required: true })
 
-defineProps<{
+withDefaults(defineProps<{
   settingsForm: {
     backup_schedule_enabled: boolean
     backup_schedule_frequency: 'daily' | 'weekly' | 'monthly' | string
@@ -39,6 +40,8 @@ defineProps<{
   restoreProgressError: string
   uploadProgress: number
   uploadUploading: boolean
+  // 创建备份的在途锁，来源与 uploadUploading 同为 useSettingsSecurity，两者互不影响；默认 false
+  backupCreating?: boolean
   onCreateBackup: () => void | Promise<void>
   onUploadBackup: (event: Event) => void | Promise<void>
   onSaveSchedule: () => void | Promise<void>
@@ -49,7 +52,9 @@ defineProps<{
   onCloseRestoreProgress: () => void | Promise<void>
   onRestartRestoreNow: () => void | Promise<void>
   onDeleteBackup: (filename: string) => void | Promise<void>
-}>()
+}>(), {
+  backupCreating: false
+})
 
 const backupFileInput = ref<HTMLInputElement | null>(null)
 const { isMobile, dialogFullscreen } = useResponsive()
@@ -165,7 +170,7 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
         <div class="dd-mobile-card__header">
           <div class="dd-mobile-card__title-wrap">
             <span class="dd-mobile-card__title">{{ row.name }}</span>
-            <span class="dd-mobile-card__subtitle">{{ new Date(row.created_at).toLocaleString() }}</span>
+            <span class="dd-mobile-card__subtitle">{{ formatDateTime(row.created_at) }}</span>
           </div>
         </div>
         <div class="dd-mobile-card__body">
@@ -191,7 +196,7 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
         <template #default="{ row }">{{ formatSize(row.size) }}</template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="170">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="260" fixed="right" align="center">
         <template #default="{ row }">
@@ -337,7 +342,7 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
     </el-form>
     <template #footer>
       <el-button @click="showBackupDialog = false">取消</el-button>
-      <el-button type="primary" @click="onConfirmCreateBackup">创建</el-button>
+      <el-button type="primary" :loading="backupCreating" :disabled="backupCreating" @click="onConfirmCreateBackup">创建</el-button>
     </template>
   </el-dialog>
 
@@ -383,7 +388,8 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
 .card-header-buttons,
 .backup-actions {
   padding: 2px;
-  border-radius: 12px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
   display: flex;
   gap: 8px;
@@ -407,7 +413,8 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
   gap: 4px;
   padding: 12px 14px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
+  // 备份内容的可选列表卡片属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   background: var(--el-fill-color-extra-light);
   transition: border-color 0.2s ease, background 0.2s ease;
   cursor: pointer;
@@ -524,7 +531,8 @@ function updateBackupScheduleSelection(key: keyof BackupSelection, value: boolea
 @media (max-width: 768px) {
   .card-header-buttons {
   padding: 2px;
-  border-radius: 12px;
+  // 同上：按钮组的灰底槽 → control 档
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
     width: 100%;
   }

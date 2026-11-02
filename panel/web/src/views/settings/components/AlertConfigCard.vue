@@ -49,7 +49,8 @@ defineProps<{
           <el-switch v-model="form.notify_on_resource_warn" inline-prompt active-text="开" inactive-text="关" />
         </div>
       </div>
-      <span class="form-hint">开启后，资源使用率超过上方阈值时将向所有已启用的通知渠道发送通知</span>
+      <!-- 资源告警走广播（service/resource_monitor.go），广播只命中「默认推送」渠道 -->
+      <span class="form-hint">开启后，资源使用率超过上方阈值时将向所有「默认推送」的通知渠道发送通知；设为「绑定推送」的渠道收不到，且没有默认推送渠道时不会发送</span>
     </div>
 
     <div class="config-section">
@@ -69,7 +70,8 @@ defineProps<{
           <el-switch v-model="form.notify_on_login" inline-prompt active-text="开" inactive-text="关" />
         </div>
       </div>
-      <span class="form-hint">开启后，每次登录成功将向所有已启用的通知渠道发送通知</span>
+      <!-- 登录通知走广播（handler/auth.go），广播只命中「默认推送」渠道 -->
+      <span class="form-hint">开启后，每次登录成功将向所有「默认推送」的通知渠道发送通知；设为「绑定推送」的渠道收不到</span>
     </div>
   </el-card>
 </template>

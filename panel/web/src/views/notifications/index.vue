@@ -1,19 +1,62 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { notificationApi } from '@/api/notification'
+import { ref, onMounted, computed, nextTick } from 'vue'
+import { notificationApi, type NotifyChannelDefinition, type NotifyFieldDefinition, type NotifyPushScope } from '@/api/notification'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Bell, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { useResponsive } from '@/composables/useResponsive'
+import { extractError, isCancel } from '@/utils/error'
+import { toast } from '@/utils/toast'
+import { scrollListToTop } from '@/utils/scrollToTop'
+import DdBadge from '@/components/ui/DdBadge.vue'
+import { formatDateTime } from '@/utils/datetime'
 
 const { isMobile, dialogFullscreen } = useResponsive()
+// 页面根：翻页回顶的锚点（scrollListToTop 从这里往上找移动端的 .layout-main、往里找桌面的 .table-card）
+const pageRootRef = ref<HTMLElement | null>(null)
 
 const channels = ref<any[]>([])
 const channelLoading = ref(false)
-const channelTypes = ref<{ type: string; name: string }[]>([])
+// 渠道类型 + 字段 schema 都来自 GET /notifications/types，Web 不再持有本地副本。
+const channelTypes = ref<NotifyChannelDefinition[]>([])
 
 const showChannelDialog = ref(false)
 const isCreateChannel = ref(true)
-const channelForm = ref({ id: 0, name: '', type: 'webhook', config: '{}' })
+// 渠道保存的在途锁：请求期间锁住底部按钮，避免连点重复创建渠道
+const channelSaving = ref(false)
+
+interface ChannelFormState {
+  id: number
+  name: string
+  type: string
+  config: string
+  // 这里刻意用宽松的 string 而不是 'default' | 'bound'：
+  // el-radio-group 的 v-model 回写类型是 string | number | boolean，标成字面量联合类型
+  // 会让 vue-tsc 在 v-model 上报不兼容。收窄统一放在提交前的 normalizePushScope 里做。
+  push_scope: string
+}
+
+const channelForm = ref<ChannelFormState>({ id: 0, name: '', type: 'webhook', config: '{}', push_scope: 'default' })
+
+// 服务端把空串也当作「默认推送」，所以只认 'bound' 这一个值，其余一律归到默认。
+function normalizePushScope(raw: unknown): NotifyPushScope {
+  return raw === 'bound' ? 'bound' : 'default'
+}
+
+function isBoundChannel(row: any): boolean {
+  return normalizePushScope(row?.push_scope) === 'bound'
+}
+
+// 一条「所有渠道都不参与广播」的顶部警示。
+//
+// 只列举仓库里真实存在的广播调用点：资源告警（service/resource_monitor.go）、
+// 登录通知（handler/auth.go）、静默更新结果（handler/system_update_auto.go）。
+// 不要往里加订阅同步 / 备份 / 依赖安装 —— 面板根本没有这几处通知调用，写上去是在承诺不存在的能力。
+const hasEnabledDefaultChannel = computed(() =>
+  channels.value.some(c => c.enabled && !isBoundChannel(c))
+)
+const showNoDefaultChannelAlert = computed(() =>
+  !channelLoading.value && channels.value.length > 0 && !hasEnabledDefaultChannel.value
+)
 
 // --- Search / filter state ---
 const searchKeyword = ref('')
@@ -23,7 +66,10 @@ const channelPage = ref(1)
 const channelPageSize = ref(10)
 
 // --- Filtered channels ---
-const filteredChannels = computed(() => {
+// 拆成「状态筛选之前」和「最终结果」两层，是为了让状态下拉里的计数与切过去看到的条数一致：
+// 计数的基数必须排除状态筛选自身（否则选中「启用」后「禁用」永远显示 0），
+// 但必须保留搜索词与类型（否则搜完再看计数会和实际条数对不上）。
+const channelsBeforeStatusFilter = computed(() => {
   let list = channels.value
   if (searchKeyword.value) {
     const kw = searchKeyword.value.toLowerCase()
@@ -32,14 +78,25 @@ const filteredChannels = computed(() => {
   if (filterType.value) {
     list = list.filter(c => c.type === filterType.value)
   }
-  if (filterStatus.value) {
-    if (filterStatus.value === 'enabled') {
-      list = list.filter(c => c.enabled)
-    } else if (filterStatus.value === 'disabled') {
-      list = list.filter(c => !c.enabled)
-    }
-  }
   return list
+})
+
+const filteredChannels = computed(() => {
+  const list = channelsBeforeStatusFilter.value
+  if (filterStatus.value === 'enabled') return list.filter(c => c.enabled)
+  if (filterStatus.value === 'disabled') return list.filter(c => !c.enabled)
+  return list
+})
+
+// 状态下拉里的计数。
+//
+// 能这么算的前提：本页是【客户端筛选】——notificationApi.list() 一次性把全量渠道拿回
+// channels.value，搜索/类型/状态/分页全在 computed 里做，改筛选只会走 handleChannelSearch()
+// （把页码归 1），不会重新发请求。所以数出来的是真实总数，不是拿当前页冒充。
+const statusCounts = computed(() => {
+  const list = channelsBeforeStatusFilter.value
+  const enabled = list.filter(c => c.enabled).length
+  return { all: list.length, enabled, disabled: list.length - enabled }
 })
 
 const pagedChannels = computed(() => {
@@ -51,6 +108,23 @@ const filteredTotal = computed(() => filteredChannels.value.length)
 
 function handleChannelSearch() {
   channelPage.value = 1
+}
+
+// 翻页 / 改每页条数后回到列表顶部（issue #143 O3，双端都做）。
+// 只挂在分页器的 current-change / size-change 上：它们只在用户翻页（或 total 变小把页码夹回）时触发，
+// 搜索、改筛选时直接改 channelPage 不会触发，所以不会在筛选时把人拽回顶部。
+// 本页是前端分页，数据早已在内存里，没有「请求回来」的时机可等；
+// 等 nextTick 让新一页先渲染出来再滚，免得先回顶、后换内容，位置又被新内容的高度顶偏。
+async function handleChannelPageChange() {
+  await nextTick()
+  scrollListToTop(pageRootRef.value)
+}
+
+async function handleChannelPageSizeChange() {
+  // 改每页条数后从第 1 页看起：原页码在新页大小下对应的是另一批数据，停在中间没有意义
+  channelPage.value = 1
+  await nextTick()
+  scrollListToTop(pageRootRef.value)
 }
 
 function resetFilters() {
@@ -92,233 +166,41 @@ function getTypeBadgeType(type: string): string {
   return typeColorMap[type]?.badge || ''
 }
 
-const configFields = computed(() => {
-  const t = channelForm.value.type
-  const wecomMsgType = (configData.value.msg_type || 'text').trim() || 'text'
-  const wecomAppMsgType = (configData.value.msg_type || 'text').trim() || 'text'
-  switch (t) {
-    case 'webhook': return [
-      { key: 'url', label: 'Webhook URL', type: 'input', placeholder: 'https://example.com/webhook' },
-    ]
-    case 'email': return [
-      { key: 'smtp_host', label: 'SMTP 主机', type: 'input', placeholder: 'smtp.qq.com' },
-      { key: 'smtp_port', label: 'SMTP 端口', type: 'input', placeholder: '465' },
-      { key: 'smtp_ssl', label: 'SSL 连接', type: 'select', placeholder: '自动：465 端口启用', options: [
-        { label: '自动 (465 启用)', value: 'auto' },
-        { label: '启用 SSL', value: 'true' },
-        { label: '关闭 SSL', value: 'false' },
-      ]},
-      { key: 'smtp_user', label: '邮箱账号', type: 'input', placeholder: 'user@example.com' },
-      { key: 'smtp_pass', label: '邮箱密码/授权码', type: 'password', placeholder: 'SMTP 授权码' },
-      { key: 'to', label: '收件人', type: 'input', placeholder: '多个收件人用逗号分隔' },
-      { key: 'from', label: '发件人 (可选)', type: 'input', placeholder: '留空则使用邮箱账号' },
-    ]
-    case 'telegram': return [
-      { key: 'token', label: 'Bot Token', type: 'input', placeholder: '从 @BotFather 获取' },
-      { key: 'chat_id', label: 'Chat ID', type: 'input', placeholder: '聊天/群组 ID' },
-      { key: 'message_thread_id', label: 'Topic ID (可选)', type: 'input', placeholder: '群组话题 ID，留空则发到默认话题' },
-      { key: 'api_host', label: 'API 地址 (可选)', type: 'input', placeholder: '自定义 API 地址，留空使用官方' },
-      { key: 'proxy', label: '代理地址 (可选)', type: 'input', placeholder: 'http/socks5 代理地址' },
-    ]
-    case 'dingtalk': return [
-      { key: 'webhook', label: 'Webhook URL', type: 'input', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=xxx' },
-      { key: 'secret', label: '加签秘钥 (可选)', type: 'input', placeholder: '安全设置中的 SEC 开头的秘钥' },
-      { key: 'msg_type', label: '消息类型', type: 'select', placeholder: '选择钉钉机器人消息类型', options: [
-        { label: '文本', value: 'text' },
-        { label: 'Markdown', value: 'markdown' },
-      ]},
-    ]
-    case 'wecom': return [
-      { key: 'webhook', label: 'Webhook URL', type: 'input', placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx' },
-      { key: 'msg_type', label: '消息类型', type: 'select', placeholder: '选择企业微信机器人消息类型', options: [
-        { label: '文本', value: 'text' },
-        { label: 'Markdown', value: 'markdown' },
-        { label: 'Markdown V2', value: 'markdown_v2' },
-        { label: '图片', value: 'image' },
-        { label: '图文', value: 'news' },
-        { label: '模版卡片', value: 'template_card' },
-      ]},
-      ...(wecomMsgType === 'text' ? [
-        { key: 'content_template', label: '文本模板', type: 'textarea', placeholder: '支持 {{title}} 和 {{content}}，留空默认 {{title}}\\n{{content}}' },
-        { key: 'mentioned_list', label: '提醒成员 (可选)', type: 'textarea', placeholder: '多个成员用逗号、分号或换行分隔，可填 @all' },
-        { key: 'mentioned_mobile_list', label: '提醒手机号 (可选)', type: 'textarea', placeholder: '多个手机号用逗号、分号或换行分隔，可填 @all' },
-      ] : []),
-      ...((wecomMsgType === 'markdown' || wecomMsgType === 'markdown_v2') ? [
-        { key: 'content_template', label: '内容模板', type: 'textarea', placeholder: '支持 {{title}} 和 {{content}} 占位符' },
-      ] : []),
-      ...(wecomMsgType === 'image' ? [
-        { key: 'image_base64', label: '图片 Base64', type: 'textarea', placeholder: '填写图片的 Base64 内容' },
-        { key: 'image_md5', label: '图片 MD5', type: 'input', placeholder: '填写图片内容对应的 MD5 值' },
-      ] : []),
-      ...(wecomMsgType === 'news' ? [
-        { key: 'news_articles', label: '图文 Articles(JSON)', type: 'textarea', placeholder: '[{\"title\":\"{{title}}\",\"description\":\"{{content}}\",\"url\":\"https://example.com\",\"picurl\":\"https://example.com/demo.png\"}]' },
-      ] : []),
-      ...(wecomMsgType === 'template_card' ? [
-        { key: 'template_card_payload', label: '卡片配置(JSON)', type: 'textarea', placeholder: '{\"card_type\":\"text_notice\",\"main_title\":{\"title\":\"{{title}}\",\"desc\":\"{{content}}\"}}' },
-      ] : []),
-    ]
-    case 'wecom_app': return [
-      { key: 'corp_id', label: '企业 ID', type: 'input', placeholder: '企业微信 CorpID' },
-      { key: 'secret', label: '应用 Secret', type: 'password', placeholder: '应用 Secret' },
-      { key: 'agent_id', label: 'Agent ID', type: 'input', placeholder: '应用 AgentId' },
-      { key: 'base_url', label: '反代基础地址 (可选)', type: 'input', placeholder: '留空使用 https://qyapi.weixin.qq.com，也可填你的 Nginx 反代地址' },
-      { key: 'to_user', label: '成员账号 (可选)', type: 'input', placeholder: '多个成员用 | 分隔，留空默认 @all' },
-      { key: 'to_party', label: '部门 ID (可选)', type: 'input', placeholder: '多个部门用 | 分隔' },
-      { key: 'to_tag', label: '标签 ID (可选)', type: 'input', placeholder: '多个标签用 | 分隔' },
-      { key: 'msg_type', label: '消息类型', type: 'select', placeholder: '选择企业微信应用消息类型', options: [
-        { label: '文本', value: 'text' },
-        { label: 'Markdown', value: 'markdown' },
-        { label: '图片', value: 'image' },
-        { label: '文件', value: 'file' },
-        { label: '视频', value: 'video' },
-        { label: '图文', value: 'news' },
-        { label: '图文消息 (mpnews)', value: 'mpnews' },
-        { label: '模版卡片', value: 'template_card' },
-      ]},
-      ...((wecomAppMsgType === 'text' || wecomAppMsgType === 'markdown') ? [
-        { key: 'content_template', label: '内容模板', type: 'textarea', placeholder: '支持 {{title}} 和 {{content}} 占位符' },
-      ] : []),
-      ...((wecomAppMsgType === 'image' || wecomAppMsgType === 'file' || wecomAppMsgType === 'video') ? [
-        { key: 'media_id', label: 'Media ID', type: 'input', placeholder: '调用上传临时素材接口后得到的 media_id' },
-      ] : []),
-      ...(wecomAppMsgType === 'news' ? [
-        { key: 'news_articles', label: '图文 Articles(JSON)', type: 'textarea', placeholder: '[{\"title\":\"{{title}}\",\"description\":\"{{content}}\",\"url\":\"https://example.com\",\"picurl\":\"https://example.com/demo.png\"}]' },
-      ] : []),
-      ...(wecomAppMsgType === 'mpnews' ? [
-        { key: 'mpnews_articles', label: '图文消息 Articles(JSON)', type: 'textarea', placeholder: '[{\"title\":\"{{title}}\",\"thumb_media_id\":\"MEDIA_ID\",\"author\":\"Author\",\"content_source_url\":\"https://example.com\",\"content\":\"<p>{{content}}</p>\",\"digest\":\"Digest description\"}]' },
-      ] : []),
-      ...(wecomAppMsgType === 'template_card' ? [
-        { key: 'template_card_payload', label: '卡片配置(JSON)', type: 'textarea', placeholder: '{\"card_type\":\"text_notice\",\"main_title\":{\"title\":\"{{title}}\",\"desc\":\"{{content}}\"}}' },
-      ] : []),
-      { key: 'safe', label: '保密消息', type: 'select', placeholder: '默认 0', options: [
-        { label: '否 (0)', value: '0' },
-        { label: '是 (1)', value: '1' },
-        ...(wecomAppMsgType === 'mpnews' ? [{ label: '仅企业内分享 (2)', value: '2' }] : []),
-      ]},
-      { key: 'enable_id_trans', label: 'ID 转译', type: 'select', placeholder: '默认 0', options: [
-        { label: '关闭 (0)', value: '0' },
-        { label: '开启 (1)', value: '1' },
-      ]},
-      { key: 'enable_duplicate_check', label: '重复检查', type: 'select', placeholder: '默认 0', options: [
-        { label: '关闭 (0)', value: '0' },
-        { label: '开启 (1)', value: '1' },
-      ]},
-      { key: 'duplicate_check_interval', label: '去重间隔(秒)', type: 'input', placeholder: '默认 1800，最大 14400' },
-    ]
-    case 'bark': return [
-      { key: 'key', label: 'Device Key', type: 'input', placeholder: '打开 Bark App 复制推送地址中的 Key，如 https://api.day.app/xxxxxx 中的 xxxxxx' },
-      { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://api.day.app' },
-      { key: 'sound', label: '推送声音 (可选)', type: 'input', placeholder: '如 birdsong，留空使用默认' },
-      { key: 'group', label: '推送分组 (可选)', type: 'input', placeholder: '消息分组名称' },
-      { key: 'icon', label: '图标 URL (可选)', type: 'input', placeholder: 'https://example.com/icon.png' },
-      { key: 'level', label: '时效性 (可选)', type: 'select', placeholder: '推送优先级', options: [
-        { label: '默认 (active)', value: 'active' },
-        { label: '时效性 (timeSensitive)', value: 'timeSensitive' },
-        { label: '被动 (passive)', value: 'passive' },
-      ]},
-      { key: 'url', label: '跳转 URL (可选)', type: 'input', placeholder: '点击通知后跳转的链接' },
-    ]
-    case 'pushplus': return [
-      { key: 'token', label: 'Token', type: 'input', placeholder: 'PushPlus 用户 Token' },
-      { key: 'topic', label: '群组编码 (可选)', type: 'input', placeholder: '一对多推送时的群组编码' },
-      { key: 'template', label: '模板 (可选)', type: 'select', placeholder: '消息模板', options: [
-        { label: '默认 (html)', value: 'html' },
-        { label: 'JSON', value: 'json' },
-        { label: '纯文本', value: 'txt' },
-        { label: 'Markdown', value: 'markdown' },
-      ]},
-    ]
-    case 'serverchan': return [
-      { key: 'key', label: 'SendKey', type: 'input', placeholder: 'Server酱的 SendKey (SCT...)' },
-    ]
-    case 'feishu': return [
-      { key: 'webhook', label: 'Webhook URL', type: 'input', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxx' },
-      { key: 'secret', label: '加签秘钥 (可选)', type: 'input', placeholder: '安全设置中的签名校验秘钥' },
-    ]
-    case 'gotify': return [
-      { key: 'server', label: '服务器地址', type: 'input', placeholder: 'https://gotify.example.com' },
-      { key: 'token', label: 'App Token', type: 'input', placeholder: 'Gotify 应用 Token' },
-      { key: 'priority', label: '优先级 (可选)', type: 'input', placeholder: '0-10，默认 5' },
-    ]
-    case 'pushdeer': return [
-      { key: 'key', label: 'PushKey', type: 'input', placeholder: 'PushDeer 的 PushKey' },
-      { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://api2.pushdeer.com' },
-    ]
-    case 'pushme': return [
-      { key: 'key', label: 'PushMe Key', type: 'input', placeholder: 'PushMe 的 push_key' },
-      { key: 'server', label: '接口地址 (可选)', type: 'input', placeholder: '默认 https://push.i-i.me' },
-      { key: 'message_type', label: '消息类型 (可选)', type: 'input', placeholder: '按 PushMe 支持的 type 值填写' },
-    ]
-    case 'chanify': return [
-      { key: 'token', label: 'Token', type: 'input', placeholder: 'Chanify 设备 Token' },
-      { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://api.chanify.net' },
-    ]
-    case 'igot': return [
-      { key: 'key', label: 'Key', type: 'input', placeholder: 'iGot 推送 Key' },
-    ]
-    case 'qmsg': return [
-      { key: 'key', label: 'Qmsg Key', type: 'input', placeholder: 'Qmsg 酱的 Key' },
-      { key: 'mode', label: '发送模式', type: 'select', placeholder: '选择 send 或 group', options: [
-        { label: '私聊/默认 (send)', value: 'send' },
-        { label: '群发 (group)', value: 'group' },
-      ]},
-      { key: 'qq', label: 'QQ 号/群号 (可选)', type: 'input', placeholder: '留空则按 Qmsg 端默认配置发送' },
-    ]
-    case 'pushover': return [
-      { key: 'token', label: 'API Token', type: 'input', placeholder: '应用 API Token' },
-      { key: 'user', label: 'User Key', type: 'input', placeholder: '用户 Key' },
-    ]
-    case 'discord': return [
-      { key: 'webhook', label: 'Webhook URL', type: 'input', placeholder: 'https://discord.com/api/webhooks/...' },
-    ]
-    case 'slack': return [
-      { key: 'webhook', label: 'Webhook URL', type: 'input', placeholder: 'https://hooks.slack.com/services/...' },
-    ]
-    case 'ntfy': return [
-      { key: 'topic', label: 'Topic', type: 'input', placeholder: '订阅主题名称' },
-      { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://ntfy.sh' },
-      { key: 'token', label: 'Token (可选)', type: 'input', placeholder: '访问令牌，用于私有主题' },
-      { key: 'priority', label: '优先级 (可选)', type: 'select', placeholder: '消息优先级', options: [
-        { label: '最低 (1)', value: '1' },
-        { label: '低 (2)', value: '2' },
-        { label: '默认 (3)', value: '3' },
-        { label: '高 (4)', value: '4' },
-        { label: '紧急 (5)', value: '5' },
-      ]},
-    ]
-    case 'wxpusher': return [
-      { key: 'app_token', label: 'App Token', type: 'input', placeholder: 'WxPusher 的 appToken' },
-      { key: 'uids', label: 'UID 列表 (可选)', type: 'textarea', placeholder: '多个 UID 可用分号、逗号或换行分隔' },
-      { key: 'topic_ids', label: 'Topic ID 列表 (可选)', type: 'textarea', placeholder: '多个 Topic ID 可用分号、逗号或换行分隔' },
-      { key: 'content_type', label: '内容类型 (可选)', type: 'select', placeholder: '默认文本消息', options: [
-        { label: '文本 (1)', value: '1' },
-        { label: 'HTML (2)', value: '2' },
-        { label: 'Markdown (3)', value: '3' },
-      ]},
-      { key: 'url', label: '原文链接 (可选)', type: 'input', placeholder: '消息详情页跳转地址' },
-      { key: 'verify_pay_type', label: '付费校验 (可选)', type: 'select', placeholder: '默认不校验', options: [
-        { label: '不校验 (0)', value: '0' },
-        { label: '仅付费用户 (1)', value: '1' },
-        { label: '仅未订阅/已过期 (2)', value: '2' },
-      ]},
-      { key: 'server', label: '接口地址 (可选)', type: 'input', placeholder: '默认 https://wxpusher.zjiecode.com/api/send/message' },
-    ]
-    case 'custom': return [
-      { key: 'url', label: 'URL', type: 'input', placeholder: 'https://example.com/api/notify' },
-      { key: 'method', label: 'Method', type: 'select', placeholder: '请求方法', options: [
-        { label: 'POST', value: 'POST' },
-        { label: 'GET', value: 'GET' },
-        { label: 'PUT', value: 'PUT' },
-      ]},
-      { key: 'content_type', label: 'Content-Type', type: 'input', placeholder: '默认 application/json' },
-      { key: 'headers', label: 'Headers (JSON)', type: 'textarea', placeholder: '{"Authorization": "Bearer xxx"}' },
-      { key: 'body', label: 'Body 模板', type: 'textarea', placeholder: '使用 {{title}} 和 {{content}} 作为占位符' },
-    ]
-    default: return [{ key: 'url', label: 'URL', type: 'input', placeholder: '' }]
-  }
-})
-
+// 渠道 config 的扁平键值视图，与 channelForm.config 的 JSON 文本互相同步。
 const configData = ref<Record<string, string>>({})
+
+// 当前渠道的字段 schema，来自服务端 GET /notifications/types。
+//
+// 这里以前是 225 行硬编码的 configFields（22 个 case / 90 个字段槽），与服务端
+// notifier.go 实际读取的 config 键靠人手同步。现在唯一真源在
+// server/model/notify_channel_registry.go，并由 Go 测试与 notifier.go 双向绑死，
+// Web 只负责渲染。
+//
+// 刻意不做「服务端没下发 fields」的降级：Web 与服务端永远同版本发布，
+// 不存在「新 Web + 老服务端」的组合，拿不到 schema 就是空表单。
+const currentChannelFields = computed<NotifyFieldDefinition[]>(
+  () => channelTypes.value.find(t => t.type === channelForm.value.type)?.fields ?? []
+)
+
+// 求 show_when 依赖字段的当前取值：用户没填过时按 schema 声明的 default 判定，
+// 与服务端「留空走默认值」的行为保持一致（wecom / wecom_app 的 msg_type 留空即 text，
+// 这也是改造前那两行 `(configData.value.msg_type || 'text')` 的等价写法）。
+function resolveShowWhenValue(fields: NotifyFieldDefinition[], key: string): string {
+  const filled = (configData.value[key] ?? '').toString().trim()
+  if (filled) return filled
+  return (fields.find(f => f.key === key)?.default ?? '').trim()
+}
+
+// show_when 语义固定为「单键等值命中」：依赖字段的当前值命中 values 之一才显示本字段。
+// 服务端刻意不支持表达式，这里也不要扩展成联动 DSL。
+const configFields = computed<NotifyFieldDefinition[]>(() => {
+  const fields = currentChannelFields.value
+  return fields.filter(field => {
+    const condition = field.show_when
+    if (!condition) return true
+    return condition.values.includes(resolveShowWhenValue(fields, condition.key))
+  })
+})
 
 function syncConfigToForm() {
   channelForm.value.config = JSON.stringify(configData.value)
@@ -370,7 +252,8 @@ function onChannelTypeChange() {
 
 function openCreateChannel() {
   isCreateChannel.value = true
-  channelForm.value = { id: 0, name: '', type: 'webhook', config: '{}' }
+  // 新建默认给「默认推送」：与老版本行为一致，用户想隔离时再手动切成「绑定推送」。
+  channelForm.value = { id: 0, name: '', type: 'webhook', config: '{}', push_scope: 'default' }
   configData.value = {}
   applyChannelTypeDefaults()
   showChannelDialog.value = true
@@ -378,7 +261,13 @@ function openCreateChannel() {
 
 function openEditChannel(row: any) {
   isCreateChannel.value = false
-  channelForm.value = { id: row.id, name: row.name, type: row.type, config: row.config || '{}' }
+  channelForm.value = {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    config: row.config || '{}',
+    push_scope: normalizePushScope(row.push_scope),
+  }
   syncFormToConfig()
   showChannelDialog.value = true
 }
@@ -395,21 +284,22 @@ const JSON_CONFIG_KEYS = new Set([
 const NUMERIC_CONFIG_KEYS = new Set(['smtp_port', 'port'])
 
 function validateConfigFields(): string | null {
+  // 只校验当前可见的字段：被 show_when 过滤掉的字段不会随表单提交语义生效。
   for (const field of configFields.value) {
-    const key = (field as any).key
+    const key = field.key
     const val = (configData.value[key] ?? '').toString().trim()
     if (!val) continue
     if (JSON_CONFIG_KEYS.has(key)) {
       try {
         JSON.parse(val)
       } catch (e: any) {
-        return `字段「${(field as any).label || key}」不是合法 JSON：${e?.message || ''}`
+        return `字段「${field.label || key}」不是合法 JSON：${e?.message || ''}`
       }
     }
     if (NUMERIC_CONFIG_KEYS.has(key)) {
       const n = Number(val)
       if (!Number.isInteger(n) || n <= 0 || n > 65535) {
-        return `字段「${(field as any).label || key}」应为 1-65535 的端口号`
+        return `字段「${field.label || key}」应为 1-65535 的端口号`
       }
     }
   }
@@ -427,18 +317,29 @@ async function handleSaveChannel() {
     return
   }
   syncConfigToForm()
+  // 提交前把 push_scope 收窄成服务端认的两个值：服务端对非法取值会直接 400。
+  const payload = {
+    name: channelForm.value.name,
+    type: channelForm.value.type,
+    config: channelForm.value.config,
+    push_scope: normalizePushScope(channelForm.value.push_scope),
+  }
+  // 校验全部通过后才置位，保证校验失败的早退分支不会把按钮锁死
+  channelSaving.value = true
   try {
     if (isCreateChannel.value) {
-      await notificationApi.create(channelForm.value)
+      await notificationApi.create(payload)
       ElMessage.success('创建成功')
     } else {
-      await notificationApi.update(channelForm.value.id, channelForm.value)
+      await notificationApi.update(channelForm.value.id, payload)
       ElMessage.success('更新成功')
     }
     showChannelDialog.value = false
     loadChannels()
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.error || (isCreateChannel.value ? '创建失败' : '更新失败'))
+  } finally {
+    channelSaving.value = false
   }
 }
 
@@ -448,7 +349,14 @@ async function handleDeleteChannel(id: number) {
     await notificationApi.delete(id)
     ElMessage.success('删除成功')
     loadChannels()
-  } catch { /* cancelled */ }
+  } catch (err) {
+    // 这里原来是裸 `catch { /* cancelled */ }`，把两件完全不同的事混成了一件：
+    // 用户在确认框点「取消」，和「点了确定但删除接口真的失败了」，走的是同一个分支。
+    // 后果是删除失败时界面上一点反馈都没有，渠道还在列表里，用户只会以为自己没点到。
+    // 必须先用 isCancel() 摘掉取消，剩下的才是真错误。
+    if (isCancel(err)) return
+    ElMessage.error(extractError(err, '删除失败'))
+  }
 }
 
 async function handleToggleChannel(row: any) {
@@ -468,9 +376,11 @@ async function handleToggleChannel(row: any) {
     }
     ElMessage.success(row.enabled ? '已禁用' : '已启用')
     loadChannels()
-  } catch (err: any) {
-    if (err === 'cancel' || err?.toString?.() === 'cancel') return
-    ElMessage.error(err?.response?.data?.error || '操作失败')
+  } catch (err) {
+    // 手写的 `err === 'cancel'` 漏了 'close'（点右上角 × 关闭确认框时 EP reject 的是它），
+    // 那种情况下会弹一条没有意义的「操作失败」。统一走 isCancel()。
+    if (isCancel(err)) return
+    ElMessage.error(extractError(err, '操作失败'))
   }
 }
 
@@ -483,11 +393,22 @@ async function handleTestChannel(id: number) {
     const data = e?.response?.data
     const mainError = data?.error || '测试发送失败'
     const detail = data?.detail || data?.message || e?.message
+
     if (detail && detail !== mainError) {
-      ElMessageBox.alert(String(detail), mainError, {
-        confirmButtonText: '知道了',
-        type: 'error',
-      }).catch(() => {})
+      // 这里原来直接弹 ElMessageBox.alert：一次「测试」失败就把整个界面挡住、
+      // 必须点「知道了」才能继续。测试渠道往往要连着试好几个，很打断。
+      // 改成带操作的轻提示——一眼看到失败原因，想看服务端返回的长详情再点开。
+      toast.error(mainError, {
+        action: {
+          text: '查看详情',
+          handler: () => {
+            ElMessageBox.alert(String(detail), mainError, {
+              confirmButtonText: '知道了',
+              type: 'error',
+            }).catch(() => {})
+          },
+        },
+      })
     } else {
       ElMessage.error(mainError)
     }
@@ -499,6 +420,32 @@ async function handleTestChannel(id: number) {
 function getTypeName(type: string) {
   const found = channelTypes.value.find(t => t.type === type)
   return found?.name || type
+}
+
+// --- 「最近测试」结果的展示三件套 ---
+// 从模板里的两串嵌套三元原样搬出来，判定分支逐字对齐（success / error|failed / 其余），
+// 只为让下面那格能包进 Transition 之后还看得清。不要在这里加新分支：
+// last_test_status 的取值由服务端写入，Web 只做渲染。
+// 返回值刻意不标注成 string —— 让 TS 推成字面量联合，才能直接喂给 el-tag 的 type。
+
+function getTestStatusTagType(status: unknown) {
+  if (status === 'success') return 'success'
+  if (status === 'error' || status === 'failed') return 'danger'
+  return 'warning'
+}
+
+function getTestStatusText(status: unknown) {
+  if (status === 'success') return '测试通过'
+  if (status === 'error' || status === 'failed') return '测试未通过'
+  return '未测试'
+}
+
+// 过渡 key 必须绑【状态值】而不是 row.id：绑 row.id 的话同一行永远是同一个 key，
+// 节点被原地复用，测完之后过渡一次都不会触发。
+// 没测过时固定给 'none'，这样「未测试 → 测试通过」这次首测也能被演出来。
+function getTestStatusKey(row: any): string {
+  if (!row?.last_test_at) return 'none'
+  return String(row.last_test_status ?? 'unknown')
 }
 
 function parseChannelConfig(configText: string): Record<string, unknown> {
@@ -609,7 +556,7 @@ function getChannelConfigSummary(row: any): string[] {
 </script>
 
 <template>
-  <div class="notifications-page dd-fixed-page dd-page-hide-heading">
+  <div ref="pageRootRef" class="notifications-page dd-fixed-page dd-page-hide-heading">
     <!-- Page Header -->
     <div class="page-header">
       <div>
@@ -617,6 +564,31 @@ function getChannelConfigSummary(row: any): string[] {
         <p class="page-subtitle">配置任务执行结果的通知渠道</p>
       </div>
     </div>
+
+        <!--
+          没有任何「默认推送」渠道时的警示。
+          只列举仓库里真实存在的三处广播调用点，不要扩写成「所有系统通知」之类的模糊说法。
+        -->
+        <!--
+          这条警示是「凭空冒出」的：把最后一个默认推送渠道禁掉的那一刻它就出现，
+          把整个工具条和表格往下顶。淡入淡出至少让这次出现有个过程，而不是硬闪。
+          刻意只做 opacity，不做高度过渡——高度动画会把下面整张表反复重排。
+        -->
+        <Transition name="dd-alert-fade">
+          <el-alert
+            v-if="showNoDefaultChannelAlert"
+            type="warning"
+            show-icon
+            :closable="false"
+            class="no-default-alert"
+            title="当前没有启用中的「默认推送」渠道"
+          >
+            <template #default>
+              资源告警、登录通知、静默更新结果这三类系统通知将不会发送（面板不做兜底，也不会退回其它渠道）。
+              如需接收，请把至少一个已启用的渠道改为「默认推送」。
+            </template>
+          </el-alert>
+        </Transition>
 
         <!-- Toolbar -->
         <div class="toolbar">
@@ -636,11 +608,33 @@ function getChannelConfigSummary(row: any): string[] {
               <el-option label="全部" value="" />
               <el-option v-for="t in channelTypes" :key="t.type" :label="t.name" :value="t.type" />
             </el-select>
+            <!--
+              状态筛选带计数：本页没有 .status-tabs 分段控件，状态筛选就是这个下拉，
+              所以计数挂在选项上——展开时就能看到「启用 5 / 禁用 2」，不必逐个切过去数。
+              计数是「统计型」，开 show-zero：「禁用 0」是有信息量的，消失了反而像没加载出来。
+              level=info（描边不实心）：中性计数，不该和需要处理的红色角标抢注意力。
+              注意 label 属性要保留：选中后输入框里显示的是 label，默认插槽只管下拉项。
+            -->
             <el-select v-model="filterStatus" placeholder="状态" clearable class="toolbar__filter" @change="handleChannelSearch">
               <template #prefix>状态</template>
-              <el-option label="全部" value="" />
-              <el-option label="启用" value="enabled" />
-              <el-option label="禁用" value="disabled" />
+              <el-option label="全部" value="">
+                <span class="filter-option">
+                  <span>全部</span>
+                  <DdBadge :value="statusCounts.all" level="info" show-zero title="全部渠道" />
+                </span>
+              </el-option>
+              <el-option label="启用" value="enabled">
+                <span class="filter-option">
+                  <span>启用</span>
+                  <DdBadge :value="statusCounts.enabled" level="info" show-zero title="已启用渠道" />
+                </span>
+              </el-option>
+              <el-option label="禁用" value="disabled">
+                <span class="filter-option">
+                  <span>禁用</span>
+                  <DdBadge :value="statusCounts.disabled" level="info" show-zero title="已禁用渠道" />
+                </span>
+              </el-option>
             </el-select>
             <el-button @click="resetFilters">
               <el-icon><Refresh /></el-icon> 重置
@@ -665,6 +659,7 @@ function getChannelConfigSummary(row: any): string[] {
                 <span class="dd-mobile-card__title">{{ row.name }}</span>
                 <div class="dd-mobile-card__badges">
                   <el-tag size="small" :type="getTypeBadgeType(row.type)" effect="plain">{{ getTypeName(row.type) }}</el-tag>
+                  <el-tag v-if="isBoundChannel(row)" size="small" type="warning" effect="plain">仅绑定</el-tag>
                 </div>
               </div>
               <el-switch :model-value="row.enabled" size="small" @change="handleToggleChannel(row)" />
@@ -679,7 +674,7 @@ function getChannelConfigSummary(row: any): string[] {
                 </div>
                 <div class="dd-mobile-card__field">
                   <span class="dd-mobile-card__label">创建时间</span>
-                  <span class="dd-mobile-card__value">{{ new Date(row.created_at).toLocaleString('zh-CN', { hour12: false }) }}</span>
+                  <span class="dd-mobile-card__value">{{ formatDateTime(row.created_at) }}</span>
                 </div>
               </div>
               <div class="dd-mobile-card__actions notification-card__actions">
@@ -698,7 +693,7 @@ function getChannelConfigSummary(row: any): string[] {
             :data="pagedChannels"
             v-loading="channelLoading"
             style="width: 100%"
-            :header-cell-style="{ background: '#f8fafc', color: '#64748b', fontWeight: 600, fontSize: '13px' }"
+            :header-cell-style="{ background: 'var(--el-fill-color-light)', color: 'var(--el-text-color-regular)', fontWeight: 600, fontSize: '13px' }"
           >
             <el-table-column prop="name" label="名称" min-width="180">
               <template #default="{ row }">
@@ -721,6 +716,20 @@ function getChannelConfigSummary(row: any): string[] {
                 <el-tag size="small" :type="getTypeBadgeType(row.type)" effect="plain" round>{{ getTypeName(row.type) }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="推送范围" width="120" align="center">
+              <template #default="{ row }">
+                <el-tooltip
+                  :content="isBoundChannel(row)
+                    ? '不参与广播，只有任务绑定它、或脚本显式指定它时才推送'
+                    : '参与广播：资源告警、登录通知、静默更新结果，以及未绑定渠道的任务通知都会发到这里'"
+                  placement="top"
+                >
+                  <el-tag size="small" :type="isBoundChannel(row) ? 'warning' : 'success'" effect="plain" round>
+                    {{ isBoundChannel(row) ? '仅绑定' : '默认推送' }}
+                  </el-tag>
+                </el-tooltip>
+              </template>
+            </el-table-column>
             <el-table-column label="配置概览" min-width="180">
               <template #default="{ row }">
                 <div class="config-summary">
@@ -735,24 +744,34 @@ function getChannelConfigSummary(row: any): string[] {
             </el-table-column>
             <el-table-column label="最近测试" width="160">
               <template #default="{ row }">
-                <div v-if="row.last_test_at" class="test-status">
-                  <el-tag
-                    size="small"
-                    :type="row.last_test_status === 'success' ? 'success' : row.last_test_status === 'error' || row.last_test_status === 'failed' ? 'danger' : 'warning'"
-                    effect="plain"
-                    round
-                  >
-                    {{ row.last_test_status === 'success' ? '测试通过' : row.last_test_status === 'error' || row.last_test_status === 'failed' ? '测试未通过' : '未测试' }}
-                  </el-tag>
-                  <span class="time-text">{{ new Date(row.last_test_at).toLocaleDateString('zh-CN') }}</span>
-                </div>
-                <span v-else class="text-muted">未测试</span>
+                <!-- 点「测试」后 handleTestChannel 会重拉列表，这一格从「未测试」翻成
+                     「测试通过 / 测试未通过」——是本页最值得被看见的一次变化，硬切会被眼睛错过。
+                     out-in 让旧结果先淡出、新结果再淡入，给出一次明确的交接。
+                     key 走 getTestStatusKey(row)（状态值），绝不能绑 row.id。
+                     只做 opacity：表格行里任何位移都会连带整行抖。
+                     外层 .test-status-slot 撑住最小高度，out-in 中间那一帧内容被移除时行高不塌。 -->
+                <span class="test-status-slot">
+                  <Transition name="dd-status-switch" mode="out-in">
+                    <div v-if="row.last_test_at" :key="getTestStatusKey(row)" class="test-status">
+                      <el-tag
+                        size="small"
+                        :type="getTestStatusTagType(row.last_test_status)"
+                        effect="plain"
+                        round
+                      >
+                        {{ getTestStatusText(row.last_test_status) }}
+                      </el-tag>
+                      <span class="time-text">{{ formatDateTime(row.last_test_at) }}</span>
+                    </div>
+                    <span v-else key="none" class="text-muted">未测试</span>
+                  </Transition>
+                </span>
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="创建时间" width="170">
               <template #default="{ row }">
                 <div class="time-cell">
-                  <span class="time-text">{{ new Date(row.created_at).toLocaleString('zh-CN', { hour12: false }) }}</span>
+                  <span class="time-text">{{ formatDateTime(row.created_at) }}</span>
                 </div>
               </template>
             </el-table-column>
@@ -777,6 +796,8 @@ function getChannelConfigSummary(row: any): string[] {
             :total="filteredTotal"
             :page-sizes="[10, 20, 50]"
             layout="sizes, prev, pager, next"
+            @current-change="handleChannelPageChange"
+            @size-change="handleChannelPageSizeChange"
           />
         </div>
 
@@ -791,19 +812,38 @@ function getChannelConfigSummary(row: any): string[] {
             <el-option v-for="t in channelTypes" :key="t.type" :label="t.name" :value="t.type" />
           </el-select>
         </el-form-item>
+        <!--
+          推送范围是渠道自身的属性（数据库一等列），不是渠道 config 里的字段，
+          所以必须手写在这里，绝不能混进下面由服务端 schema 驱动的 configFields 循环。
+        -->
+        <el-form-item label="推送范围">
+          <el-radio-group v-model="channelForm.push_scope">
+            <el-radio-button value="default">默认推送</el-radio-button>
+            <el-radio-button value="bound">绑定推送</el-radio-button>
+          </el-radio-group>
+          <div class="form-tip">
+            <strong>默认推送</strong>：参与广播。资源告警、登录通知、静默更新结果，以及没有绑定渠道的任务通知都会发到这里。<br />
+            <strong>绑定推送</strong>：不参与广播，只有任务在「通知渠道」里选中它、或脚本调用时显式指定它才会推送。
+            想做到「一个脚本对应一个通知」就选这个。
+          </div>
+        </el-form-item>
         <el-divider content-position="left">配置</el-divider>
+        <!--
+          通用渲染器：字段来自服务端 schema，widget 只有 input / password / textarea / select 四种。
+          最后的 v-else 是兜底分支，遇到不认识的 widget 一律按普通输入框渲染，绝不隐藏字段。
+        -->
         <el-form-item v-for="field in configFields" :key="field.key" :label="field.label">
           <el-select
-            v-if="field.type === 'select'"
+            v-if="field.widget === 'select'"
             v-model="configData[field.key]"
             :placeholder="field.placeholder || field.label"
             clearable
             style="width: 100%"
           >
-            <el-option v-for="opt in field.options" :key="opt.value" :label="opt.label" :value="opt.value" />
+            <el-option v-for="opt in field.options || []" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
           <el-input
-            v-else-if="field.type === 'textarea'"
+            v-else-if="field.widget === 'textarea'"
             v-model="configData[field.key]"
             type="textarea"
             :rows="3"
@@ -812,15 +852,15 @@ function getChannelConfigSummary(row: any): string[] {
           <el-input
             v-else
             v-model="configData[field.key]"
-            :type="field.type === 'password' ? 'password' : 'text'"
-            :show-password="field.type === 'password'"
+            :type="field.widget === 'password' ? 'password' : 'text'"
+            :show-password="field.widget === 'password'"
             :placeholder="field.placeholder || field.label"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showChannelDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleSaveChannel">{{ isCreateChannel ? '创建' : '保存' }}</el-button>
+        <el-button type="primary" :loading="channelSaving" :disabled="channelSaving" @click="handleSaveChannel">{{ isCreateChannel ? '创建' : '保存' }}</el-button>
       </template>
     </el-dialog>
 
@@ -846,6 +886,22 @@ function getChannelConfigSummary(row: any): string[] {
   .page-subtitle { font-size: 13px; color: var(--el-text-color-secondary); margin: 6px 0 0; line-height: 1.6; max-width: 720px; }
 }
 
+// 「没有默认推送渠道」警示条：跟在页头之后，不占满页面高度
+.no-default-alert {
+  margin-bottom: 4px;
+}
+
+// 弹窗里推送范围单选的说明文字。
+// el-form-item__content 是 flex + wrap，这里必须占满整行，否则会挤到单选按钮右边。
+.form-tip {
+  flex: 0 0 100%;
+  width: 100%;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
 // 工具条：与定时任务页/订阅管理页统一（margin:14px 0、左区 gap 12、右区 gap 10）
 .toolbar {
   display: flex; justify-content: space-between; align-items: center; margin: 14px 0; gap: 12px; flex-wrap: wrap;
@@ -855,11 +911,11 @@ function getChannelConfigSummary(row: any): string[] {
   &__filter { width: 130px; }
 }
 
-// 表格卡：圆角/阴影/边框全部对齐卡片令牌（dd-fixed-page 下的 flex + 内部滚动由全局规则接管）
+// 表格卡：1px 边框划分层次，不再用阴影浮起（dd-fixed-page 下的 flex + 内部滚动由全局规则接管）
 .table-card {
   background: var(--el-bg-color);
-  border-radius: var(--dd-card-radius);
-  box-shadow: var(--dd-shadow-card);
+  // 表格容器属容器类表面 → surface 档；overflow:hidden 让内部贴边的表头/行自动被圆角裁角
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
   overflow: hidden;
 }
@@ -872,6 +928,7 @@ function getChannelConfigSummary(row: any): string[] {
 
 // 渠道头像：底色/文字色保留按类型的品牌识别色（来自模板内联 style），
 // 这里只统一通用尺寸与轻边框，边框走令牌以适配明暗。
+// 形状承载语义（圆形=头像/身份标识），两种圆角模式下都固定正圆，不吃 --dd-radius-* 令牌。
 .channel-avatar {
   width: 36px;
   height: 36px;
@@ -924,6 +981,20 @@ function getChannelConfigSummary(row: any): string[] {
   gap: 2px;
 }
 
+// 「最近测试」这一格的占位槽。
+//
+// out-in 中间有一帧「旧的已移除、新的还没进来」，没有最小高度的话整行会在测试完成的
+// 那一刻塌一次再弹回来 —— 恰好发生在我们想让用户看清的那个瞬间，得不偿失。
+// 42px = el-tag small(24px) + gap(2px) + 日期行(约 16px)，即「已测过」那一档的高度。
+// 代价是「未测试」的行也被撑到同一高度（比原来高约 6px）；换来的是全表行高统一、
+// 且测试完成时零跳动，这笔买卖划算。
+// 用 block 级 flex 而不是 inline-flex：单元格里的行内盒会带基线余白，块级则严丝合缝。
+.test-status-slot {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+}
+
 .time-cell {
   display: flex;
   flex-direction: column;
@@ -945,6 +1016,47 @@ function getChannelConfigSummary(row: any): string[] {
 
 .action-btns {
   display: flex; align-items: center; justify-content: center; gap: 2px;
+
+  // EP 自带 `.el-button + .el-button { margin-left: 12px }` 会叠加在上面的 gap 上，
+  // 实际间距变成 14px 而不是设计的 2px。间距统一交给 gap
+  // （与 tasks / deps / subscriptions 三页一致）。
+  :deep(.el-button + .el-button) { margin-left: 0; }
+}
+
+// 下拉选项里「文字 + 计数角标」的排布。
+// 这段样式虽然写在 scoped 里，但命中的是被 teleport 到 body 的下拉面板 ——
+// 能命中是因为 .filter-option 这个 span 是本组件模板里写的、带 data-v 标记，
+// scoped 编译出来的是普通属性选择器，与元素挂在 DOM 哪个位置无关。
+// 用 inline-flex 而不是 block：EP 的 .el-select-dropdown__item 靠自身 line-height 撑高，
+// 换成块级子元素会让选项高度塌到角标那 18px。
+.filter-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  vertical-align: middle;
+}
+
+// 状态标签切换：只做透明度，禁止位移/缩放——表格行里任何位移都会连带整行。
+// 时长与缓动走令牌，prefers-reduced-motion 时令牌自动降为 1ms 即等效关闭。
+.dd-status-switch-enter-active,
+.dd-status-switch-leave-active {
+  transition: opacity var(--dd-motion-fast) var(--dd-ease-standard);
+}
+
+.dd-status-switch-enter-from,
+.dd-status-switch-leave-to {
+  opacity: 0;
+}
+
+// 顶部警示条的进出场：同样只做透明度，不碰高度。
+.dd-alert-fade-enter-active,
+.dd-alert-fade-leave-active {
+  transition: opacity var(--dd-motion-normal) var(--dd-ease-standard);
+}
+
+.dd-alert-fade-enter-from,
+.dd-alert-fade-leave-to {
+  opacity: 0;
 }
 
 // 分页条：与定时任务页/订阅管理页一致的间距收敛

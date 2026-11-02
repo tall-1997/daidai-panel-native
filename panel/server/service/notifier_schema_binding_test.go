@@ -19,6 +19,10 @@ import (
 // TestNotifierSourceHoldsEverySenderCalledBySendToChannel 会兜底拦住这种拆分。
 const notifierSourceFile = "notifier.go"
 
+// 本机版（Android）把 android_local / external_webhook 两个渠道拆到
+// notifier_android_channels.go，扫描器必须一起遍历，否则那部分读取的键会逃过检查。
+var notifierSourceFiles = []string{"notifier.go", "notifier_android_channels.go"}
+
 // ---- 白名单 ----
 //
 // 白名单只有一个合法用途：兜住「服务端确实读了这个键，但不是通过 cfg["字面量"] 读的」
@@ -189,18 +193,32 @@ func TestNotifierSmtpSSLAliasLoopStillExists(t *testing.T) {
 // 上面两条扫描器都只读 notifier.go 这一个文件。一旦某个发送函数被挪走，它读取的
 // config 键就会静默逃过绑定检查 —— 防线还在，但已经不覆盖那个渠道了，而且没有任何提示。
 func TestNotifierSourceHoldsEverySenderCalledBySendToChannel(t *testing.T) {
-	parsed := mustParseNotifierAST(t)
+	parsedFiles := notifierASTs(t)
 
 	declared := make(map[string]struct{})
-	for _, decl := range parsed.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil {
-			declared[fn.Name.Name] = struct{}{}
+	for _, parsed := range parsedFiles {
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil {
+				declared[fn.Name.Name] = struct{}{}
+			}
 		}
+	}
+
+	var sendToChannelFile *ast.File
+	for _, parsed := range parsedFiles {
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name != nil && fn.Name.Name == "sendToChannel" {
+				sendToChannelFile = parsed
+			}
+		}
+	}
+	if sendToChannelFile == nil {
+		t.Fatalf("在 %v 里找不到 sendToChannel", notifierSourceFiles)
 	}
 
 	var missing []string
 	var called int
-	ast.Inspect(parsed, func(node ast.Node) bool {
+	ast.Inspect(sendToChannelFile, func(node ast.Node) bool {
 		fn, ok := node.(*ast.FuncDecl)
 		if !ok || fn.Name == nil || fn.Name.Name != "sendToChannel" {
 			return true
@@ -242,11 +260,16 @@ func TestNotifierSourceHoldsEverySenderCalledBySendToChannel(t *testing.T) {
 
 func mustReadNotifierSource(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(notifierSourceFile)
-	if err != nil {
-		t.Fatalf("读取 %s 失败: %v", notifierSourceFile, err)
+	var builder strings.Builder
+	for _, name := range notifierSourceFiles {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		builder.Write(raw)
+		builder.WriteString("\n")
 	}
-	return string(raw)
+	return builder.String()
 }
 
 func mustParseNotifierAST(t *testing.T) *ast.File {
@@ -259,6 +282,21 @@ func mustParseNotifierAST(t *testing.T) *ast.File {
 	return parsed
 }
 
+// notifierASTs 返回全部被扫描文件的 AST（notifier.go + 拆出去的扩展渠道文件）。
+func notifierASTs(t *testing.T) []*ast.File {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	files := make([]*ast.File, 0, len(notifierSourceFiles))
+	for _, name := range notifierSourceFiles {
+		parsed, err := parser.ParseFile(fileSet, name, nil, 0)
+		if err != nil {
+			t.Fatalf("解析 %s 失败: %v", name, err)
+		}
+		files = append(files, parsed)
+	}
+	return files
+}
+
 // mustParseNotifierConfigKeys 抽出所有 cfg["..."] 形式的取值。
 //
 // 用 go/ast 而不是正则：注释里的示例、错误信息字符串里的 cfg["x"] 都不会被误命中，
@@ -267,7 +305,8 @@ func mustParseNotifierConfigKeys(t *testing.T) map[string]struct{} {
 	t.Helper()
 
 	keys := make(map[string]struct{})
-	ast.Inspect(mustParseNotifierAST(t), func(node ast.Node) bool {
+	for _, file := range notifierASTs(t) {
+	ast.Inspect(file, func(node ast.Node) bool {
 		index, ok := node.(*ast.IndexExpr)
 		if !ok {
 			return true
@@ -288,6 +327,7 @@ func mustParseNotifierConfigKeys(t *testing.T) map[string]struct{} {
 		keys[key] = struct{}{}
 		return true
 	})
+	}
 
 	return keys
 }
@@ -297,7 +337,8 @@ func mustParseNotifierChannelTypes(t *testing.T) map[string]struct{} {
 	t.Helper()
 
 	types := make(map[string]struct{})
-	ast.Inspect(mustParseNotifierAST(t), func(node ast.Node) bool {
+	for _, file := range notifierASTs(t) {
+	ast.Inspect(file, func(node ast.Node) bool {
 		fn, ok := node.(*ast.FuncDecl)
 		if !ok || fn.Name == nil || fn.Name.Name != "sendToChannel" {
 			return true
@@ -323,6 +364,7 @@ func mustParseNotifierChannelTypes(t *testing.T) map[string]struct{} {
 		})
 		return false
 	})
+	}
 
 	return types
 }

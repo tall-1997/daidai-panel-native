@@ -2,8 +2,8 @@ package main
 
 import "fmt"
 
-func printHelp() {
-	fmt.Println(`ddp - 呆呆面板容器内置命令
+// helpText 是 ddp help 的全文。单独成常量，测试可以直接核对里面写的命令与参数是否真实可用。
+const helpText = `ddp - 呆呆面板容器内置命令
 
 用法:
   ddp help
@@ -35,6 +35,7 @@ func printHelp() {
   ddp sub list [--type git-repo|single-file] [--keyword 关键字]
   ddp sub logs <订阅ID或名称> [--lines N]
   ddp sub pull <订阅ID或名称>
+  ddp mcp --app-key <app_key> --app-secret <app_secret> [--url http://127.0.0.1:5701]
   ddp reset-login [用户名] [--ip IP] [--all]
   ddp reset-password [<用户名>] <新密码>
   ddp reset-username [<旧用户名>] <新用户名>
@@ -58,6 +59,10 @@ func printHelp() {
   4.1 Magisk 模块版只在线更新面板程序与前端，容器 rootfs 和已装依赖不动；模块外壳有变更的版本会提示重新刷入模块 zip。
   5. service install 目前会在 Linux 上安装 systemd 守护，并让二进制更新时自动停启该服务。
   6. script / env / list / logs 这类命令不会依赖面板前端，容器里直接可用。
+  7. mcp 以 stdio 方式运行 MCP 服务，给 Claude Desktop 等 AI 客户端拉起（stdout 只输出协议消息）。
+      先在面板「系统设置 → MCP 服务」开启；凭据用「Open API」里创建的应用，也可用环境变量
+      DDP_MCP_URL / DDP_MCP_APP_KEY / DDP_MCP_APP_SECRET 传入。Docker 部署时客户端里的命令写成
+      docker exec -i <容器名> ddp mcp ...（-i 不能少）。完整说明见 ddp mcp --help。
 
 示例:
   ddp status
@@ -72,11 +77,16 @@ func printHelp() {
   ddp task run 12
   ddp sub list --type git-repo
   ddp sub pull 我的订阅
+  ddp mcp --app-key <app_key> --app-secret <app_secret> --url http://127.0.0.1:5701
+  docker exec -i <容器名> ddp mcp --app-key <app_key> --app-secret <app_secret>
   ddp reset-login --all
   ddp reset-password admin NewPass123
   ddp reset-username admin newadmin
   ddp list-users
   ddp disable-2fa admin
   ddp ip-whitelist clear
-  ddp ip-whitelist set 203.0.113.10 203.0.113.0/24`)
+  ddp ip-whitelist set 203.0.113.10 203.0.113.0/24`
+
+func printHelp() {
+	fmt.Println(helpText)
 }

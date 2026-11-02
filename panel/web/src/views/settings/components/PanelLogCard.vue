@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { CopyDocument, Download, Refresh, Search, Tickets } from '@element-plus/icons-vue'
 import { ansiToHtml, normalizeAnsi } from '@/utils/ansi'
+import { useLogAutoFollow } from '@/composables/useLogAutoFollow'
 import type { PanelLogLevel } from '../usePanelLogViewer'
 
 const props = defineProps<{
@@ -44,15 +45,23 @@ const lineOptions = [100, 200, 500, 1000]
 const renderedHtml = computed(() => ansiToHtml(normalizeAnsi(props.logs.join('\n'))))
 
 const logViewRef = ref<HTMLElement>()
+// 面板日志卡的自动跟随。这里只做到「不在底部就不拽回」：内容每 3s 整体替换，
+// 跟随中贴到最新，用户上翻超过阈值后就不再被拽回底部（可以停在中间阅读）。
+const panelFollow = useLogAutoFollow(logViewRef)
+
+onMounted(() => {
+  // 面板日志默认自动刷新，进卡即视为「运行中」并跟随最新
+  panelFollow.begin(true)
+})
 
 watch(() => props.logs, () => {
-  nextTick(() => {
-    const el = logViewRef.value
-    if (el) {
-      el.scrollTop = el.scrollHeight
-    }
-  })
+  panelFollow.onContentChange()
 }, { flush: 'post' })
+
+// 切换关键词 / 级别 / 行数相当于换了一份内容，回到底部看最新
+watch(() => [props.keyword, props.level, props.lines], () => {
+  panelFollow.begin(true)
+})
 </script>
 
 <template>
@@ -159,7 +168,8 @@ watch(() => props.logs, () => {
 @use './config-card-shared.scss' as *;
 
 .panel-log-card {
-  border-radius: 14px;
+  // 卡片本体属容器类表面 → surface 档
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
 }
 
@@ -175,7 +185,8 @@ watch(() => props.logs, () => {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border-radius: 999px;
+  // 「同步中」状态 chip 是天然胶囊 → pill 档（与 .dd-status-chip 同档）
+  border-radius: var(--dd-radius-pill);
   font-size: 11px;
   font-weight: 600;
   color: var(--el-color-primary);
@@ -199,7 +210,8 @@ watch(() => props.logs, () => {
 
 .panel-log-toolbar__actions {
   padding: 4px;
-  border-radius: 12px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
   display: flex;
   justify-content: flex-end;

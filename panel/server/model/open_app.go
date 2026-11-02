@@ -5,8 +5,10 @@ import (
 )
 
 type OpenApp struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	Name      string    `gorm:"size:128;not null" json:"name"`
+	ID uint `gorm:"primarykey" json:"id"`
+	// 应用名在语义上唯一：连点创建按钮会连开好几个「密钥只展示一次」的弹窗，用户根本对不上是哪一个。
+	// 老库里的同名残留由 database.DeduplicateBeforeUniqueIndex() 在 AutoMigrate 之前改名让路。
+	Name      string    `gorm:"size:128;uniqueIndex;not null" json:"name"`
 	AppKey    string    `gorm:"size:64;uniqueIndex;not null" json:"app_key"`
 	AppSecret string    `gorm:"size:128;not null" json:"-"`
 	Scopes    string    `gorm:"size:512;default:''" json:"scopes"`

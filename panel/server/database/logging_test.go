@@ -20,9 +20,7 @@ func TestInitLogDoesNotExposeDatabasePath(t *testing.T) {
 		_ = Close()
 	})
 
-	if err := Init(&config.DatabaseConfig{Path: path}); err != nil {
-		t.Fatal(err)
-	}
+	Init(&config.DatabaseConfig{Path: path})
 	if strings.Contains(output.String(), path) || strings.Contains(output.String(), filepath.Dir(path)) {
 		t.Fatalf("database path leaked in log: %q", output.String())
 	}

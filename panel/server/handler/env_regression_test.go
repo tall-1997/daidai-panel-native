@@ -9,6 +9,8 @@ import (
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/testutil"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestEnvBatchSetGroupUpdatesSelectedRows(t *testing.T) {
@@ -136,6 +138,237 @@ func TestEnvListSupportsMultipleGroupFilters(t *testing.T) {
 	if _, exists := gotNames["STAGE_ONLY"]; exists {
 		t.Fatalf("did not expect STAGE_ONLY in filter result, got %v", gotNames)
 	}
+}
+
+// /envs/names 是「变量名筛选」下拉的数据源：变量名去重、附全库同名条数、按名称升序。
+// count 刻意用全库口径（不跟随筛选），与 UpsertByName 409 文案里的 N 对齐。
+func TestEnvNamesReturnsDedupedCountsSortedByName(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "env-name-list-operator", "operator")
+	token := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	envs := []*model.EnvVar{
+		{Name: "JD_COOKIE", Value: "1", Enabled: true, Position: 1000},
+		{Name: "ALPHA_TOKEN", Value: "2", Enabled: true, Position: 2000},
+		{Name: "JD_COOKIE", Value: "3", Enabled: true, Position: 3000},
+		{Name: "ZETA_KEY", Value: "4", Enabled: true, Position: 4000},
+		{Name: "JD_COOKIE", Value: "5", Enabled: true, Position: 5000},
+		{Name: "ZETA_KEY", Value: "6", Enabled: true, Position: 6000},
+	}
+	for _, env := range envs {
+		if err := database.DB.Create(env).Error; err != nil {
+			t.Fatalf("create env %q: %v", env.Name, err)
+		}
+	}
+	// 禁用一条：count 是全库同名条数，不该被 enabled 影响。
+	if err := database.DB.Model(envs[4]).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable env: %v", err)
+	}
+
+	rec := performRequest(engine, http.MethodGet, "/api/v1/envs/names", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok || len(items) != 3 {
+		t.Fatalf("expected 3 distinct env names, got %#v", payload["data"])
+	}
+
+	gotOrder := make([]string, 0, len(items))
+	gotCounts := make(map[string]float64, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected name object, got %#v", item)
+		}
+		name, _ := entry["name"].(string)
+		count, ok := entry["count"].(float64)
+		if !ok {
+			t.Fatalf("expected numeric count for %q, got %#v", name, entry["count"])
+		}
+		gotOrder = append(gotOrder, name)
+		gotCounts[name] = count
+	}
+
+	expectedOrder := []string{"ALPHA_TOKEN", "JD_COOKIE", "ZETA_KEY"}
+	if strings.Join(gotOrder, ",") != strings.Join(expectedOrder, ",") {
+		t.Fatalf("expected names sorted %v, got %v", expectedOrder, gotOrder)
+	}
+	expectedCounts := map[string]float64{"ALPHA_TOKEN": 1, "JD_COOKIE": 3, "ZETA_KEY": 2}
+	for name, want := range expectedCounts {
+		if gotCounts[name] != want {
+			t.Fatalf("expected %q count %v, got %v", name, want, gotCounts[name])
+		}
+	}
+}
+
+// names 是【精确】筛选：JD_COOKIE 不应把 JD_COOKIE_EXTRA 一起带出来（那是 keyword 的 LIKE 语义）。
+func TestEnvListSupportsExactNameFilter(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "env-name-filter-operator", "operator")
+	token := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	envs := []*model.EnvVar{
+		{Name: "JD_COOKIE", Value: "1", Enabled: true, Position: 1000},
+		{Name: "JD_COOKIE", Value: "2", Enabled: true, Position: 2000},
+		{Name: "JD_COOKIE_EXTRA", Value: "3", Enabled: true, Position: 3000},
+		{Name: "PT_KEY", Value: "4", Enabled: true, Position: 4000},
+	}
+	for _, env := range envs {
+		if err := database.DB.Create(env).Error; err != nil {
+			t.Fatalf("create env %q: %v", env.Name, err)
+		}
+	}
+
+	singleNames := envNamesFromListRequest(t, engine, token, "/api/v1/envs?names=JD_COOKIE")
+	if len(singleNames) != 2 {
+		t.Fatalf("expected 2 rows for names=JD_COOKIE, got %v", singleNames)
+	}
+	for _, name := range singleNames {
+		if name != "JD_COOKIE" {
+			t.Fatalf("expected exact name match, got %v", singleNames)
+		}
+	}
+
+	// 逗号分隔与重复参数两种写法都要能筛出同一批数据（多值之间是 OR）。
+	commaNames := envNamesFromListRequest(t, engine, token, "/api/v1/envs?names=JD_COOKIE,PT_KEY")
+	repeatedNames := envNamesFromListRequest(t, engine, token, "/api/v1/envs?names=JD_COOKIE&names=PT_KEY")
+	if len(commaNames) != 3 || len(repeatedNames) != 3 {
+		t.Fatalf("expected 3 rows for multi-name filter, got comma=%v repeated=%v", commaNames, repeatedNames)
+	}
+	for _, name := range append(append([]string{}, commaNames...), repeatedNames...) {
+		if name != "JD_COOKIE" && name != "PT_KEY" {
+			t.Fatalf("did not expect %q in multi-name filter result", name)
+		}
+	}
+}
+
+// names 与 keyword / groups / enabled 之间必须是 AND：任何一条不满足都要被筛掉。
+func TestEnvListCombinesNameFilterWithOtherFiltersUsingAnd(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "env-name-and-operator", "operator")
+	token := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	envs := []*model.EnvVar{
+		// 全部条件都满足，只有它该被留下。
+		{Name: "JD_COOKIE", Value: "alpha-token", Group: "prod", Enabled: true, Position: 1000},
+		// 名字对、分组对、启用，但 keyword 不匹配。
+		{Name: "JD_COOKIE", Value: "beta-token", Group: "prod", Enabled: true, Position: 2000},
+		// 名字对、keyword 对、启用，但分组不匹配。
+		{Name: "JD_COOKIE", Value: "alpha-token", Group: "dev", Enabled: true, Position: 3000},
+		// 名字对、keyword 对、分组对，但被禁用。
+		{Name: "JD_COOKIE", Value: "alpha-token", Group: "prod", Enabled: true, Position: 4000},
+		// 除了名字以外全对。
+		{Name: "PT_KEY", Value: "alpha-token", Group: "prod", Enabled: true, Position: 5000},
+	}
+	for _, env := range envs {
+		if err := database.DB.Create(env).Error; err != nil {
+			t.Fatalf("create env %q: %v", env.Name, err)
+		}
+	}
+	if err := database.DB.Model(envs[3]).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable env: %v", err)
+	}
+
+	rec := performRequest(
+		engine,
+		http.MethodGet,
+		"/api/v1/envs?names=JD_COOKIE&keyword=alpha&groups=prod&enabled=true",
+		map[string]string{"Authorization": "Bearer " + token},
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected exactly 1 row for combined filters, got %#v", payload["data"])
+	}
+	only, ok := items[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected env object, got %#v", items[0])
+	}
+	if got, _ := only["id"].(float64); uint(got) != envs[0].ID {
+		t.Fatalf("expected env %d to survive combined filters, got %v", envs[0].ID, only["id"])
+	}
+	if got, _ := payload["total"].(float64); got != 1 {
+		t.Fatalf("expected combined filter total 1, got %v", got)
+	}
+}
+
+// 最容易写错的方向：名字不存在时必须返回空列表，绝不能悄悄回落成「不筛」返回全量。
+func TestEnvListNameFilterWithUnknownNameReturnsEmpty(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "env-name-unknown-operator", "operator")
+	token := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	envs := []*model.EnvVar{
+		{Name: "JD_COOKIE", Value: "1", Enabled: true, Position: 1000},
+		{Name: "PT_KEY", Value: "2", Enabled: true, Position: 2000},
+	}
+	for _, env := range envs {
+		if err := database.DB.Create(env).Error; err != nil {
+			t.Fatalf("create env %q: %v", env.Name, err)
+		}
+	}
+
+	rec := performRequest(engine, http.MethodGet, "/api/v1/envs?names=NO_SUCH_ENV", map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok || len(items) != 0 {
+		t.Fatalf("expected empty list for unknown name, got %#v", payload["data"])
+	}
+	if got, _ := payload["total"].(float64); got != 0 {
+		t.Fatalf("expected total 0 for unknown name, got %v", got)
+	}
+}
+
+// 取 /envs 列表里每一行的 name，供上面几条名称筛选用例做断言。
+func envNamesFromListRequest(t *testing.T, engine *gin.Engine, token, path string) []string {
+	t.Helper()
+
+	rec := performRequest(engine, http.MethodGet, path, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for %s, got %d, body=%s", path, rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok {
+		t.Fatalf("expected env list for %s, got %#v", path, payload["data"])
+	}
+
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		env, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected env object for %s, got %#v", path, item)
+		}
+		name, _ := env["name"].(string)
+		names = append(names, name)
+	}
+	return names
 }
 
 func TestEnvGroupsSplitsStoredMultiGroups(t *testing.T) {

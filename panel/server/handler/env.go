@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -64,6 +65,24 @@ func normalizeEnvGroupsPayload(group string, groups []string) string {
 
 func parseEnvGroupFilter(rawValues ...string) []string {
 	return model.SplitEnvGroups(strings.Join(rawValues, ","))
+}
+
+// parseEnvNameFilter 解析「变量名筛选」参数，套路与 parseEnvGroupFilter 一致。
+// 变量名受 envNamePattern（^[A-Za-z_][A-Za-z0-9_]*$）约束、不可能含逗号，所以逗号分隔在这里是安全的；
+// 复用 SplitEnvGroups 只是借它「切分 + 去空白 + 去重」这套通用逻辑，与分组语义无关。
+// 🔴 「逗号分隔安全」这个前提只对变量名成立，别把同一套解析扩散到 value / remarks 这类自由文本字段上。
+func parseEnvNameFilter(rawValues ...string) []string {
+	return model.SplitEnvGroups(strings.Join(rawValues, ","))
+}
+
+// applyEnvNameFilters 按变量名做【精确】匹配（不是 keyword 那种 LIKE）：
+// 多个变量名之间是 OR（IN），与 keyword / groups / enabled 之间仍是 AND —— 由 GORM 的多次 Where 串成。
+// 传了库里不存在的名字时自然筛出空列表，绝不会回落成「不筛」。
+func applyEnvNameFilters(query *gorm.DB, names []string) *gorm.DB {
+	if len(names) == 0 {
+		return query
+	}
+	return query.Where("name IN ?", names)
 }
 
 func applyEnvGroupFilters(query *gorm.DB, groups []string) *gorm.DB {
@@ -133,7 +152,14 @@ func appendEnvToSortBucket(tx *gorm.DB, env *model.EnvVar, sortOrder int) error 
 	}).Error
 }
 
-func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint) error {
+// reorderEnvWithinSortBucket 把 source 挪到同一个置顶桶里 target 的前面（insertAfter 时是后面），再把整桶重编号。
+//
+// targetID 为 nil 表示移到 source 所在桶的末尾，此时不看 insertAfter。这是对外文档化的契约（apiData.ts「不传 target_id 表示移到本区末尾」），
+// APP v1.4.0 起在没有筛选时拖到可见末尾就靠它，由 TestEnvSortWithoutTargetMovesSourceToEndOfItsBucket 钉住，别改语义。
+// insertAfter 对应 PUT /envs/sort 的 position:"after"，与 PUT /tasks/sort 同名同义（契约 C4）：网页落在可见列表最后一行时发「插到上一行之后」，
+// 不必再靠「target 为空 = 整桶末尾」—— 那样分页 / 筛选下拖到本页底部，会越过所有没显示的项被甩到整桶最后，
+// 置顶项也永远拖不到置顶区末尾（落点的下一行必然是普通项，会被当成跨区拦下来，issue #131）。
+func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint, insertAfter bool) error {
 	var source model.EnvVar
 	if err := tx.First(&source, sourceID).Error; err != nil {
 		return fmt.Errorf("源环境变量不存在")
@@ -160,12 +186,6 @@ func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint) erro
 		return err
 	}
 
-	ordered := make([]model.EnvVar, 0, len(siblings))
-	insertIndex := len(siblings) - 1
-	if insertIndex < 0 {
-		insertIndex = 0
-	}
-
 	filtered := make([]model.EnvVar, 0, len(siblings))
 	for _, item := range siblings {
 		if item.ID == source.ID {
@@ -174,7 +194,7 @@ func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint) erro
 		filtered = append(filtered, item)
 	}
 
-	insertIndex = len(filtered)
+	insertIndex := len(filtered)
 	if targetID != nil {
 		insertIndex = -1
 		for idx, item := range filtered {
@@ -186,8 +206,13 @@ func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint) erro
 		if insertIndex == -1 {
 			return fmt.Errorf("目标环境变量不存在")
 		}
+		if insertAfter {
+			insertIndex++
+		}
 	}
 
+	// 用独立的底层数组拼装，避免 append 回写到 filtered 上把后半段覆盖掉。
+	ordered := make([]model.EnvVar, 0, len(filtered)+1)
 	ordered = append(ordered, filtered[:insertIndex]...)
 	ordered = append(ordered, source)
 	ordered = append(ordered, filtered[insertIndex:]...)
@@ -208,6 +233,8 @@ func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint) erro
 
 func (h *EnvHandler) List(c *gin.Context) {
 	keyword := c.Query("keyword")
+	// names 同时支持 `names=A,B` 和 `names=A&names=B` 两种写法（QueryArray 已经把重复参数收齐）。
+	nameFilters := parseEnvNameFilter(c.QueryArray("names")...)
 	groupFilters := parseEnvGroupFilter(append(c.QueryArray("groups"), c.Query("groups"), c.Query("group"))...)
 	enabledRaw := c.Query("enabled")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -228,6 +255,7 @@ func (h *EnvHandler) List(c *gin.Context) {
 		like := "%" + keyword + "%"
 		query = query.Where("UPPER(name) LIKE UPPER(?) OR UPPER(remarks) LIKE UPPER(?) OR UPPER(value) LIKE UPPER(?) OR UPPER(\"group\") LIKE UPPER(?)", like, like, like, like)
 	}
+	query = applyEnvNameFilters(query, nameFilters)
 	query = applyEnvGroupFilters(query, groupFilters)
 	if enabledRaw != "" {
 		enabled, err := strconv.ParseBool(enabledRaw)
@@ -284,6 +312,8 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		Remarks string   `json:"remarks"`
 		Group   string   `json:"group"`
 		Groups  []string `json:"groups"`
+		// 新建时可以直接标为重要（APP #16）；不传就是 false，请求与以前逐字节一致。不是布尔时整个请求 400。
+		Important bool `json:"important"`
 	}
 
 	var items []envItem
@@ -339,6 +369,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 			Enabled:   true,
 			SortOrder: envNormalSortOrder,
 			Position:  nextPos,
+			Important: item.Important,
 		}
 		if err := service.SealEnvVarValue(c.Request.Context(), &env, item.Value); err != nil {
 			sealFailed = true
@@ -547,6 +578,13 @@ type updateEnvRequest struct {
 	Group   *string   `json:"group"`
 	Groups  *[]string `json:"groups"`
 	Enabled *bool     `json:"enabled"`
+	// Position 是桶内排序值（越小越靠前；置顶区与普通区各自比较），#131 起允许手填（契约 C5）。
+	// 可选：App 的编辑只发 name/value/remarks/group(s)，详情弹层的「标为重要 / 取消重要」只发 important，不传就不动。
+	// 拖拽排序会把整桶重编号成 1000/2000/…，手填的值只保证相对顺序。
+	// 🔴 与 PUT /envs/sort 请求体里的 position（"before" / "after" 落点）同名不同义，别混用。
+	Position *float64 `json:"position"`
+	// Important 是「重要」标记（APP #16）：指针，不传不动；false 是合法修改（取消重要）。不是布尔时绑定就 400、什么都不写。
+	Important *bool `json:"important"`
 }
 
 func (h *EnvHandler) Update(c *gin.Context) {
@@ -614,6 +652,22 @@ func (h *EnvHandler) Update(c *gin.Context) {
 	}
 	if req.Enabled != nil && *req.Enabled != env.Enabled {
 		updates["enabled"] = *req.Enabled
+	}
+	// 「重要」标记：值变了才写（全部没变时照旧回「未检测到字段变更」）。
+	// 网页编辑弹窗没拨开关、App 的编辑请求都不带这个键，所以整体回写不会冲掉别处刚改的标记。
+	if req.Important != nil && *req.Important != env.Important {
+		updates["important"] = *req.Important
+	}
+	if req.Position != nil {
+		// 排序值必须是有限数。JSON 本身写不出 NaN / Inf（1e999 这类溢出值在上面绑定时就报错了），这里是兜底：
+		// 非有限值一旦落库，列表顺序 —— 也就是运行时同名多账号的拼接顺序 —— 会变得不可预期。
+		if math.IsNaN(*req.Position) || math.IsInf(*req.Position, 0) {
+			response.BadRequest(c, "排序值必须是有限数字")
+			return
+		}
+		if *req.Position != env.Position {
+			updates["position"] = *req.Position
+		}
 	}
 
 	// 青龙风格：(name, remarks) 不再是业务唯一键，同 name + 同 remarks 允许多条，
@@ -812,11 +866,17 @@ func (h *EnvHandler) Sort(c *gin.Context) {
 	var req struct {
 		SourceID uint  `json:"source_id" binding:"required"`
 		TargetID *uint `json:"target_id"`
+		// Position 是落点：插到 target 的前面还是后面，与 PUT /tasks/sort 同名同义（契约 C4）。
+		// 只认 "after"，空串和拼错的值一律按 "before"；不带这个键（老脚本、v1.3.9 及以前的 APP）同样按 before。
+		// target 为空时不看它：一律移到 source 所在桶的末尾（见 reorderEnvWithinSortBucket）。
+		// 🔴 与 env 行上的数值字段 position（桶内排序值，PUT /envs/:id 可写）同名不同义，别混用。
+		Position string `json:"position"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
 		return
 	}
+	insertAfter := strings.EqualFold(strings.TrimSpace(req.Position), "after")
 
 	var source model.EnvVar
 	if err := database.DB.First(&source, req.SourceID).Error; err != nil {
@@ -825,7 +885,7 @@ func (h *EnvHandler) Sort(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		return reorderEnvWithinSortBucket(tx, req.SourceID, req.TargetID)
+		return reorderEnvWithinSortBucket(tx, req.SourceID, req.TargetID, insertAfter)
 	}); err != nil {
 		switch err.Error() {
 		case "源环境变量不存在", "目标环境变量不存在":
@@ -857,6 +917,28 @@ func (h *EnvHandler) Groups(c *gin.Context) {
 	sort.Strings(groups)
 
 	response.Success(c, gin.H{"data": groups})
+}
+
+// envNameCount 是 /envs/names 的一项：变量名 + 全库同名条数。
+type envNameCount struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+// Names 按变量名聚合，给前端「变量名筛选」下拉提供选项与条数，形态与 Groups 对齐。
+//
+// 🔴 count 的口径是【全库同名条数】，刻意不跟随当前的 keyword / groups / enabled 筛选：
+// 它与 UpsertByName 冲突文案里那句「存在 N 条名为 'X' 的环境变量」是同一个 N，两处必须对得上。
+// 若改成筛选后的条数，同一个变量名会在下拉里和报错里显示两个不同的数字。
+func (h *EnvHandler) Names(c *gin.Context) {
+	var rows []envNameCount
+	database.DB.Raw(`SELECT name, COUNT(*) AS count FROM env_vars WHERE name != '' GROUP BY name ORDER BY name ASC`).Scan(&rows)
+
+	// Scan 到空结果时 rows 仍是 nil，直接返回会序列化成 null；/envs/groups 空库返回的是 []，
+	// 两个下拉接口的空值形态保持一致。
+	data := make([]envNameCount, 0, len(rows))
+	data = append(data, rows...)
+	response.Success(c, gin.H{"data": data})
 }
 
 func parseEnvExportIDs(raw string) []uint {
@@ -932,6 +1014,8 @@ func (h *EnvHandler) ExportAll(c *gin.Context) {
 			"group":   e.Group,
 			"groups":  model.SplitEnvGroups(e.Group),
 			"enabled": e.Enabled,
+			// 「重要」标记永远带上（false 也带）；导入端只升不降，旧文件里的 false 不会取消标记（APP #16）。
+			"important": e.Important,
 		}
 	}
 
@@ -1076,6 +1160,7 @@ func (h *EnvHandler) Import(c *gin.Context) {
 	}
 
 	imported := 0
+	updated := 0
 	errors := []string{}
 
 	for i, item := range req.Envs {
@@ -1093,6 +1178,9 @@ func (h *EnvHandler) Import(c *gin.Context) {
 
 		remarks, _ := item["remarks"].(string)
 		group, hasGroup := envGroupValueFromImportItem(item)
+		// 「重要」标记只认 JSON 布尔 true（APP #16），字符串 "true" 不算，与下面读 enabled 的口径一致。
+		// merge 命中已有变量时只升不降，见下方。
+		important, _ := item["important"].(bool)
 
 		enabled := true
 		if statusVal, ok := item["status"].(float64); ok {
@@ -1122,8 +1210,42 @@ func (h *EnvHandler) Import(c *gin.Context) {
 				if hasGroup {
 					updates["group"] = group
 				}
+				// 只升不降：文件里是 true 才写 true；false / 没这个键一律不动。
+				// 否则拿一份旧导出文件（老 APP 会把每条的 "important":false 原样带回）merge 一次，
+				// 用户后来标的重要变量就被静默取消了。取消标记只能在界面上显式操作，或显式 PUT {"important":false}。
+				// 🔴 别「顺手统一」成上面 hasGroup 那种「有键就写」的写法。
+				if important {
+					updates["important"] = true
+				}
 				database.DB.Model(&existing).Updates(updates)
 				imported++
+				updated++
+				continue
+			}
+		}
+
+		if req.Mode == "merge_value" {
+			// #161：名称 + 值都相同才算同一条，命中时值本来就一样，只更新备注 / 分组 / 启用 / 重要。
+			// 同一文件里重复的「名称 + 值」，第二条会命中第一条刚建的行，自然只落一条。
+			var existing model.EnvVar
+			if database.DB.Where("name = ? AND value = ?", name, value).First(&existing).Error == nil {
+				updates := map[string]interface{}{
+					"enabled": enabled,
+				}
+				// 备注有键才写，省略 remarks 的条目不会把已有备注清空
+				if _, ok := item["remarks"]; ok {
+					updates["remarks"] = remarks
+				}
+				if hasGroup {
+					updates["group"] = group
+				}
+				// 重要只升不降，口径同 merge
+				if important {
+					updates["important"] = true
+				}
+				database.DB.Model(&existing).Updates(updates)
+				imported++
+				updated++
 				continue
 			}
 		}
@@ -1142,6 +1264,8 @@ func (h *EnvHandler) Import(c *gin.Context) {
 			Enabled:   enabled,
 			SortOrder: envNormalSortOrder,
 			Position:  nextPos,
+			// 新建的行（merge 没命中、replace 清空后）按文件原样写「重要」标记。
+			Important: important,
 		}
 		if err := service.SealEnvVarValue(c.Request.Context(), &env, value); err != nil {
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
@@ -1151,6 +1275,15 @@ func (h *EnvHandler) Import(c *gin.Context) {
 			errors = append(errors, fmt.Sprintf("item %d: %s", i+1, err.Error()))
 			continue
 		}
+		if !enabled {
+			// EnvVar.Enabled 带 `default:true`：GORM 插入时会把零值 false 换成默认值 true 写进 INSERT，
+			// 文件里禁用的变量（enabled:false、青龙 status:1）导入后会被静默重新启用，「导出 → 替换导入」一圈禁用的全活了。
+			// 照 UpsertByName、restoreEnvVars 的做法，建完再补写一次 false（merge 命中走的是 map 更新，不受影响）。
+			// 补写失败时这一行已经建好（是启用的），照样算进导入数，同时在 errors 里点名，让调用方知道禁用状态没写进去。
+			if err := database.DB.Model(&model.EnvVar{}).Where("id = ?", env.ID).Update("enabled", false).Error; err != nil {
+				errors = append(errors, fmt.Sprintf("item %d: 已导入，但没能设为禁用: %s", i+1, err.Error()))
+			}
+		}
 		imported++
 	}
 
@@ -1159,12 +1292,25 @@ func (h *EnvHandler) Import(c *gin.Context) {
 		return
 	}
 
+	message := fmt.Sprintf("成功导入 %d 个环境变量", imported)
+	if updated > 0 {
+		message += fmt.Sprintf("（新建 %d 个，更新 %d 个）", imported-updated, updated)
+	}
 	c.JSON(201, gin.H{
-		"message": fmt.Sprintf("成功导入 %d 个环境变量", imported),
+		"message": message,
 		"errors":  errors,
+		"created": imported - updated,
+		"updated": updated,
 	})
 }
 
+// MoveToTop 把变量移入置顶区，追加到置顶区【末尾】（#131：先置顶的排在前面）。
+//
+// 原来取「置顶区最小 position - 1000」，后置顶的反而挤到最上面。现在与取消置顶同一个套路
+// （appendEnvToSortBucket：桶内最大 position + 1000）。
+// 存量不迁移：已置顶项彼此的相对顺序原样保留 —— 拖拽会把整桶重编号，分不清哪些顺序是用户手调的，
+// 反转会毁掉手工排好的顺序；升级后新置顶的一律排在它们后面。
+// 🔴 这个顺序同时是运行时同名多账号用 & 拼接的顺序（脚本里的「第 N 个账号」），语义变化要写进发布说明。
 func (h *EnvHandler) MoveToTop(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	var env model.EnvVar
@@ -1173,23 +1319,15 @@ func (h *EnvHandler) MoveToTop(c *gin.Context) {
 		return
 	}
 
+	// 已经在置顶区就原样返回（幂等）：Web 菜单按状态互斥不会发出这种请求，但 Open API 可以直调，
+	// 再追加一次会把它从置顶区中间挪到末尾，等于偷偷改了用户排好的顺序。
+	if env.SortOrder == envPinnedSortOrder {
+		response.Success(c, gin.H{"message": "已置顶"})
+		return
+	}
+
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		var firstPinned model.EnvVar
-		err := tx.Where("sort_order = ?", envPinnedSortOrder).
-			Order("position ASC, id ASC").
-			First(&firstPinned).Error
-
-		newPos := envPositionStep
-		if err == nil {
-			newPos = firstPinned.Position - envPositionStep
-		} else if err != gorm.ErrRecordNotFound {
-			return err
-		}
-
-		return tx.Model(&env).Updates(map[string]interface{}{
-			"sort_order": envPinnedSortOrder,
-			"position":   newPos,
-		}).Error
+		return appendEnvToSortBucket(tx, &env, envPinnedSortOrder)
 	}); err != nil {
 		response.InternalError(c, "置顶失败")
 		return
@@ -1261,6 +1399,8 @@ func (h *EnvHandler) RegisterRoutes(r *gin.RouterGroup) {
 		envs.PUT("/:id/move-top", h.MoveToTop)
 		envs.PUT("/:id/cancel-top", h.CancelMoveToTop)
 		envs.GET("/groups", h.Groups)
+		// 与 /groups 同理：静态路径优先于上面的 /:id，不会被当成 id 走进 Get。
+		envs.GET("/names", h.Names)
 		envs.GET("/export-all", h.ExportAll)
 		envs.POST("/export-files", h.ExportFiles)
 		envs.POST("/import", h.Import)

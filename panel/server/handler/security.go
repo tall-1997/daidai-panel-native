@@ -62,10 +62,13 @@ func (h *SecurityHandler) LoginLogs(c *gin.Context) {
 func (h *SecurityHandler) Sessions(c *gin.Context) {
 	service.CleanExpiredSessions()
 
+	// 列出「access 或 refresh 仍有效」的会话：登录超过 access 有效期、但还能续期的会话也得看得见，才能单独撤销它
+	now := time.Now()
 	var sessions []model.UserSession
-	database.DB.Where("expires_at > ?", time.Now()).
+	database.DB.Where("expires_at > ? OR (refresh_expires_at IS NOT NULL AND refresh_expires_at > ?)", now, now).
 		Order("created_at DESC").Find(&sessions)
 
+	currentSessionID := c.GetString("sid")
 	data := make([]map[string]interface{}, len(sessions))
 	for i, s := range sessions {
 		item := s.ToDict()
@@ -73,6 +76,8 @@ func (h *SecurityHandler) Sessions(c *gin.Context) {
 		item["client_type"] = clientType
 		item["client_type_label"] = service.SessionClientLabel(clientType)
 		item["client_name"] = service.ResolveStoredSessionClientName(clientType, s.ClientName, s.UserAgent)
+		// current：这一行是不是发起请求的这个登录会话。按会话号认，续期过的令牌也认得出来
+		item["current"] = s.JTI == currentSessionID
 		data[i] = item
 	}
 
@@ -102,7 +107,6 @@ func (h *SecurityHandler) RevokeAllSessions(c *gin.Context) {
 
 func (h *SecurityHandler) RevokeOtherSessions(c *gin.Context) {
 	username, _ := c.Get("username")
-	currentJTI, _ := c.Get("jti")
 
 	var user model.User
 	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
@@ -110,7 +114,9 @@ func (h *SecurityHandler) RevokeOtherSessions(c *gin.Context) {
 		return
 	}
 
-	count := service.RevokeOtherUserSessions(user.ID, currentJTI.(string))
+	// 按会话号认「当前会话」：用续期得来的令牌发起时，它的 jti 不是会话行里记的那个，
+	// 按 jti 排除会把自己的会话一起撤掉，当场踢下线
+	count := service.RevokeOtherUserSessions(user.ID, c.GetString("sid"))
 	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个其他会话", count)})
 }
 

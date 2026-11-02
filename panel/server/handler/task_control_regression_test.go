@@ -1,7 +1,6 @@
 package handler_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,13 +26,9 @@ func setupTaskExecutionRouter(t *testing.T) (*gin.Engine, string) {
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "task-control-operator", "operator")
 	token := testutil.MustCreateAccessToken(t, user.Username, user.Role)
-	_ = service.StopSchedulerV2(context.Background())
-	if err := service.StartSchedulerV2(context.Background()); err != nil {
-		t.Fatalf("start scheduler: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = service.StopSchedulerV2(context.Background())
-	})
+	service.ShutdownSchedulerV2()
+	service.InitSchedulerV2()
+	t.Cleanup(service.ShutdownSchedulerV2)
 	return engine, token
 }
 

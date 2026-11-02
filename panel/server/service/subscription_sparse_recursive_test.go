@@ -98,15 +98,16 @@ func TestBuildSparseCheckoutPatternsPairsRecursiveRuleForEachFragment(t *testing
 	})
 
 	t.Run("递归规则不破坏包含侧的完整检出降级", func(t *testing.T) {
-		// 白名单含 gitignore 元字符 → 整体退回完整检出，patterns 必须仍然为空；
+		// 白名单含正则片段（#129 之前的说法是「含 gitignore 元字符」）→ 整体退回完整检出，patterns 必须仍然为空；
 		// 依赖规则也不能借递归规则把它重新激活成「只检出依赖」。
 		sub := &model.Subscription{Whitelist: "^jd[^_]|utils", DependOn: "sendNotify"}
 		patterns, warnings := buildSubscriptionSparseCheckoutPatterns(sub)
 		if len(patterns) != 0 {
 			t.Fatalf("包含侧已退回完整检出，不应产出任何规则, got %#v", patterns)
 		}
-		if !strings.Contains(strings.Join(warnings, "\n"), "^jd[^_]") {
-			t.Fatalf("应点名不安全的白名单片段, got %#v", warnings)
+		joined := strings.Join(warnings, "\n")
+		if !strings.Contains(joined, "^jd[^_]") || !strings.Contains(joined, "正则") {
+			t.Fatalf("应点名白名单里的正则片段, got %#v", warnings)
 		}
 	})
 

@@ -99,6 +99,8 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 		if exitCode != 0 && model.GetRegisteredConfigBool("auto_install_deps") {
 			installed := map[string]bool{}
 			const maxRetries = 5
+			// logOffset 是 logLen() 给出的全局行号，不是 Logs 的切片下标：
+			// 输出超过上限时头部会被成块丢弃，两者会错开，logOutputSince 按全局行号解释它。
 			logOffset := 0
 			for i := 0; i < maxRetries && exitCode != 0; i++ {
 				if run.isStopped() {
@@ -153,7 +155,7 @@ func (h *ScriptHandler) RunCode(c *gin.Context) {
 			}
 		}
 
-		if hint := service.BuildModuleCompatibilityHint(run.logOutput()); hint != "" {
+		if hint := service.BuildRuntimeFailureHint(run.logOutput()); hint != "" {
 			run.appendLog(hint)
 		}
 

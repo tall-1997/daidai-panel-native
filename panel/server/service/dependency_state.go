@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,26 +41,21 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 	case model.DepTypeNodeJS:
 		modDir := filepath.Join(depsDir, "nodejs", "node_modules", filepath.FromSlash(NormalizeNodeDependencyPackageName(name)))
 		if info, err := os.Stat(modDir); err == nil {
-			if !info.IsDir() {
-				return false
-			}
-			requested, constrained := exactNodeDependencyVersion(name)
-			if !constrained {
-				return !strings.ContainsAny(nodeDependencyVersionSpec(name), "<>=~^*")
-			}
-			return requested == nodeDependencyInstalledVersion(modDir)
+			return info.IsDir()
 		}
 	case model.DepTypePython:
 		pythonVersion = NormalizeDependencyPythonVersion(pythonVersion)
-		if installed, ok := pythonDistributionVersion(ManagedPythonSitePackagesDir(pythonVersion), name); ok {
-			requested, constrained := exactPythonDependencyVersion(name)
-			if constrained {
-				return requested == installed
-			}
-			return !strings.ContainsAny(name, "<>=!~")
+		// 拿到托管 pip 就只问它一次：下面 venv 里的 bin/pip、bin/pip3 与 NewPipCommandForPythonVersion
+		// 解析出来的都是同一个 venv 的 pip，结论不会变，判缺时却要多起好几个子进程（#156）。
+		// 现在判缺从当初的 12 个降到 3 个：解析托管 pip 时一遍健康检查的 2 个 + 1 次 pip show（#158 起不再查第二遍）。
+		if managedPip := strings.TrimSpace(ResolveManagedPipBinaryForPythonVersion(pythonVersion)); managedPip != "" {
+			showCmd := exec.Command(managedPip, "show", name)
+			showCmd.Env = SanitizePipEnv(os.Environ())
+			out, err := showCmd.CombinedOutput()
+			return err == nil && strings.Contains(string(out), "Name:")
 		}
+		// 拿不到托管 pip（版本不支持、venv 坏了）时，才按原来的顺序试 venv 里残留的 pip 与系统 pip。
 		candidates := []string{
-			ResolveManagedPipBinaryForPythonVersion(pythonVersion),
 			filepath.Join(ManagedPythonVenvDir(pythonVersion), "bin", "pip"),
 			filepath.Join(ManagedPythonVenvDir(pythonVersion), "bin", "pip3"),
 			filepath.Join(ManagedPythonVenvDir(pythonVersion), "Scripts", "pip.exe"),
@@ -73,11 +67,10 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 				continue
 			}
 			if _, err := os.Stat(pipBin); err == nil {
-				showCmd := androidManagedCommand(pipBin, []string{"show", name}, "")
+				showCmd := exec.Command(pipBin, "show", name)
 				showCmd.Env = SanitizePipEnv(os.Environ())
-				androidFinalizeCommand(showCmd)
 				if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
-					return pythonShowVersionSatisfies(name, string(out))
+					return true
 				}
 			}
 		}
@@ -86,12 +79,11 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 			return false
 		}
 		showCmd.Env = SanitizePipEnv(os.Environ())
-		androidFinalizeCommand(showCmd)
 		if out, err := showCmd.CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
-			return pythonShowVersionSatisfies(name, string(out))
+			return true
 		}
 	case model.DepTypeLinux:
-		if _, ok := managedRuntimeBinary(name); ok {
+		if _, err := exec.LookPath(name); err == nil {
 			return true
 		}
 		for _, probe := range []struct {
@@ -102,20 +94,10 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 			{binary: "dpkg-query", args: []string{"-W", "-f=${Status}", name}},
 			{binary: "rpm", args: []string{"-q", name}},
 		} {
-			bin := probe.binary
-			if _, err := exec.LookPath(bin); err != nil {
-				if rt := androidContainer(); rt.active {
-					guest := rt.rootfsBinary(bin)
-					if guest == "" {
-						continue
-					}
-					bin = guest
-				} else {
-					continue
-				}
+			if _, err := exec.LookPath(probe.binary); err != nil {
+				continue
 			}
-			probeCmd := androidManagedCommand(bin, probe.args, "")
-			if out, err := probeCmd.CombinedOutput(); err == nil {
+			if out, err := exec.Command(probe.binary, probe.args...).CombinedOutput(); err == nil {
 				if probe.binary != "dpkg-query" || strings.Contains(string(out), "install ok installed") {
 					return true
 				}
@@ -124,93 +106,6 @@ func DependencyInstalledForPythonVersion(depType, name, pythonVersion string) bo
 	}
 
 	return false
-}
-
-func pythonDistributionInstalled(sitePackages, name string) bool {
-	_, ok := pythonDistributionVersion(sitePackages, name)
-	return ok
-}
-
-func pythonDistributionVersion(sitePackages, name string) (string, bool) {
-	entries, err := os.ReadDir(sitePackages)
-	if err != nil {
-		return "", false
-	}
-	want := canonicalPythonDependencyName(name)
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".dist-info") {
-			continue
-		}
-		base := strings.TrimSuffix(entry.Name(), ".dist-info")
-		if index := strings.LastIndex(base, "-"); index > 0 {
-			base = base[:index]
-		}
-		if canonicalPythonDependencyName(base) == want {
-			metadata, err := os.ReadFile(filepath.Join(sitePackages, entry.Name(), "METADATA"))
-			if err == nil {
-				for _, line := range strings.Split(string(metadata), "\n") {
-					if strings.HasPrefix(line, "Version:") {
-						return strings.TrimSpace(strings.TrimPrefix(line, "Version:")), true
-					}
-				}
-			}
-			if index := strings.LastIndex(strings.TrimSuffix(entry.Name(), ".dist-info"), "-"); index > 0 {
-				return strings.TrimSuffix(entry.Name(), ".dist-info")[index+1:], true
-			}
-			return "", true
-		}
-	}
-	return "", false
-}
-
-func exactPythonDependencyVersion(spec string) (string, bool) {
-	for _, separator := range []string{"===", "=="} {
-		if index := strings.Index(spec, separator); index >= 0 {
-			version := strings.TrimSpace(strings.SplitN(spec[index+len(separator):], ";", 2)[0])
-			return version, version != ""
-		}
-	}
-	return "", false
-}
-
-func pythonShowVersionSatisfies(spec, output string) bool {
-	requested, exact := exactPythonDependencyVersion(spec)
-	if !exact {
-		return !strings.ContainsAny(spec, "<>=!~")
-	}
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "Version:") {
-			return requested == strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
-		}
-	}
-	return false
-}
-
-func nodeDependencyVersionSpec(spec string) string {
-	name := NormalizeNodeDependencyPackageName(spec)
-	return strings.TrimPrefix(strings.TrimSpace(spec[len(name):]), "@")
-}
-
-func exactNodeDependencyVersion(spec string) (string, bool) {
-	version := nodeDependencyVersionSpec(spec)
-	if version == "" || version == "latest" || strings.ContainsAny(version, "<>=~^*") {
-		return "", false
-	}
-	return version, true
-}
-
-func nodeDependencyInstalledVersion(moduleDir string) string {
-	payload, err := os.ReadFile(filepath.Join(moduleDir, "package.json"))
-	if err != nil {
-		return ""
-	}
-	var manifest struct {
-		Version string `json:"version"`
-	}
-	if json.Unmarshal(payload, &manifest) != nil {
-		return ""
-	}
-	return strings.TrimSpace(manifest.Version)
 }
 
 func NormalizeNodeDependencyPackageName(spec string) string {

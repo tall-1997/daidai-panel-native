@@ -1,7 +1,8 @@
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { systemApi } from '@/api/system'
 import { copyText } from '@/utils/clipboard'
+import { formatDateTime } from '@/utils/datetime'
 import { usePageActivity } from '@/composables/usePageActivity'
 
 export type PanelLogLevel = '' | 'debug' | 'info' | 'warn' | 'error'
@@ -10,7 +11,10 @@ const defaultPanelLogLines = 200
 const defaultPanelLogLevel: PanelLogLevel = 'info'
 const updatePanelLogKeyword = '更新'
 
-export function usePanelLogViewer() {
+// isTabActive：「面板日志」子标签此刻是否正在显示（#159 修复 E）。
+// 这个组合式逻辑挂在整个系统设置页上，只看页面可见的话，停在别的子标签、甚至从没点开过面板日志时，
+// 页面一重新可见就会开始每 3 秒拉一次面板日志，所以自动刷新与筛选重拉都要再看它。
+export function usePanelLogViewer(isTabActive: Readonly<Ref<boolean>>) {
   const { isPageActive } = usePageActivity()
 
   const loading = ref(false)
@@ -64,7 +68,8 @@ export function usePanelLogViewer() {
 
   function scheduleAutoRefresh() {
     stopAutoRefresh()
-    if (!autoRefresh.value || !isPageActive.value) {
+    // 不在面板日志子标签时不续约：在途请求结束后走到这里也会停下，不再留 3 秒定时器
+    if (!autoRefresh.value || !isPageActive.value || !isTabActive.value) {
       return
     }
     refreshTimer = setTimeout(() => {
@@ -94,7 +99,7 @@ export function usePanelLogViewer() {
       })
       logs.value = res.data?.logs || []
       total.value = Number(res.data?.total || 0)
-      lastLoadedAt.value = new Date().toLocaleString()
+      lastLoadedAt.value = formatDateTime(new Date())
     } catch (err: any) {
       if (showError) {
         ElMessage.error(err?.response?.data?.error || err?.message || '加载面板日志失败')
@@ -158,17 +163,20 @@ export function usePanelLogViewer() {
     ElMessage.success('已下载面板日志')
   }
 
+  // 切走面板日志子标签时 isTabActive 变 false，这里立即停掉 3 秒轮询
   watch(
-    () => [autoRefresh.value, isPageActive.value],
+    () => [autoRefresh.value, isPageActive.value, isTabActive.value],
     () => {
       scheduleAutoRefresh()
     }
   )
 
+  // 刻意不把 isTabActive 放进来源：切回面板日志子标签时由设置页的 handleTabChange 拉一次，放进来会重复请求
   watch(
     () => [lines.value, keyword.value, level.value, isPageActive.value],
     (_value, _oldValue) => {
-      if (!isPageActive.value) {
+      // 不在面板日志子标签时（包括页面隐藏后重新可见）不重拉
+      if (!isPageActive.value || !isTabActive.value) {
         return
       }
       scheduleFilterReload()

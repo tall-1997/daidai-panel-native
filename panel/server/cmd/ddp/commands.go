@@ -77,6 +77,8 @@ func run(args []string) int {
 		err = runDisable2FA(rt, args[1:])
 	case "ip-whitelist", "ip-white", "whitelist":
 		err = runIPWhitelist(rt, args[1:])
+	case "mcp":
+		err = runMCP(rt, args[1:])
 	default:
 		err = fmt.Errorf("未知命令: %s", args[0])
 	}
@@ -105,7 +107,7 @@ func runStatus(rt *cliRuntime) error {
 	resource := service.GetResourceInfo()
 	pid, pidErr := readServerPID(rt.serverPIDFile())
 	serverRunning := pidErr == nil && isProcessRunning(pid)
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", rt.backendPort())
+	healthURL := rt.backendBaseURL() + "/api/v1/health"
 	backendReachable := checkHTTPReachable(healthURL)
 
 	var taskCount int64
@@ -198,7 +200,7 @@ func runCheck(rt *cliRuntime) error {
 		add("服务进程", "FAIL", fmt.Sprintf("PID %d 不存在", pid), true)
 	}
 
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", rt.backendPort())
+	healthURL := rt.backendBaseURL() + "/api/v1/health"
 	if checkHTTPReachable(healthURL) {
 		add("后端探活", "OK", healthURL, false)
 	} else {
@@ -217,7 +219,14 @@ func runCheck(rt *cliRuntime) error {
 	if planErr == nil && plan.UpdateManager == "watchtower" {
 		// 精简镜像由 Watchtower 托管更新，不应因为没有 Docker CLI 或 docker.sock 报出误导性警告。
 		if plan.WatchtowerManualTriggerSupported {
-			add("更新托管", "OK", "Watchtower HTTP API 已配置，ddp update 可立即触发检查", false)
+			// 只看配置齐不齐会漏掉「配置没问题但 API 根本没在监听」的情况（issue #108：
+			// Watchtower 低于 v1.20.0 时会静默忽略 WATCHTOWER_HTTP_API_ENDPOINTS，端口不会打开），
+			// 所以这里再连一下确认。短超时、不触发更新，失败也只是这一条转红，不影响其余检查项。
+			if reachable, detail := handler.CheckWatchtowerAPIReachable(3 * time.Second); reachable {
+				add("更新托管", "OK", "Watchtower HTTP API 已配置且探活通过，ddp update 可立即触发检查", false)
+			} else {
+				add("更新托管", "FAIL", detail, true)
+			}
 		} else if plan.WatchtowerPeriodicPollsEnabled || plan.WatchtowerSchedule != "" {
 			add("更新托管", "WARN", "Watchtower 定时检查已启用；如需使用 ddp update，请补充 HTTP API 地址和令牌", false)
 		} else {
@@ -921,7 +930,11 @@ func runResetPassword(rt *cliRuntime, args []string) error {
 	// 同步清除登录失败记录，避免还在锁定中
 	_ = database.DB.Where("username = ?", user.Username).Delete(&model.LoginAttempt{}).Error
 
-	fmt.Printf("已重置用户 %s 的密码\n", user.Username)
+	// 与网页改密一致：撤销该用户的全部登录会话（含续期出的令牌）。命令行是独立进程，
+	// 撤销写在库里，运行中的面板下一个请求就能看到，不用重启。
+	revoked := service.RevokeAllUserSessions(user.ID)
+
+	fmt.Printf("已重置用户 %s 的密码，已撤销 %d 个登录会话\n", user.Username, revoked)
 	return nil
 }
 
@@ -1017,7 +1030,10 @@ func runResetUsername(rt *cliRuntime, args []string) error {
 	// 同步清除历史登录失败记录
 	_ = database.DB.Where("username = ?", oldUsername).Delete(&model.LoginAttempt{}).Error
 
-	fmt.Printf("已将用户 %s 重命名为 %s\n", oldUsername, newName)
+	// 与网页改用户名一致：撤销该用户的全部登录会话，旧用户名签出的令牌一律作废
+	revoked := service.RevokeAllUserSessions(user.ID)
+
+	fmt.Printf("已将用户 %s 重命名为 %s，已撤销 %d 个登录会话\n", oldUsername, newName, revoked)
 	return nil
 }
 

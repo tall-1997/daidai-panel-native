@@ -80,7 +80,10 @@ func GetResourceInfo() ResourceInfo {
 			info.DiskUsage = math.Round(float64(info.DiskUsed)/float64(info.DiskTotal)*10000) / 100
 		}
 
-		info.CPUUsage, info.NetRxBytes, info.NetTxBytes, info.NetRxSpeed, info.NetTxSpeed = getLinuxCPUAndNet()
+		sample := defaultLinuxResourceSampler.current()
+		info.CPUUsage = sample.cpuUsage
+		info.NetRxBytes, info.NetTxBytes = sample.netRx, sample.netTx
+		info.NetRxSpeed, info.NetTxSpeed = sample.rxSpeed, sample.txSpeed
 	}
 	if runtime.GOOS == "windows" {
 		fillWindowsResourceInfo(&info)
@@ -202,91 +205,198 @@ func getLinuxDisk() (total, used, free uint64) {
 	return
 }
 
-func getLinuxCPU() float64 {
-	readStat := func() (idle, total uint64) {
-		out, err := os.ReadFile("/proc/stat")
-		if err != nil {
-			return
-		}
-		lines := strings.Split(string(out), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "cpu ") {
-				fields := strings.Fields(line)
-				if len(fields) < 5 {
-					return
-				}
-				var sum uint64
-				for _, f := range fields[1:] {
-					v, _ := strconv.ParseUint(f, 10, 64)
-					sum += v
-				}
-				idleVal, _ := strconv.ParseUint(fields[4], 10, 64)
-				return idleVal, sum
-			}
-		}
-		return
-	}
-
-	idle1, total1 := readStat()
-	time.Sleep(500 * time.Millisecond)
-	idle2, total2 := readStat()
-
-	totalDelta := total2 - total1
-	idleDelta := idle2 - idle1
-	if totalDelta == 0 {
-		return 0
-	}
-	usage := float64(totalDelta-idleDelta) / float64(totalDelta) * 100
-	return math.Round(usage*100) / 100
+// procStatCPU 是 /proc/stat 汇总行「cpu 」的一份累计计数快照（单位 jiffies），
+// 只留算使用率要用的两个量，免得调用方各自去记字段顺序。
+type procStatCPU struct {
+	// total 只加 user..steal 前 8 项：guest / guest_nice 内核已经计入 user / nice，
+	// 再加一遍会把跑虚拟机的机器的分母和分子一起虚高。
+	total uint64
+	// idle 含 iowait：CPU 在等盘时其实是空着的，top / htop 和常见面板都不算它忙碌。
+	idle uint64
 }
 
-func getLinuxCPUAndNet() (cpuUsage float64, netRx, netTx uint64, rxSpeed, txSpeed float64) {
-	readCPUStat := func() (idle, total uint64) {
-		out, err := os.ReadFile("/proc/stat")
-		if err != nil {
+// parseProcStatCPU 从 /proc/stat 内容中解析汇总行；找不到或格式不对时返回 false。
+func parseProcStatCPU(content []byte) (procStatCPU, bool) {
+	for _, line := range strings.Split(string(content), "\n") {
+		if !strings.HasPrefix(line, "cpu ") {
+			continue
+		}
+		// 字段依次是 user nice system idle iowait irq softirq steal guest guest_nice，
+		// 老内核只有前 4～7 项，缺的按 0 算。
+		fields := strings.Fields(line)[1:]
+		if len(fields) < 4 {
+			return procStatCPU{}, false
+		}
+		var values [8]uint64
+		for i := 0; i < len(fields) && i < len(values); i++ {
+			v, err := strconv.ParseUint(fields[i], 10, 64)
+			if err != nil {
+				return procStatCPU{}, false
+			}
+			values[i] = v
+		}
+		var snap procStatCPU
+		for _, v := range values {
+			snap.total += v
+		}
+		snap.idle = values[3] + values[4]
+		return snap, true
+	}
+	return procStatCPU{}, false
+}
+
+// cpuUsagePercent 由前后两份快照算这段时间的平均使用率（百分比，保留两位小数）。
+// 口径：忙碌 = 总计 − idle − iowait。
+func cpuUsagePercent(prev, cur procStatCPU) float64 {
+	// 总计没涨（间隔太短）或倒退（计数回绕、传反了快照）时这一轮没法算，
+	// 报 0 而不是让无符号减法下溢成一个离谱的大数。
+	if cur.total <= prev.total {
+		return 0
+	}
+	totalDelta := cur.total - prev.total
+	prevBusy := prev.total - prev.idle
+	curBusy := cur.total - cur.idle
+	// 部分内核的 iowait 会回退，忙碌量可能不增反减，同样按 0 处理。
+	if curBusy <= prevBusy {
+		return 0
+	}
+	busyDelta := curBusy - prevBusy
+	if busyDelta > totalDelta {
+		busyDelta = totalDelta
+	}
+	return math.Round(float64(busyDelta)/float64(totalDelta)*10000) / 100
+}
+
+// netBytesPerSecond 按两次采样实际相隔的时间算每秒字节数；
+// 计数倒退（网卡重建、计数回绕）时报 0。
+func netBytesPerSecond(prev, cur uint64, elapsed time.Duration) float64 {
+	if cur < prev || elapsed <= 0 {
+		return 0
+	}
+	return math.Round(float64(cur-prev) / elapsed.Seconds())
+}
+
+// linuxResourceSnapshot 是一个采样点：CPU 累计计数、网卡累计字节和采样时刻。
+type linuxResourceSnapshot struct {
+	cpu   procStatCPU
+	cpuOK bool
+	rx    uint64
+	tx    uint64
+	at    time.Time
+}
+
+// linuxResourceSample 是两个采样点之间算出来的结果，资源信息接口直接返回它。
+type linuxResourceSample struct {
+	cpuUsage float64
+	netRx    uint64
+	netTx    uint64
+	rxSpeed  float64
+	txSpeed  float64
+}
+
+func readLinuxResourceSnapshot() linuxResourceSnapshot {
+	snap := linuxResourceSnapshot{at: time.Now()}
+	if content, err := os.ReadFile("/proc/stat"); err == nil {
+		snap.cpu, snap.cpuOK = parseProcStatCPU(content)
+	}
+	snap.rx, snap.tx = getLinuxNetBytes()
+	return snap
+}
+
+func buildLinuxResourceSample(prev, cur linuxResourceSnapshot) linuxResourceSample {
+	sample := linuxResourceSample{netRx: cur.rx, netTx: cur.tx}
+	if prev.cpuOK && cur.cpuOK {
+		sample.cpuUsage = cpuUsagePercent(prev.cpu, cur.cpu)
+	}
+	elapsed := cur.at.Sub(prev.at)
+	sample.rxSpeed = netBytesPerSecond(prev.rx, cur.rx, elapsed)
+	sample.txSpeed = netBytesPerSecond(prev.tx, cur.tx, elapsed)
+	return sample
+}
+
+const (
+	// linuxResourceSampleInterval 是后台采样周期，接口给出的是这段时间的平均值。
+	linuxResourceSampleInterval = 3 * time.Second
+	// linuxResourceFallbackWindow 只用于后台还没出第一份结果时的同步兜底采样。
+	linuxResourceFallbackWindow = 500 * time.Millisecond
+)
+
+// linuxResourceSampler 在后台定时采样 CPU 与网速，资源信息接口只读缓存。
+//
+// 为什么不再在请求里现场采（#140）：APP 首页会并发请求资源信息、统计（遍历脚本目录）、
+// 仪表盘（聚合一周日志），现场 sleep 500ms 的窗口正好罩住面板自己处理这批请求的开销，
+// 2 核机器上读数被抬到 50% 左右，而同机其它面板只有个位数。
+type linuxResourceSampler struct {
+	read           func() linuxResourceSnapshot
+	interval       time.Duration
+	fallbackWindow time.Duration
+	// stop 只给测试收掉后台循环用；生产环境为 nil，循环随进程存活。
+	stop <-chan struct{}
+
+	startOnce sync.Once
+	mu        sync.RWMutex
+	latest    linuxResourceSample
+	hasLatest bool
+	// fallbackMu 让首批并发请求只做一次同步采样，其余的直接拿它的结果。
+	fallbackMu sync.Mutex
+}
+
+var defaultLinuxResourceSampler = &linuxResourceSampler{
+	read:           readLinuxResourceSnapshot,
+	interval:       linuxResourceSampleInterval,
+	fallbackWindow: linuxResourceFallbackWindow,
+}
+
+// current 返回最近一次采样结果；还没有结果时同步采样一次兜底。
+func (s *linuxResourceSampler) current() linuxResourceSample {
+	// 懒启动：第一次有人要资源信息时才起后台循环，不动面板启动流程；
+	// ddp status 这类一次性命令只是多一个随进程退出的 goroutine。
+	s.startOnce.Do(func() { go s.loop() })
+
+	if sample, ok := s.cached(); ok {
+		return sample
+	}
+
+	s.fallbackMu.Lock()
+	defer s.fallbackMu.Unlock()
+	if sample, ok := s.cached(); ok {
+		return sample
+	}
+	prev := s.read()
+	time.Sleep(s.fallbackWindow)
+	sample := buildLinuxResourceSample(prev, s.read())
+	s.mu.Lock()
+	// 后台循环若已先一步写入，它的窗口更长更准，不拿兜底结果覆盖。
+	if !s.hasLatest {
+		s.latest, s.hasLatest = sample, true
+	}
+	s.mu.Unlock()
+	return sample
+}
+
+func (s *linuxResourceSampler) cached() (linuxResourceSample, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.latest, s.hasLatest
+}
+
+func (s *linuxResourceSampler) loop() {
+	prev := s.read()
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			cur := s.read()
+			sample := buildLinuxResourceSample(prev, cur)
+			prev = cur
+			s.mu.Lock()
+			s.latest, s.hasLatest = sample, true
+			s.mu.Unlock()
+		case <-s.stop:
 			return
 		}
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.HasPrefix(line, "cpu ") {
-				fields := strings.Fields(line)
-				if len(fields) < 5 {
-					return
-				}
-				var sum uint64
-				for _, f := range fields[1:] {
-					v, _ := strconv.ParseUint(f, 10, 64)
-					sum += v
-				}
-				idleVal, _ := strconv.ParseUint(fields[4], 10, 64)
-				return idleVal, sum
-			}
-		}
-		return
 	}
-
-	idle1, total1 := readCPUStat()
-	rx1, tx1 := getLinuxNetBytes()
-
-	time.Sleep(500 * time.Millisecond)
-
-	idle2, total2 := readCPUStat()
-	rx2, tx2 := getLinuxNetBytes()
-
-	totalDelta := total2 - total1
-	idleDelta := idle2 - idle1
-	if totalDelta > 0 {
-		cpuUsage = math.Round(float64(totalDelta-idleDelta)/float64(totalDelta)*10000) / 100
-	}
-
-	netRx = rx2
-	netTx = tx2
-	if rx2 >= rx1 {
-		rxSpeed = float64(rx2-rx1) * 2
-	}
-	if tx2 >= tx1 {
-		txSpeed = float64(tx2-tx1) * 2
-	}
-	return
 }
 
 func getLinuxNetBytes() (rx, tx uint64) {

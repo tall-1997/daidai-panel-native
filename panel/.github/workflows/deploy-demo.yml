@@ -1,0 +1,137 @@
+name: Deploy Demo
+
+# 在线演示 Demo 的「构建 + 部署到 GitHub Pages」。
+#
+# 抽成可复用工作流（与 checks.yml 同一模式）而不是写死在 release.yml 里，是因为它有两条触发路径：
+#   1. workflow_call —— 发版时由 release.yml 调用，且 needs 里带上 release job，
+#      保证公网 Demo 恒等于「已经真的发出去了的最新正式版」；
+#   2. workflow_dispatch —— 维护者在【不发版】的情况下手动部署一次，
+#      用来验证本地静态预览与真实 GH Pages 之间那些已知的行为差异。
+#
+# ⚠️ 为什么【不】直接给 release.yml 加 workflow_dispatch：
+#    那样一次手动触发会把整个发版流程都拉起来（在非 tag 引用上尝试 gh release create），
+#    而且 release.yml 里各 job 的 `${GITHUB_REF_NAME#v}` 在分支上取到的是分支名，
+#    版本号会变成字符串 "main"。拆成独立工作流后，两条路径互不污染。
+#
+# ⚠️ 用相对路径调用（uses: ./.github/workflows/deploy-demo.yml）时，
+#    GitHub 取的是【调用方所在那次提交】里的本文件，所以发版 tag 必须打在含本文件的提交之后。
+
+on:
+  # workflow_call 与 workflow_dispatch 的 inputs 是两套【互相独立】的声明，必须各写一遍；
+  # 但运行时两者都从同一个 `inputs` 上下文读取，下面的解析步骤只需处理一次。
+  workflow_call:
+    inputs:
+      version:
+        description: '演示站要显示的面板版本号（不带前缀 v）。发版路径由 release.yml 传入 tag 版本。'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '可选：演示站要显示的版本号（不带前缀 v）。留空则取 web/package.json 的版本并加 -dev 后缀。'
+        required: false
+        type: string
+        default: ''
+
+env:
+  # ⚠️ 顶层 env 不会跨 workflow_call 边界传递 —— 调用方 release.yml 的 env 在这里读不到，
+  #    所以这行必须重复写一遍。checks.yml 也是同样的处理。
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  deploy:
+    name: 部署在线演示 Demo 到 GitHub Pages
+    runs-on: ubuntu-latest
+    # ⚠️ 这份 permissions 必须与 release.yml 里调用方 job 上那份【保持一致】。
+    #    可复用工作流的规则是「只能收窄，不能放大」：被调用方声明的权限一旦超出调用方授予的范围，
+    #    整个 run 会直接失败（报 "The workflow is requesting 'pages: write', but is only allowed 'pages: none'"）。
+    #    相等是允许的，所以两边写成同一个集合。
+    #    workflow_dispatch 路径没有调用方，用的就是这一份 —— 因此这里【不能】省略不写，
+    #    省略会退回仓库默认的 GITHUB_TOKEN 权限，多半没有 pages: write，手动部署必失败。
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # ⚠️ 两条【只能在仓库设置里做】的前置条件，缺任何一条本 job 都会在线上失败，
+    #    而本地静态预览（起个 http-server 指到 web/dist）一条都验不出来：
+    #
+    #    1. Settings → Pages → Source 选 "GitHub Actions"。
+    #       否则 configure-pages 那一步直接失败。
+    #
+    #    2. Settings → Environments → github-pages → "Deployment branches and tags"
+    #       必须放行 tag（加一条 `v*` 的 tag 规则，或改成 No restriction）。
+    #       GitHub 在启用 Pages 时会【自动创建】github-pages 这个环境，并默认只允许
+    #       默认分支部署；本工作流的主路径是 release.yml 在 `push tag v*` 上调用它，
+    #       ref 是 refs/tags/vX.Y.Z——不放行的话 job 会在跑任何一步之前就被拒：
+    #         Branch "refs/tags/vX.Y.Z" is not allowed to deploy to github-pages
+    #         due to environment protection rules.
+    #       这条不能靠改 YAML 绕开：actions/deploy-pages 强制要求指向 github-pages 环境。
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # 有了手动触发之后，「发版部署」与「手动部署」存在同时打到 Pages 的可能。
+    # 同组串行；cancel-in-progress: false 是刻意的——不要把一次已经开始的线上部署掐断。
+    concurrency:
+      group: daidai-github-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      # Node 配置与 checks.yml 保持一致，避免两边构建环境漂移。
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # ⚠️ 这里【不要】改成从 GITHUB_REF_NAME 推导版本号。
+      #    手动触发时 GITHUB_REF_NAME 是分支名，`${GITHUB_REF_NAME#v}` 会原样得到 "main"，
+      #    侧边栏就会显示 "vmain"。发版路径的版本号一律由调用方经 inputs.version 显式传入。
+      - name: 解析 Demo 版本号
+        id: version
+        shell: bash
+        # 经 env 传入而不是把表达式直接内插进脚本体，避免 input 内容被当成 shell 代码执行。
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # ${VAR:-} 而不是裸 $VAR：input 留空时这个环境变量是空串而非未定义，
+          # 但 set -u 下多写一层默认值没有代价，省掉一整类失败模式。
+          if [[ -n "${INPUT_VERSION:-}" ]]; then
+            RESOLVED="${INPUT_VERSION}"
+          else
+            # 手动预览部署：用仓库当前的前端版本号 + -dev 后缀，一眼能看出这不是某个正式版。
+            # 后缀刻意保持短：MainLayout.vue 的 .logo-version 是 flex-shrink: 0，
+            # 版本号一长就会把侧边栏 logo 那一行撑坏。
+            RESOLVED="$(node -p "require('./web/package.json').version")-dev"
+          fi
+          echo "VERSION=${RESOLVED}" >> "$GITHUB_OUTPUT"
+          echo "Demo 版本号解析为：${RESOLVED}"
+
+      - name: 安装前端依赖
+        working-directory: web
+        run: npm ci
+
+      # build:demo = vite build --mode demo --base=/daidai-panel/
+      #   --mode demo 让 web/.env.demo 生效（VITE_DEMO=1），mock 层才会被打进产物；
+      #   --base 是 GitHub Pages 项目站的子路径，改仓库名时这里和 package.json 要一起改。
+      # ⚠️ 不要改 outDir：web/scripts/copy-spa-fallback.mjs 把目标写死成 cwd 下的 dist。
+      - name: 构建 Demo 静态站
+        working-directory: web
+        env:
+          VITE_DEMO_VERSION: ${{ steps.version.outputs.VERSION }}
+        run: npm run build:demo
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

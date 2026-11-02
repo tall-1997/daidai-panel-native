@@ -21,12 +21,12 @@ export const scriptApi = {
     return request.get('/scripts', { params }) as Promise<{ data: any[] }>
   },
 
-  tree(signal?: AbortSignal) {
-    return request.get('/scripts/tree', { signal }) as Promise<{ data: any[] }>
+  tree() {
+    return request.get('/scripts/tree') as Promise<{ data: any[] }>
   },
 
-  getContent(path: string, signal?: AbortSignal) {
-    return request.get('/scripts/content', { params: { path }, signal }) as Promise<{ data: { content: string; binary?: boolean; is_binary?: boolean; size: number } }>
+  getContent(path: string) {
+    return request.get('/scripts/content', { params: { path } }) as Promise<{ data: { content: string; binary?: boolean; is_binary?: boolean; size: number } }>
   },
 
   download(path: string) {
@@ -36,8 +36,8 @@ export const scriptApi = {
     }) as Promise<Blob>
   },
 
-  saveContent(path: string, content: string, message?: string, signal?: AbortSignal) {
-    return request.put('/scripts/content', { path, content, message }, { signal }) as Promise<{ message: string }>
+  saveContent(path: string, content: string, message?: string) {
+    return request.put('/scripts/content', { path, content, message }) as Promise<{ message: string }>
   },
 
   upload(formData: FormData) {
@@ -105,6 +105,19 @@ export const scriptApi = {
   debugStopKeepalive(runId: string) {
     if (typeof window === 'undefined' || !runId) {
       return false
+    }
+
+    // 在线演示 Demo 分叉：静态站没有后端，下面那发请求必然 404。
+    //
+    // 这里【必须保留 fetch 形态】——keepalive 是 fetch 独有的，axios 做不到，
+    // 而这个方法的全部意义就是「页面正在卸载时把停止请求送出去」。
+    // 也正因为它不走 axios，demo 的 mock adapter 拦不到，只能在这里短路。
+    //
+    // 返回 true 是为了保持调用方语义（「停止请求已经发出」）：演示环境里那个调试
+    // 会话本来就只存在于内存中，页面一卸载就没了，没有任何东西需要真的去停。
+    // 守卫是编译期常量，发布版里整段被剔除，真实面板的 keepalive 一行不少。
+    if (import.meta.env.VITE_DEMO === '1') {
+      return true
     }
 
     try {

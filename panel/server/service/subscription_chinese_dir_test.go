@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"daidai-panel/config"
@@ -13,7 +14,7 @@ import (
 
 // 复现用户报告的 jdpro 仓库 "扫描 0 个候选文件" 失败：
 // saveDir = "京东"（中文），仓库根目录有 65 个 .js + 6 个 .py。
-// 期望：扫描出 71 个候选，全部被建任务（带 cron 头的用脚本 cron，没有的用兜底）。
+// 期望：中文目录、中文文件名都能扫到；带 cron 头的建任务，没有 cron 头的（默认规则留空时）不建、在提示里点名（#134）。
 func TestSyncSubscriptionTasksHandlesChineseSaveDirWithJdproLayout(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
@@ -35,7 +36,7 @@ const $ = new Env('京东资产');
  */
 const $ = new Env('京东CK检测');
 `,
-		// 没 cron 头的业务脚本——必须用兜底建任务
+		// 没 cron 头的业务脚本——默认规则留空时不建任务，但必须被扫到（出现在提示里）
 		"jd_no_cron.js": `const $ = new Env('某脚本');
 `,
 		// 通知辅助脚本——必须跳过
@@ -77,13 +78,23 @@ const $ = new Env('京东CK检测');
 	var tasks []model.Task
 	queryTasksByLabel(subscriptionTaskLabel(sub.ID)).Find(&tasks)
 
-	// 期望 4 个任务：jd_bean_change / jd_CheckCK（带 cron） + jd_no_cron / 京东签到（兜底）
+	// 期望 2 个任务：jd_bean_change / jd_CheckCK（带 cron）；jd_no_cron / 京东签到 没有 cron 头、默认规则留空，不建。
 	// sendNotify.js 应该被跳过
-	if len(tasks) != 4 {
+	if len(tasks) != 2 {
 		for _, task := range tasks {
 			t.Logf("  task: cmd=%q cron=%q", task.Command, task.CronExpression)
 		}
-		t.Fatalf("expected 4 tasks (helpers skipped), got %d", len(tasks))
+		t.Fatalf("expected 2 tasks (scripts without cron and helpers skipped), got %d", len(tasks))
+	}
+	// 没建的两个中文目录下的脚本（含中文文件名）要真的扫到了：出现在「未建定时任务」的提示里。
+	hint := ""
+	for _, l := range logs {
+		if strings.Contains(l, "个脚本没有识别到 cron 声明，未建定时任务") {
+			hint = l
+		}
+	}
+	if !strings.Contains(hint, "[提示] 2 个脚本") || !strings.Contains(hint, "jd_no_cron.js") || !strings.Contains(hint, "京东签到.js") {
+		t.Errorf("expected the undeclared-cron hint to name jd_no_cron.js and 京东签到.js, got %q", hint)
 	}
 
 	hasHelperTask := false

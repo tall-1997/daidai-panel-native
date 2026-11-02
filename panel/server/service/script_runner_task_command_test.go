@@ -363,6 +363,9 @@ func TestRunCommandSupportsManagedDependencyCommand(t *testing.T) {
 	}
 	writeFakeExecutable(t, venvBin, "dailycheckin", []string{envEcho, argEcho})
 
+	// ScriptResult 不再带整段输出（#159 修复 D 删掉了没人读的 Output），改从 onOutput 收集后断言。
+	// 各次输出回调之间有先后（读协程排空之后 pumpAndWait 才返回），这里不需要加锁。
+	var output strings.Builder
 	result, _, err := RunCommand(
 		`dailycheckin --flag`,
 		config.C.Data.ScriptsDir,
@@ -372,19 +375,19 @@ func TestRunCommandSupportsManagedDependencyCommand(t *testing.T) {
 			"DD_TEST_VALUE":         "ok",
 		},
 		1024,
-		nil,
+		func(chunk string) { output.WriteString(chunk) },
 	)
 	if err != nil {
 		t.Fatalf("run managed dependency command: %v", err)
 	}
 	if result.ReturnCode != 0 {
-		t.Fatalf("expected return code 0, got %d output=%s", result.ReturnCode, result.Output)
+		t.Fatalf("expected return code 0, got %d output=%s", result.ReturnCode, output.String())
 	}
-	if !strings.Contains(result.Output, "daily:ok") {
-		t.Fatalf("expected dependency command to receive task env, output=%q", result.Output)
+	if !strings.Contains(output.String(), "daily:ok") {
+		t.Fatalf("expected dependency command to receive task env, output=%q", output.String())
 	}
-	if !strings.Contains(result.Output, "arg:--flag") {
-		t.Fatalf("expected dependency command to receive args, output=%q", result.Output)
+	if !strings.Contains(output.String(), "arg:--flag") {
+		t.Fatalf("expected dependency command to receive args, output=%q", output.String())
 	}
 }
 

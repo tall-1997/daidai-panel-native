@@ -299,8 +299,12 @@ func CORS() gin.HandlerFunc {
 			logCORSRejection(c, origin)
 			return false
 		},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		// MCP-Protocol-Version / Mcp-Session-Id 给浏览器里的 MCP 客户端（例如网页版 Inspector，issue #128）用：
+		// 它们每个请求都带协议版本头，预检不放行的话浏览器直接拦下，放行名单里的来源也连不上。
+		// 这里只多放行两个请求头，Origin 的放行口径（上面的 AllowOriginWithContextFunc）不变。
+		// ExposeHeaders 不用加 Mcp-Session-Id：面板的 MCP 跑无状态模式，SDK 既不读也不回写这个头。
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With", "MCP-Protocol-Version", "Mcp-Session-Id"},
 		ExposeHeaders:    []string{"Content-Length", "Content-Disposition"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,

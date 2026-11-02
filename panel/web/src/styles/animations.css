@@ -76,14 +76,13 @@
   }
 }
 
+/* 纯扁平方案下不再用阴影做呼吸层次，只保留极轻微的尺寸脉动 */
 @keyframes cardPulse {
   0%,
   100% {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     transform: scale3d(1, 1, 1);
   }
   50% {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
     transform: scale3d(1.01, 1.01, 1);
   }
 }
@@ -297,15 +296,13 @@
   }
 }
 
-/* 发光效果 */
+/* 高亮呼吸：去掉外发光阴影，只保留亮度变化 */
 @keyframes glow {
   0%,
   100% {
-    box-shadow: 0 0 5px rgba(64, 158, 255, 0.3);
     filter: brightness(1);
   }
   50% {
-    box-shadow: 0 0 20px rgba(64, 158, 255, 0.6);
     filter: brightness(1.1);
   }
 }
@@ -501,55 +498,17 @@
   transition: all 0.3s var(--ease-smooth);
 }
 
-/* Hover 效果 */
-.hover-lift {
-  transition:
-    transform 0.25s var(--ease-out),
-    box-shadow 0.25s var(--ease-out);
-  will-change: transform, box-shadow;
-}
+/* Hover 效果：
+   原有的 .hover-lift / .hover-scale / .hover-glow / .card-hover 已整体移除。
+   纯扁平方案下 hover 只允许改 background-color / border-color / color，
+   不做上浮、缩放和外发光，因此这些工具类没有存在意义。 */
 
-.hover-lift:hover {
-  transform: translate3d(0, -4px, 0);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
-}
-
-.hover-scale {
-  transition: transform 0.25s var(--ease-out);
-  will-change: transform;
-}
-
-.hover-scale:hover {
-  transform: scale3d(1.05, 1.05, 1);
-}
-
-.hover-glow {
-  transition: box-shadow 0.25s var(--ease-out);
-  will-change: box-shadow;
-}
-
-.hover-glow:hover {
-  box-shadow: 0 0 20px rgba(64, 158, 255, 0.4);
-}
-
-.card-hover {
-  transition:
-    transform 0.25s var(--ease-out),
-    box-shadow 0.25s var(--ease-out);
-  will-change: transform, box-shadow;
-}
-
-.card-hover:hover {
-  transform: translate3d(0, -4px, 0);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-
-/* 骨架屏 */
+/* 骨架屏：这里的移动渐变是加载指示（同 loading 圆弧），属于功能性动效，予以保留 */
 .skeleton {
   background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
   background-size: 200% 100%;
   animation: skeletonLoading 1.5s ease-in-out infinite;
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 .skeleton-dark {
@@ -558,13 +517,7 @@
   animation: skeletonLoading 1.5s ease-in-out infinite;
 }
 
-/* 渐变背景 */
-.gradient-animated {
-  background: linear-gradient(-45deg, #409eff, #36cfc9, #10b981, #f59e0b);
-  background-size: 400% 400%;
-  animation: gradientShift 15s ease infinite;
-  will-change: background-position;
-}
+/* 渐变背景工具类 .gradient-animated 已移除：四色流动渐变属于纯装饰，与扁平方案冲突 */
 
 /* 闪光效果 */
 .shimmer {

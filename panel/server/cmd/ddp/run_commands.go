@@ -28,7 +28,7 @@ import (
 // 它只是兜底 —— 会话结束时凭据会被立刻吊销（见调用方的 defer 与 runForeground）。
 func buildRuntimeEnv(rt *cliRuntime, workDir string) (map[string]string, *service.ScriptTokenInfo) {
 	envMap, scriptToken, envErr := service.BuildManagedRuntimeEnvMapWithScriptToken(
-		workDir, rt.cfg.Data.ScriptsDir, nil, service.UntimedTaskScriptTokenTTL, "")
+		workDir, rt.cfg.Data.ScriptsDir, nil, service.UntimedTaskScriptTokenTTL, "", nil) // 最后的 nil：交互会话不按任务限定变量（#168），注入全部
 	if envErr != nil {
 		rt.warnings = append(rt.warnings, "构建运行环境部分失败（通知/辅助可能不可用）: "+envErr.Error())
 	}

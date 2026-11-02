@@ -42,7 +42,12 @@ func (h *TaskHandler) CreateView(c *gin.Context) {
 		view.SortOrder = maxOrder + 1
 	}
 
-	database.DB.Create(&view)
+	// 原来这行没接 .Error，插入失败也照样返回 200 + 一个没有 id 的对象。
+	// task_views.name 现在是唯一索引，连点创建按钮的第二发会撞在这里，翻译成友好 400。
+	if err := database.DB.Create(&view).Error; err != nil {
+		response.BadRequest(c, "同名任务视图已存在")
+		return
+	}
 	response.Success(c, view)
 }
 
@@ -86,7 +91,11 @@ func (h *TaskHandler) UpdateView(c *gin.Context) {
 	}
 
 	if len(updates) > 0 {
-		database.DB.Model(&view).Updates(updates)
+		// 改名撞上别的视图会在这里报错；不接 .Error 就会出现「提示保存成功、刷新又变回去」。
+		if err := database.DB.Model(&view).Updates(updates).Error; err != nil {
+			response.BadRequest(c, "同名任务视图已存在")
+			return
+		}
 	}
 	database.DB.First(&view, viewID)
 	response.Success(c, view)

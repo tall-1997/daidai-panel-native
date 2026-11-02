@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"strconv"
@@ -33,65 +32,37 @@ type BackupScheduler struct {
 }
 
 var globalBackupScheduler *BackupScheduler
-var backupSchedulerMu sync.Mutex
-var backupSchedulerOn bool
 
-func StartBackupScheduler(ctx context.Context) error {
-	_ = ctx
-	backupSchedulerMu.Lock()
-	defer backupSchedulerMu.Unlock()
-
-	if backupSchedulerOn {
-		return nil
-	}
-
+func InitBackupScheduler() {
 	scheduler := &BackupScheduler{
 		cron: cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
 	}
 	scheduler.cron.Start()
 	globalBackupScheduler = scheduler
-	backupSchedulerOn = true
 	scheduler.Reload()
 	log.Println("backup scheduler initialized")
-	return nil
 }
 
-func StopBackupScheduler(ctx context.Context) error {
-	backupSchedulerMu.Lock()
-	defer backupSchedulerMu.Unlock()
-
-	if !backupSchedulerOn {
-		return nil
+// ShutdownBackupScheduler 停止定时备份：立刻不再触发；正在跑的那次最多等到 deadline，不取消它。
+// cron.Stop 返回的 ctx 要等「正在跑的作业」结束才 Done，一次定时备份可能要跑几分钟，
+// 原来无限等会让整个关停卡住、最后被 Docker SIGKILL。deadline 由面板关停流程统一给出（与订阅调度共用）。
+func ShutdownBackupScheduler(deadline time.Time) {
+	if globalBackupScheduler == nil {
+		return
 	}
-
-	if globalBackupScheduler != nil {
-		stopCtx := globalBackupScheduler.cron.Stop()
-		if ctx == nil {
-			<-stopCtx.Done()
-		} else {
-			select {
-			case <-stopCtx.Done():
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	ctx := globalBackupScheduler.cron.Stop()
+	// 至少留 1 毫秒：截止时间已过时也让「没有作业在跑」这种情况能如实报成已停止，而不是和超时分支抢。
+	wait := time.Until(deadline)
+	if wait < time.Millisecond {
+		wait = time.Millisecond
 	}
-
-	globalBackupScheduler = nil
-	backupSchedulerOn = false
-	log.Println("backup scheduler stopped")
-	return nil
-}
-
-func InitBackupScheduler() {
-	if err := StartBackupScheduler(context.Background()); err != nil {
-		log.Printf("backup scheduler start failed: %v", err)
-	}
-}
-
-func ShutdownBackupScheduler() {
-	if err := StopBackupScheduler(context.Background()); err != nil {
-		log.Printf("backup scheduler stop failed: %v", err)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		log.Println("backup scheduler stopped")
+	case <-timer.C:
+		log.Println("backup scheduler stopped (a scheduled backup is still running, not waiting for it)")
 	}
 }
 

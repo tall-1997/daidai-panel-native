@@ -37,6 +37,75 @@ func TestCanonicalizePythonPackageName(t *testing.T) {
 	}
 }
 
+// issue #166：判断旧写法的 extras 是否已覆盖新写法，决定是「已存在跳过」还是「原地改名重装」。
+func TestPythonExtrasCovered(t *testing.T) {
+	cases := []struct {
+		existing  string
+		requested string
+		want      bool
+	}{
+		// 新写法没有 extras：任何旧写法都算覆盖，照旧跳过。
+		{"httpx", "httpx", true},
+		{"httpx[http2]", "httpx", true},
+		{"httpx==0.28.1", "httpx", true},
+		// 报告里的场景：已装 httpx，再装 httpx[http2] 不能被当成已存在。
+		{"httpx", "httpx[http2]", false},
+		{"httpx==0.28.1", "httpx[http2]", false},
+		// 旧 extras ⊇ 新 extras 才算覆盖。
+		{"httpx[http2]", "httpx[http2]", true},
+		{"httpx[http2,socks]", "httpx[socks]", true},
+		{"httpx[http2, socks]==0.28.1", "httpx[socks,http2]", true},
+		{"httpx[socks]", "httpx[http2]", false},
+		{"httpx[http2]", "httpx[http2,socks]", false},
+		// extras 名按小写 + PEP 503 分隔符折叠比较。
+		{"httpx[HTTP2]", "httpx[http2]", true},
+		{"pkg[Foo_Bar]", "pkg[foo.bar]", true},
+		// 环境标记里的方括号不算 extras。
+		{"httpx; extra == 'x[y]'", "httpx[y]", false},
+		{"httpx; python_version >= '3'", "httpx[http2]", false},
+	}
+
+	for _, tc := range cases {
+		if got := PythonExtrasCovered(tc.existing, tc.requested); got != tc.want {
+			t.Errorf("PythonExtrasCovered(%q, %q) = %v, want %v", tc.existing, tc.requested, got, tc.want)
+		}
+	}
+}
+
+// issue #166：原地升级时记录名 = 旧写法合并本次 extras，版本锁定、已有 extras、环境标记都不能丢。
+func TestMergePythonSpecExtras(t *testing.T) {
+	cases := []struct {
+		existing  string
+		requested string
+		want      string
+	}{
+		{"httpx", "httpx[http2]", "httpx[http2]"},
+		// 旧写法的版本锁定沿用。
+		{"httpx==0.27.0", "httpx[http2]", "httpx[http2]==0.27.0"},
+		// 旧 extras 保留在前，新 extras 追加在后。
+		{"httpx[socks]", "httpx[http2]", "httpx[socks,http2]"},
+		// 本次写法带版本约束时用本次的。
+		{"httpx[socks]==0.27.0", "httpx[http2]>=0.28", "httpx[socks,http2]>=0.28"},
+		{"httpx>=1,<2", "httpx[http2]", "httpx[http2]>=1,<2"},
+		// 环境标记原样沿用，前导空白不动。
+		{`httpx; python_version >= "3.8"`, "httpx[http2]", `httpx[http2]; python_version >= "3.8"`},
+		// 基础名大小写按本次输入；extras 去重按小写 + PEP 503 折叠，旧的保持原拼写。
+		{"HTTPX[Socks]", "httpx[socks,http2]", "httpx[Socks,http2]"},
+		{"pkg[Foo_Bar]", "pkg[foo.bar,baz]", "pkg[Foo_Bar,baz]"},
+		// 边界：旧写法方括号没闭合，残缺部分不带进新名字。
+		{"httpx[socks", "httpx[http2]", "httpx[http2]"},
+		// 边界：本次写法首尾空白、基础名与 [ 之间、extras 里的空白都要能拆开。
+		{"httpx==0.27.0", "  httpx [ http2 , socks ]  ", "httpx[http2,socks]==0.27.0"},
+		{"httpx", " httpx[http2] >= 0.28 ", "httpx[http2] >= 0.28"},
+	}
+
+	for _, tc := range cases {
+		if got := MergePythonSpecExtras(tc.existing, tc.requested); got != tc.want {
+			t.Errorf("MergePythonSpecExtras(%q, %q) = %q, want %q", tc.existing, tc.requested, got, tc.want)
+		}
+	}
+}
+
 func TestFindExistingPythonDependencyIgnoresCaseAndSeparators(t *testing.T) {
 	testutil.SetupTestEnv(t)
 

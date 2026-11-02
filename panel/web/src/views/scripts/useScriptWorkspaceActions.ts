@@ -1,7 +1,9 @@
-import { onBeforeUnmount, onDeactivated, ref, type ComputedRef, type Ref } from 'vue'
+import { ref, type ComputedRef, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scriptApi } from '@/api/script'
+import { taskApi } from '@/api/task'
+import { isTaskRunnableScriptPath, taskCommandMatchesScript } from '@/utils/taskCommandScript'
 import type { ScriptVersionDetail, ScriptVersionRecord } from './types'
 
 interface ScriptWorkspaceActionsOptions {
@@ -34,9 +36,12 @@ export function useScriptWorkspaceActions({
   const router = useRouter()
 
   const saving = ref(false)
-  let saveGeneration = 0
-  let saveController: AbortController | null = null
   const formatting = ref(false)
+  // 新建文件 / 新建目录 / 上传各自一把在途锁，对齐上面 saving 的写法。
+  // 刻意不合并成一个 flag：合并后点「新建文件」会让「新建目录」「上传」的按钮一起转圈。
+  const creatingFile = ref(false)
+  const creatingDir = ref(false)
+  const uploading = ref(false)
 
   const showCreateFileDialog = ref(false)
   const showCreateDirDialog = ref(false)
@@ -67,23 +72,20 @@ export function useScriptWorkspaceActions({
     return err === 'cancel' || err === 'close' || String(err) === 'cancel' || String(err) === 'close'
   }
 
-  async function verifyEditableTarget(path: string, signal: AbortSignal) {
+  async function verifyEditableTarget(path: string) {
     const normalizedPath = path.trim()
     if (!normalizedPath) {
       ElMessage.warning('当前没有可保存的脚本')
       return false
     }
 
-    let remoteFile
-    try {
-      remoteFile = await scriptApi.getContent(normalizedPath, signal)
-    } catch {
-      if (signal.aborted) return false
+    const loaded = await loadFileContent(normalizedPath, { silent: true })
+    if (!loaded) {
       ElMessage.error('保存失败：脚本可能已被删除、移动，或当前选中的不是可编辑文件')
       return false
     }
 
-    if (remoteFile.data.is_binary ?? remoteFile.data.binary ?? false) {
+    if (isBinary.value) {
       ElMessage.warning('当前文件为二进制文件，不能在线保存')
       return false
     }
@@ -93,18 +95,17 @@ export function useScriptWorkspaceActions({
 
   async function saveCurrentFile() {
     if (!selectedFile.value || isBinary.value) return
-    const generation = ++saveGeneration
-    saveController?.abort()
-    const controller = new AbortController()
-    saveController = controller
     saving.value = true
     try {
       const currentPath = selectedFile.value
       const snapshotContent = fileContent.value
-      const verified = await verifyEditableTarget(currentPath, controller.signal)
-      if (!verified || generation !== saveGeneration || currentPath !== selectedFile.value) {
+      const verified = await verifyEditableTarget(currentPath)
+      if (!verified) {
         return false
       }
+
+      // 校验会刷新后端最新内容；如果用户本地正有改动，需要把待保存内容覆盖回去。
+      fileContent.value = snapshotContent
 
       let versionMessage = 'V1 初始版本'
       if (originalContent.value !== '') {
@@ -116,18 +117,15 @@ export function useScriptWorkspaceActions({
           versionMessage = 'V2 更新'
         }
       }
-      if (generation !== saveGeneration || currentPath !== selectedFile.value) return false
-      await scriptApi.saveContent(currentPath, snapshotContent, versionMessage, controller.signal)
-      if (generation !== saveGeneration || currentPath !== selectedFile.value) return false
-      originalContent.value = snapshotContent
+      await scriptApi.saveContent(currentPath, fileContent.value, versionMessage)
+      originalContent.value = fileContent.value
       ElMessage.success('保存成功')
       return true
     } catch (err: any) {
-      if (controller.signal.aborted || generation !== saveGeneration) return false
       ElMessage.error(extractScriptErrorMessage(err, '保存失败'))
       return false
     } finally {
-      if (generation === saveGeneration) saving.value = false
+      saving.value = false
     }
   }
 
@@ -135,18 +133,13 @@ export function useScriptWorkspaceActions({
     await saveCurrentFile()
   }
 
-  function cancelPendingSave() {
-    saveGeneration += 1
-    saveController?.abort()
-    saveController = null
-    saving.value = false
-  }
-
-  onDeactivated(cancelPendingSave)
-  onBeforeUnmount(cancelPendingSave)
-
   async function handleCreateFile() {
     if (!newFileName.value.trim()) return
+    // 输入框上还挂着 @keyup.enter="onCreateFile"，按钮的 :loading/:disabled 拦不住回车入口：
+    // 请求期间 newFileName 还没清空（清空在 await 之后）、弹窗也还开着，
+    // 连按两次回车会把同一个文件写两遍（版本历史里出现两条「V1 初始版本」）。这里补一道在途判断。
+    if (creatingFile.value) return
+    creatingFile.value = true
     try {
       const fullPath = newFileParent.value
         ? `${newFileParent.value}/${newFileName.value.trim()}`
@@ -171,11 +164,17 @@ export function useScriptWorkspaceActions({
       }
     } catch (err: any) {
       ElMessage.error(err?.response?.data?.error || err?.message || '创建失败')
+    } finally {
+      creatingFile.value = false
     }
   }
 
   async function handleCreateDir() {
     if (!newDirName.value.trim()) return
+    // 同 handleCreateFile：目录名输入框上挂着 @keyup.enter="onCreateDir"，绕开按钮的 :loading。
+    // 连按回车时第二次会撞上「目录已存在」，用户会看到「创建成功」后紧跟一条红色报错。
+    if (creatingDir.value) return
+    creatingDir.value = true
     try {
       const fullPath = newDirParent.value
         ? `${newDirParent.value}/${newDirName.value.trim()}`
@@ -188,6 +187,8 @@ export function useScriptWorkspaceActions({
       await loadTree()
     } catch (err: any) {
       ElMessage.error(err?.response?.data?.error || err?.message || '创建失败')
+    } finally {
+      creatingDir.value = false
     }
   }
 
@@ -257,11 +258,6 @@ export function useScriptWorkspaceActions({
     for (const file of files) {
       formData.append('file', file)
     }
-    const firstFile = files[0]
-    if (files.length === 1 && firstFile) {
-      formData.append('filename', firstFile.name)
-      formData.append('filename_b64', btoa(unescape(encodeURIComponent(firstFile.name))))
-    }
     if (uploadDir.value) {
       formData.append('dir', uploadDir.value)
     }
@@ -277,19 +273,11 @@ export function useScriptWorkspaceActions({
       uploadFileList.value = []
       await loadTree()
 
+      // 多文件上传刻意不问：一次传 N 个文件对应不了一条任务，这里维持原状。
       if (uploadedPaths.length === 1) {
         const targetPath = uploadedPaths[0]
         if (!targetPath) return false
-        try {
-          await ElMessageBox.confirm('是否将此脚本添加到定时任务？', '提示', {
-            confirmButtonText: '确定',
-            cancelButtonText: '取消',
-            type: 'info'
-          })
-          navigateToTaskWithScript(targetPath)
-        } catch {
-          // cancelled
-        }
+        await askAddUploadedScriptToTask(targetPath)
       }
     } catch (err: any) {
       ElMessage.error(err?.response?.data?.error || err?.message || '上传失败')
@@ -308,7 +296,81 @@ export function useScriptWorkspaceActions({
       ElMessage.warning('请至少选择一个文件')
       return
     }
-    await handleUpload(uploadFileList.value)
+    // 上传目前只有按钮一个入口、不存在回车绕过，这道在途判断是和上面两个函数保持一致：
+    // 三处写法统一，将来给上传弹窗补回车提交时不会再漏一次防重。
+    if (uploading.value) return
+    // 上传本身耗时较长，且成功后还会弹「是否加到定时任务」确认框，
+    // 整段都要锁住，否则连点会重复上传并连开多个确认框。
+    uploading.value = true
+    try {
+      await handleUpload(uploadFileList.value)
+    } finally {
+      uploading.value = false
+    }
+  }
+
+  /**
+   * 统计「这个脚本已经有几条定时任务」。
+   * 返回 null = 没查成（网络抖动 / 401 / 后端报错），调用方必须按「不知道」处理，也就是照旧弹窗 ——
+   * 重复问一次只是烦，静默吞掉「上传后加定时任务」这个入口要糟糕得多。
+   */
+  async function countTasksUsingScript(targetPath: string) {
+    try {
+      // keyword 用 basename 不用整路径：keyword 是 name/command 的子串匹配，
+      // 而同一个脚本在库里至少有 8 种合法命令形态（`task "a b/x.py"`、`task a\ b/x.py` …），
+      // 整路径在这些形态里根本不成子串，会漏。宽召回交给下面的逐条解析去收窄。
+      const basename = targetPath.split('/').pop() || targetPath
+      if (!basename) return null
+      // 刻意不传 filters / sort_rules：带上任意一个都会让后端切到内存全表路径
+      // （无 LIMIT 地 Find 出全部匹配行再在内存里筛排），任务多的面板上是实打实的开销。
+      const res = await taskApi.list({ keyword: basename, all: 1 })
+      const rows = Array.isArray(res?.data) ? res.data : []
+
+      let total = 0
+      let disabled = 0
+      for (const row of rows) {
+        const command = typeof row?.command === 'string' ? row.command : ''
+        // 必须整体相等比较，绝不能拿 basename 裸 includes：
+        // `jd/qd.py` 的任务不是 `qd.py` 的任务，误判会把弹窗错误地吞掉。
+        if (!command || !taskCommandMatchesScript(command, targetPath)) continue
+        total++
+        // status=0 是已禁用。它同样占着「这个脚本已经配过任务了」的事实，要算进去，
+        // 但得在文案里点明，否则用户在列表里按默认筛选找不到那几条会以为面板在骗人。
+        if (Number(row?.status) === 0) disabled++
+      }
+      return { total, disabled }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 上传单个文件后的「是否加到定时任务」询问，两道前置判断（issue #118 建议 3）：
+   * 1. 扩展名不在 task 能跑的 6 种里 —— 问了也只会生成一条永远跑不起来的 `task config.json`；
+   * 2. 该脚本已经有定时任务 —— 覆盖式重传是最常见的用法，不该每次都拦一下，降级成一条不阻断的提示。
+   * 注意这里只管上传入口；编辑器右上角的「添加任务」按钮保持不拦，
+   * 同一脚本按账号拆 `desi` / `conc` 建多条任务是官方文档推荐的正常用法，那是用户的逃生门。
+   */
+  async function askAddUploadedScriptToTask(targetPath: string) {
+    if (!isTaskRunnableScriptPath(targetPath)) return
+
+    const existing = await countTasksUsingScript(targetPath)
+    if (existing && existing.total > 0) {
+      const disabledNote = existing.disabled > 0 ? `（${existing.disabled} 条已禁用）` : ''
+      ElMessage.info(`该脚本已有 ${existing.total} 条定时任务${disabledNote}，未重复询问`)
+      return
+    }
+
+    try {
+      await ElMessageBox.confirm('是否将此脚本添加到定时任务？', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'info'
+      })
+      navigateToTaskWithScript(targetPath)
+    } catch {
+      // cancelled
+    }
   }
 
   function navigateToTaskWithScript(filePath: string) {
@@ -484,6 +546,9 @@ export function useScriptWorkspaceActions({
   return {
     saving,
     formatting,
+    creatingFile,
+    creatingDir,
+    uploading,
     showCreateFileDialog,
     showCreateDirDialog,
     showRenameDialog,

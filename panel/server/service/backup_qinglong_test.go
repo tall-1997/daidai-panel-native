@@ -84,6 +84,7 @@ func TestBuildQingLongNotificationChannels(t *testing.T) {
 		"WXPUSHER_TOPIC_IDS": "101;102",
 		"WXPUSHER_UIDS":      "UID_demo_1;UID_demo_2",
 		"QYWX_AM":            "ww-demo,secret-demo,@all,1000001,markdown",
+		"QYWX_ORIGIN":        "http://1.2.3.4:3000",
 	})
 
 	byType := make(map[string]map[string]string, len(channels))
@@ -112,6 +113,10 @@ func TestBuildQingLongNotificationChannels(t *testing.T) {
 	}
 	if got := byType["wecom_app"]["msg_type"]; got != "markdown" {
 		t.Fatalf("unexpected wecom app msg_type: %q", got)
+	}
+	// QYWX_ORIGIN（#152）只进企业微信应用的 base_url，上面机器人的 webhook 仍是官方地址。
+	if got := byType["wecom_app"]["base_url"]; got != "http://1.2.3.4:3000" {
+		t.Fatalf("unexpected wecom app base_url: %q", got)
 	}
 	if got := byType["bark"]["key"]; got != "device-key" {
 		t.Fatalf("unexpected bark key: %q", got)
