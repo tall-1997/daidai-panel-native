@@ -231,6 +231,25 @@ func reorderEnvWithinSortBucket(tx *gorm.DB, sourceID uint, targetID *uint, inse
 	return nil
 }
 
+
+// envResponseForRequest 默认按脱敏口径返回；MCP 等管理员内部调用可用 ?reveal=plain
+// 取到「非密封变量」的明文（密封变量仍然只返回掩码）。普通变量明文只在显式 reveal 下下发，
+// 默认列表/详情保持全量脱敏（TestEnvResponsesRedactLegacyPlaintextValuesByDefault）。
+func envResponseForRequest(c *gin.Context, env *model.EnvVar) map[string]interface{} {
+	if strings.EqualFold(strings.TrimSpace(c.Query("reveal")), "plain") {
+		if claims, ok := c.Get("claims"); ok {
+			if cl, ok := claims.(*middleware.Claims); ok && strings.EqualFold(cl.Role, "admin") {
+				clone := *env
+				if clone.Secret || strings.TrimSpace(clone.Sealed) != "" {
+					clone.Value = service.RedactedEnvSecretValue
+				}
+				return clone.ToDict()
+			}
+		}
+	}
+	return service.OpenEnvVarForResponse(env)
+}
+
 func (h *EnvHandler) List(c *gin.Context) {
 	keyword := c.Query("keyword")
 	// names 同时支持 `names=A,B` 和 `names=A&names=B` 两种写法（QueryArray 已经把重复参数收齐）。
@@ -278,7 +297,7 @@ func (h *EnvHandler) List(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(envs))
 	for i, e := range envs {
-		data[i] = service.OpenEnvVarForResponse(&e)
+		data[i] = envResponseForRequest(c, &e)
 	}
 
 	if wantAll {

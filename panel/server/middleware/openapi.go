@@ -75,6 +75,19 @@ func RequireUserToken() gin.HandlerFunc {
 	}
 }
 
+// openAPIBindingFromUsername 解析应用令牌里的「服务/服务用户」绑定：
+// 用户名形如 app:<appKey>:<service>:<user>（本机版 Android 扩展，开放 API 按服务账号隔离）。
+func openAPIBindingFromUsername(username string) (serviceName, serviceUser string) {
+	parts := strings.Split(strings.TrimPrefix(username, "app:"), ":")
+	if len(parts) >= 2 {
+		serviceName = strings.TrimSpace(parts[1])
+	}
+	if len(parts) >= 3 {
+		serviceUser = strings.TrimSpace(parts[2])
+	}
+	return serviceName, serviceUser
+}
+
 func OpenAPIAccess(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("app_scope_authorized", false)
@@ -100,6 +113,9 @@ func OpenAPIAccess(scope string) gin.HandlerFunc {
 		}
 
 		c.Set("app_scope_authorized", true)
+		serviceName, serviceUser := openAPIBindingFromUsername(username)
+		c.Set("openapi_service", serviceName)
+		c.Set("openapi_service_user", serviceUser)
 
 		if app.RateLimit > 0 {
 			since := time.Now().Add(-time.Hour)
@@ -121,9 +137,11 @@ func OpenAPIAccess(scope string) gin.HandlerFunc {
 		}
 
 		database.DB.Create(&model.ApiCallLog{
-			AppID:    app.ID,
-			AppName:  app.Name,
-			Endpoint: endpoint,
+			AppID:       app.ID,
+			AppName:     app.Name,
+			Service:     serviceName,
+			ServiceUser: serviceUser,
+			Endpoint:    endpoint,
 			Method:   c.Request.Method,
 			Status:   c.Writer.Status(),
 			Duration: float64(time.Since(start).Milliseconds()),

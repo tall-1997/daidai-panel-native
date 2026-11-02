@@ -210,7 +210,7 @@ await sendNotify('日报', textReport, { channel_types: ['email', 'telegram'] })
 - `content_type` 取 `text` / `markdown` / `html`（也认 `text/html` 这类写法，大小写不限），**不传就按各渠道自己的配置发，和以前完全一样**。它和渠道配置里 WxPusher / 自定义渠道的同名配置项不是一回事。
 - `markdown` 不会把企业微信应用的文本消息改成 markdown 消息（微信插件里看不到 markdown，也带不上保密消息设置）；企业微信机器人配了 @ 成员时同样保持文本。
 - 青龙同名函数：`wxpusher_bot` `smtp` `pushplus_bot` `dingding_bot` `feishu_bot` `telegram_bot` `wecom_bot` `wecom_app` `bark` `gotify` `iGot` `serverJ` `pushdeer` `qmsg_bot` `pushme` `ntfy` `custom_notify`；其余渠道用 `send_to("渠道类型", ...)`。
-- 渠道类型名（`send_to`、`channel_type` 用，大小写不限）：`webhook` `email` `telegram` `dingtalk` `wecom`（企业微信机器人） `wecom_app`（企业微信应用） `bark` `pushplus` `serverchan`（Server酱） `feishu` `gotify` `pushdeer` `pushme` `chanify` `igot` `qmsg` `pushover` `discord` `slack` `ntfy` `wxpusher` `custom`（自定义）。写错时接口返回 400，报错里会列出全部可选类型。
+- 渠道类型名（`send_to`、`channel_type` 用，大小写不限）：`webhook` `email` `telegram` `dingtalk` `wecom`（企业微信机器人） `wecom_app`（企业微信应用） `bark` `pushplus` `serverchan`（Server酱） `feishu` `gotify` `pushdeer` `pushme` `chanify` `igot` `qmsg` `pushover` `discord` `slack` `ntfy` `wxpusher` `custom`（自定义） `android_local`（本机通知） `external_webhook`（外部 Webhook）。写错时接口返回 400，报错里会列出全部可选类型。
 - 按类型发（分渠道函数、`send_to`、`channel_type`）**只发「默认推送」渠道**；设成「绑定推送」的渠道要用 `channel_name` 或 `channel_id` 点名。带了类型或名称时不再使用任务默认渠道 `DAIDAI_NOTIFY_CHANNEL_ID`。
 - 找不到匹配的渠道时接口返回 400：`send` / `send_to` 会抛异常；青龙同名函数和青龙一样打印一行跳过、返回 `None`，不影响后面的调用。
 - 脚本同目录下有订阅仓库自带的 `notify.py` 时，Python 会优先导入那一份，上面这些能力就用不上。

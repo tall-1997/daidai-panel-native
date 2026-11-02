@@ -364,7 +364,9 @@ type listEnvsInput struct {
 }
 
 func (t *toolset) listEnvs(ctx context.Context, in listEnvsInput) (any, error) {
+	// 本机版（Android）：管理员显式取明文，敏感名称仍由本层遮蔽。
 	query := url.Values{}
+	query.Set("reveal", "plain")
 	if group := strings.TrimSpace(in.Group); group != "" {
 		query.Set("group", group)
 	}

@@ -150,7 +150,7 @@ jobs:
           go test ./... > /tmp/gotest-all.log 2>&1
           status=$?
           if [ $status -ne 0 ]; then
-            grep -E '^--- FAIL|^FAIL|^panic:|^# ' /tmp/gotest-all.log | head -60 | while IFS= read -r line; do
+            grep -E '^--- FAIL|^FAIL|^panic:|^# |_test\.go:[0-9]+:' /tmp/gotest-all.log | head -60 | while IFS= read -r line; do
               echo "::error title=go-test-failure::$line"
             done
             tail -80 /tmp/gotest-all.log

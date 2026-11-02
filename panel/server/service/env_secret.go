@@ -83,7 +83,7 @@ func OpenEnvVarForResponse(env *model.EnvVar) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	clone := *env
-	if clone.Secret || strings.TrimSpace(clone.Sealed) != "" {
+	if clone.Secret || strings.TrimSpace(clone.Sealed) != "" || clone.Value != "" {
 		clone.Value = RedactedEnvSecretValue
 	}
 	return clone.ToDict()
