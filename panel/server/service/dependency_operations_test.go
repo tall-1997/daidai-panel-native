@@ -54,6 +54,9 @@ func TestOfflinePureWheelInstallsListsAndUninstallsInPrivateDirectory(t *testing
 
 	install, err := NewPipInstallCommandForPythonVersion(version, wheel)
 	if err != nil {
+		if strings.Contains(err.Error(), "不可用") {
+			t.Skipf("runner lacks pip for python%s: %v", version, err)
+		}
 		t.Fatalf("build private wheel install: %v", err)
 	}
 	install.Env = ManagedPythonDependencyEnv(SanitizePipEnv(os.Environ()), version)
@@ -69,6 +72,9 @@ func TestOfflinePureWheelInstallsListsAndUninstallsInPrivateDirectory(t *testing
 
 	uninstall, err := NewPipUninstallCommandForPythonVersion(version, "local-fixture")
 	if err != nil {
+		if strings.Contains(err.Error(), "不可用") {
+			t.Skipf("runner lacks pip for python%s: %v", version, err)
+		}
 		t.Fatalf("build private wheel uninstall: %v", err)
 	}
 	uninstall.Env = ManagedPythonDependencyEnv(SanitizePipEnv(os.Environ()), version)
@@ -86,6 +92,9 @@ func TestPipInstallAllowsNativeWheelsAndSourceDistributions(t *testing.T) {
 
 	install, err := NewPipInstallCommandForPythonVersion(version, "native-package")
 	if err != nil {
+		if strings.Contains(err.Error(), "不可用") {
+			t.Skipf("runner lacks pip for python%s: %v", version, err)
+		}
 		t.Fatalf("build unrestricted pip install: %v", err)
 	}
 	for _, arg := range install.Args {

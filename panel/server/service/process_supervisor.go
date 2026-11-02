@@ -39,6 +39,8 @@ type ProcessResult struct {
 	TimedOut bool
 	Canceled bool
 	Output   string
+	// Err 是 Wait 的原始错误：调用方据此判断是否被信号终止（describeTerminationSignal）。
+	Err error
 }
 
 type SupervisedProcess interface {
@@ -158,7 +160,7 @@ func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
 	p.outputMu.Lock()
 	output := p.output.String()
 	p.outputMu.Unlock()
-	return ProcessResult{ExitCode: exitCode, TimedOut: timedOut, Canceled: canceled, Output: output}, err
+	return ProcessResult{ExitCode: exitCode, TimedOut: timedOut, Canceled: canceled, Output: output, Err: err}, err
 }
 
 func (p *defaultSupervisedProcess) Cancel() error {

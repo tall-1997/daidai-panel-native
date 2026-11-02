@@ -692,6 +692,12 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		if onOutput != nil {
 			onOutput(msg)
 		}
+	} else if signalName := describeTerminationSignal(procResult.Err); signalName != "" {
+		// 被信号终止时给用户可读解释（OOM / 手动停止 / 外部 kill），与旧执行路径同文案。
+		msg := fmt.Sprintf("\n[脚本进程被信号终止：%s（退出码 %d）。常见原因：内存超限被系统 OOM Killer 杀掉、面板或用户手动停止、外部 kill]\n", signalName, returnCode)
+		if onOutput != nil {
+			onOutput(msg)
+		}
 	}
 
 	return &ScriptResult{ReturnCode: returnCode}, process, nil

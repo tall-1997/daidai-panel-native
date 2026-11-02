@@ -34,6 +34,11 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 }
 
 func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, onOutput PullCallback) (string, error) {
+	return pullSubscriptionWithOperation(ctx, sub, onOutput, "")
+}
+
+// pullSubscriptionWithOperation 是拉取实现本体：operationID 非空时把操作记录挂在 SubLog 上并按结果收口。
+func pullSubscriptionWithOperation(ctx context.Context, sub *model.Subscription, onOutput PullCallback, operationID string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -108,11 +113,24 @@ func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 
 	subLog := model.SubLog{
 		SubscriptionID: sub.ID,
+		OperationID:    operationID,
 		Status:         status,
 		Content:        fullLog.String(),
 		Duration:       duration,
 	}
 	database.DB.Create(&subLog)
+
+	// 本机版（Android）：订阅拉取也进操作记录，APP 按 operation_id 追踪（失败时带错误码）。
+	if operationID != "" {
+		store := DefaultOperationStore()
+		_ = store.Start(operationID, "pulling")
+		if pullErr != nil {
+			code := 1
+			_ = store.Fail(operationID, &code, "subscription_pull_failed", int64(len(subLog.Content)))
+		} else {
+			_ = store.Finish(operationID, 0, int64(len(subLog.Content)))
+		}
+	}
 
 	now := time.Now()
 	database.DB.Model(sub).Updates(map[string]interface{}{
@@ -266,6 +284,12 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		destDir = absDestDir
 	}
 	env := authCfg.Env
+
+	// 本机版（Android）：强制覆盖模式下改用 staging 克隆 + 原子切换，
+	// 中途被杀不会留下半残目录，且上一份健康版本保留在 .<dir>.previous 便于回滚。
+	if IsGitRepo(destDir) && resolveSubscriptionForceOverwrite(sub) {
+		return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
+	}
 
 	if IsGitRepo(destDir) {
 		var fullOutput strings.Builder

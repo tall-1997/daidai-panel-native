@@ -145,7 +145,18 @@ func ExecuteSubscriptionPull(sub *model.Subscription, onOutput PullCallback) (st
 	}
 	defer finishSubscriptionPull(sub.ID)
 
-	return PullSubscriptionWithContext(ctx, sub, onOutput)
+	// 本机版（Android）：为每次拉取建一条操作记录，SubLog 一并带上 operation_id。
+	operationID := fmt.Sprintf("subscription_%d_%d", sub.ID, time.Now().UnixNano())
+	operation, opErr := DefaultOperationStore().Create(OperationCreateOptions{
+		ID:       operationID,
+		Kind:     model.OperationKindSubscription,
+		Phase:    "queued",
+		Progress: 0,
+	})
+	if opErr != nil {
+		return "", opErr
+	}
+	return pullSubscriptionWithOperation(ctx, sub, onOutput, operation.ID)
 }
 
 func (s *SubscriptionScheduler) AddOrUpdateJob(sub *model.Subscription) error {
