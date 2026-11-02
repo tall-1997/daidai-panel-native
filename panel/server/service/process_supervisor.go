@@ -145,7 +145,8 @@ func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
 	select {
 	case err = <-done:
 	case <-p.ctx.Done():
-		KillProcessGroup(p.cmd.Process)
+		// 先 SIGTERM 再宽限后 SIGKILL（TerminateProcessGroup 不阻塞），让 trap 了 TERM 的脚本能收尾。
+		TerminateProcessGroup(p.cmd.Process)
 		err = <-done
 	}
 	p.cancel()

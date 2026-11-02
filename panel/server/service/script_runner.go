@@ -688,11 +688,10 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	// #159 修复 A（本机版走 Supervisor 后在此补齐）：主命令自己结束时，若进程组里还留着后台进程
 	// （nohup / & 放到后台的），按任务执行器挂上的判定决定清不清理；清理成功时补一行提示。
 	if plan.ShouldCleanupProcessGroup != nil && plan.ShouldCleanupProcessGroup() && process != nil && processGroupAlive(process.Pid) {
-		KillProcessGroup(process)
-		if waitProcessGroupGone(process.Pid, shutdownTermGrace) {
-			if onOutput != nil {
-				onOutput(leftoverProcessCleanupNotice)
-			}
+		// 非阻塞：先 TERM、宽限后 KILL 由 TerminateProcessGroup 自己安排，结算不等它（#159 修复 A）。
+		TerminateProcessGroup(process)
+		if onOutput != nil {
+			onOutput(leftoverProcessCleanupNotice)
 		}
 	}
 
