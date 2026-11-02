@@ -134,8 +134,7 @@ func mobileCapabilityMiddleware(platform MobilePlatform) gin.HandlerFunc {
 			return
 		}
 		if metadata, ok := MetadataForRoute(c.Request.Method, c.FullPath()); ok && metadata.AuthContract == "jwt" {
-			middleware.JWTAuth()(c)
-			if c.IsAborted() {
+			if !middleware.AuthenticateAccessToken(c) {
 				return
 			}
 		}

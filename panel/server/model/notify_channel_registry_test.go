@@ -206,6 +206,9 @@ func TestNotifyChannelTypesRemainBackwardCompatible(t *testing.T) {
 		{"ntfy", "ntfy"},
 		{"wxpusher", "WxPusher / ClawBot(iLink)"},
 		{"custom", "自定义"},
+		// 本机版（Android）扩展渠道：应用内通知与外部 Webhook，追加在末尾不改变既有顺序。
+		{"android_local", "本机通知"},
+		{"external_webhook", "外部 Webhook"},
 	}
 
 	channels := model.NotifyChannelDefinitions()

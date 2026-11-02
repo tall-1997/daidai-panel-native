@@ -220,72 +220,81 @@ func ExtractBearerToken(authHeader string) string {
 	return strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 }
 
+func AuthenticateAccessToken(c *gin.Context) bool {
+	tokenStr := ExtractBearerToken(c.GetHeader("Authorization"))
+
+	if tokenStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少授权令牌"})
+		c.Abort()
+		return false
+	}
+
+	claims, err := ParseToken(tokenStr)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌无效或已过期"})
+		c.Abort()
+		return false
+	}
+
+	if claims.TokenType != "access" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌类型错误"})
+		c.Abort()
+		return false
+	}
+
+	if AccessTokenRevoked(claims) {
+		if IsUserSessionToken(claims) {
+			// 登录会话已失效：退出、撤销、改密、禁用、删除、改角色、被新登录顶替，或是升级前续期得来的老令牌。
+			// 必须是 401：网页与 APP 遇 401 会先用 refresh 续一次，会话还在就无感续上，不在就回登录页；
+			// 用 403 两端都不会登出。只「增加」code 字段，与登录失败的写法一致，两端都不读它。
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "登录已失效，请重新登录", "code": "session_revoked"})
+		} else {
+			// 脚本令牌、应用令牌：这句文案写进了 docs/script-api.md，保持不变
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌已被撤销"})
+		}
+		c.Abort()
+		return false
+	}
+
+	// 任务限定了可用环境变量（#168）时，注入脚本的令牌只能发通知：
+	// 否则脚本拿着它调 /envs 就能读到任务没给它的变量，或者新建一个任务再运行来绕开限制。
+	// 放在撤销判定之后：已吊销的令牌照旧回 401「令牌已被撤销」，不因为这条改成 403。
+	// 这只是减少不必要的暴露，不是沙箱——脚本与面板同一系统用户运行，仍能用 ddp 或直接读库拿到全部变量。
+	if claims.NotifyOnly && !(c.Request.Method == http.MethodPost && notifyOnlyAllowedPaths[c.FullPath()]) {
+		c.JSON(http.StatusForbidden, gin.H{"error": NotifyOnlyTokenForbiddenMessage})
+		c.Abort()
+		return false
+	}
+
+	c.Set("username", claims.Username)
+	c.Set("role", claims.Role)
+	c.Set("jti", claims.ID)
+	// 会话号：退出登录、「撤销其他会话」、会话列表的 current 都按它认当前会话。
+	// 升级前签发的老令牌没有会话号，能走到这里的只有「登录时那一枚」，它的 jti 就是会话号。
+	sessionID := claims.SessionID
+	if sessionID == "" {
+		sessionID = claims.ID
+	}
+	c.Set("sid", sessionID)
+	if claims.ExpiresAt != nil {
+		c.Set("token_expires_at", claims.ExpiresAt.Time)
+	}
+	// 执行日志流在心跳时要拿它复查撤销（handler/log.go）
+	c.Set("claims", claims)
+	if isAppToken(claims.Username, claims.Role) {
+		c.Set("token_kind", "app")
+	} else {
+		c.Set("token_kind", "user")
+	}
+	return true
+}
+
+// JWTAuth 复用 AuthenticateAccessToken：能力中间件要在「校验通过但不放行」时先拿身份再拒绝，
+// 不能直接调用 JWTAuth（它内部会 c.Next() 把业务 handler 跑完）。
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenStr := ExtractBearerToken(c.GetHeader("Authorization"))
-
-		if tokenStr == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少授权令牌"})
-			c.Abort()
+		if !AuthenticateAccessToken(c) {
 			return
-		}
-
-		claims, err := ParseToken(tokenStr)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌无效或已过期"})
-			c.Abort()
-			return
-		}
-
-		if claims.TokenType != "access" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌类型错误"})
-			c.Abort()
-			return
-		}
-
-		if AccessTokenRevoked(claims) {
-			if IsUserSessionToken(claims) {
-				// 登录会话已失效：退出、撤销、改密、禁用、删除、改角色、被新登录顶替，或是升级前续期得来的老令牌。
-				// 必须是 401：网页与 APP 遇 401 会先用 refresh 续一次，会话还在就无感续上，不在就回登录页；
-				// 用 403 两端都不会登出。只「增加」code 字段，与登录失败的写法一致，两端都不读它。
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "登录已失效，请重新登录", "code": "session_revoked"})
-			} else {
-				// 脚本令牌、应用令牌：这句文案写进了 docs/script-api.md，保持不变
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌已被撤销"})
-			}
-			c.Abort()
-			return
-		}
-
-		// 任务限定了可用环境变量（#168）时，注入脚本的令牌只能发通知：
-		// 否则脚本拿着它调 /envs 就能读到任务没给它的变量，或者新建一个任务再运行来绕开限制。
-		// 放在撤销判定之后：已吊销的令牌照旧回 401「令牌已被撤销」，不因为这条改成 403。
-		// 这只是减少不必要的暴露，不是沙箱——脚本与面板同一系统用户运行，仍能用 ddp 或直接读库拿到全部变量。
-		if claims.NotifyOnly && !(c.Request.Method == http.MethodPost && notifyOnlyAllowedPaths[c.FullPath()]) {
-			c.JSON(http.StatusForbidden, gin.H{"error": NotifyOnlyTokenForbiddenMessage})
-			c.Abort()
-			return
-		}
-
-		c.Set("username", claims.Username)
-		c.Set("role", claims.Role)
-		c.Set("jti", claims.ID)
-		// 会话号：退出登录、「撤销其他会话」、会话列表的 current 都按它认当前会话。
-		// 升级前签发的老令牌没有会话号，能走到这里的只有「登录时那一枚」，它的 jti 就是会话号。
-		sessionID := claims.SessionID
-		if sessionID == "" {
-			sessionID = claims.ID
-		}
-		c.Set("sid", sessionID)
-		if claims.ExpiresAt != nil {
-			c.Set("token_expires_at", claims.ExpiresAt.Time)
-		}
-		// 执行日志流在心跳时要拿它复查撤销（handler/log.go）
-		c.Set("claims", claims)
-		if isAppToken(claims.Username, claims.Role) {
-			c.Set("token_kind", "app")
-		} else {
-			c.Set("token_kind", "user")
 		}
 		c.Next()
 	}

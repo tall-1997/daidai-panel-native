@@ -37,6 +37,11 @@ func appScopeAllowed(scopeList, required string) bool {
 
 func loadOpenAppByUsername(username string) (*model.OpenApp, error) {
 	appKey := strings.TrimPrefix(username, "app:")
+	// 本机版（Android）：应用令牌用户名可带「服务/服务用户」后缀 app:<key>:<service>:<user>，
+	// 应用键只取第一段。
+	if idx := strings.Index(appKey, ":"); idx >= 0 {
+		appKey = appKey[:idx]
+	}
 	var app model.OpenApp
 	if err := database.DB.Where("app_key = ?", appKey).First(&app).Error; err != nil {
 		return nil, err
