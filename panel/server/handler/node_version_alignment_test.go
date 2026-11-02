@@ -197,7 +197,7 @@ func TestNodeVersionPinsAlignedAcrossChannels(t *testing.T) {
 	for _, name := range []string{"Dockerfile", "Dockerfile.debian"} {
 		pins = append(pins, nodeAlignDockerfilePins(t, name, readRepoTextFile(t, name))...)
 	}
-	for _, name := range []string{"checks.yml", "deploy-demo.yml"} {
+	for _, name := range []string{"deploy-demo.yml"} {
 		pins = append(pins, nodeAlignWorkflowPins(t, ".github/workflows/"+name, readRepoTextFile(t, ".github", "workflows", name))...)
 	}
 

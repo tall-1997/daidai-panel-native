@@ -10,6 +10,7 @@ import (
 	"daidai-panel/database"
 	"daidai-panel/handler"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 
 	"github.com/gin-gonic/gin"
@@ -85,7 +86,10 @@ func TestCreateTaskViewRejectsDuplicateName(t *testing.T) {
 }
 
 func TestCreateSSHKeyRejectsDuplicateName(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	root := testutil.SetupTestEnv(t)
+	if err := service.InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
 
 	admin := testutil.MustCreateUser(t, "dup-ssh-admin", "admin")
 	token := testutil.MustCreateAccessToken(t, admin.Username, admin.Role)
@@ -132,7 +136,10 @@ func TestCreateOpenAppRejectsDuplicateName(t *testing.T) {
 
 // 平台令牌的唯一键是「平台 + 名称」：同平台重名要拦，跨平台同名必须放行。
 func TestCreatePlatformTokenRejectsDuplicateOnlyWithinSamePlatform(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	root := testutil.SetupTestEnv(t)
+	if err := service.InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
 
 	admin := testutil.MustCreateUser(t, "dup-token-admin", "admin")
 	token := testutil.MustCreateAccessToken(t, admin.Username, admin.Role)

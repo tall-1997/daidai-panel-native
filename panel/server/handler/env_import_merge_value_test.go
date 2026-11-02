@@ -1,18 +1,23 @@
 package handler_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	"daidai-panel/database"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 )
 
 // #161：merge_value 按「名称 + 值」认同一条。备注相同、值不同的要各自新建（merge 会把它们合成一条）；
 // 命中时备注有键才写、重要只升不降、启用状态按文件写；同一文件里重复的「名称 + 值」只落一条。
 func TestImportMergeValueMatchesOnNameAndValue(t *testing.T) {
-	testutil.SetupTestEnv(t)
+	root := testutil.SetupTestEnv(t)
+	if err := service.InitializeRuntimeSecurity(root); err != nil {
+		t.Fatalf("initialize runtime security: %v", err)
+	}
 
 	engine := newProtectedRouter()
 	user := testutil.MustCreateUser(t, "env-import-merge-value", "operator")
@@ -51,8 +56,10 @@ func TestImportMergeValueMatchesOnNameAndValue(t *testing.T) {
 		t.Fatalf("库里应有 5 条（同文件重复的 TOKEN=c 只落一条），实际 %d: %+v", len(envs), envs)
 	}
 	byKey := map[string]model.EnvVar{}
-	for _, env := range envs {
-		byKey[env.Name+"="+env.Value] = env
+	for i := range envs {
+		// 本机版（Android）：值落库即密封，按解封后的明文建索引。
+		opened := service.OpenEnvVarValue(context.Background(), &envs[i])
+		byKey[envs[i].Name+"="+opened] = envs[i]
 	}
 
 	hit := byKey["TOKEN=a"]

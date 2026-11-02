@@ -1116,6 +1116,52 @@
           "default": "{\"title\":\"{{title}}\",\"content\":\"{{content}}\"}"
         }
       ]
+    },
+    {
+      "type": "android_local",
+      "name": "本机通知",
+      "icon": "android",
+      "fields": [
+        {
+          "key": "channel",
+          "label": "通知渠道",
+          "widget": "input",
+          "placeholder": "default",
+          "default": "default"
+        }
+      ]
+    },
+    {
+      "type": "external_webhook",
+      "name": "外部 Webhook",
+      "icon": "webhook",
+      "fields": [
+        {
+          "key": "url",
+          "label": "URL",
+          "widget": "input",
+          "placeholder": "https://example.com/hook",
+          "required": true
+        },
+        {
+          "key": "body",
+          "label": "Body 模板",
+          "widget": "textarea",
+          "placeholder": "支持 {{title}} / {{content}} 占位符"
+        },
+        {
+          "key": "headers",
+          "label": "Headers (JSON)",
+          "widget": "textarea",
+          "placeholder": "{\"X-Token\":\"xxx\"}"
+        },
+        {
+          "key": "bearer_token",
+          "label": "Bearer Token",
+          "widget": "password",
+          "placeholder": "Authorization: Bearer \u003ctoken\u003e"
+        }
+      ]
     }
   ]
 }

@@ -127,6 +127,12 @@ func (h *LogHandler) List(c *gin.Context) {
 func (h *LogHandler) Stream(c *gin.Context) {
 	taskIDStr := c.Param("id")
 	taskID, _ := strconv.ParseUint(taskIDStr, 10, 32)
+	// 本机版（Android）：支持 Last-Event-ID / cursor 断点续读（APP 切后台重连不重放整段）。
+	rawCursor := c.GetHeader("Last-Event-ID")
+	if rawCursor == "" {
+		rawCursor = c.Query("cursor")
+	}
+	cursor := service.ParseLogCursor(rawCursor)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -150,8 +156,11 @@ func (h *LogHandler) Stream(c *gin.Context) {
 
 	if tl != nil {
 		history, _ := tl.ReadAll()
-		if len(history) > 0 {
-			writeSSEData(c.Writer, string(history))
+		if cursor > int64(len(history)) {
+			cursor = int64(len(history))
+		}
+		if len(history) > int(cursor) {
+			cursor = writeSSEDataWithCursor(c.Writer, string(history[cursor:]), cursor)
 			c.Writer.Flush()
 		}
 
@@ -258,9 +267,25 @@ func (h *LogHandler) Stream(c *gin.Context) {
 		}
 		if tl != nil {
 			history, _ := tl.ReadAll()
-			if len(history) > 0 {
-				writeSSEData(c.Writer, string(history))
+			if cursor > int64(len(history)) {
+				cursor = int64(len(history))
+			}
+			if len(history) > int(cursor) {
+				cursor = writeSSEDataWithCursor(c.Writer, string(history[cursor:]), cursor)
 				c.Writer.Flush()
+			}
+		}
+		// 本机版（Android）：没有实时日志时回读已落库的 TaskLog，按游标续读（完成的日志也能看）。
+		if tl == nil {
+			var taskLog model.TaskLog
+			if err := database.DB.Where("task_id = ?", taskID).Order("started_at DESC, id DESC").First(&taskLog).Error; err == nil {
+				if content, next, err := service.ReadTaskLogFromCursor(&taskLog, cursor); err == nil && content != "" {
+					cursor = writeSSEDataWithCursor(c.Writer, content, cursor)
+					if cursor < next {
+						cursor = next
+					}
+					c.Writer.Flush()
+				}
 			}
 		}
 		// 等待结束后重查真实状态：若已开始运行 → reconnect（前端重连后进入 tl != nil 流式分支），否则才判完成。
@@ -504,4 +529,16 @@ func (h *LogHandler) RegisterRoutes(r *gin.RouterGroup) {
 		logs.GET("/:id", middleware.JWTAuth(), middleware.OpenAPIAccess("logs"), middleware.RequireRole("viewer"), h.Detail)
 		logs.DELETE("/:id", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.Delete)
 	}
+}
+
+// writeSSEDataWithCursor 按字节游标分帧：id 是下一段起点，APP 重连时用 Last-Event-ID 续读。
+func writeSSEDataWithCursor(w io.Writer, data string, cursor int64) int64 {
+	nextCursor := cursor + int64(len(data))
+	fmt.Fprintf(w, "id: %d\n", nextCursor)
+	data = strings.ReplaceAll(data, "\r\n", "\n")
+	for _, line := range strings.Split(data, "\n") {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprint(w, "\n")
+	return nextCursor
 }

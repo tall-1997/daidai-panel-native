@@ -1227,8 +1227,21 @@ func (h *EnvHandler) Import(c *gin.Context) {
 		if req.Mode == "merge_value" {
 			// #161：名称 + 值都相同才算同一条，命中时值本来就一样，只更新备注 / 分组 / 启用 / 重要。
 			// 同一文件里重复的「名称 + 值」，第二条会命中第一条刚建的行，自然只落一条。
+			//
+			// 本机版（Android）：值落库即密封（value 列为空、密文在 sealed），不能再按 value 列直接比较；
+			// 按名称取出候选后逐条解封比对明文，语义与未加密时一致。
+			var candidates []model.EnvVar
+			database.DB.Where("name = ?", name).Find(&candidates)
 			var existing model.EnvVar
-			if database.DB.Where("name = ? AND value = ?", name, value).First(&existing).Error == nil {
+			matched := false
+			for i := range candidates {
+				if service.OpenEnvVarValue(c.Request.Context(), &candidates[i]) == value {
+					existing = candidates[i]
+					matched = true
+					break
+				}
+			}
+			if matched {
 				updates := map[string]interface{}{
 					"enabled": enabled,
 				}
