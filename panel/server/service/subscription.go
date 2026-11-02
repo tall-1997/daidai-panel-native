@@ -1395,6 +1395,9 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 					if err := scheduler.AddJob(&task); err != nil {
 						log.Printf("任务 %d 注册调度失败（它不会自动触发）: %v", task.ID, err)
 					}
+				} else {
+					// 本机版（Android）：调度器未起（关停中 / ddp 进程）也要让用户看见任务没被注册。
+					emit(fmt.Sprintf("[调度器未初始化] 任务 %s 已保存，将在调度器启动时加载", candidate.Name))
 				}
 				created++
 				if candidate.DefaultRule {

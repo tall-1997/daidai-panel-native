@@ -111,12 +111,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 		cancel()
 		return nil, err
 	}
-	go func() {
-		<-ctx.Done()
-		if ctx.Err() != nil {
-			KillProcessGroup(cmd.Process)
-		}
-	}()
+	// 不在这里挂「ctx 结束就杀整组」的协程：Wait 正常收尾时也会 cancel，
+	// 那会把任务有意留在后台的进程（nohup / &）一起杀掉，清理与否必须由调用方按配置决定。
+	// 超时 / 取消的整组终止在 Wait 的 select 分支里做。
 	return proc, nil
 }
 
@@ -141,7 +138,16 @@ func (p *defaultSupervisedProcess) PID() int {
 }
 
 func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
-	err := p.cmd.Wait()
+	// 等主进程退出；ctx 超时 / 取消时终止整组，再等回收。
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-p.ctx.Done():
+		KillProcessGroup(p.cmd.Process)
+		err = <-done
+	}
 	p.cancel()
 	exitCode := 0
 	if err != nil {
