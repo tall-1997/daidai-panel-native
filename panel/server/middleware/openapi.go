@@ -37,6 +37,8 @@ func appScopeAllowed(scopeList, required string) bool {
 
 func loadOpenAppByUsername(username string) (*model.OpenApp, error) {
 	appKey := strings.TrimPrefix(username, "app:")
+	// 本机版（Android）：应用令牌用户名可带「服务/服务用户」后缀 app:<key>:<service>:<user>，
+	// 应用键只取第一段。
 	if idx := strings.Index(appKey, ":"); idx >= 0 {
 		appKey = appKey[:idx]
 	}
@@ -47,15 +49,22 @@ func loadOpenAppByUsername(username string) (*model.OpenApp, error) {
 	return &app, nil
 }
 
-func openAPIBindingFromUsername(username string) (serviceName, serviceUser string) {
-	parts := strings.Split(strings.TrimPrefix(username, "app:"), ":")
-	if len(parts) >= 2 {
-		serviceName = strings.TrimSpace(parts[1])
+// AppTokenHasScope 判断当前请求是否具备某个「额外」scope，给 handler 内部按需校验用。
+//
+// 适用场景：路由组上的 OpenAPIAccess 只校验了一个 scope（例如 tasks），但某个可选开关会顺带动到
+// 另一类资源（例如删除任务时一并删除脚本，动的是 scripts 的文件）。RequireRole 对应用令牌只看
+// app_scope_authorized、不看角色，所以这类开关必须在 handler 里再调一次本函数，否则只有 tasks
+// 权限的应用就凭空获得了删脚本的能力。仿写新开关时别漏了这一步。
+//
+// 口径：用户令牌恒为 true（用户的权限由 RequireRole 按角色控制）；应用令牌要求应用存在、已启用，
+// 且 scopes 含 scope 或 *，与 OpenAPIAccess 用的是同一套判定。
+func AppTokenHasScope(c *gin.Context, scope string) bool {
+	username := c.GetString("username")
+	if !isAppToken(username, c.GetString("role")) {
+		return true
 	}
-	if len(parts) >= 3 {
-		serviceUser = strings.TrimSpace(parts[2])
-	}
-	return serviceName, serviceUser
+	app, err := loadOpenAppByUsername(username)
+	return err == nil && app.Enabled && appScopeAllowed(app.Scopes, scope)
 }
 
 func RequireUserToken() gin.HandlerFunc {
@@ -69,6 +78,19 @@ func RequireUserToken() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// openAPIBindingFromUsername 解析应用令牌里的「服务/服务用户」绑定：
+// 用户名形如 app:<appKey>:<service>:<user>（本机版 Android 扩展，开放 API 按服务账号隔离）。
+func openAPIBindingFromUsername(username string) (serviceName, serviceUser string) {
+	parts := strings.Split(strings.TrimPrefix(username, "app:"), ":")
+	if len(parts) >= 2 {
+		serviceName = strings.TrimSpace(parts[1])
+	}
+	if len(parts) >= 3 {
+		serviceUser = strings.TrimSpace(parts[2])
+	}
+	return serviceName, serviceUser
 }
 
 func OpenAPIAccess(scope string) gin.HandlerFunc {
@@ -122,13 +144,13 @@ func OpenAPIAccess(scope string) gin.HandlerFunc {
 		database.DB.Create(&model.ApiCallLog{
 			AppID:       app.ID,
 			AppName:     app.Name,
-			Endpoint:    endpoint,
-			Method:      c.Request.Method,
 			Service:     serviceName,
 			ServiceUser: serviceUser,
-			Status:      c.Writer.Status(),
-			Duration:    float64(time.Since(start).Milliseconds()),
-			IP:          ResolveClientIP(c),
+			Endpoint:    endpoint,
+			Method:   c.Request.Method,
+			Status:   c.Writer.Status(),
+			Duration: float64(time.Since(start).Milliseconds()),
+			IP:       ResolveClientIP(c),
 		})
 	}
 }

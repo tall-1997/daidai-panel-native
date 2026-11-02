@@ -2,10 +2,14 @@
 import { ref, watch } from 'vue'
 import { useResponsive } from '@/composables/useResponsive'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean
   groups: string[]
-}>()
+  // 提交在途标记：父组件批量分组请求期间置位，防止连点重复提交
+  submitting?: boolean
+}>(), {
+  submitting: false
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -41,6 +45,10 @@ function applyBatchGroupName(group: string) {
 }
 
 function handleConfirm() {
+  // 上一发还没回来就不再叠加请求
+  if (props.submitting) {
+    return
+  }
   emit('confirm', normalizeGroupList(batchGroups.value))
 }
 
@@ -100,7 +108,7 @@ watch(
     </el-form>
     <template #footer>
       <el-button @click="closeDialog">取消</el-button>
-      <el-button type="primary" @click="handleConfirm">确定</el-button>
+      <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleConfirm">确定</el-button>
     </template>
   </el-dialog>
 </template>

@@ -4,11 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,74 +26,16 @@ import (
 )
 
 type LegacyBackupData struct {
-	Version   string                      `json:"version"`
-	CreatedAt time.Time                   `json:"created_at"`
-	Tasks     []model.Task                `json:"tasks"`
-	EnvVars   []BackupEnvVar              `json:"env_vars"`
-	Subs      []model.Subscription        `json:"subscriptions"`
-	Channels  []LegacyBackupNotifyChannel `json:"notify_channels"`
-	SSHKeys   []model.SSHKey              `json:"ssh_keys"`
-	Configs   []model.SystemConfig        `json:"system_configs"`
-	Scripts   []LegacyBackupScriptFile    `json:"scripts,omitempty"`
-	Deps      []model.Dependency          `json:"dependencies,omitempty"`
-}
-
-type LegacyBackupNotifyChannel struct {
-	ID        uint            `json:"id"`
-	Name      string          `json:"name"`
-	Type      string          `json:"type"`
-	Config    json.RawMessage `json:"config"`
-	PushScope string          `json:"push_scope"`
-	Enabled   bool            `json:"enabled"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-}
-
-type LegacyBackupScriptFile struct {
-	Path          string `json:"path"`
-	Content       string `json:"content"`
-	ContentBase64 string `json:"content_base64"`
-}
-
-type portableOpenAppSecret struct {
-	Provider string `json:"provider"`
-	Cipher   string `json:"cipher"`
-	Sealed   bool   `json:"sealed"`
-}
-
-func openPortableOpenAppSecret(appKey, stored string) string {
-	var payload portableOpenAppSecret
-	if json.Unmarshal([]byte(stored), &payload) != nil || !payload.Sealed || payload.Provider == "" || payload.Cipher == "" {
-		return stored
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(payload.Cipher)
-	if err != nil {
-		return stored
-	}
-	opened, err := RuntimeSecretStoreInstance().Open(context.Background(), "open-app:"+appKey, SealedValue{Provider: payload.Provider, Cipher: ciphertext})
-	if err != nil {
-		return stored
-	}
-	return string(opened)
-}
-
-func sealRestoredOpenAppSecret(appKey, raw string) string {
-	if raw == "" || strings.HasPrefix(raw, "sha256:") {
-		return raw
-	}
-	var existing portableOpenAppSecret
-	if json.Unmarshal([]byte(raw), &existing) == nil && existing.Sealed {
-		return raw
-	}
-	sealed, err := RuntimeSecretStoreInstance().Seal(context.Background(), "open-app:"+appKey, []byte(raw))
-	if err != nil {
-		return raw
-	}
-	encoded, err := json.Marshal(portableOpenAppSecret{Provider: sealed.Provider, Cipher: base64.StdEncoding.EncodeToString(sealed.Cipher), Sealed: true})
-	if err != nil {
-		return raw
-	}
-	return string(encoded)
+	Version   string                `json:"version"`
+	CreatedAt time.Time             `json:"created_at"`
+	Tasks     []model.Task          `json:"tasks"`
+	EnvVars   []BackupEnvVar        `json:"env_vars"`
+	Subs      []model.Subscription  `json:"subscriptions"`
+	Channels  []model.NotifyChannel `json:"notify_channels"`
+	SSHKeys   []model.SSHKey        `json:"ssh_keys"`
+	Configs   []model.SystemConfig  `json:"system_configs"`
+	Scripts   []ScriptFile          `json:"scripts,omitempty"`
+	Deps      []model.Dependency    `json:"dependencies,omitempty"`
 }
 
 func createBackupArchive(options BackupCreateOptions) (string, error) {
@@ -193,8 +135,15 @@ func buildBackupManifest(selection BackupSelection) (BackupManifest, error) {
 	}
 
 	if selection.Tasks {
-		if err := database.DB.Order("id ASC").Find(&manifest.Data.Tasks).Error; err != nil {
+		// 不能直接 Find(&manifest.Data.Tasks)：清单里存的是 BackupTask，标签要单独拎成数组。
+		// 形态照下面紧邻的 EnvVars 分支。
+		var tasks []model.Task
+		if err := database.DB.Order("id ASC").Find(&tasks).Error; err != nil {
 			return BackupManifest{}, fmt.Errorf("load tasks: %w", err)
+		}
+		manifest.Data.Tasks = make([]BackupTask, 0, len(tasks))
+		for _, task := range tasks {
+			manifest.Data.Tasks = append(manifest.Data.Tasks, backupTaskFromModel(task))
 		}
 	}
 
@@ -205,15 +154,19 @@ func buildBackupManifest(selection BackupSelection) (BackupManifest, error) {
 		}
 		manifest.Data.EnvVars = make([]BackupEnvVar, 0, len(envVars))
 		for _, envVar := range envVars {
-			item := backupEnvVarFromModel(envVar)
-			item.Secret = envVar.Secret
-			manifest.Data.EnvVars = append(manifest.Data.EnvVars, item)
+			manifest.Data.EnvVars = append(manifest.Data.EnvVars, backupEnvVarFromModel(envVar))
 		}
 	}
 
 	if selection.Subscriptions {
-		if err := database.DB.Order("id ASC").Find(&manifest.Data.Subscriptions).Error; err != nil {
+		// 同上：清单里存的是 BackupSubscription，auth_token 要单独带出来。
+		var subscriptions []model.Subscription
+		if err := database.DB.Order("id ASC").Find(&subscriptions).Error; err != nil {
 			return BackupManifest{}, fmt.Errorf("load subscriptions: %w", err)
+		}
+		manifest.Data.Subscriptions = make([]BackupSubscription, 0, len(subscriptions))
+		for _, subscription := range subscriptions {
+			manifest.Data.Subscriptions = append(manifest.Data.Subscriptions, backupSubscriptionFromModel(subscription))
 		}
 
 		var sshKeys []model.SSHKey
@@ -253,7 +206,14 @@ func buildBackupManifest(selection BackupSelection) (BackupManifest, error) {
 
 	if selection.Logs {
 		var taskLogs []model.TaskLog
-		if err := database.DB.Preload("Task").Order("id ASC").Find(&taskLogs).Error; err != nil {
+		// 日志和执行趋势的按天计数（#158）必须在同一个读事务里取：两次读之间要是碰上一次清理，
+		// 同一批行会既在日志里、又在计数里，恢复之后趋势就重复算了。事务里只能用 tx（连接池只有一条连接）。
+		if err := database.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Order("day ASC").Find(&manifest.Data.TaskLogDailyStats).Error; err != nil {
+				return err
+			}
+			return tx.Preload("Task").Order("id ASC").Find(&taskLogs).Error
+		}); err != nil {
 			return BackupManifest{}, fmt.Errorf("load task logs: %w", err)
 		}
 		for _, logItem := range taskLogs {
@@ -297,7 +257,7 @@ func snapshotConfigBundle() (BackupConfigBundle, error) {
 			ID:        app.ID,
 			Name:      app.Name,
 			AppKey:    app.AppKey,
-			AppSecret: openPortableOpenAppSecret(app.AppKey, app.AppSecret),
+			AppSecret: app.AppSecret,
 			Scopes:    app.Scopes,
 			Enabled:   app.Enabled,
 			RateLimit: app.RateLimit,
@@ -353,6 +313,20 @@ func snapshotConfigBundle() (BackupConfigBundle, error) {
 			UserID:    item.UserID,
 			Secret:    item.Secret,
 			Enabled:   item.Enabled,
+			CreatedAt: item.CreatedAt,
+			UpdatedAt: item.UpdatedAt,
+		})
+	}
+
+	var preferences []model.UserPreference
+	if err := database.DB.Order("id ASC").Find(&preferences).Error; err != nil {
+		return BackupConfigBundle{}, fmt.Errorf("load user preferences: %w", err)
+	}
+	for _, item := range preferences {
+		bundle.UserPreferences = append(bundle.UserPreferences, BackupUserPreference{
+			UserID:    item.UserID,
+			Editor:    item.Editor,
+			List:      item.List,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
 		})
@@ -572,7 +546,7 @@ func restoreBackupFile(filename, password string) (err error) {
 		return nil
 	}
 	if looksLikeJSON(rawData) {
-		if err := restoreJSONBytes(rawData); err != nil {
+		if err := restoreLegacyJSONBytes(rawData); err != nil {
 			return err
 		}
 		CompleteRestoreProgress("数据已恢复完成，正在准备重启面板...")
@@ -580,55 +554,6 @@ func restoreBackupFile(filename, password string) (err error) {
 	}
 
 	return fmt.Errorf("无法识别的备份格式")
-}
-
-func restoreJSONBytes(data []byte) error {
-	var probe struct {
-		Format string          `json:"format"`
-		Data   json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("failed to parse backup: %w", err)
-	}
-	if probe.Format != "daidai-panel-backup" || len(probe.Data) == 0 || string(probe.Data) == "null" {
-		return restoreLegacyJSONBytes(data)
-	}
-
-	var manifest BackupManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return fmt.Errorf("解析现代备份清单失败: %w", err)
-	}
-	if manifest.Format != "daidai-panel-backup" || strings.TrimSpace(manifest.Version) == "" {
-		return fmt.Errorf("不支持的备份清单")
-	}
-	tempDir, err := os.MkdirTemp("", "daidai-json-restore-*")
-	if err != nil {
-		return fmt.Errorf("创建 JSON 备份临时目录失败: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-	for _, script := range manifest.Data.Scripts {
-		if err := writePortableScript(tempDir, script.Path, script.Content); err != nil {
-			return err
-		}
-	}
-	BindRestoreProgressPlan(manifest.Source, manifest.Selection)
-	return restoreBackupManifest(manifest, tempDir)
-}
-
-func writePortableScript(root, path, encoded string) error {
-	clean := filepath.Clean(filepath.FromSlash(path))
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("非法脚本路径: %s", path)
-	}
-	content, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return fmt.Errorf("脚本 %s 的 base64 无效: %w", path, err)
-	}
-	target := filepath.Join(root, "files", "scripts", clean)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(target, content, 0o755)
 }
 
 func looksLikeGzip(data []byte) bool {
@@ -696,11 +621,7 @@ func restoreLegacyJSONBytes(data []byte) error {
 		if strings.Contains(scriptFile.Path, "..") {
 			continue
 		}
-		encoded := scriptFile.ContentBase64
-		if encoded == "" {
-			encoded = scriptFile.Content
-		}
-		content, err := base64.StdEncoding.DecodeString(encoded)
+		content, err := base64.StdEncoding.DecodeString(scriptFile.Content)
 		if err != nil {
 			continue
 		}
@@ -711,6 +632,19 @@ func restoreLegacyJSONBytes(data []byte) error {
 		if err := os.WriteFile(targetPath, content, 0o755); err != nil {
 			return fmt.Errorf("写入旧脚本失败: %w", err)
 		}
+	}
+
+	// 老 JSON 备份里 tasks / subscriptions 存的是 model.X 原样序列化的结果，
+	// 本来就没有 labels / auth_token 这两个键（它们在 model 上是 json:"-"）。
+	// 这里只是把类型对齐到新的 BackupTask / BackupSubscription，标签与令牌仍为空 ——
+	// 老备份的恢复行为逐字节不变。
+	legacyTasks := make([]BackupTask, 0, len(legacy.Tasks))
+	for _, task := range legacy.Tasks {
+		legacyTasks = append(legacyTasks, backupTaskFromModel(task))
+	}
+	legacySubscriptions := make([]BackupSubscription, 0, len(legacy.Subs))
+	for _, subscription := range legacy.Subs {
+		legacySubscriptions = append(legacySubscriptions, backupSubscriptionFromModel(subscription))
 	}
 
 	manifest := BackupManifest{
@@ -731,32 +665,21 @@ func restoreLegacyJSONBytes(data []byte) error {
 			Configs: BackupConfigBundle{
 				SystemConfigs: legacy.Configs,
 			},
-			Tasks:         legacy.Tasks,
+			Tasks:         legacyTasks,
 			EnvVars:       legacy.EnvVars,
-			Subscriptions: legacy.Subs,
+			Subscriptions: legacySubscriptions,
 		},
 	}
 
+	// legacy.Channels 是 []model.NotifyChannel，老备份里 push_scope 是空串，
+	// EffectivePushScope 归一后落成 default —— 老备份本来就没有「绑定推送」这个概念。
 	for _, channel := range legacy.Channels {
-		configValue := strings.TrimSpace(string(channel.Config))
-		if len(channel.Config) == 0 || configValue == "null" {
-			configValue = "{}"
-		} else if strings.HasPrefix(configValue, `"`) {
-			var decoded string
-			if json.Unmarshal(channel.Config, &decoded) == nil {
-				configValue = decoded
-			}
-		}
-		pushScope, ok := model.NormalizeNotifyPushScope(channel.PushScope)
-		if !ok {
-			pushScope = model.NotifyPushScopeDefault
-		}
 		manifest.Data.Configs.NotifyChannels = append(manifest.Data.Configs.NotifyChannels, BackupNotifyChannel{
 			ID:        channel.ID,
 			Name:      channel.Name,
 			Type:      channel.Type,
-			Config:    configValue,
-			PushScope: pushScope,
+			Config:    channel.Config,
+			PushScope: channel.EffectivePushScope(),
 			Enabled:   channel.Enabled,
 			CreatedAt: channel.CreatedAt,
 			UpdatedAt: channel.UpdatedAt,
@@ -849,14 +772,39 @@ func restoreBackupManifest(manifest BackupManifest, extractedDir string) error {
 	var createdDependencies []model.Dependency
 	taskIDMap := map[uint]uint{}
 	sshKeyIDMap := map[uint]uint{}
+	// 订阅恢复会重新分配主键，任务上的 subscription:<旧ID> 标签要靠这份映射回头改写，见下面的后置 pass。
+	subscriptionIDMap := map[uint]uint{}
 
 	rollback := func(err error) error {
 		tx.Rollback()
 		return err
 	}
 
-	if selection.Logs || selection.Tasks {
+	// 执行趋势的按天计数（task_log_daily_stats，#158）跟着日志走：
+	//   - 勾「日志」（青龙除外）：日志与计数整体回到备份那一刻——两张表都清空，计数写回备份里的
+	//     （老备份没有这个键 = 清零；下面 restoreTaskLogs 因任务对不上而跳过的日志不并计）；
+	//   - 只勾「任务」或青龙导入：现存日志照旧要清掉（只勾任务时任务 id 会重排、外键不允许留着；
+	//     青龙勾「日志」时也照旧整表替换日志，与改动前一致），先经 DeleteTaskLogs 并入计数再删，计数表不清——
+	//     青龙包里没有呆呆面板的执行历史，清零只会丢信息。
+	// 这一段必须是恢复事务里的第一批语句：DeleteTaskLogs 的归档 INSERT 要打头（原因见它的注释）。
+	if selection.Logs && manifest.Source != "qinglong" {
 		if err := deleteAll(tx, "task_logs"); err != nil {
+			return rollback(err)
+		}
+		if err := deleteAll(tx, "task_log_daily_stats"); err != nil {
+			return rollback(err)
+		}
+		for _, stat := range manifest.Data.TaskLogDailyStats {
+			// upsert 而不是 Create：手工拼过的备份里同一天出现两次时累加，不让整次恢复因主键冲突回滚。
+			if err := tx.Exec(`INSERT INTO task_log_daily_stats (day, success, failed, aborted, other) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(day) DO UPDATE SET success = success + excluded.success, failed = failed + excluded.failed,
+aborted = aborted + excluded.aborted, other = other + excluded.other`,
+				stat.Day, stat.Success, stat.Failed, stat.Aborted, stat.Other).Error; err != nil {
+				return rollback(err)
+			}
+		}
+	} else if selection.Logs || selection.Tasks {
+		if _, _, err := DeleteTaskLogs(tx, "1 = 1"); err != nil {
 			return rollback(err)
 		}
 	}
@@ -940,7 +888,18 @@ func restoreBackupManifest(manifest BackupManifest, extractedDir string) error {
 		if err != nil {
 			return rollback(err)
 		}
-		if err := restoreSubscriptions(tx, manifest.Data.Subscriptions, sshKeyIDMap); err != nil {
+		subscriptionIDMap, err = restoreSubscriptions(tx, manifest.Data.Subscriptions, sshKeyIDMap)
+		if err != nil {
+			return rollback(err)
+		}
+	}
+
+	// 后置 pass：恢复顺序是先任务后订阅，等订阅拿到新主键之后再回头改任务标签，
+	// 照上面 restoreTasks 里 pendingDepends 那套写法，不动既有恢复顺序。
+	// 只勾选任务不勾选订阅时 subscriptionIDMap 为空 → 所有 subscription: 标签被丢弃，
+	// 等价于今天（标签整列丢失）的行为。
+	if selection.Tasks {
+		if err := remapSubscriptionLabels(tx, subscriptionIDMap); err != nil {
 			return rollback(err)
 		}
 	}
@@ -960,9 +919,12 @@ func restoreBackupManifest(manifest BackupManifest, extractedDir string) error {
 	}
 
 	if selection.TaskViews {
+		// task_views.name 从 v3.1.0 起是唯一索引，归档里的重名要先改名再落库（理由见 restoreNotifyChannels）。
+		// 表在上面已经 deleteAll 清空，所以只需要处理归档内部的重名。
+		usedViewNames := make(map[string]bool, len(manifest.Data.TaskViews))
 		for _, view := range manifest.Data.TaskViews {
 			newView := model.TaskView{
-				Name:      view.Name,
+				Name:      resolveRestoredUniqueName(usedViewNames, view.Name, "任务视图"),
 				Filters:   view.Filters,
 				SortRules: view.SortRules,
 				Hidden:    view.Hidden,
@@ -1000,9 +962,7 @@ func restoreBackupManifest(manifest BackupManifest, extractedDir string) error {
 	}
 
 	UpdateRestoreProgress("finalizing", "正在刷新任务调度与恢复后状态...", 92)
-	if err := model.InitDefaultConfigs(); err != nil {
-		return err
-	}
+	model.InitDefaultConfigs()
 	_ = middleware.ConfigureTrustedProxyCIDRs(model.GetRegisteredConfig("trusted_proxy_cidrs"))
 
 	if scheduler := GetSchedulerV2(); scheduler != nil {
@@ -1096,8 +1056,36 @@ func restoreUsers(tx *gorm.DB, users []BackupUser) (map[uint]uint, error) {
 	return idMap, nil
 }
 
+// resolveRestoredUniqueName 给恢复中的一条记录挑一个「本次归档里还没被用掉」的名字，
+// 并把改名这件事写进面板日志 —— 用户恢复完发现「我的渠道名怎么多了个 (2)」，得能在日志里找到答案。
+//
+// used 会被就地更新（把最终采用的名字标记为已占用），调用方每张表各传一个 map 即可。
+// label 只参与日志文案。
+func resolveRestoredUniqueName(used map[string]bool, original, label string) string {
+	name := database.NextAvailableName(used, original)
+	if name == "" {
+		// 极端脏数据（同一个名字在归档里重复上万次）时退回原名：
+		// 宁可让 DB 唯一约束把这次恢复挡下来并报错，也不能拿一个空名字盖掉用户数据。
+		name = original
+	}
+	if name != original {
+		log.Printf("恢复备份：归档里存在重名的%s「%s」，已改名为「%s」", label, original, name)
+	}
+	used[name] = true
+	return name
+}
+
 func restoreNotifyChannels(tx *gorm.DB, channels []BackupNotifyChannel) (map[uint]uint, error) {
 	idMap := make(map[uint]uint, len(channels))
+	// notify_channels.name 从 v3.1.0 起是唯一索引，但**归档里的数据永远不会随升级被清洗**：
+	// 用户在 v3.0.10 连点创建出两条都叫「推送」的渠道（当时完全合法）并导出过备份，
+	// 升级后启动迁移只改了活库，那份备份里仍然是两条「推送」。
+	// 不在这里改名的话，第二条 Create 会返回 UNIQUE constraint failed → rollback → 整次恢复全白做，
+	// 用户拿着一份永远恢复不了的备份，且没有任何自救入口。
+	//
+	// 这张表在上面已经被 deleteAll 清空，所以只需要处理**归档内部**的重名。
+	// 改名规则复用 database.NextAvailableName，与启动迁移保持同一套口径。
+	usedChannelNames := make(map[string]bool, len(channels))
 	for _, item := range channels {
 		// 老备份里可能带着被客户端写坏的 config（例如 smtp_ssl 是 JSON 布尔），
 		// 那种渠道恢复回来会直接发不出任何通知。这里顺手归一一次，让它恢复即可用。
@@ -1118,8 +1106,10 @@ func restoreNotifyChannels(tx *gorm.DB, channels []BackupNotifyChannel) (map[uin
 			pushScope = model.NotifyPushScopeDefault
 		}
 
+		name := resolveRestoredUniqueName(usedChannelNames, item.Name, "通知渠道")
+
 		channel := model.NotifyChannel{
-			Name:      item.Name,
+			Name:      name,
 			Type:      item.Type,
 			Config:    config,
 			PushScope: pushScope,
@@ -1136,11 +1126,15 @@ func restoreNotifyChannels(tx *gorm.DB, channels []BackupNotifyChannel) (map[uin
 }
 
 func restoreOpenApps(tx *gorm.DB, apps []BackupOpenApp) error {
+	// open_apps.name 从 v3.1.0 起是唯一索引，这里同样要处理归档内部的重名（理由见 restoreNotifyChannels）。
+	// 这条路径比通知渠道更容易踩到：青龙导入会把青龙 app 表原样搬进 Configs.OpenApps，
+	// 而青龙的 app.name 没有任何唯一约束 —— 青龙用户有两个同名应用时，整个导入会直接失败。
+	usedAppNames := make(map[string]bool, len(apps))
 	for _, item := range apps {
 		app := model.OpenApp{
-			Name:      item.Name,
+			Name:      resolveRestoredUniqueName(usedAppNames, item.Name, "OpenAPI 应用"),
 			AppKey:    item.AppKey,
-			AppSecret: sealRestoredOpenAppSecret(item.AppKey, item.AppSecret),
+			AppSecret: item.AppSecret,
 			Scopes:    item.Scopes,
 			Enabled:   item.Enabled,
 			RateLimit: item.RateLimit,
@@ -1184,6 +1178,35 @@ func restoreTwoFactorAuths(tx *gorm.DB, items []BackupTwoFactorAuth, userIDMap m
 	return nil
 }
 
+// restoreUserPreferences 与上面的 restoreTwoFactorAuths 逐条同构：
+// 用户主键在恢复时会重新分配，只有能从 userIDMap 映射到新 ID 的记录才恢复，
+// 映射不到（归档里的那个用户没被一起恢复）就整条跳过，写失败则把错误抛给外层事务回滚。
+//
+// ⚠️ 现状：restoreUsers / restoreTwoFactorAuths 目前都**没有调用点** —— 用户、2FA
+// 只导出不恢复（恢复用户会连带换掉当前管理员的凭据，风险太大），
+// 所以这个函数同样先与它们成对放着，等哪天把用户恢复整条链路接上时一起接。
+// 不要以为「编辑器偏好 / 列表页偏好已经能跟着备份恢复了」：现在只做到了随备份导出。
+// List 与导出那边成对补上，是为了哪天接上恢复链路时不会漏掉这一列。
+func restoreUserPreferences(tx *gorm.DB, items []BackupUserPreference, userIDMap map[uint]uint) error {
+	for _, item := range items {
+		userID := userIDMap[item.UserID]
+		if userID == 0 {
+			continue
+		}
+		record := model.UserPreference{
+			UserID:    userID,
+			Editor:    item.Editor,
+			List:      item.List,
+			CreatedAt: item.CreatedAt,
+			UpdatedAt: item.UpdatedAt,
+		}
+		if err := tx.Create(&record).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func backupEnvVarFromModel(item model.EnvVar) BackupEnvVar {
 	enabled := item.Enabled
 	return BackupEnvVar{
@@ -1195,7 +1218,7 @@ func backupEnvVarFromModel(item model.EnvVar) BackupEnvVar {
 		Position:  item.Position,
 		SortOrder: item.SortOrder,
 		Group:     item.Group,
-		Secret:    item.Secret,
+		Important: item.Important,
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
 	}
@@ -1215,6 +1238,7 @@ func modelEnvVarFromBackup(item BackupEnvVar) model.EnvVar {
 		Position:  item.Position,
 		SortOrder: item.SortOrder,
 		Group:     item.Group,
+		Important: item.Important,
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
 	}
@@ -1238,11 +1262,54 @@ func restoreEnvVars(tx *gorm.DB, envVars []BackupEnvVar) error {
 	return nil
 }
 
-func restoreTasks(tx *gorm.DB, tasks []model.Task, notifyChannelIDMap map[uint]uint) (map[uint]uint, error) {
+// backupTaskFromModel 把库里的 Task 转成备份形态：标签单独拎成数组，
+// 否则 model.Task.Labels 上的 json:"-" 会让整列标签在写 manifest.json 时被丢掉（issue #112）。
+func backupTaskFromModel(item model.Task) BackupTask {
+	// GetLabels 在空标签时返回 []string{} 而不是 nil，所以清单里恒为 JSON 数组，
+	// 与 /api/tasks/export 和 ToDict() 的形态一致。
+	return BackupTask{Task: item, Labels: item.GetLabels()}
+}
+
+// modelTaskFromBackup 把备份形态转回落库用的 model.Task。
+// 外层的 Labels 数组是唯一权威：老备份没有这个键 → nil → 拼出空串，与升级前完全一致。
+func modelTaskFromBackup(item BackupTask) model.Task {
+	task := item.Task
+	task.SetLabelsFromSlice(item.Labels)
+	return task
+}
+
+// backupSubscriptionFromModel / modelSubscriptionFromBackup 同理，处理 AuthToken（订阅 PAT）。
+func backupSubscriptionFromModel(item model.Subscription) BackupSubscription {
+	return BackupSubscription{
+		Subscription:            item,
+		AuthToken:               item.AuthToken,
+		AuthTokenSecretProvider: item.AuthTokenSecretProvider,
+		AuthTokenSecretCipher:   base64.StdEncoding.EncodeToString(item.AuthTokenSecretCipher),
+		SSHKeySecretProvider:    item.SSHKeySecretProvider,
+		SSHKeySecretCipher:      base64.StdEncoding.EncodeToString(item.SSHKeySecretCipher),
+	}
+}
+
+func modelSubscriptionFromBackup(item BackupSubscription) model.Subscription {
+	subscription := item.Subscription
+	subscription.AuthToken = item.AuthToken
+	subscription.AuthTokenSecretProvider = item.AuthTokenSecretProvider
+	subscription.SSHKeySecretProvider = item.SSHKeySecretProvider
+	if decoded, err := base64.StdEncoding.DecodeString(item.AuthTokenSecretCipher); err == nil {
+		subscription.AuthTokenSecretCipher = decoded
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(item.SSHKeySecretCipher); err == nil {
+		subscription.SSHKeySecretCipher = decoded
+	}
+	return subscription
+}
+
+func restoreTasks(tx *gorm.DB, tasks []BackupTask, notifyChannelIDMap map[uint]uint) (map[uint]uint, error) {
 	idMap := make(map[uint]uint, len(tasks))
 	pendingDepends := make(map[uint]uint)
 
-	for _, item := range tasks {
+	for _, backupTask := range tasks {
+		item := modelTaskFromBackup(backupTask)
 		oldID := item.ID
 		oldDepends := item.DependsOn
 		oldNotificationChannelID := item.NotificationChannelID
@@ -1289,9 +1356,13 @@ func normalizeRestoredTaskStatus(status float64) float64 {
 
 func restoreSSHKeys(tx *gorm.DB, keys []BackupSSHKey) (map[uint]uint, error) {
 	idMap := make(map[uint]uint, len(keys))
+	// ssh_keys.name 从 v3.1.0 起是唯一索引，同样要处理归档内部的重名（理由见 restoreNotifyChannels）。
+	// 这里失败的代价尤其大：SSH 密钥恢复失败会连带订阅一起 rollback，
+	// 而私钥往往只有备份里这一份。
+	usedKeyNames := make(map[string]bool, len(keys))
 	for _, item := range keys {
 		key := model.SSHKey{
-			Name:       item.Name,
+			Name:       resolveRestoredUniqueName(usedKeyNames, item.Name, "SSH 密钥"),
 			PrivateKey: item.PrivateKey,
 			CreatedAt:  item.CreatedAt,
 			UpdatedAt:  item.UpdatedAt,
@@ -1304,10 +1375,27 @@ func restoreSSHKeys(tx *gorm.DB, keys []BackupSSHKey) (map[uint]uint, error) {
 	return idMap, nil
 }
 
-func restoreSubscriptions(tx *gorm.DB, subscriptions []model.Subscription, sshKeyIDMap map[uint]uint) error {
-	for _, item := range subscriptions {
+// restoreSubscriptions 返回「备份里的订阅 ID → 恢复后新 ID」的映射，
+// 写法照 restoreSSHKeys / restoreNotifyChannels —— 以前只有它把映射扔了，
+// 于是任务上的 subscription:<旧ID> 标签没法跟着改（见 remapSubscriptionLabels）。
+func restoreSubscriptions(tx *gorm.DB, subscriptions []BackupSubscription, sshKeyIDMap map[uint]uint) (map[uint]uint, error) {
+	idMap := make(map[uint]uint, len(subscriptions))
+	for _, backupSubscription := range subscriptions {
+		item := modelSubscriptionFromBackup(backupSubscription)
+		oldID := item.ID
 		item.ID = 0
 		item.Status = 0
+		// 老备份（v3.2.6 之前）里没有三态列，只有 auto_add_task / auto_del_task=1，
+		// 语义是「开就是开、不看全局」。在落库前就地翻译成 enabled 并把源列清成 false，
+		// 与 handler.Create / 青龙导入用的是同一个口径：
+		//   - 还原完当场就有正确语义，不必等下次重启的启动回填；
+		//   - 也不会给回填留下新的 legacy=1 行 —— 否则用户把这条订阅改回「跟随全局设置」，
+		//     下次重启又会被提回「强制开启」。
+		// ⚠️ Resolve 只在备份没带三态信息时才看旧布尔：新备份里的 mode 是准的，不能被 legacy 顶掉。
+		item.AutoAddTaskMode = model.ResolveSubscriptionTaskSyncModeInput(item.AutoAddTaskMode, item.AutoAddTask)
+		item.AutoDelTaskMode = model.ResolveSubscriptionTaskSyncModeInput(item.AutoDelTaskMode, item.AutoDelTask)
+		item.AutoAddTask = false
+		item.AutoDelTask = false
 		if item.SSHKeyID != nil {
 			mapped := sshKeyIDMap[*item.SSHKeyID]
 			if mapped == 0 {
@@ -1317,6 +1405,70 @@ func restoreSubscriptions(tx *gorm.DB, subscriptions []model.Subscription, sshKe
 			}
 		}
 		if err := tx.Create(&item).Error; err != nil {
+			return nil, err
+		}
+		// 老备份里可能没有 id（青龙以外的历史格式），0 不是合法订阅 ID，不进映射表，
+		// 免得把 subscription:0 这类脏标签误指到某个真订阅上。
+		if oldID != 0 {
+			idMap[oldID] = item.ID
+		}
+	}
+	return idMap, nil
+}
+
+// remapSubscriptionLabels 把恢复后的任务标签里 subscription:<旧ID> 改写成 subscription:<新ID>。
+//
+// 为什么必须做：恢复流程给订阅重新分配主键（restoreSubscriptions 里 item.ID = 0，
+// 而 deleteAll 只 DELETE FROM 不重置 sqlite_sequence，主键是 AUTOINCREMENT、语义上不复用已删除 ROWID），
+// 把旧 ID 原样写回可能挂到**另一个不相干的订阅**头上；而订阅同步的 autoDelete 分支会对
+// 「认领到但不在候选集里」的任务执行 RemoveJob + 删 task_logs + Delete(&task) —— 是物理删除，
+// 比标签丢失严重得多。
+//
+// 规则：
+//  1. 命中 old→new 映射 → 改写成 subscription:<新ID>；
+//  2. 没命中（订阅没被一起恢复 / 备份里就没有那个订阅 / ID 解析不出来）→ 丢弃该条 subscription: 标签，
+//     绝不保留旧 ID；
+//  3. 非 subscription: 前缀的标签（含 分组: 与用户自定义）一律原样保留；
+//  4. 绝不复用 handler/task_labels.go 的 sanitizeIncomingLabels —— 那是给用户输入用的，会把内部前缀洗掉。
+//
+// 只在 selection.Tasks 时调用：那种情况下 tasks 表已被 deleteAll 清空并重建，
+// 表里的行恰好就是本次恢复出来的任务，所以这里可以直接按 labels 过滤全表。
+func remapSubscriptionLabels(tx *gorm.DB, subscriptionIDMap map[uint]uint) error {
+	// 与 subscriptionTaskLabel 生成的形态一一对应。
+	const labelPrefix = "subscription:"
+
+	// LIKE 只是个粗筛（"my-subscription:foo" 这类用户自建标签也会被捞出来），
+	// 真正的边界判定在下面按标签逐条做前缀匹配。
+	var tasks []model.Task
+	if err := tx.Where("labels LIKE ?", "%"+labelPrefix+"%").Find(&tasks).Error; err != nil {
+		return err
+	}
+
+	for _, task := range tasks {
+		labels := task.GetLabels()
+		remapped := make([]string, 0, len(labels))
+		for _, label := range labels {
+			// GetLabels 只按逗号切分、不做 trim，历史脏数据里可能是 " subscription:1"，
+			// 所以先 TrimSpace 再判前缀。
+			trimmed := strings.TrimSpace(label)
+			if !strings.HasPrefix(trimmed, labelPrefix) {
+				remapped = append(remapped, label)
+				continue
+			}
+			oldID, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(trimmed, labelPrefix)), 10, 64)
+			if err != nil {
+				continue
+			}
+			if newID := subscriptionIDMap[uint(oldID)]; newID != 0 {
+				remapped = append(remapped, subscriptionTaskLabel(newID))
+			}
+		}
+
+		newLabels := strings.Join(remapped, ",")
+		if newLabels == task.Labels {
+			continue
+		}
+		if err := tx.Model(&model.Task{}).Where("id = ?", task.ID).Update("labels", newLabels).Error; err != nil {
 			return err
 		}
 	}
@@ -1641,7 +1793,6 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 	case model.DepTypeNodeJS:
 		unlock := LockNodePackageOperation()
 		defer unlock()
-		defer TrimNpmCache()
 
 		var err error
 		cmd, err = NewNpmInstallCommand(dep.Name)
@@ -1653,18 +1804,8 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 			return
 		}
 	case model.DepTypePython:
-		pythonVersion := NormalizePythonVersionOrDefault(dep.PythonVersion)
-		unlock := LockDependencyInstall(dep.Type, dep.Name, pythonVersion)
-		defer unlock()
-		if DependencyInstalledForPythonVersion(dep.Type, dep.Name, pythonVersion) {
-			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
-				"status": model.DepStatusInstalled,
-				"log":    logPrefix + " 已安装，跳过网络安装",
-			})
-			return
-		}
 		var err error
-		cmd, err = NewPipInstallCommandForPythonVersion(pythonVersion, dep.Name)
+		cmd, err = NewPipInstallCommandForPythonVersion(dep.PythonVersion, dep.Name)
 		if err != nil {
 			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 				"status": model.DepStatusFailed,
@@ -1672,8 +1813,14 @@ func reinstallDependency(dep model.Dependency, logPrefix string) {
 			})
 			return
 		}
-		cmd.Env = append(ManagedPythonDependencyEnv(PipInstallEnv(AppendProxyEnv(os.Environ()), CurrentPipMirror()), pythonVersion), "TMPDIR=/tmp")
+		cmd.Env = append(PipInstallEnv(AppendProxyEnv(os.Environ()), CurrentPipMirror()), "TMPDIR=/tmp")
 	case model.DepTypeLinux:
+		// 与网页端安装 / 卸载共用同一把 Linux 包操作锁：重建后 apt 索引为空，两边都会先跑 apt-get update，
+		// 而 update 的 lists 锁不等待，撞上就是一条 failed 记录。锁必须在构造命令之前拿 ——
+		// 构造时就会判断索引要不要刷新、写镜像源 —— 并由 defer 一直持有到下面 CombinedOutput 结束。
+		unlock := LockLinuxPackageOperation()
+		defer unlock()
+
 		// 重启后的 Linux 依赖恢复必须复用当前主依赖安装路径的包管理器策略，
 		// 避免 Debian 继续走旧的裸 apt-get update/install 分支，导致与
 		// 依赖管理页的真实行为分叉，表现为“等待重启安装”后状态长期不收敛。
@@ -1714,5 +1861,12 @@ func buildLinuxDependencyInstallCommand(packageName string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildLinuxPackageCommand(manager, "install", packageName, false, DetectLinuxDistribution(), nil)
+	// 与网页安装共用同一个 ensureMirror（#142）：原来这里传 nil，容器重建后的自动重装一律走
+	// deb.debian.org，国内慢得多，重建后「脚本报缺库」的窗口也就被拉得更长。
+	// 权限检查仍排在换源之前（BuildLinuxPackageCommand 内部保证），非 root 时不会去改 sources。
+	return BuildLinuxPackageCommand(manager, "install", packageName, false, DetectLinuxDistribution(), linuxDependencyEnsureMirrorFunc)
 }
+
+// linuxDependencyEnsureMirrorFunc 抽成变量只为测试能确认「重启重装确实接上了换源」，
+// 而不必真的去改测试机的 /etc/apt。
+var linuxDependencyEnsureMirrorFunc = EnsureDefaultLinuxMirror

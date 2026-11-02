@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { taskApi } from '@/api/task'
+import { formatDateTime } from '@/utils/datetime'
+import CronVisualDialog from './CronVisualDialog.vue'
 
 type StopRuleState = {
   id: number
@@ -17,6 +19,10 @@ const emit = defineEmits<{
 }>()
 
 const rules = ref<StopRuleState[]>([])
+const showVisualDialog = ref(false)
+const activeVisualRuleIndex = ref(0)
+/** 传给可视化弹窗的初值，打开那一刻取一次快照，弹窗内部自己反解 */
+const visualExpression = ref('')
 
 let nextRuleId = 1
 
@@ -113,6 +119,27 @@ function removeRule(index: number) {
   emitRules()
 }
 
+function openVisualDialog(index: number) {
+  activeVisualRuleIndex.value = index
+  visualExpression.value = rules.value[index]?.expression || ''
+  showVisualDialog.value = true
+}
+
+/**
+ * 应用可视化编辑的结果：写回表达式 -> 上报父组件 -> 立刻解析拿描述和下次停止时间。
+ * 三步缺一不可，漏 emitRules 会「改了但没上报」，漏 parseRule 会「描述停在改之前」。
+ */
+function applyVisualExpression(expression: string) {
+  const index = activeVisualRuleIndex.value
+  const rule = rules.value[index]
+  if (!rule) {
+    return
+  }
+  rule.expression = expression
+  emitRules()
+  void parseRule(index)
+}
+
 function handleKeyDown(event: KeyboardEvent) {
   if (event.key === ' ') {
     event.stopPropagation()
@@ -155,9 +182,14 @@ function handleKeyDown(event: KeyboardEvent) {
           </el-button>
         </div>
       </div>
-      <div v-if="rule.parseResult" class="stop-rule-info">
-        <template v-if="rule.parseResult.is_valid">
-          <div class="stop-meta">
+      <!--
+        信息区改成常驻：「可视化编辑」入口和解析结果同处一行（与 CronInput 的 .cron-meta 同构）。
+        原来整块挂 v-if="rule.parseResult"，规则为空时整行不渲染 —— 而「还没填表达式」恰恰是最需要
+        可视化入口的时候。
+      -->
+      <div class="stop-rule-info">
+        <div class="stop-meta">
+          <template v-if="rule.parseResult?.is_valid">
             <div class="valid-badge">
               <el-icon class="badge-icon"><CircleCheck /></el-icon>
               <span class="badge-text">{{ rule.parseResult.description }}</span>
@@ -165,21 +197,26 @@ function handleKeyDown(event: KeyboardEvent) {
             <div v-if="rule.parseResult.next_run_times?.length" class="next-times">
               <el-icon class="time-icon"><Clock /></el-icon>
               <span class="label">下次停止</span>
-              <span class="time-value">{{ new Date(rule.parseResult.next_run_times[0]).toLocaleString() }}</span>
+              <span class="time-value">{{ formatDateTime(rule.parseResult.next_run_times[0]) }}</span>
             </div>
-          </div>
-        </template>
-        <div v-else class="stop-meta">
-          <div class="error-badge">
+          </template>
+          <div v-else-if="rule.parseResult" class="error-badge">
             <el-icon class="badge-icon"><CircleClose /></el-icon>
             <span class="badge-text">{{ rule.parseResult.error }}</span>
           </div>
+          <el-button text size="small" @click="openVisualDialog(index)">可视化编辑</el-button>
         </div>
       </div>
     </div>
     <div class="stop-schedule-hint">
       到达设定时间后自动停止正在运行的任务，适合需要在特定时段运行的长驻任务。
     </div>
+
+    <CronVisualDialog
+      v-model:visible="showVisualDialog"
+      :expression="visualExpression"
+      @apply="applyVisualExpression"
+    />
   </div>
 </template>
 
@@ -240,11 +277,11 @@ function handleKeyDown(event: KeyboardEvent) {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: linear-gradient(135deg, #67c23a 0%, #85ce61 100%);
-  border-radius: 14px;
+  background: var(--el-color-success);
+  // 与 .error-badge 是同一槽位互斥的两态，统一走 control 档，避免有效/错误之间形状跳变
+  border-radius: var(--dd-radius-control);
   color: #fff;
   font-weight: 500;
-  box-shadow: 0 2px 6px rgba(103, 194, 58, 0.25);
 
   .badge-icon {
     font-size: 14px;
@@ -261,11 +298,11 @@ function handleKeyDown(event: KeyboardEvent) {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%);
-  border-radius: 14px;
+  background: var(--el-color-danger);
+  // 校验错误提示块 → control 档（与 CronInput 的同名元素保持一致）
+  border-radius: var(--dd-radius-control);
   color: #fff;
   font-weight: 500;
-  box-shadow: 0 2px 6px rgba(245, 108, 108, 0.25);
 
   .badge-icon {
     font-size: 14px;
@@ -281,8 +318,9 @@ function handleKeyDown(event: KeyboardEvent) {
   align-items: center;
   gap: 5px;
   padding: 4px 10px;
-  background: linear-gradient(135deg, var(--el-color-warning-light-9) 0%, var(--el-color-warning-light-8) 100%);
-  border-radius: 14px;
+  background: var(--el-color-warning-light-9);
+  // 「下次停止」信息小块 → control 档
+  border-radius: var(--dd-radius-control);
   color: var(--el-color-warning);
   font-weight: 500;
   border: 1px solid var(--el-color-warning-light-7);

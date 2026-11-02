@@ -117,32 +117,22 @@ func TestBuildSparseCheckoutPatternsForQLRepoCommand(t *testing.T) {
 	}
 
 	patterns, warnings := buildSubscriptionSparseCheckoutPatterns(sub)
-	// 白名单三条 + 依赖规则里 5 条安全模式（`^jd[^_]` 含元字符被单独跳过）+ 黑名单排除，
-	// 每个片段成对下发「条目本身」与「条目下全部内容」两条规则：
-	// gitignore 的 `*` 不跨 `/`，只发 `**/*utils*` 拉不到 utils/date.js。
-	want := []string{
-		"**/*jd_*", "**/*jd_*/**",
-		"**/*jx_*", "**/*jx_*/**",
-		"**/*jddj_*", "**/*jddj_*/**",
-		"**/*USER*", "**/*USER*/**",
-		"**/*JD*", "**/*JD*/**",
-		"**/*function*", "**/*function*/**",
-		"**/*sendNotify*", "**/*sendNotify*/**",
-		"**/*utils*", "**/*utils*/**",
-		"!**/*backUp*", "!**/*backUp*/**",
-	}
+	// #129 起依赖规则里的 `^jd[^_]` 按正则识别（改造前它含 gitignore 元字符、被单独跳过，
+	// jdCookie.js 这类文件既不落盘、Go 侧也认不出来）。正则表达不成 sparse 规则，按「档 1」
+	// 放弃包含侧限制、检出完整仓库，只保留黑名单的排除规则（排除规则照旧成对下发）。
+	// 去掉 `^jd[^_]` 之后的普通写法下发什么，由 TestSubscriptionPlainFilterBehaviorPinned 的 ql-plain 钉着。
+	want := []string{"*", "!**/*backUp*", "!**/*backUp*/**"}
 	if !reflect.DeepEqual(patterns, want) {
 		t.Fatalf("sparse patterns = %#v, want %#v", patterns, want)
 	}
-	// 依赖规则并入检出范围这件事必须可见，含元字符被跳过的那条也必须可见。
-	if len(warnings) != 2 {
-		t.Fatalf("expected 2 warnings (依赖并入 + 元字符跳过), got %#v", warnings)
+	// 放宽成整仓这件事必须可见，而且要点名是哪一段正则导致的。
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning (依赖规则的正则片段放宽检出), got %#v", warnings)
 	}
-	if !strings.Contains(warnings[0], "sendNotify") || !strings.Contains(warnings[0], "不会建成定时任务") {
-		t.Errorf("第一条应说明依赖规则已并入检出、且不建任务, got %q", warnings[0])
-	}
-	if !strings.Contains(warnings[1], "^jd[^_]") {
-		t.Errorf("第二条应点名被跳过的依赖模式, got %q", warnings[1])
+	for _, keyword := range []string{"^jd[^_]", "正则", "完整仓库", "不建定时任务"} {
+		if !strings.Contains(warnings[0], keyword) {
+			t.Errorf("告警应包含 %q, got %q", keyword, warnings[0])
+		}
 	}
 	for _, p := range patterns {
 		if strings.Contains(p, "|") {
@@ -163,17 +153,26 @@ func TestBuildSparseCheckoutPatternsCommaSeparatedUnchanged(t *testing.T) {
 	}
 }
 
-// 白名单含 gitignore 元字符（`[` `]` `?` `\`）时，只跳过那一条会让它对应的文件
-// 静默检不出来。约定：整体放弃包含侧限制、检出完整仓库，并打出可见告警。
+// 白名单含正则片段（#129 之前的说法是「含 gitignore 元字符」，那几个字符 `[` `]` `?` `\` 现在都是正则触发字符）时，
+// 正则表达不成 sparse 规则，只跳过那一条会让它对应的文件静默检不出来。
+// 约定：整体放弃包含侧限制、检出完整仓库，并打出可见告警；建任务时由 Go 侧按正则筛选。
 func TestBuildSparseCheckoutPatternsFallsBackOnUnsafeWhitelist(t *testing.T) {
 	// 无黑名单 → 直接返回空规则（等价于关闭 sparse-checkout）
 	sub := &model.Subscription{Whitelist: "^jd[^_]|USER"}
 	patterns, warnings := buildSubscriptionSparseCheckoutPatterns(sub)
 	if len(patterns) != 0 {
-		t.Fatalf("含元字符的白名单应退回完整检出, got %#v", patterns)
+		t.Fatalf("含正则片段的白名单应退回完整检出, got %#v", patterns)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "^jd[^_]") {
-		t.Fatalf("应给出含具体模式的可见告警, got %#v", warnings)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "^jd[^_]") || !strings.Contains(warnings[0], "正则") {
+		t.Fatalf("应给出点名正则片段的可见告警, got %#v", warnings)
+	}
+	// 以前这里的告警承诺「扫描任务时仍按白名单过滤」却做不到（Go 侧把 ^jd[^_] 当字面量，一个都匹配不到）；
+	// 现在 Go 侧真的按正则筛：仓库根下 jd 开头、第三个字符不是 _ 的文件命中，其余不命中。
+	if !matchesSubscriptionWhitelist(sub, "jdCookie.js") {
+		t.Error("^jd[^_] 应命中仓库根下的 jdCookie.js")
+	}
+	if matchesSubscriptionWhitelist(sub, "jd_bean_change.js") || matchesSubscriptionWhitelist(sub, "scripts/jdCookie.js") {
+		t.Error("^jd[^_] 不应命中 jd_ 开头、或不在仓库根下的文件")
 	}
 
 	// 有黑名单 → 包含全部 + 保留排除规则（排除规则同样成对，否则 backUp/jd_old.js
@@ -199,7 +198,8 @@ func TestBuildSparseCheckoutPatternsFallsBackOnUnsafeWhitelist(t *testing.T) {
 	}
 }
 
-// 黑名单是「排除」语义：跳过不安全的排除规则只会多落盘，方向安全，逐条跳过 + 告警。
+// 黑名单是「排除」语义：正则片段表达不成排除规则，跳过它只会多落盘，方向安全，逐条跳过 + 告警。
+// #129 之后告警里「不会建成定时任务」的承诺才真正成立：Go 侧按正则排除（以前当字面量，一个都挡不住）。
 func TestBuildSparseCheckoutPatternsSkipsUnsafeBlacklist(t *testing.T) {
 	sub := &model.Subscription{Whitelist: "jd_", Blacklist: "back[Uu]p|Archive"}
 	patterns, warnings := buildSubscriptionSparseCheckoutPatterns(sub)
@@ -209,6 +209,14 @@ func TestBuildSparseCheckoutPatternsSkipsUnsafeBlacklist(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "back[Uu]p") {
 		t.Fatalf("应对被跳过的黑名单给出可见告警, got %#v", warnings)
+	}
+	for _, excluded := range []string{"backUp/jd_old.js", "backup/jd_old.js", "Archive/jd_a.js"} {
+		if checkBlacklist(sub, excluded) {
+			t.Errorf("黑名单应排除 %q", excluded)
+		}
+	}
+	if !checkBlacklist(sub, "jd_bean_change.js") {
+		t.Error("未命中黑名单的文件应放行")
 	}
 }
 
@@ -283,6 +291,11 @@ func TestCheckBlacklistSupportsPipeSeparator(t *testing.T) {
 // 断言能扫描出候选并建出定时任务。
 func TestSyncSubscriptionTasksHandlesQLPipeSeparatedFilters(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	// jx_sign.js / jddj_bean.js 没有 cron 头：默认规则留空时不建任务（#134），这里填上规则，
+	// 让白名单命中的三个文件都能落成任务，断言的仍是竖线分隔的过滤结果。
+	if err := model.SetConfig("default_cron_rule", "20 6 * * *"); err != nil {
+		t.Fatalf("set default_cron_rule: %v", err)
+	}
 
 	saveDir := "6dylan6_jdpro"
 	scriptsRoot := filepath.Join(config.C.Data.ScriptsDir, saveDir)
@@ -360,8 +373,8 @@ func TestSyncSubscriptionTasksHandlesQLPipeSeparatedFilters(t *testing.T) {
 	if got := byBase["jd_bean_change.js"].CronExpression; got != "1 0 * * *" {
 		t.Errorf("脚本头 cron 应被保留, got %q", got)
 	}
-	if got := byBase["jx_sign.js"].CronExpression; got != FallbackSubscriptionCron {
-		t.Errorf("无 cron 头的脚本应用兜底 cron, got %q", got)
+	if got := byBase["jx_sign.js"].CronExpression; got != "20 6 * * *" {
+		t.Errorf("无 cron 头的脚本应用订阅设置里的默认 Cron 规则, got %q", got)
 	}
 }
 
@@ -441,7 +454,10 @@ func TestPullGitRepoWithCallbackPipeSeparatedWhitelistChecksOutAllMatches(t *tes
 		SaveDir:   "jdpro-repo",
 		Whitelist: qlRepoWhitelist,
 		Blacklist: qlRepoBlacklist,
-		DependOn:  qlRepoDependOn,
+		// 依赖规则只留普通片段：#129 起 `^jd[^_]` 是正则片段、会把检出放宽成整仓，
+		// 那样就验不到本用例要守的「竖线分隔的白名单 sparse 规则真的能检出三类文件」了。
+		// 带正则的完整指令见 TestPullGitRepoWithCallbackRegexDependencyChecksOutJdCookie。
+		DependOn: qlRepoPlainDependOn,
 	}
 	authCfg, err := buildGitAuthConfig(os.Environ(), sub.URL, sub, "")
 	if err != nil {

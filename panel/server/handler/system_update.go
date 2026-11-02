@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -283,6 +284,97 @@ func buildWatchtowerUpdateTarget(cfg watchtowerRuntimeConfig) gin.H {
 	return target
 }
 
+// watchtowerAPIUnreachable 判断错误是不是「压根没连上」这一类的传输层失败：
+// 端口没人监听（connection refused）、DNS 解析不了（no such host）、拨号超时。
+// 只按错误类型判断，不匹配错误文案 —— 这些文本在不同系统、不同语言环境下都不一样，
+// 用字符串匹配必然漏判。
+func watchtowerAPIUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// DNS 解析失败通常被 net.OpError 包着，少数解析路径会裸抛 DNSError，所以先单独认一次。
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	// 拨号阶段失败 = 连接根本没建立起来。
+	// 连上之后的读写错误不算，那说明 API 其实在监听，属于另一类问题。
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+
+	// 兜底：连响应都没拿到就整体超时（例如 http.Client.Timeout 到点）。
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+
+	return false
+}
+
+// watchtowerServiceNameFromAPIURL 从 WATCHTOWER_HTTP_API_URL 的 host 部分推导 Watchtower 的
+// compose 服务名 —— 容器之间就是靠这个名字做 DNS 解析的。
+// 用户可能把服务名改成别的，所以不能写死成参考部署里的名字；
+// 遇到 IP、localhost 这种拿去执行 docker 命令只会误导的 host，就返回空串让调用方退回通用说法。
+func watchtowerServiceNameFromAPIURL(apiURL string) string {
+	raw := strings.TrimSpace(apiURL)
+	if raw == "" {
+		return ""
+	}
+	// 允许用户只写 host:port；没有 scheme 时 url.Parse 会把整串当成路径，解析不出 host。
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	switch strings.ToLower(host) {
+	case "localhost", "host.docker.internal":
+		return ""
+	}
+	return host
+}
+
+// watchtowerUnreachableHint 生成「Watchtower 的 HTTP API 连不上」时的可操作诊断文案。
+// 面板一键更新和 ddp check 的探活共用这一份，避免两处各写各的然后慢慢漂移。
+//
+// 背景（issue #108）：参考部署使用的 WATCHTOWER_HTTP_API_ENDPOINTS 是 watchtower v1.20.0
+// 才引入的，更早的版本遇到不认识的环境变量是静默忽略 —— 容器正常启动、日志也不报错，
+// 但 API 端口从头到尾没打开；而 Watchtower 自己带着 enable=false 标签不会自我更新，
+// 早期部署的用户本地那份 latest 会一直停在老版本。
+func watchtowerUnreachableHint(apiURL string, cause error) string {
+	target := strings.TrimSpace(apiURL)
+	if target == "" {
+		target = "Watchtower HTTP API 地址"
+	}
+	name := watchtowerServiceNameFromAPIURL(apiURL)
+	if name == "" {
+		name = "<你的 watchtower 服务名>"
+	}
+
+	lines := []string{
+		"连不上 Watchtower 的 HTTP API（" + target + "）：这个地址解析不到、或者端口上没有服务在监听，更新请求根本发不出去 —— 不是更新本身失败。",
+		"最可能的原因：Watchtower 版本低于 v1.20.0。参考部署里的 WATCHTOWER_HTTP_API_ENDPOINTS 是 v1.20.0 才引入的，更老的版本会静默忽略它 —— 容器照常启动、日志也不报错，但 API 端口不会打开。",
+		"第二个原因：Watchtower 打了 com.centurylinklabs.watchtower.enable=false 标签，不会更新自己，本地那份 latest 镜像可能还是很久以前拉的旧版本。",
+		"请按两步自查：",
+		"1. 看版本：docker compose logs " + name + "（启动日志开头会打印 Watchtower 版本号；不是 compose 部署就用 docker logs <你的 watchtower 容器名>）",
+		"2. 拉新版并重建：docker compose pull " + name + " && docker compose up -d " + name,
+	}
+	if cause != nil {
+		lines = append(lines, "原始错误："+cause.Error())
+	}
+	return strings.Join(lines, "\n")
+}
+
 func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{}, error) {
 	if !cfg.Managed {
 		return nil, fmt.Errorf("当前部署未启用 Watchtower 托管更新")
@@ -317,6 +409,11 @@ func triggerWatchtowerUpdate(cfg watchtowerRuntimeConfig) (map[string]interface{
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// 地址根本连不上时，裸抛一句 dial tcp ...: connection refused 用户完全无从自查，
+		// 换成带判定结论和自查步骤的诊断（issue #108）；其余失败保持原样。
+		if watchtowerAPIUnreachable(err) {
+			return nil, errors.New(watchtowerUnreachableHint(cfg.APIURL, err))
+		}
 		return nil, fmt.Errorf("调用 Watchtower 更新接口失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -942,11 +1039,16 @@ if [ "$status" -eq 0 ]; then
 fi`, shellQuote(previousImageID))
 	}
 
+	// 先 docker stop -t 10 再 rm -f：rm -f 等于直接 SIGKILL，面板一点收尾都做不了（任务停在运行中、
+	// 软链残留、WAL 没 checkpoint）。stop 给面板发 SIGTERM，面板 8 秒内自行收完尾退出；
+	// stop 失败（容器已经不在等）时 || true 放行，后面的 rm -f 照样兜底。
 	return fmt.Sprintf(`sleep 2
+docker stop -t 10 %s >/dev/null 2>&1 || true
 docker rm -f %s >/dev/null 2>&1 || true
 docker %s
 status=$?%s
 exit "$status"`,
+		shellQuote(plan.ContainerName),
 		shellQuote(plan.ContainerName),
 		strings.Join(quotedArgs, " "),
 		cleanupBlock,

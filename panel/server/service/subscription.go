@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,13 +25,6 @@ import (
 
 type PullCallback func(line string)
 
-type subscriptionWorktreeJournal struct {
-	DestDir    string `json:"dest_dir"`
-	BackupDir  string `json:"backup_dir"`
-	StagingDir string `json:"staging_dir"`
-	Phase      string `json:"phase"`
-}
-
 func PullSubscription(sub *model.Subscription) (string, error) {
 	return PullSubscriptionWithCallback(sub, nil)
 }
@@ -40,70 +34,47 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 }
 
 func PullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, onOutput PullCallback) (string, error) {
-	return pullSubscriptionWithContext(ctx, sub, onOutput, "")
+	return pullSubscriptionWithOperation(ctx, sub, onOutput, "")
 }
 
-func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, onOutput PullCallback, operationID string) (string, error) {
+// pullSubscriptionWithOperation 是拉取实现本体：operationID 非空时把操作记录挂在 SubLog 上并按结果收口。
+func pullSubscriptionWithOperation(ctx context.Context, sub *model.Subscription, onOutput PullCallback, operationID string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	startTime := time.Now()
-	store := DefaultOperationStore()
-	if operationID != "" {
-		_ = store.Start(operationID, "pulling")
-	}
 
-	sshKeyPath, cleanupSSHKey, err := resolveSubscriptionSSHKeyPath(ctx, sub)
-	if err != nil {
-		return "", err
+	var sshKeyPath string
+	// 本机版（Android）：订阅可直接携带密封 SSH 私钥（HasSSHKeySecret），
+	// 也可以引用 ssh_keys 表里被 SecretStore 密封的密钥；统一走 resolveSubscriptionSSHKeyPath 解封。
+	keyPath, keyCleanup, keyErr := resolveSubscriptionSSHKeyPath(ctx, sub)
+	if keyErr != nil {
+		return "", keyErr
 	}
-	defer cleanupSSHKey()
-
-	authCfg, err := buildGitAuthConfigWithContext(ctx, os.Environ(), sub.URL, sub, sshKeyPath)
+	defer keyCleanup()
+	sshKeyPath = keyPath
+	authCfg, err := buildGitAuthConfig(os.Environ(), sub.URL, sub, sshKeyPath)
 	if err != nil {
 		return "", err
 	}
 	defer authCfg.CleanupFunc()
 
 	var fullLog strings.Builder
-	lineCursor := int64(0)
-	subLog := model.SubLog{
-		SubscriptionID: sub.ID,
-		OperationID:    operationID,
-		Status:         1,
-		Content:        "",
-		LogCursor:      0,
-	}
-	logPersisted := database.DB.Create(&subLog).Error == nil
 	emit := func(line string) {
-		lineCursor++
 		fullLog.WriteString(line)
 		fullLog.WriteString("\n")
-		if logPersisted {
-			updates := map[string]interface{}{"content": fullLog.String(), "log_cursor": lineCursor}
-			if lineCursor == 1 || lineCursor%5 == 0 {
-				_ = database.DB.Model(&model.SubLog{}).Where("id = ?", subLog.ID).Updates(updates).Error
-			}
-		}
-		if operationID != "" && lineCursor%5 == 0 {
-			_ = store.Progress(operationID, "pulling", 50, lineCursor)
-		}
 		if onOutput != nil {
 			onOutput(line)
 		}
 	}
 
 	emit(fmt.Sprintf("[开始拉取] %s (%s)", sub.Name, sub.Type))
-	if operationID != "" {
-		emit(fmt.Sprintf("[Operation] %s", operationID))
-	}
-	applySubscriptionForceOverwriteSetting(sub)
-	hookHandledByPull := sub.Type == model.SubTypeGitRepo && (sub.ForceOverwrite == nil || *sub.ForceOverwrite)
 
 	var output string
 	var pullErr error
 
-	pullErr = runSubscriptionPreScriptWithContext(ctx, sub, emit)
+	// 拉取前指令跑在真正拉取之前，失败就不往下走了（详见 runSubscriptionPreScriptIfConfigured）。
+	pullErr = runSubscriptionPreScriptIfConfigured(sub, emit)
 	if pullErr == nil && ctx.Err() != nil {
 		pullErr = fmt.Errorf("拉取已停止")
 	}
@@ -120,8 +91,8 @@ func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 	if pullErr == nil && ctx.Err() != nil {
 		pullErr = fmt.Errorf("拉取已停止")
 	}
-	if pullErr == nil && !hookHandledByPull {
-		pullErr = runSubscriptionHookIfConfigured(ctx, sub, emit)
+	if pullErr == nil {
+		pullErr = runSubscriptionHookIfConfigured(sub, emit)
 	}
 	if pullErr == nil && ctx.Err() != nil {
 		pullErr = fmt.Errorf("拉取已停止")
@@ -140,22 +111,25 @@ func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 
 	emit(fmt.Sprintf("[完成] 耗时 %.2f 秒, 状态: %s", duration, map[int]string{0: "成功", 1: "失败"}[status]))
 
-	if logPersisted {
-		database.DB.Model(&model.SubLog{}).Where("id = ?", subLog.ID).Updates(map[string]interface{}{
-			"status":     status,
-			"content":    fullLog.String(),
-			"duration":   duration,
-			"log_cursor": lineCursor,
-		})
-	} else {
-		database.DB.Create(&model.SubLog{
-			SubscriptionID: sub.ID,
-			OperationID:    operationID,
-			Status:         status,
-			Content:        fullLog.String(),
-			Duration:       duration,
-			LogCursor:      lineCursor,
-		})
+	subLog := model.SubLog{
+		SubscriptionID: sub.ID,
+		OperationID:    operationID,
+		Status:         status,
+		Content:        fullLog.String(),
+		Duration:       duration,
+	}
+	database.DB.Create(&subLog)
+
+	// 本机版（Android）：订阅拉取也进操作记录，APP 按 operation_id 追踪（失败时带错误码）。
+	if operationID != "" {
+		store := DefaultOperationStore()
+		_ = store.Start(operationID, "pulling")
+		if pullErr != nil {
+			code := 1
+			_ = store.Fail(operationID, &code, "subscription_pull_failed", int64(len(subLog.Content)))
+		} else {
+			_ = store.Finish(operationID, 0, int64(len(subLog.Content)))
+		}
 	}
 
 	now := time.Now()
@@ -164,58 +138,74 @@ func pullSubscriptionWithContext(ctx context.Context, sub *model.Subscription, o
 		"status":       status,
 	})
 
-	if operationID != "" {
-		if pullErr == nil {
-			_ = store.Finish(operationID, 0, lineCursor)
-		} else if ctx.Err() != nil {
-			_ = store.Cancel(operationID, "stopped", lineCursor)
-		} else {
-			exitCode := 1
-			_ = store.Fail(operationID, &exitCode, "pull_failed", lineCursor)
-		}
-	}
-
 	return output, pullErr
 }
 
-func resolveSubscriptionSSHKeyPath(ctx context.Context, sub *model.Subscription) (string, func(), error) {
-	cleanup := func() {}
-	if sub == nil || sub.EffectiveAuthType() != model.SubAuthTypeSSH {
-		return "", cleanup, nil
-	}
-
-	if sub.HasSSHKeySecret() {
-		path, err := writeSubscriptionSSHKeySecret(ctx, sub)
-		if err != nil {
-			return "", cleanup, err
+// resolveSubscriptionForceOverwrite 解析这次拉取到底覆盖还是保留本地。
+// 只读不写：v2.2.15 到 v3.0.9 之间这里是个「覆盖器」，每次拉取开头就把全局值盖进 sub.ForceOverwrite，
+// 订阅自己存的值从此再没生效过；而且盖的那个 sub 稍后还会被 database.DB.Model(sub).Updates(...) 用到，
+// 顺手也是个隐患。现在改成纯解析，sub 对象一个字段都不动。
+//
+// 三态优先级：订阅显式选了 force / preserve 就以订阅为准，inherit（含空串、脏值）才回落全局开关。
+// 刻意不写成 `sub.X || isConfigEnabled(...)` 那种 OR —— OR 表达不了「全局开着、但这个订阅强制关」，
+// 而这正是本功能的核心诉求。v3.2.6 起「自动添加定时任务 / 自动删除失效任务」也从 OR 换成了同一形状，
+// 见下面的 resolveSubscriptionAutoAddTask / resolveSubscriptionAutoDelTask。
+func resolveSubscriptionForceOverwrite(sub *model.Subscription) bool {
+	if sub != nil {
+		switch model.NormalizeSubscriptionOverwriteMode(sub.OverwriteMode) {
+		case model.SubOverwriteForce:
+			return true
+		case model.SubOverwritePreserve:
+			return false
 		}
-		return path, func() { _ = os.Remove(path) }, nil
 	}
-
-	if sub.SSHKeyID == nil {
-		return "", cleanup, nil
-	}
-	var sshKey model.SSHKey
-	if err := database.DB.First(&sshKey, *sub.SSHKeyID).Error; err != nil {
-		return "", cleanup, nil
-	}
-	privateKey, err := OpenSSHKeyPrivateKey(ctx, &sshKey)
-	if err != nil {
-		return "", cleanup, err
-	}
-	tmpFile, err := writeTempSSHKey(privateKey)
-	if err != nil {
-		return "", cleanup, fmt.Errorf("写入 SSH 密钥失败: %w", err)
-	}
-	return tmpFile, func() { _ = os.Remove(tmpFile) }, nil
+	// inherit（含空串、脏值、sub 为 nil）才回落全局开关，顺带避免另外两档白读一次配置
+	return isConfigEnabled("subscription_force_overwrite", true)
 }
 
-func applySubscriptionForceOverwriteSetting(sub *model.Subscription) {
-	if sub == nil || sub.Type != model.SubTypeGitRepo {
-		return
+// resolveSubscriptionAutoAddTask / resolveSubscriptionAutoDelTask 解析这次同步到底建不建任务、删不删任务。
+// 与上面的覆盖拉取解析器同形：纯解析，sub 对象一个字段都不写回
+// （sub 稍后还会被 database.DB.Model(sub).Updates(...) 用到，就地改写既掩盖个体值也埋回写隐患）。
+//
+// v3.2.6 之前这两项是 `sub.AutoAddTask || isConfigEnabled("auto_add_cron", true)` 的 OR：
+// 全局默认 true，订阅那一列几乎恒等于空转；更要命的是 OR 永远表达不出
+// 「全局开着、但这一条订阅别建任务」——那正是用户提的需求。现在换成三态解析：
+// 订阅显式选了 enabled / disabled 就以订阅为准，inherit（含空串、脏值、sub 为 nil）才回落全局默认。
+func resolveSubscriptionAutoAddTask(sub *model.Subscription) bool {
+	if sub != nil {
+		switch model.NormalizeSubscriptionTaskSyncMode(sub.AutoAddTaskMode) {
+		case model.SubTaskSyncEnabled:
+			return true
+		case model.SubTaskSyncDisabled:
+			return false
+		}
 	}
-	overwrite := isConfigEnabled("subscription_force_overwrite", true)
-	sub.ForceOverwrite = &overwrite
+	return isConfigEnabled("auto_add_cron", true)
+}
+
+func resolveSubscriptionAutoDelTask(sub *model.Subscription) bool {
+	if sub != nil {
+		switch model.NormalizeSubscriptionTaskSyncMode(sub.AutoDelTaskMode) {
+		case model.SubTaskSyncEnabled:
+			return true
+		case model.SubTaskSyncDisabled:
+			return false
+		}
+	}
+	return isConfigEnabled("auto_del_cron", true)
+}
+
+// subscriptionTaskSyncStrategyLabel 把三态开关翻译成日志里的人话，
+// 让「我明明在订阅里关了怎么还在建任务」这类问题一眼能自查（同拉取日志里的「策略：X」）。
+func subscriptionTaskSyncStrategyLabel(mode string) string {
+	switch model.NormalizeSubscriptionTaskSyncMode(mode) {
+	case model.SubTaskSyncEnabled:
+		return "强制开启"
+	case model.SubTaskSyncDisabled:
+		return "强制关闭"
+	default:
+		return "跟随全局设置"
+	}
 }
 
 func runCmdWithCallback(ctx context.Context, cmd *exec.Cmd, emit PullCallback) (string, error) {
@@ -250,6 +240,10 @@ func runCmdWithCallback(ctx context.Context, cmd *exec.Cmd, emit PullCallback) (
 		return buf.String(), fmt.Errorf("拉取已停止")
 	}
 	if err != nil {
+		// clone / fetch / checkout / reset / sparse-checkout 全部走这一个出口，
+		// 所以错误识别也统一放这里：调用方拿到的只有 `exit status 128`，
+		// 真正的原因在刚刚 emit 出去的那几行 fatal 里。这里紧跟着追加一条
+		// 中文提示，让「原因」和「原始输出」在日志里挨着，原始输出一行不删。
 		if hint := classifyGitFailure(buf.String(), err); hint != "" {
 			emit(hint)
 		}
@@ -267,6 +261,8 @@ func gitHasWorkingTreeChanges(ctx context.Context, repoDir string, env []string)
 		if ctx != nil && ctx.Err() != nil {
 			return false, fmt.Errorf("拉取已停止")
 		}
+		// 这条命令用的是 cmd.Output()，stderr 不进日志流；直接抛 err 的话
+		// 用户只能看到 `exit status 128`，所以把 stderr 原文一并带上。
 		return false, wrapGitCommandError("检查本地改动", gitCommandStderr(err), err)
 	}
 
@@ -289,8 +285,9 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 	}
 	env := authCfg.Env
 
-	forceOverwrite := sub.ForceOverwrite == nil || *sub.ForceOverwrite
-	if IsGitRepo(destDir) && forceOverwrite {
+	// 本机版（Android）：强制覆盖模式下改用 staging 克隆 + 原子切换，
+	// 中途被杀不会留下半残目录，且上一份健康版本保留在 .<dir>.previous 便于回滚。
+	if IsGitRepo(destDir) && resolveSubscriptionForceOverwrite(sub) {
 		return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
 	}
 
@@ -301,7 +298,11 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			branchLabel = strings.TrimSpace(sub.Branch)
 		}
 
-		emit(fmt.Sprintf("[检测到已有仓库] %s 已存在 Git 仓库，接下来会同步远端并覆盖更新本地文件", saveDir))
+		// 措辞必须中性：这条 emit 在覆盖策略判定之前、无条件执行，preserve 的订阅也会打出来。
+		// 原文写死「覆盖更新本地文件」，于是保留本地修改的订阅日志会先说要覆盖、再说在保留，自相矛盾；
+		// 而用户搜关键字或截图报障时最先命中的恰恰就是这一句，加了策略标签反而多一处矛盾。
+		// 真正的策略由下面 forceOverwrite 分支各自 emit（都带「策略：X」）。
+		emit(fmt.Sprintf("[检测到已有仓库] %s 已存在 Git 仓库，接下来会同步远端并按覆盖策略更新本地文件", saveDir))
 		emit(fmt.Sprintf("[同步远端地址] 正在校正订阅地址 -> %s", authCfg.DisplayURL))
 		output, err := syncGitRemoteWithCallback(ctx, destDir, authCfg.RemoteURL, env, emit)
 		fullOutput.WriteString(output)
@@ -327,8 +328,18 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			return fullOutput.String(), err
 		}
 
+		// 策略来源一并写进日志：用户在订阅里单独设过就显示「强制覆盖 / 保留本地修改」，
+		// 没设过就显示「跟随全局设置」，方便自查「我明明关了怎么还在覆盖」这类问题。
+		forceOverwrite := resolveSubscriptionForceOverwrite(sub)
+		strategyLabel := "跟随全局设置"
+		switch model.NormalizeSubscriptionOverwriteMode(sub.OverwriteMode) {
+		case model.SubOverwriteForce:
+			strategyLabel = "强制覆盖"
+		case model.SubOverwritePreserve:
+			strategyLabel = "保留本地修改"
+		}
 		if forceOverwrite {
-			emit("[覆盖更新本地文件] 正在用远端最新提交覆盖当前订阅目录中的仓库内容")
+			emit(fmt.Sprintf("[覆盖更新本地文件] 正在用远端最新提交覆盖当前订阅目录中的仓库内容（策略：%s）", strategyLabel))
 			cmd = exec.CommandContext(ctx, "git", "reset", "--hard", "FETCH_HEAD")
 			cmd.Dir = destDir
 			cmd.Env = env
@@ -339,7 +350,7 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 			}
 			emit("[已完成] 已覆盖更新所有仓库文件，本地新增的文件已保留")
 		} else {
-			emit("[保留本地修改] 正在合并远端更新（保留本地修改的文件）")
+			emit(fmt.Sprintf("[保留本地修改] 正在合并远端更新（保留本地修改的文件，策略：%s）", strategyLabel))
 			hasStash, err := gitHasWorkingTreeChanges(ctx, destDir, env)
 			if err != nil {
 				return fullOutput.String(), err
@@ -390,10 +401,6 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		if readErr != nil {
 			return "", fmt.Errorf("读取保存目录失败: %w", readErr)
 		}
-		if len(entries) > 0 && forceOverwrite {
-			return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
-		}
-
 		if len(entries) > 0 {
 			var fullOutput strings.Builder
 			branchLabel := "默认分支"
@@ -466,168 +473,32 @@ func pullGitRepoWithCallback(ctx context.Context, sub *model.Subscription, authC
 		}
 	}
 
+	// 本机版（Android）：新订阅先克隆到 staging，健康检查后再原子替换，
+	// 中途被杀不会留下半残的订阅目录（crash journal 见 atomicReplaceSubscriptionWorktree）。
 	return replaceSubscriptionGitWorktree(ctx, sub, authCfg, destDir, saveDir, env, emit)
 }
 
-func replaceSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir, saveDir string, env []string, emit PullCallback) (string, error) {
-	parent := filepath.Dir(destDir)
-	base := filepath.Base(destDir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return "", fmt.Errorf("创建订阅目录失败: %w", err)
-	}
-
-	stagingDir, err := os.MkdirTemp(parent, "."+base+".staging-*")
-	if err != nil {
-		return "", fmt.Errorf("创建订阅 staging 工作区失败: %w", err)
-	}
-	stagingActive := true
-	defer func() {
-		if stagingActive {
-			_ = os.RemoveAll(stagingDir)
-		}
-	}()
-
-	var fullOutput strings.Builder
-	emit(fmt.Sprintf("[git clone] %s -> %s (staging)", authCfg.DisplayURL, saveDir))
-	output, err := cloneSubscriptionGitWorktree(ctx, sub, authCfg, stagingDir, env, emit)
-	fullOutput.WriteString(output)
-	if err != nil {
-		return fullOutput.String(), normalizeGitProviderError(output, err)
-	}
-	if err := runSubscriptionHookInWorkDir(ctx, sub, stagingDir, emit); err != nil {
-		return fullOutput.String(), err
-	}
-
-	emit("[原子切换] 正在用新工作区替换当前订阅目录")
-	if err := atomicReplaceSubscriptionWorktree(destDir, stagingDir); err != nil {
-		return fullOutput.String(), err
-	}
-	stagingActive = false
-	emit("[已完成] 已原子切换到新的健康订阅工作区")
-	return fullOutput.String(), nil
-}
-
-func cloneSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir string, env []string, emit PullCallback) (string, error) {
-	args := []string{"clone", "--depth", "1"}
-	sparsePatterns, sparseWarnings := buildSubscriptionSparseCheckoutPatterns(sub)
-	for _, warning := range sparseWarnings {
-		emit(warning)
-	}
-	if len(sparsePatterns) > 0 {
-		args = append(args, "--filter=blob:none", "--no-checkout")
-	}
-	if sub.Branch != "" {
-		args = append(args, "-b", sub.Branch)
-	}
-	args = append(args, authCfg.RemoteURL, destDir)
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = config.C.Data.ScriptsDir
-	cmd.Env = env
-	output, err := runCmdWithCallback(ctx, cmd, emit)
-	if err != nil {
-		return output, normalizeGitProviderError(output, err)
-	}
-	if len(sparsePatterns) > 0 {
-		var fullOutput strings.Builder
-		fullOutput.WriteString(output)
-		if spErr := applySparseCheckout(ctx, destDir, sub, env, emit); spErr != nil {
-			return fullOutput.String(), spErr
-		}
-		emit("[checkout] 正在按子目录/白名单规则检出订阅文件")
-		cmd = exec.CommandContext(ctx, "git", "checkout", "HEAD")
-		cmd.Dir = destDir
-		cmd.Env = env
-		output, err = runCmdWithCallback(ctx, cmd, emit)
-		fullOutput.WriteString(output)
-		return fullOutput.String(), err
-	}
-	return output, nil
-}
-
-func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
-	backupDir := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".previous")
-	journalPath := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".replace-journal.json")
-	if err := recoverSubscriptionWorktreeJournal(journalPath); err != nil {
-		return err
-	}
-	backupActive := false
-	_ = os.RemoveAll(backupDir)
-
-	if _, err := os.Stat(destDir); err == nil {
-		if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "backup"}); err != nil {
-			return err
-		}
-		if err := os.Rename(destDir, backupDir); err != nil {
-			return fmt.Errorf("备份当前订阅工作区失败: %w", err)
-		}
-		backupActive = true
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("检查当前订阅工作区失败: %w", err)
-	}
-
-	if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "publish"}); err != nil {
-		return err
-	}
-	if err := os.Rename(stagingDir, destDir); err != nil {
-		if backupActive {
-			_ = os.Rename(backupDir, destDir)
-		}
-		return fmt.Errorf("发布新订阅工作区失败: %w", err)
-	}
-
-	_ = os.Remove(journalPath)
-	_ = backupActive
-	return nil
-}
-
-func writeSubscriptionWorktreeJournal(path string, journal subscriptionWorktreeJournal) error {
-	data, err := json.Marshal(journal)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("写入订阅工作区 crash journal 失败: %w", err)
-	}
-	return nil
-}
-
-func recoverSubscriptionWorktreeJournal(path string) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("读取订阅工作区 crash journal 失败: %w", err)
-	}
-	var journal subscriptionWorktreeJournal
-	if err := json.Unmarshal(data, &journal); err != nil {
-		return fmt.Errorf("解析订阅工作区 crash journal 失败: %w", err)
-	}
-	if journal.DestDir == "" || journal.BackupDir == "" {
-		return fmt.Errorf("订阅工作区 crash journal 缺少路径")
-	}
-	if _, err := os.Stat(journal.DestDir); os.IsNotExist(err) {
-		if _, backupErr := os.Stat(journal.BackupDir); backupErr == nil {
-			if restoreErr := os.Rename(journal.BackupDir, journal.DestDir); restoreErr != nil {
-				return fmt.Errorf("恢复订阅工作区 crash journal 失败: %w", restoreErr)
-			}
-		}
-	} else if err != nil {
-		return fmt.Errorf("检查订阅工作区 crash journal 目标失败: %w", err)
-	}
-	_ = os.Remove(path)
-	return nil
-}
-
+// subscriptionSparseUnsafeChars 列出会让 sparse-checkout「静默少匹配」的 gitignore 元字符。
+//
+// `git sparse-checkout set --no-cone` 用的是 gitignore 语法：`?` 匹配任意单字符、
+// `[...]` 是字符类、`\` 是转义符。路径里若含这些字符，git 会按通配语义解释而不是字面量，
+// 结果往往是「一个文件都没检出、且完全不报错」——本类 bug 最难排查的形态。
+//
+// #129 之后它只管「指定子目录」：白名单 / 黑名单 / 依赖规则里含这些字符的片段一律按正则识别
+// （它们都在正则触发字符里，见 subscriptionRegexTriggerChars），另走「整仓检出 + Go 侧按正则匹配」。
+//
+// `*` 刻意不在此列：它只会放宽匹配、不会导致漏检出，方向是安全的。
+// `|` 也不在此列：它在 gitignore 里就是普通字符，拆分阶段已经被当作分隔符拆掉了。
 const subscriptionSparseUnsafeChars = "?[]\\"
 
 // subscriptionSparseUnsafeCharsHint 是给用户看的可读版本（日志里直接打元字符会糊成一团）。
 const subscriptionSparseUnsafeCharsHint = "? [ ] \\"
 
-// splitSubscriptionSparseTargets 把过滤字段拆成两组：
-// 能安全下发给 sparse-checkout 的模式，和含 gitignore 元字符、下发后会静默失配的模式。
+// splitSubscriptionSparseTargets 把「指定子目录」拆成两组：
+// 能安全下发给 sparse-checkout 的路径，和含 gitignore 元字符、下发后会静默失配的路径。
+// 子目录是精确路径字段、不参与 #129 的正则识别，所以用的是改造前的拆分器（splitSubscriptionPlainPatterns）。
 func splitSubscriptionSparseTargets(raw string) (safe []string, risky []string) {
-	for _, p := range splitSubscriptionFilterPatterns(raw) {
+	for _, p := range splitSubscriptionPlainPatterns(raw) {
 		p = normalizeSubscriptionFilterTarget(p)
 		if p == "" || isWildcardFilterPattern(p) {
 			continue
@@ -641,26 +512,22 @@ func splitSubscriptionSparseTargets(raw string) (safe []string, risky []string) 
 	return safe, risky
 }
 
-// splitSubscriptionSparseDependencyTargets 在 splitSubscriptionDependencyPatterns 之上，
-// 再按 gitignore 元字符把依赖模式分成「能安全下发」和「下发会静默失配」两组。
-func splitSubscriptionSparseDependencyTargets(raw string) (safe []string, risky []string, notes []string) {
-	patterns, skippedNotes := splitSubscriptionDependencyPatterns(raw)
-	for _, p := range patterns {
-		if strings.ContainsAny(p, subscriptionSparseUnsafeChars) {
-			risky = append(risky, p)
-			continue
-		}
-		safe = append(safe, p)
-	}
-	return safe, risky, skippedNotes
-}
-
 func formatSubscriptionPatternList(patterns []string) string {
 	quoted := make([]string, 0, len(patterns))
 	for _, p := range patterns {
 		quoted = append(quoted, "`"+p+"`")
 	}
 	return strings.Join(quoted, " / ")
+}
+
+// formatSubscriptionUndeclaredCronFiles 给「没识别到 cron 声明、未建任务」的提示列文件名：最多 5 个，多了用「如 … 等」带过
+// （总数已经写在提示开头）。
+func formatSubscriptionUndeclaredCronFiles(files []string) string {
+	const limit = 5
+	if len(files) > limit {
+		return "如 " + strings.Join(files[:limit], "、") + " 等"
+	}
+	return strings.Join(files, "、")
 }
 
 // formatSubscriptionFileList 把文件列表压成一行日志；超过 limit 只列前 limit 个并带上总数，
@@ -672,9 +539,54 @@ func formatSubscriptionFileList(files []string, limit int) string {
 	return strings.Join(files, ", ")
 }
 
+// buildSubscriptionSparseCheckoutPatterns 返回下发给 git sparse-checkout 的规则，
+// 以及需要打给用户看的告警（调用方负责 emit）。
+//
+// 白名单 / 黑名单 / 依赖规则里的正则片段（#129，见 subscription_patterns.go）表达不成 gitignore 规则，
+// 统一按「档 1」处理：
+//   - 包含侧出现正则片段（白名单含正则，或包含侧已有限制时依赖规则含正则）→ 放弃包含侧的 sparse 限制、
+//     检出完整仓库，由 Go 侧匹配器决定哪些是依赖文件、哪些建任务（只剩黑名单时照旧用 `*` + 排除规则）；
+//   - 黑名单的正则片段不下发排除规则，文件照常落盘，由 Go 侧按正则排除（不建任务）；
+//   - 编译失败的正则片段逐条跳过并告警。
+//
+// 普通片段生成的规则与改造前逐字节一致（subscription_pattern_pin_test.go 钉着）。
 func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns []string, warnings []string) {
 	if sub == nil {
 		return nil, nil
+	}
+
+	whitelist := compileSubscriptionPatternSet(sub.Whitelist, subscriptionPatternWhitelist)
+	blacklist := compileSubscriptionPatternSet(sub.Blacklist, subscriptionPatternBlacklist)
+	depend := compileSubscriptionPatternSet(sub.DependOn, subscriptionPatternDepend)
+
+	// 完整检出：用户明确要整个仓库（青龙生态里那些要读仓库 src/ 自行编译的脚本）。
+	// 返回空规则之后有两处顺带生效，不用再各写一遍开关：
+	//   1. applySparseCheckout 看到空规则会把已有的 sparse-checkout 关掉，
+	//      所以「先开着 sparse 拉过、再打开这个开关」也能自动恢复成完整仓库；
+	//   2. pullGitRepoWithCallback 首次 clone 那条 --filter=blob:none --no-checkout
+	//      分支的条件是 len(sparsePatterns) > 0，这里返回空自然就跳过了。
+	// 白名单/黑名单仍然照常参与「建不建定时任务」的筛选，只是不再限制落盘范围。
+	//
+	// 这里必须带一条告警回去：用户同时填了指定子目录/白名单/黑名单又打开完整检出时，
+	// 看到的现象是整仓文件全落盘、那些规则像是失效了；一声不吭的话没人能把现象和开关对上。
+	// 与本函数其它几条「退回完整检出」的分支保持同一套做法（见函数末尾调用方的注释：
+	// 这类问题的杀伤力全在「静默」）。
+	//
+	// 但三项都留空时**不打这条提示**：那种订阅本来就是整仓检出（下面几条分支会自己说明），
+	// 开不开这个开关结果完全一样。无条件打的话，用户会照着提示去设置里找一个
+	// 自己从来没配过的白名单，或误以为曾经配过、被这个开关吞掉了。
+	if sub.FullCheckout {
+		// 非法正则照样要点名：完整检出只放开落盘范围，白 / 黑名单、依赖规则仍然决定建不建任务。
+		// 没有非法片段时 invalid 为 nil，下面两个返回值与改造前完全一样。
+		invalid := subscriptionInvalidPatternWarnings(&whitelist, &blacklist, &depend)
+		if strings.TrimSpace(sub.SubPath) == "" &&
+			strings.TrimSpace(sub.Whitelist) == "" &&
+			strings.TrimSpace(sub.Blacklist) == "" {
+			return nil, invalid
+		}
+		return nil, append([]string{
+			"[提示] 已按订阅设置检出整个仓库：指定子目录/白名单/黑名单本次都不限制落盘范围，但仍然照常决定给哪些脚本建定时任务",
+		}, invalid...)
 	}
 
 	seen := map[string]bool{}
@@ -706,7 +618,7 @@ func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns 
 	//   - 一旦包含侧多了 `**/*jd_*/**` 这种直接命中子文件的规则，非递归的
 	//     `!**/*backUp*`（只匹配到 backUp 目录条目本身）就压不住它了，本来挡得住的
 	//     文件反而会落盘。
-	//   - Go 侧 checkBlacklist 对完整相对路径做 strings.Contains，本来就是递归语义；
+	//   - Go 侧 checkBlacklist 对完整相对路径做子串包含（正则片段按正则），本来就是递归语义；
 	//     递归排除只是让 git 侧与它对齐，不会多挡任何「本来会被建成定时任务」的文件。
 	addFragmentPatterns := func(fragment string, exclude bool) {
 		prefix := ""
@@ -718,20 +630,19 @@ func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns 
 	}
 
 	subPaths, unsafeSubPaths := splitSubscriptionSparseTargets(sub.SubPath)
-	whitelist, unsafeWhitelist := splitSubscriptionSparseTargets(sub.Whitelist)
-	blacklist, unsafeBlacklist := splitSubscriptionSparseTargets(sub.Blacklist)
+	plan := resolveSubscriptionIncludePlan(subPaths, unsafeSubPaths, &whitelist)
 
-	// 包含侧（指定子目录 / 白名单）是「或」语义：只跳过其中一条不安全的子模式，
+	// 包含侧（指定子目录 / 白名单）是「或」语义：只跳过其中一条表达不了的子模式，
 	// 会让那条本该命中的文件静默检不出来，用户看到的还是「拉取成功但任务是空的」。
-	// 所以只要有一条不安全，就整体放弃包含侧的 sparse 限制、改为检出完整仓库，
-	// 再交给 Go 侧的 matchesSubscriptionFilters 决定给哪些脚本建任务。
+	// 所以子目录含 git 元字符、或白名单含正则片段时，都整体放弃包含侧的 sparse 限制、改为检出完整仓库，
+	// 再交给 Go 侧的匹配器（subscriptionFilterMatcher）决定给哪些脚本建任务。
 	// 宁可多落几个文件，也不要静默丢文件。
-	switch {
-	case len(unsafeSubPaths) > 0:
+	switch plan {
+	case subscriptionIncludeUnsafeSubPath:
 		warnings = append(warnings, fmt.Sprintf(
 			"[警告] 指定子目录 %s 含 git 通配特殊字符（%s），无法安全转成 sparse-checkout 规则；本次改为检出完整仓库，请改用不含这些字符的普通路径片段",
 			formatSubscriptionPatternList(unsafeSubPaths), subscriptionSparseUnsafeCharsHint))
-	case len(subPaths) > 0:
+	case subscriptionIncludeSubPath:
 		// 指定子目录优先级最高：它代表用户明确只想要仓库里的某几个目录/文件。
 		//
 		// 这里刻意**不**走 addFragmentPatterns：子目录填的是明确路径（`scripts/daily`），
@@ -742,69 +653,99 @@ func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns 
 		for _, p := range subPaths {
 			addPattern(p)
 		}
-	case len(unsafeWhitelist) > 0:
+	case subscriptionIncludeWhitelistRegex:
 		warnings = append(warnings, fmt.Sprintf(
-			"[警告] 白名单 %s 含 git 通配特殊字符（%s），无法安全转成 sparse-checkout 规则；本次改为检出完整仓库，扫描任务时仍按白名单过滤。白名单是「子串包含」匹配，不支持正则",
-			formatSubscriptionPatternList(unsafeWhitelist), subscriptionSparseUnsafeCharsHint))
-	default:
+			"[提示] 白名单 %s 含正则片段，git sparse-checkout 表达不了正则；本次检出完整仓库，建任务时再由面板按白名单筛选（普通片段按子串包含，正则片段按正则匹配仓库相对路径）",
+			formatSubscriptionPatternList(whitelist.regexFragments())))
+	case subscriptionIncludeWhitelist:
 		// 没有指定子目录时，才用白名单限制真实检出的文件范围。
-		// 白名单历史上是「完整相对路径的子串包含匹配」（见 matchesSubscriptionWhitelist），
+		// 白名单的普通片段是「完整相对路径的子串包含匹配」（见 matchesSubscriptionWhitelist），
 		// 所以片段命中目录名时，目录里的文件也算命中——成对下发递归规则才对得上。
-		for _, p := range whitelist {
+		for _, p := range whitelist.sparseTargets() {
 			addFragmentPatterns(p, false)
 		}
+	}
+	// 编译失败的白名单片段逐条跳过（它们本来就一个文件都匹配不到）。子目录优先时白名单不参与检出，
+	// 但仍然决定建不建任务，所以不论走哪条分支都要点名。
+	if warning := whitelist.invalidWarning(); warning != "" {
+		warnings = append(warnings, warning)
 	}
 
 	// 依赖规则并进「包含侧」：命中的文件会被检出落盘（主脚本 require 的辅助库），
 	// 但 Go 侧的任务候选筛选仍然只认白名单，所以它们不会被建成定时任务，
-	// 见 isSubscriptionDependencyOnlyFile。
+	// 见 isSubscriptionDependencyOnlyFile。按指定子目录检出时还有子目录护栏：子目录外的依赖文件一律不建任务
+	// （白名单留空时 isSubscriptionDependencyOnlyFile 一个都摘不掉，全靠护栏，见 newSubscriptionFilterMatcher）。
 	//
-	// 守卫 `len(patterns) > 0` 是本次改造最关键的一处，去掉会直接把订阅打空：
-	//   - 上面的 switch 因元字符退回完整检出时 patterns 为空 → 本来就全量落盘，
+	// 守卫 `plan.restrictsCheckout()`（改造前写作 `len(patterns) > 0`，两者等价）是这里最关键的一处，
+	// 去掉会直接把订阅打空：
+	//   - 上面的 switch 退回完整检出时 patterns 为空 → 本来就全量落盘，
 	//     依赖规则天然满足；此时若追加依赖模式，sparse-checkout 反而会被激活成
 	//     「只检出依赖文件」，白名单文件全丢。
 	//   - 用户既没填子目录也没填白名单时 patterns 同样为空 → 本来就检出全部文件
 	//     （白名单为空 = 全部文件都算命中白名单），追加依赖模式一样会把「全量」
 	//     缩成「只有依赖」，主脚本反而没了。
-	if len(patterns) > 0 {
-		dependPatterns, unsafeDepend, dependNotes := splitSubscriptionSparseDependencyTargets(sub.DependOn)
-		// 依赖片段最典型的写法就是目录名（青龙那条真实指令里的 `utils`），
-		// 主脚本 require('./utils/xxx') 要的是目录里的文件而不是目录条目本身，
-		// 所以这里同样成对下发递归规则。
-		for _, p := range dependPatterns {
-			addFragmentPatterns(p, false)
-		}
-		if len(dependPatterns) > 0 {
+	if plan.restrictsCheckout() {
+		if depend.hasRegex() {
+			// 档 1：依赖规则的正则片段表达不成 sparse 规则。只跳过它会「少落一个辅助文件」——
+			// 这正是 #129 要修的问题（主脚本 require('./jdCookie') 一跑就报找不到模块），
+			// 所以改为放弃包含侧的 sparse 限制、检出完整仓库，由 Go 侧按依赖规则认出依赖文件（不建任务）。
+			// 建任务的集合不因此变大：子目录有护栏（newSubscriptionFilterMatcher 的 subPathScope），
+			// 白名单照常过滤，兜底 #2 也按放宽前的范围判断（见 scanSubscriptionTaskCandidates）。
+			patterns = nil
+			seen = map[string]bool{}
+			scopeNote := ""
+			if plan == subscriptionIncludeSubPath {
+				scopeNote = "；指定子目录本次不再限制落盘范围，但仍然只给子目录里的脚本建定时任务"
+			}
 			warnings = append(warnings, fmt.Sprintf(
-				"[依赖规则] %s 已并入检出范围：命中的文件会被拉取到脚本目录供主脚本调用，但不会建成定时任务（只有命中白名单的文件才建任务）",
-				formatSubscriptionPatternList(dependPatterns)))
+				"[提示] 依赖规则 %s 含正则片段，git sparse-checkout 表达不了正则；本次检出完整仓库，由面板按依赖规则识别依赖文件（依赖文件照旧不建定时任务）%s",
+				formatSubscriptionPatternList(depend.regexFragments()), scopeNote))
+		} else {
+			dependPatterns := depend.sparseTargets()
+			// 依赖片段最典型的写法就是目录名（青龙那条真实指令里的 `utils`），
+			// 主脚本 require('./utils/xxx') 要的是目录里的文件而不是目录条目本身，
+			// 所以这里同样成对下发递归规则。
+			for _, p := range dependPatterns {
+				addFragmentPatterns(p, false)
+			}
+			if len(dependPatterns) > 0 {
+				taskScope := "只有命中白名单的文件才建任务"
+				if plan == subscriptionIncludeSubPath {
+					taskScope = "只给指定子目录里命中白名单的脚本建任务"
+				}
+				warnings = append(warnings, fmt.Sprintf(
+					"[依赖规则] %s 已并入检出范围：命中的文件会被拉取到脚本目录供主脚本调用，但不会建成定时任务（%s）",
+					formatSubscriptionPatternList(dependPatterns), taskScope))
+			}
 		}
-		// 依赖规则跳过一条只会「少落一个辅助文件」，退化到改造前的行为（主脚本照常检出、
-		// 照常建任务，只是跑起来可能缺依赖），方向安全，所以逐条跳过而不像白名单那样整体退回。
-		// 但必须打出来：静默少一个 sendNotify.js，用户看到的是任务跑起来才报错。
-		if len(unsafeDepend) > 0 {
+		if dependNotes := depend.notes(); len(dependNotes) > 0 {
 			warnings = append(warnings, fmt.Sprintf(
-				"[警告] 依赖规则 %s 含 git 通配特殊字符（%s），已跳过对应的检出规则；这些依赖文件不会被拉取，主脚本运行时可能因缺少依赖而失败，请改用不含这些字符的普通文件名片段",
-				formatSubscriptionPatternList(unsafeDepend), subscriptionSparseUnsafeCharsHint))
-		}
-		if len(dependNotes) > 0 {
-			warnings = append(warnings, fmt.Sprintf(
-				"[提示] 依赖规则中的 %s 含空格/中文或过长，已按文字备注跳过、未参与文件检出；依赖规则现在是功能性字段，请填写文件名片段（多个用 `,` 或 `|` 分隔，匹配方式是「子串包含」）",
-				formatSubscriptionPatternList(dependNotes)))
+				"[提示] 依赖规则中的 %s 含空格/中文或过长，已按文字备注跳过、未参与文件检出；依赖规则现在是功能性字段，请填写文件名片段（多个用 `,` 或 `|` 分隔；普通片段按「子串包含」匹配，含 %s 的片段按正则匹配）",
+				formatSubscriptionPatternList(dependNotes), subscriptionRegexTriggerHint))
 		}
 	} else if strings.TrimSpace(sub.DependOn) != "" {
 		warnings = append(warnings, "[提示] 未配置指定子目录/白名单（或包含侧已退回完整检出），本次检出完整仓库，依赖规则无需额外生效")
 	}
-
-	// 黑名单是「排除」语义：跳过一条不安全的排除规则，只会让对应文件多落一份盘，
-	// Go 侧的 checkBlacklist 仍然会把它们挡在定时任务之外，方向是安全的，逐条跳过即可。
-	if len(unsafeBlacklist) > 0 {
-		warnings = append(warnings, fmt.Sprintf(
-			"[警告] 黑名单 %s 含 git 通配特殊字符（%s），已跳过对应的 sparse-checkout 排除规则；这些文件仍会落盘，但不会被建成定时任务",
-			formatSubscriptionPatternList(unsafeBlacklist), subscriptionSparseUnsafeCharsHint))
+	// 依赖规则里编译失败的片段逐条跳过：只会「少认一个依赖文件」，方向安全，但必须打出来——
+	// 静默少一个 jdCookie.js，用户看到的是任务跑起来才报错。
+	if warning := depend.invalidWarning(); warning != "" {
+		warnings = append(warnings, warning)
 	}
 
-	if len(blacklist) == 0 {
+	// 黑名单是「排除」语义：正则片段表达不成排除规则，跳过它只会让对应文件多落一份盘，
+	// Go 侧的 checkBlacklist 会按正则把它们挡在定时任务之外，方向是安全的，逐条跳过即可。
+	// （改造前这里的承诺并不成立：`back[Uu]p` 在 Go 侧被当成字面量，一个文件都挡不住。）
+	if regexBlacklist := blacklist.regexFragments(); len(regexBlacklist) > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"[提示] 黑名单 %s 含正则片段，git sparse-checkout 表达不了正则，已跳过对应的排除规则；这些文件仍会落盘，但面板会按正则把它们排除在定时任务之外",
+			formatSubscriptionPatternList(regexBlacklist)))
+	}
+	if warning := blacklist.invalidWarning(); warning != "" {
+		warnings = append(warnings, warning)
+	}
+
+	blacklistTargets := blacklist.sparseTargets()
+	if len(blacklistTargets) == 0 {
 		// 包含侧被迫放弃、又没有可用排除规则时 patterns 为空，
 		// 等价于「不做任何过滤」，直接返回空让调用方关掉 sparse-checkout。
 		return patterns, warnings
@@ -817,7 +758,7 @@ func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns 
 	}
 	// 排除规则必须排在包含规则之后：sparse-checkout 是「最后匹配者胜出」，
 	// 只有这样 `!**/*backUp*/**` 才能压住前面 `**/*jd_*/**` 对 backUp/jd_old.js 的命中。
-	for _, p := range blacklist {
+	for _, p := range blacklistTargets {
 		addFragmentPatterns(p, true)
 	}
 
@@ -826,6 +767,7 @@ func buildSubscriptionSparseCheckoutPatterns(sub *model.Subscription) (patterns 
 
 func applySparseCheckout(ctx context.Context, repoDir string, sub *model.Subscription, env []string, emit PullCallback) error {
 	patterns, warnings := buildSubscriptionSparseCheckoutPatterns(sub)
+	// 先把告警打出来：这类问题的杀伤力全在「静默」，哪怕后面走了兜底也要让用户看见。
 	for _, warning := range warnings {
 		emit(warning)
 	}
@@ -848,7 +790,7 @@ func applySparseCheckout(ctx context.Context, repoDir string, sub *model.Subscri
 		return nil
 	}
 
-	emit(fmt.Sprintf("[sparse-checkout] 设置订阅路径过滤: %s", strings.Join(patterns, ", ")))
+	emit(fmt.Sprintf("[sparse-checkout] 设置订阅路径过滤（共 %d 条）: %s", len(patterns), strings.Join(patterns, ", ")))
 
 	cmd := exec.CommandContext(ctx, "git", "sparse-checkout", "init", "--no-cone")
 	cmd.Dir = repoDir
@@ -868,60 +810,49 @@ func applySparseCheckout(ctx context.Context, repoDir string, sub *model.Subscri
 	return nil
 }
 
-func pullSingleFileWithCallback(ctx context.Context, sub *model.Subscription, _ string, emit PullCallback) (string, error) {
-	saveDir := sub.SaveDir
+// singleFileSubscriptionTarget 返回单文件订阅的保存子目录与文件名：
+// SaveDir 为空用 downloads，Alias 为空用 URL 末段。
+func singleFileSubscriptionTarget(sub *model.Subscription) (saveDir, filename string) {
+	saveDir = sub.SaveDir
 	if saveDir == "" {
 		saveDir = "downloads"
 	}
 
 	parts := strings.Split(sub.URL, "/")
-	filename := parts[len(parts)-1]
+	filename = parts[len(parts)-1]
 	if sub.Alias != "" {
 		filename = sub.Alias
 	}
+	return saveDir, filename
+}
 
-	destPath := filepath.Join(config.C.Data.ScriptsDir, saveDir, filename)
-	parent := filepath.Dir(destPath)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return "", fmt.Errorf("创建目录失败: %w", err)
-	}
-	tmpFile, err := os.CreateTemp(parent, "."+filepath.Base(filename)+".staging-*")
-	if err != nil {
-		return "", fmt.Errorf("创建单文件 staging 失败: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
-	stagingActive := true
-	defer func() {
-		if stagingActive {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+// singleFileSubscriptionDestPath 是单文件订阅下载目标路径的唯一公式。
+// 拉取（pullSingleFileWithCallback）与「删除任务时一并删除脚本」判断「这个文件是不是某个订阅下载的」
+// 都走这里；两边口径一旦分叉，被订阅每次重新下载的文件就会被当成普通脚本删掉。
+func singleFileSubscriptionDestPath(scriptsDir string, sub *model.Subscription) string {
+	saveDir, filename := singleFileSubscriptionTarget(sub)
+	return filepath.Join(scriptsDir, saveDir, filename)
+}
 
-	emit(fmt.Sprintf("[下载] %s -> %s/%s (staging)", sub.URL, saveDir, filename))
-	output, err := DownloadFileWithContext(ctx, sub.URL, tmpPath)
+func pullSingleFileWithCallback(ctx context.Context, sub *model.Subscription, _ string, emit PullCallback) (string, error) {
+	saveDir, filename := singleFileSubscriptionTarget(sub)
+	destPath := singleFileSubscriptionDestPath(config.C.Data.ScriptsDir, sub)
+	emit(fmt.Sprintf("[下载] %s -> %s/%s", sub.URL, saveDir, filename))
+	output, err := DownloadFileWithContext(ctx, sub.URL, destPath)
 	if output != "" {
 		emit(output)
 	}
-	if err != nil {
-		return output, err
-	}
-	if ctx.Err() != nil {
-		return output, fmt.Errorf("拉取已停止")
-	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		return output, fmt.Errorf("发布单文件订阅失败: %w", err)
-	}
-	stagingActive = false
-	emit("[已完成] 已原子切换到新的单文件订阅版本")
-	return output, nil
+	return output, err
 }
 
 func syncGitRemoteWithCallback(ctx context.Context, repoDir, remoteURL string, env []string, emit PullCallback) (string, error) {
-	remoteURL, err := cleanGitRemoteURL(remoteURL)
+	// 本机版（Android）：写进 .git/config 的远端地址必须去掉账号/令牌，
+	// 凭据只走临时的 credential store，避免明文密钥长期留在脚本目录里。
+	cleanedURL, err := cleanGitRemoteURL(remoteURL)
 	if err != nil {
 		return "", err
 	}
+	remoteURL = cleanedURL
 	cmd := exec.CommandContext(ctx, "git", "remote")
 	cmd.Dir = repoDir
 	cmd.Env = env
@@ -931,6 +862,8 @@ func syncGitRemoteWithCallback(ctx context.Context, repoDir, remoteURL string, e
 		if ctx != nil && ctx.Err() != nil {
 			return "", fmt.Errorf("拉取已停止")
 		}
+		// 同 gitHasWorkingTreeChanges：cmd.Output() 的 stderr 不会 emit 出去，
+		// 不带上原文的话用户只能看到一句退出码。
 		return "", wrapGitCommandError("读取远端配置", gitCommandStderr(err), err)
 	}
 
@@ -976,9 +909,17 @@ var (
 	//   * @cron 0 0 * * *
 	//   // cron: 0 0 * * *
 	// 通过 `\b` 词界避免误匹配 `crontab` / `cron-utils` 等关键字。
-	cronLabelPrefixRe      = regexp.MustCompile(`(?im)^[\s#*@/]*@?cron\b\s*[:：]?\s*(\S.*)$`)
+	// 第 1 组是 cron 前面的注释标记与缩进（判断值带引号时能不能剥，见 extractSubscriptionCronExpressionFromLabel），第 2 组是值。
+	cronLabelPrefixRe      = regexp.MustCompile(`(?im)^([\s#*@/]*)@?cron\b\s*[:：]?\s*(\S.*)$`)
 	subscriptionTaskNameRe = regexp.MustCompile(`new\s+Env\s*\(\s*['"` + "`" + `]([^'"` + "`" + `]+)['"` + "`" + `]\s*\)`)
-	// Only accept name declarations from comment headers to avoid matching object fields.
+	// 注释头里的任务名声明，覆盖用户实际在用的几种写法：
+	//   //name: 远程开机        // name: 雀巢会员      （js / mjs / ts）
+	//   #name: X               ## name: DDNS IP更新   （sh / py）
+	//   * name: X              @name: X               （JSDoc 块注释 / 标签）
+	//   <!-- name: X -->                              （html）
+	// 刻意**要求**行首带注释标记，不接受裸 `name: xxx`：JS/TS 里 `{ name: 'foo' }`
+	// 这种对象字面量太常见，裸匹配会把它误判成任务名。cron 那边敢接受裸写法，
+	// 是因为还有 cron.Parse 兜底校验，而 name 没有可校验的形态，只能靠注释标记收窄。
 	subscriptionTaskNameLabelRe = regexp.MustCompile(`(?i)^\s*(?:<!--|//+|#+|\*+|--+|@)\s*@?name\s*[:：]\s*(\S.*)$`)
 	// 青龙风格 `cron "EXPR" filename, tag:xxx` 单行声明，常见于 JS 顶部注释。
 	// 例如：cron "6 6 6 6 *" jd_CheckCK.js, tag:京东CK检测by-ccwav
@@ -986,16 +927,21 @@ var (
 )
 
 type subscriptionTaskSyncOptions struct {
-	autoAdd     bool
-	autoDelete  bool
+	autoAdd    bool
+	autoDelete bool
+	// defaultCron：订阅设置里的默认 Cron 规则，脚本没识别到 cron 声明时使用；空串 = 这类脚本不建任务（#134）。
 	defaultCron string
-	allowedExts map[string]bool
+	// ignoredDefaultCron：库里存着、但 cron.Parse 不认而被忽略的默认规则原值（直接改库、恢复旧备份才会有），只给拉取日志用。
+	ignoredDefaultCron string
+	allowedExts        map[string]bool
 }
 
 type subscriptionTaskCandidate struct {
 	Name           string
 	Command        string
 	CronExpression string
+	// DefaultRule：脚本没声明 cron，CronExpression 来自默认 Cron 规则。只用于日志分开计数与标明来源。
+	DefaultRule bool
 }
 
 func subscriptionTaskLabel(subID uint) string {
@@ -1011,11 +957,36 @@ func hasLabel(labels []string, target string) bool {
 	return false
 }
 
+// hasLabelFold：labels 里有没有与 target 忽略大小写相同的项。给订阅标签判定用——SQLite 的 LIKE 对 ASCII
+// 不分大小写（queryTasksByLabel），usedByOtherSubscription / withoutLabel 与它对齐，否则用户手写成
+// Subscription:2 这类大小写差异会误删别的订阅在用的任务，或者每次同步空转一次「[解除关联]」。
+func hasLabelFold(labels []string, target string) bool {
+	for _, item := range labels {
+		if strings.EqualFold(item, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func withLabel(labels []string, target string) []string {
 	if hasLabel(labels, target) {
 		return labels
 	}
 	return append(labels, target)
+}
+
+// withoutLabel 是 withLabel 的反操作：去掉所有与 target 忽略大小写相同（strings.EqualFold）的项，其余按原顺序保留。
+// 忽略大小写是为了与 queryTasksByLabel 的 LIKE 口径一致：用户把订阅标签手写成 Subscription:2 时，这里也能把它摘掉，
+// 不会写回原值造成每次同步空转。
+func withoutLabel(labels []string, target string) []string {
+	kept := make([]string, 0, len(labels))
+	for _, item := range labels {
+		if !strings.EqualFold(item, target) {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 func subscriptionSaveDir(sub *model.Subscription) string {
@@ -1062,7 +1033,45 @@ func subscriptionFilterContains(target string, pattern string) bool {
 	return strings.Contains(target, pattern)
 }
 
+// splitSubscriptionFilterPatterns 把「白名单 / 黑名单 / 依赖规则」这三个过滤字段
+// 拆成一组独立模式（去重、保持顺序）。分隔符同时接受 `,` 和 `|`。
+//
+// 为什么必须认 `|`：用户最主要的配置来源是青龙的 `ql repo` 命令，它的第 2/3/4 个
+// 位置参数是 `grep -E` 模式，天然用 `|` 分隔：
+//
+//	ql repo https://github.com/6dylan6/jdpro.git "jd_|jx_|jddj_" "backUp" "..."
+//
+// 旧实现只按 `,` 拆 → 整串 `jd_|jx_|jddj_` 被当成一个模式，三条链路同时失效：
+//  1. buildSubscriptionSparseCheckoutPatterns 生成 `**/*jd_|jx_|jddj_*`，
+//     而 gitignore 语法里 `|` 只是普通字符不是「或」→ sparse-checkout 检出 0 个文件；
+//  2. matchesSubscriptionWhitelist 做 strings.Contains(路径, "jd_|jx_|jddj_") → 恒 false；
+//  3. checkBlacklist 同理。
+//
+// 表现就是「git 拉取成功、日志没有任何报错、但扫描 0 个候选文件、一个定时任务都没建」。
+//
+// #129 起拆分器只在「顶层」拆（有配对的括号里、方括号表达式里、被 `\` 转义的分隔符不拆，见
+// splitSubscriptionPatternSegments），让 `(jd|jx)_`、`a{1,3}` 这类正则片段不再被拆坏；
+// 不含 ( [ { \ 的输入与改造前逐字节一致。空段照旧丢弃：`jd_||jx_`、`|jd_|` 这类首尾/连续分隔符很常见，
+// 而空模式会让 subscriptionFilterContains 恒 false，也会让 sparse-checkout 生成 `**/**` 这种含义跑偏的规则。
+//
+// 注意：正则只对「含正则触发字符」的片段生效（见 subscription_patterns.go），普通片段仍是子串包含。
+// 贸然把整个字段当正则，会让现存配置里含 `.` `*` `+` 的普通子串（a.b、jd_*.js、c++）行为突变。
 func splitSubscriptionFilterPatterns(raw string) []string {
+	var patterns []string
+	seen := make(map[string]bool)
+	for _, pattern := range splitSubscriptionPatternSegments(raw) {
+		if seen[pattern] {
+			continue
+		}
+		seen[pattern] = true
+		patterns = append(patterns, pattern)
+	}
+	return patterns
+}
+
+// splitSubscriptionPlainPatterns 是改造前的拆分器：在每一个 `,` `|` 处拆，不看括号与转义。
+// 只给「指定子目录」用——它是精确路径字段、不参与正则识别，行为必须原样保留。
+func splitSubscriptionPlainPatterns(raw string) []string {
 	var patterns []string
 	seen := make(map[string]bool)
 	for _, pattern := range strings.FieldsFunc(raw, func(r rune) bool {
@@ -1079,26 +1088,15 @@ func splitSubscriptionFilterPatterns(raw string) []string {
 }
 
 func hasNonWildcardSubscriptionFilter(raw string) bool {
-	for _, pattern := range splitSubscriptionFilterPatterns(raw) {
-		if !isWildcardFilterPattern(pattern) {
-			return true
-		}
-	}
-	return false
+	set := compileSubscriptionPatternSet(raw, subscriptionPatternWhitelist)
+	return set.hasNonWildcard()
 }
 
+// matchesSubscriptionWhitelist 是单文件判定（测试与零散调用用）；扫描整个目录时走
+// subscriptionFilterMatcher，每次同步只编译一次。
 func matchesSubscriptionWhitelist(sub *model.Subscription, filePath string) bool {
-	hasNonWildcard := false
-	for _, pattern := range splitSubscriptionFilterPatterns(sub.Whitelist) {
-		if isWildcardFilterPattern(pattern) {
-			return true
-		}
-		hasNonWildcard = true
-		if subscriptionFilterContains(filePath, pattern) {
-			return true
-		}
-	}
-	return !hasNonWildcard
+	set := compileSubscriptionPatternSet(sub.Whitelist, subscriptionPatternWhitelist)
+	return set.whitelistMatches(filePath)
 }
 
 func matchesSubscriptionFilters(sub *model.Subscription, filePath string) bool {
@@ -1108,6 +1106,8 @@ func matchesSubscriptionFilters(sub *model.Subscription, filePath string) bool {
 	return checkBlacklist(sub, filePath)
 }
 
+// subscriptionDependencyPatternMaxLen 是「依赖规则」单个片段的长度上限（按 rune 计）。
+// 超过就判定为文字备注，见 looksLikeSubscriptionDependencyNote。
 const subscriptionDependencyPatternMaxLen = 64
 
 // looksLikeSubscriptionDependencyNote 判断依赖规则里的某一段是「文字备注」还是「文件名片段」。
@@ -1148,22 +1148,21 @@ func looksLikeSubscriptionDependencyNote(pattern string) bool {
 // splitSubscriptionDependencyPatterns 把「依赖规则」字段拆成真正参与匹配的模式，
 // 以及被判定为文字备注、直接跳过的片段（调用方负责把 notes 打到日志里）。
 //
-// 分隔符与白/黑名单完全一致（`,` 和 `|`），匹配语义也一致（子串包含，不是正则）。
+// 分隔符与白/黑名单完全一致（`,` 和 `|`），匹配语义也一致：普通片段是子串包含（返回规整后的文本），
+// 含正则触发字符的片段按正则（返回原文）；编译失败的正则片段不参与匹配，不在返回值里。
 //
 // 通配符（`*` / `all` / `全部`）刻意跳过而不是「全部当依赖」：依赖命中的文件不建任务，
 // 若把整个仓库都算成依赖，等于一个定时任务都建不出来。跳过后依赖规则视为未配置，
 // 行为与改造前一致。
 func splitSubscriptionDependencyPatterns(raw string) (patterns []string, notes []string) {
-	for _, p := range splitSubscriptionFilterPatterns(raw) {
-		p = normalizeSubscriptionFilterTarget(p)
-		if p == "" || isWildcardFilterPattern(p) {
-			continue
+	set := compileSubscriptionPatternSet(raw, subscriptionPatternDepend)
+	for _, f := range set.fragments {
+		switch f.kind {
+		case subscriptionFragmentSubstring, subscriptionFragmentRegex:
+			patterns = append(patterns, f.text)
+		case subscriptionFragmentNote:
+			notes = append(notes, f.text)
 		}
-		if looksLikeSubscriptionDependencyNote(p) {
-			notes = append(notes, p)
-			continue
-		}
-		patterns = append(patterns, p)
 	}
 	return patterns, notes
 }
@@ -1173,13 +1172,8 @@ func matchesSubscriptionDependency(sub *model.Subscription, filePath string) boo
 	if sub == nil {
 		return false
 	}
-	patterns, _ := splitSubscriptionDependencyPatterns(sub.DependOn)
-	for _, pattern := range patterns {
-		if subscriptionFilterContains(filePath, pattern) {
-			return true
-		}
-	}
-	return false
+	set := compileSubscriptionPatternSet(sub.DependOn, subscriptionPatternDepend)
+	return set.anyMatches(filePath)
 }
 
 // isSubscriptionDependencyOnlyFile 判断文件是不是「只因为依赖规则才落盘」的辅助库文件。
@@ -1202,114 +1196,176 @@ func isSubscriptionDependencyOnlyFile(sub *model.Subscription, filePath string) 
 	return matchesSubscriptionDependency(sub, filePath)
 }
 
+// checkBlacklist 与白名单共用同一套拆分与匹配（subscriptionPatternSet），不再自己写一份 strings.Split(",")。
+// 之前那份重复实现是 `|` 分隔失效的三个现场之一：白名单改好了黑名单还是不认 `|`。
+// 返回 true 表示没被黑名单排除。通配写法跳过（黑名单填 `*` 不等于「全部排除」）。
 func checkBlacklist(sub *model.Subscription, filePath string) bool {
-	for _, pattern := range splitSubscriptionFilterPatterns(sub.Blacklist) {
-		if isWildcardFilterPattern(pattern) {
-			continue
-		}
-		if subscriptionFilterContains(filePath, pattern) {
-			return false
-		}
-	}
-	return true
+	set := compileSubscriptionPatternSet(sub.Blacklist, subscriptionPatternBlacklist)
+	return !set.anyMatches(filePath)
 }
 
 func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 	options := getSubscriptionTaskSyncOptions(sub)
+	addStrategy := subscriptionTaskSyncStrategyLabel(sub.AutoAddTaskMode)
+	delStrategy := subscriptionTaskSyncStrategyLabel(sub.AutoDelTaskMode)
 	if !options.autoAdd && !options.autoDelete {
-		emit("[跳过自动同步任务] 订阅与系统设置中均未启用 auto_add_cron / auto_del_cron")
+		// 旧文案写的是「订阅与系统设置中均未启用 auto_add_cron / auto_del_cron」，
+		// 那是 OR 语义下唯一可能的原因；三态之后「全局开着、订阅自己强制关」也会走到这里，
+		// 所以必须把两项各自的策略来源打出来，否则用户会去翻全局设置而永远找不到原因。
+		emit(fmt.Sprintf("[跳过自动同步任务] 自动添加定时任务=关闭（策略：%s），自动删除失效任务=关闭（策略：%s）",
+			addStrategy, delStrategy))
 		return
+	}
+
+	// 两项各打一条策略来源：订阅单独设过就是「强制开启 / 强制关闭」，没设过是「跟随全局设置」。
+	// 只关掉其中一项时不会走上面那条跳过日志，不打这两行的话用户看不出「为什么一个都没建」。
+	if options.autoAdd {
+		emit(fmt.Sprintf("[自动添加定时任务] 已启用（策略：%s）", addStrategy))
+	} else {
+		emit(fmt.Sprintf("[自动添加定时任务] 未启用（策略：%s），本次不会新建任务", addStrategy))
+	}
+	if options.autoDelete {
+		emit(fmt.Sprintf("[自动删除失效任务] 已启用（策略：%s）", delStrategy))
+	} else {
+		emit(fmt.Sprintf("[自动删除失效任务] 未启用（策略：%s），本次不会删除任务", delStrategy))
 	}
 
 	saveDir := subscriptionSaveDir(sub)
 	scriptsDir := filepath.Join(config.C.Data.ScriptsDir, saveDir)
-	candidates, dependencyFiles := collectSubscriptionTaskCandidates(sub, options)
+	scan := scanSubscriptionTaskCandidates(sub, options)
+	candidates, dependencyFiles := scan.candidates, scan.dependencyOnly
 	label := subscriptionTaskLabel(sub.ID)
 
 	// 可观测兜底：v2.2.8 之前任何空候选 / DB 创建失败都被静默吞掉，用户只看到
 	// "[完成]" 就以为同步成功了。这里把每一步都打日志出来。
+	// cron 的来源分开数（#134）：以前把默认规则建的也算进「含 cron 的脚本」，看不出哪些是脚本自己声明的。
+	declaredCount, defaultRuleCount := 0, 0
+	for _, candidate := range candidates {
+		if candidate.DefaultRule {
+			defaultRuleCount++
+		} else {
+			declaredCount++
+		}
+	}
 	scannedFileCount := countSubscriptionScriptFiles(scriptsDir, options.allowedExts, sub)
-	emit(fmt.Sprintf("[扫描脚本] 目录 %s 共扫描 %d 个候选文件（按白/黑名单过滤后），识别出 %d 个含 cron 的脚本",
-		scriptsDir, scannedFileCount, len(candidates)))
+	emit(fmt.Sprintf("[扫描脚本] 目录 %s 共扫描 %d 个候选文件（按白/黑名单过滤后），识别出 %d 个声明 cron 的脚本",
+		scriptsDir, scannedFileCount, declaredCount))
+	if defaultRuleCount > 0 {
+		emit(fmt.Sprintf("[默认 Cron 规则] %d 个脚本没有识别到 cron 声明，使用订阅设置里的默认规则 %s", defaultRuleCount, options.defaultCron))
+	}
+	// 默认规则只在新建任务时用得上，自动添加关着就不提。
+	if options.autoAdd && options.ignoredDefaultCron != "" {
+		emit(fmt.Sprintf("[警告] 订阅设置里的默认 Cron 规则「%s」无效，已忽略", options.ignoredDefaultCron))
+	}
+	// 依赖规则是「拉下来但不建任务」，不打出来的话用户会以为这些文件被漏掉了。
 	if len(dependencyFiles) > 0 {
 		emit(fmt.Sprintf("[依赖文件] 依赖规则命中 %d 个文件，已拉取到脚本目录供主脚本调用，不会建成定时任务: %s",
 			len(dependencyFiles), formatSubscriptionFileList(dependencyFiles, 10)))
 	}
-	if len(candidates) == 0 && scannedFileCount > 0 {
-		emit("[提示] 仓库内有脚本但没有识别到 cron 表达式：请检查脚本头部是否含 `cron <表达式>` 注释，或在系统设置 default_cron_rule 里配置默认 cron")
-	}
+	// 扫到 0 个文件是「静默失败」最典型的落点：拉取全绿、日志无错、任务列表空。
+	// 把最可能的三个原因直接摊开，别让用户去猜。
 	if scannedFileCount == 0 {
-		emit("[提示] 没有扫描到任何候选脚本，常见原因：1) 指定子目录/白名单/黑名单把文件全过滤掉了（多个模式用 `,` 或 `|` 分隔，匹配方式是「子串包含」而非正则）；2) 上一步 sparse-checkout 规则没命中任何文件；3) 系统设置 repo_file_extensions 不含该脚本扩展名")
+		emit("[提示] 没有扫描到任何候选脚本，常见原因：1) 指定子目录/白名单/黑名单把文件全过滤掉了（多个片段用 `,` 或 `|` 分隔；普通片段按「子串包含」匹配，含 " + subscriptionRegexTriggerHint + " 的片段按正则匹配仓库相对路径）；2) 上一步 sparse-checkout 规则没命中任何文件；3) 系统设置 repo_file_extensions 不含该脚本扩展名")
+		// 只有依赖文件落了盘、主脚本一个没扫到，说明白名单和依赖规则填反了。
+		// 这是「依赖规则改成功能性」之后最容易出现的新型误配，单独点名。
 		if len(dependencyFiles) > 0 {
 			emit("[提示] 本次只有依赖规则命中了文件、白名单一个都没命中：依赖规则只负责把辅助库文件拉下来，不会建任务。请确认主脚本的文件名片段是否填在「白名单」里")
 		}
 	}
 
 	var managedTasks []model.Task
-	queryTasksByLabel(label).Find(&managedTasks)
-	managedByCommand := make(map[string]*model.Task, len(managedTasks))
+	if err := queryTasksByLabel(label).Find(&managedTasks).Error; err != nil {
+		emit(fmt.Sprintf("[警告] 读取本订阅的任务失败，本次跳过任务同步: %v", err))
+		return
+	}
+
+	// 按脚本认任务（#125）：本订阅已有任务在跑某个候选脚本——命令原样，或改过参数、写法
+	// （task x.js now、desi …、-m 30m、./x.js、node x.js …）——就算这个脚本「已经有任务」：
+	// 不新建，也不改它的名称、定时、命令、状态、日志；同一脚本有多条任务也都不动。
+	// 想恢复订阅默认就删掉任务重新拉取。以前按命令原文匹配，命令一加参数就对不上：
+	// 新建一条重复任务，开着自动删除时还会把改过命令的那条连同历史日志删掉。
+	scriptIndex := newSubscriptionScriptIndex(config.C.Data.ScriptsDir, candidates)
+	undeclared := newSubscriptionUndeclaredScripts(scriptIndex, config.C.Data.ScriptsDir, scan.undeclaredCron)
+	managedCommands := make(map[string]bool, len(managedTasks))
+	managedKeys := make(map[string]bool, len(managedTasks))
+	managedUndeclaredKeys := make(map[string]bool)
 	for i := range managedTasks {
-		managedByCommand[strings.TrimSpace(managedTasks[i].Command)] = &managedTasks[i]
+		managedCommands[strings.TrimSpace(managedTasks[i].Command)] = true
+		if key, ok := scriptIndex.scriptKeyOf(managedTasks[i].Command); ok {
+			managedKeys[key] = true
+		}
+		if key, ok := scriptIndex.scriptKeyIn(managedTasks[i].Command, undeclared.hasKey); ok {
+			managedUndeclaredKeys[key] = true
+		}
+	}
+	// undeclaredWithTask：没识别到 cron 声明、本次不建任务的脚本里已经有任务的（按精确命令记）。先记本订阅自己的
+	// （升级前按每天 0 点兜底建的、之前接管的），新增分支接管到的再补上。有任务的不再接管同脚本的其他任务，也不进「未建」提示。
+	undeclaredWithTask := make(map[string]bool, len(undeclared.items))
+	for _, item := range undeclared.items {
+		if managedCommands[item.command] || (item.key != "" && managedUndeclaredKeys[item.key]) {
+			undeclaredWithTask[item.command] = true
+		}
 	}
 
 	created := 0
-	updated := 0
 	deleted := 0
 	adopted := 0
+	detached := 0
 	failed := 0
 
+	// adoptExisting 接管：只加上本订阅的标签，名称、定时、命令一概不动；有几条接管几条。
+	adoptExisting := func(matches []*model.Task) {
+		for _, existing := range matches {
+			existing.SetLabelsFromSlice(withLabel(existing.GetLabels(), label))
+			if err := database.DB.Model(existing).Update("labels", existing.Labels).Error; err != nil {
+				failed++
+				emit(fmt.Sprintf("[关联已有任务失败] %s: %v", existing.Name, err))
+			} else {
+				adopted++
+				emit(fmt.Sprintf("[关联已有任务] %s", existing.Name))
+			}
+		}
+	}
+
+	adoptPoolFailed := false
 	if options.autoAdd {
-		for command, candidate := range candidates {
-			if existing, ok := managedByCommand[command]; ok {
-				if existing.SubscriptionLocked {
-					if existing.Name != candidate.Name || existing.CronExpression != candidate.CronExpression {
-						emit(fmt.Sprintf("[保留手动定时] %s 已被手动调整过，跳过订阅源的名称/定时覆盖（订阅源 cron: %s）；如需重新跟随订阅，请在任务详情点「恢复为订阅默认」",
-							existing.Name, candidate.CronExpression))
-					}
-					continue
-				}
-				changes := map[string]interface{}{}
-				if existing.Name != candidate.Name {
-					changes["name"] = candidate.Name
-					existing.Name = candidate.Name
-				}
-				if existing.CronExpression != candidate.CronExpression {
-					changes["cron_expression"] = candidate.CronExpression
-					existing.CronExpression = candidate.CronExpression
-				}
-				if len(changes) > 0 {
-					if err := database.DB.Model(existing).Updates(changes).Error; err != nil {
-						failed++
-						emit(fmt.Sprintf("[自动更新任务失败] %s: %v", candidate.Name, err))
-					} else {
-						if scheduler := GetSchedulerV2(); scheduler != nil {
-							scheduler.UpdateJob(existing)
-						} else {
-							emit(fmt.Sprintf("[调度器未初始化] 任务 %s 已保存，将在调度器启动时加载", candidate.Name))
-						}
-						updated++
-						emit(fmt.Sprintf("[自动更新任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
-					}
-				}
+		var pending []string
+		for _, command := range sortedSubscriptionCandidateCommands(candidates) {
+			if managedCommands[command] {
 				continue
 			}
+			// 键有歧义的候选（Windows 下仅大小写不同的两个文件）不按脚本认领，只认命令原文。
+			if key, ok := scriptIndex.candidateKey(command); ok && managedKeys[key] {
+				continue
+			}
+			pending = append(pending, command)
+		}
+		var unownedUndeclared []subscriptionUndeclaredScript
+		for _, item := range undeclared.items {
+			if !undeclaredWithTask[item.command] {
+				unownedUndeclared = append(unownedUndeclared, item)
+			}
+		}
 
-			var existing model.Task
-			if err := database.DB.Where("command = ?", command).First(&existing).Error; err == nil {
-				labels := withLabel(existing.GetLabels(), label)
-				existing.SetLabelsFromSlice(labels)
-				existing.SubscriptionLocked = true
-				if err := database.DB.Model(&existing).Updates(map[string]interface{}{
-					"labels":              existing.Labels,
-					"subscription_locked": true,
-				}).Error; err != nil {
-					failed++
-					emit(fmt.Sprintf("[关联已有任务失败] %s: %v", existing.Name, err))
-				} else {
-					managedByCommand[command] = &existing
-					adopted++
-					emit(fmt.Sprintf("[关联已有任务] %s", existing.Name))
-				}
+		var adoptPool *subscriptionAdoptPool
+		if len(pending) > 0 || len(unownedUndeclared) > 0 {
+			var err error
+			if adoptPool, err = loadSubscriptionAdoptPool(scriptIndex, managedTasks, undeclared); err != nil {
+				failed++
+				emit(fmt.Sprintf("[关联已有任务失败] 读取任务列表出错，本次不新建任务，以免与已有任务重复: %v", err))
+				pending, unownedUndeclared = nil, nil
+				adoptPoolFailed = true
+			}
+		}
+
+		for _, command := range pending {
+			candidate := candidates[command]
+
+			// 接管：不归本订阅管、但命令与候选完全相同或跑的是同一个脚本的任务（用户自建的、删订阅再重建后
+			// 带着悬空旧标签的、别的订阅的），只加标签。
+			key, keyOK := scriptIndex.candidateKey(command)
+			if matches := adoptPool.take(command, key, keyOK); len(matches) > 0 {
+				adoptExisting(matches)
 				continue
 			}
 
@@ -1328,47 +1384,143 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 				emit(fmt.Sprintf("[自动添加任务失败] %s (cron: %s) command=%s err=%v",
 					candidate.Name, candidate.CronExpression, candidate.Command, err))
 			} else {
+				// 与 handler/task_mutate.go 的 Create 同口径：注册调度失败要留痕，
+				// 否则订阅日志里显示「自动添加任务」成功，任务却从此不会被 cron 触发。
+				// 文案里的「失败」会被 panel_log.go 的 detectPanelLogLevel 判成 ERROR 级。
+				// 调度器为 nil 时不注册（与下面 deleteSubscriptionTaskIfUnchanged 摘任务同一写法）：面板关停时
+				// ShutdownSchedulerV2 已经把它置空，还在跑的拉取照样会走到这里（原来直接对 nil 调 AddJob，
+				// 手动拉取的协程没有 recover，整个面板崩溃退出）；ddp 进程里调度器本来就没起。
+				// 任务行已经落库，面板下次启动时 InitSchedulerV2 会按库注册它。
 				if scheduler := GetSchedulerV2(); scheduler != nil {
-					_ = scheduler.AddJob(&task)
+					if err := scheduler.AddJob(&task); err != nil {
+						log.Printf("任务 %d 注册调度失败（它不会自动触发）: %v", task.ID, err)
+					}
 				} else {
+					// 本机版（Android）：调度器未起（关停中 / ddp 进程）也要让用户看见任务没被注册。
 					emit(fmt.Sprintf("[调度器未初始化] 任务 %s 已保存，将在调度器启动时加载", candidate.Name))
 				}
-				managedByCommand[command] = &task
 				created++
-				emit(fmt.Sprintf("[自动添加任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
+				if candidate.DefaultRule {
+					emit(fmt.Sprintf("[自动添加任务] %s (cron: %s，默认规则)", candidate.Name, candidate.CronExpression))
+				} else {
+					emit(fmt.Sprintf("[自动添加任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
+				}
+			}
+		}
+
+		// 没识别到 cron 声明、本订阅还没有任务的脚本：不建任务，但已有的同脚本任务（青龙导入的、手建的、删订阅再重建后
+		// 带着悬空旧标签的）照旧只加标签接管，与 v3.2.8 它们还是兜底候选时一致——不接管的话它们不归订阅管，
+		// 上游删了脚本也不会被自动删除（Wave 2 复查）。认法与候选相同：精确命令或脚本键（键有歧义时只认精确命令）。
+		for _, item := range unownedUndeclared {
+			if matches := adoptPool.take(item.command, item.key, item.claimable); len(matches) > 0 {
+				adoptExisting(matches)
+				undeclaredWithTask[item.command] = true
 			}
 		}
 	}
 
-	if options.autoDelete {
-		for _, task := range managedTasks {
-			command := strings.TrimSpace(task.Command)
-			if !strings.HasPrefix(command, "task ") {
+	// 没识别到 cron 声明、默认规则又没有可用值的脚本不建任务（#134）：说清有几个、是哪些、想建怎么办。放在接管之后算：
+	// 已经有任务的（本订阅的、刚接管的，不论原来带什么标签）不算「未建」，不列——叫人给已经有任务的脚本再建一条只会建出重复任务。
+	// 自动添加关着时本来就不建，不提示；读任务列表失败时不知道哪些脚本有任务，也不提示。
+	// 不说「未声明 cron」：缩进 + 引号这类写法的声明认不出，脚本作者明明写了。
+	if options.autoAdd && !adoptPoolFailed {
+		var unbuilt []string
+		for _, item := range undeclared.items {
+			if undeclaredWithTask[item.command] {
 				continue
 			}
-			if _, ok := candidates[command]; ok {
-				continue
+			rel, err := filepath.Rel(scriptsDir, item.path)
+			if err != nil {
+				rel = filepath.Base(item.path)
 			}
-			if task.SubscriptionLocked {
-				emit(fmt.Sprintf("[保留任务] %s 已加锁，订阅源中已无对应脚本，已保留，请手动确认", task.Name))
-				continue
+			unbuilt = append(unbuilt, filepath.ToSlash(rel))
+		}
+		if len(unbuilt) > 0 {
+			// 库里存着非法规则时（上面已有 [警告]），叫人「修正」而不是「填写」：设置里看着是填了的。
+			action := "填写"
+			if options.ignoredDefaultCron != "" {
+				action = "修正"
 			}
+			emit(fmt.Sprintf("[提示] %d 个脚本没有识别到 cron 声明，未建定时任务（%s）。需要的话在订阅设置%s「默认 Cron 规则」，或手动为脚本建任务",
+				len(unbuilt), formatSubscriptionUndeclaredCronFiles(unbuilt), action))
+		}
+	}
 
-			if scheduler := GetSchedulerV2(); scheduler != nil {
-				scheduler.RemoveJob(task.ID)
+	if options.autoDelete {
+		if len(candidates) == 0 && len(scan.undeclaredCron) == 0 {
+			// 熔断：一个候选都没有，多半是检出为空、子目录/白名单配错，或单文件订阅扫错了目录，
+			// 而不是上游真把脚本全删了。这时照「不在候选里就删」会把整个订阅的任务连同历史日志清空。
+			// 没识别到 cron 声明、没建任务的脚本也算扫到了受管脚本（#134）：改动前它们按兜底 cron 都是候选、不触发熔断，
+			// 这里保持一致，否则整个仓库都没写 cron 头的订阅从此再也删不掉上游已删脚本的任务。
+			if len(managedTasks) > 0 {
+				emit("[跳过自动删除] 本次没有识别到任何候选脚本，为防误删，未删除任何任务")
 			}
-			database.DB.Where("task_id = ?", task.ID).Delete(&model.TaskLog{})
-			database.DB.Delete(&task)
-			deleted++
-			emit(fmt.Sprintf("[自动删除任务] %s", task.Name))
+		} else if otherLabels, err := otherLiveSubscriptionLabels(sub.ID); err != nil {
+			failed++
+			emit(fmt.Sprintf("[跳过自动删除] 读取订阅列表失败，无法确认任务是否还被其他订阅使用，为防误删，未删除任何任务: %v", err))
+		} else {
+			// 删除必须有正面证据（判定见 subscriptionStaleTaskJudge.judge）。范围不变：只看 task 开头的命令，
+			// node / python3 这类解释器命令从不自动删除。没识别到 cron 声明、没建任务的脚本对应的已有任务一律保留（#134）。
+			judge := newSubscriptionStaleTaskJudge(scriptIndex, candidates, saveDir,
+				subscriptionScannedFileKeys(scriptIndex, config.C.Data.ScriptsDir, scan.seenFiles), undeclared)
+			for i := range managedTasks {
+				task := &managedTasks[i]
+				if !strings.HasPrefix(strings.TrimSpace(task.Command), "task ") {
+					continue
+				}
+				verdict, scriptPath, statErr := judge.judge(task.Command)
+				switch verdict {
+				case staleTaskKeep:
+					continue
+				case staleTaskKeepUnscanned:
+					emit(fmt.Sprintf("[保留任务] %s：脚本 %s 还在订阅目录里，但本次扫描没有读到，未删除（可能是目录联接或存储读目录异常）",
+						task.Name, scriptPath))
+					continue
+				case staleTaskKeepStatError:
+					emit(fmt.Sprintf("[保留任务] %s：无法确认脚本 %s 是否还在（%s），未删除（可能是权限不足或存储异常）",
+						task.Name, scriptPath, statErr))
+					continue
+				}
+				// 跨订阅接管之后（两个订阅共用 SaveDir、单文件订阅的 SaveDir 设在别的仓库里），这条任务可能还带着
+				// 别的订阅的标签。那个订阅还在，任务对它就没有失效：只摘掉本订阅的标签，不删行、不动日志，
+				// 删不删交给那个订阅自己的同步。已删订阅留下的悬空旧标签（E9）不算，照常删。
+				if usedByOtherSubscription(task, otherLabels) {
+					changed, err := detachSubscriptionTaskIfUnchanged(task, label)
+					if err != nil {
+						failed++
+						emit(fmt.Sprintf("[解除关联失败] %s: %v", task.Name, err))
+						continue
+					}
+					if !changed {
+						// changed=false 有两种：快照过期（同步期间任务被改 / 删，条件不命中）→ 保留并提示；
+						// 本订阅标签本就不在任务上（detach 无可摘除）→ 静默，绝不能每次拉取都刷屏。
+						if hasLabelFold(task.GetLabels(), label) {
+							emit(fmt.Sprintf("[保留任务] %s：同步期间任务被修改或已删除，本次未解除关联", task.Name))
+						}
+						continue
+					}
+					detached++
+					emit(fmt.Sprintf("[解除关联] %s：仍被其他订阅使用，只移除本订阅的标签，未删除", task.Name))
+					continue
+				}
+				removed, err := deleteSubscriptionTaskIfUnchanged(task)
+				if err != nil {
+					failed++
+					emit(fmt.Sprintf("[自动删除任务失败] %s: %v", task.Name, err))
+					continue
+				}
+				if !removed {
+					emit(fmt.Sprintf("[保留任务] %s：同步期间任务被修改或已删除，本次未删除", task.Name))
+					continue
+				}
+				deleted++
+				emit(fmt.Sprintf("[自动删除任务] %s", task.Name))
+			}
 		}
 	}
 
 	if created > 0 {
 		emit(fmt.Sprintf("[共自动添加 %d 个定时任务]", created))
-	}
-	if updated > 0 {
-		emit(fmt.Sprintf("[共自动更新 %d 个定时任务]", updated))
 	}
 	if adopted > 0 {
 		emit(fmt.Sprintf("[共关联 %d 个已有任务]", adopted))
@@ -1376,12 +1528,105 @@ func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
 	if deleted > 0 {
 		emit(fmt.Sprintf("[共自动删除 %d 个失效任务]", deleted))
 	}
+	if detached > 0 {
+		emit(fmt.Sprintf("[共解除关联 %d 个任务]", detached))
+	}
 	if failed > 0 {
 		emit(fmt.Sprintf("[警告] 共 %d 个任务操作失败，详见上方日志", failed))
 	}
-	if created == 0 && updated == 0 && adopted == 0 && deleted == 0 && failed == 0 {
+	if created == 0 && adopted == 0 && deleted == 0 && detached == 0 && failed == 0 {
 		emit("[同步完成] 本次未对定时任务做任何变更")
 	}
+}
+
+// deleteSubscriptionTaskIfUnchanged 按同步开始时的快照条件删除一条失效任务：
+// 只有 id 与命令原文都还和快照一致才删（同步期间用户改了命令、或别处已经删了，都不动），
+// 任务行删到了，历史日志才跟着删——两步在同一个事务里，要么都删、要么都不删；提交之后再从调度器摘掉。
+// 返回 (false, nil) 表示条件不满足、什么都没删。
+//
+// 事务里的顺序是「先删日志、再按条件删任务、条件不满足就回滚」：task_logs 对 tasks 有外键
+// （PRAGMA foreign_keys 开着），任务行在、日志还在时删任务会报 FOREIGN KEY constraint failed。
+// 删日志经 DeleteTaskLogs，先并入执行趋势的按天计数（#158）；它必须是事务第一条语句，这里本来就是。
+// 事务里只能用 tx：库连接池只有 1 个连接，事务里再用 database.DB 会把自己锁死。
+func deleteSubscriptionTaskIfUnchanged(task *model.Task) (bool, error) {
+	removed, changed := false, false
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if _, _, err := DeleteTaskLogs(tx, "task_id = ?", task.ID); err != nil {
+			return fmt.Errorf("删除历史日志失败: %w", err)
+		}
+		result := tx.Where("id = ? AND command = ?", task.ID, task.Command).Delete(&model.Task{})
+		if result.Error != nil {
+			return fmt.Errorf("删除任务失败: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			// 返回非 nil 让事务回滚，刚删的日志与刚并入的计数原样恢复。
+			changed = true
+			return fmt.Errorf("任务在同步期间被修改或已删除")
+		}
+		removed = true
+		return nil
+	})
+	if changed {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if removed {
+		if scheduler := GetSchedulerV2(); scheduler != nil {
+			scheduler.RemoveJob(task.ID)
+		}
+	}
+	return removed, nil
+}
+
+// otherLiveSubscriptionLabels 返回除 selfID 外、仍然存在的订阅的标签（subscriptionTaskLabel 的形态），每次同步查一次。
+// 删订阅不动任务，任务身上会留下已删订阅的悬空旧标签（E9）——它们不在这里面，不挡删除。
+func otherLiveSubscriptionLabels(selfID uint) ([]string, error) {
+	var ids []uint
+	if err := database.DB.Model(&model.Subscription{}).Order("id").Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	labels := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != selfID {
+			labels = append(labels, subscriptionTaskLabel(id))
+		}
+	}
+	return labels, nil
+}
+
+// usedByOtherSubscription：任务标签里有没有 otherLabels 中的任一个。与 queryTasksByLabel 的 LIKE 同口径：
+// GetLabels 按逗号切、整项比较，但忽略大小写（hasLabelFold）——否则用户手写成 Subscription:2 时，B 的 LIKE 认它、
+// A 的精确比较不认，A 会把 B 还在用的任务连日志删掉。
+func usedByOtherSubscription(task *model.Task, otherLabels []string) bool {
+	labels := task.GetLabels()
+	for _, other := range otherLabels {
+		if hasLabelFold(labels, other) {
+			return true
+		}
+	}
+	return false
+}
+
+// detachSubscriptionTaskIfUnchanged 把 label 从任务标签里摘掉（忽略大小写，见 withoutLabel），不删任务、不动日志与调度——
+// 给「判为失效、但还被别的仍存在的订阅使用」的任务。快照条件比删除多一个 labels：同步期间用户改了命令或标签
+// （含别的订阅刚摘掉自己的标签）、或任务已被删，都不动。返回 (false, nil) 有两种：新旧标签相同（没什么可摘、直接返回）、
+// 或快照条件不命中（同步期间被改 / 删）——调用方两种都不计 detached、不打 [解除关联]，靠 hasLabelFold 区分要不要提示。
+func detachSubscriptionTaskIfUnchanged(task *model.Task, label string) (bool, error) {
+	updated := *task
+	updated.SetLabelsFromSlice(withoutLabel(task.GetLabels(), label))
+	if updated.Labels == task.Labels {
+		// 标签本就不带 label（大小写规整后也没有）：没什么可摘的，直接当没改。调用方据此静默处理，避免空转刷屏。
+		return false, nil
+	}
+	result := database.DB.Model(&model.Task{}).
+		Where("id = ? AND command = ? AND labels = ?", task.ID, task.Command, task.Labels).
+		Update("labels", updated.Labels)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 // countSubscriptionScriptFiles 统计 scriptsDir 下符合扩展名 + 白/黑名单过滤的文件数。
@@ -1391,6 +1636,7 @@ func countSubscriptionScriptFiles(scriptsDir string, allowedExts map[string]bool
 	if _, err := os.Stat(scriptsDir); err != nil {
 		return 0
 	}
+	matcher := newSubscriptionFilterMatcher(sub)
 	count := 0
 	filepath.Walk(scriptsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -1404,7 +1650,7 @@ func countSubscriptionScriptFiles(scriptsDir string, allowedExts map[string]bool
 			return nil
 		}
 		relPath := subscriptionRelativeScriptPath(scriptsDir, path, info)
-		if shouldManageSubscriptionFile(sub, relPath, allowedExts) {
+		if matcher.shouldManage(relPath, allowedExts) {
 			count++
 		}
 		return nil
@@ -1412,31 +1658,31 @@ func countSubscriptionScriptFiles(scriptsDir string, allowedExts map[string]bool
 	return count
 }
 
-// FallbackSubscriptionCron 是订阅脚本未声明 cron 时使用的"硬兜底"。
-// 用户既没在脚本头部写 cron 注释、也没在系统设置 default_cron_rule 里配自定义默认值时，
-// 用这个兜底——每天 0 点跑一次，保证 git 拉到的脚本都会变成定时任务。
-// 用户可以在任务详情里手动改 cron，或者把脚本注释加上 cron 头让下次同步用真值覆盖。
-const FallbackSubscriptionCron = "0 0 * * *"
-
 func getSubscriptionTaskSyncOptions(sub *model.Subscription) subscriptionTaskSyncOptions {
-	defaultCron := strings.TrimSpace(model.GetRegisteredConfig("default_cron_rule"))
-	if defaultCron != "" && !cron.Parse(defaultCron).Valid {
-		defaultCron = ""
-	}
-	// 系统设置里 default_cron_rule 是空时，落到硬兜底。这是用户"git 拉了但一个任务都没建"
-	// 困惑的根因：原默认是 "" → cron 头没识别就 skip，整个仓库一个任务都建不出来。
-	// v2.2.10 起改为：默认兜底 = 每天 0 点。用户想关闭兜底，可以把 default_cron_rule
-	// 设成非法值（比如 "off"），代码会回退到 "" 然后跳过没 cron 的脚本。
-	if defaultCron == "" {
-		defaultCron = FallbackSubscriptionCron
-	}
+	// defaultCron 只保存用户在订阅设置里填的合法规则；留空（出厂默认）就是空，未声明 cron 的脚本不建任务（#134）。
+	// v2.2.10 ～ v3.2.8 在留空时硬兜底成每天 0 点、建成启用任务，而且关不掉：config.py、mysend.py 这类库文件、
+	// 拉取后钩子也被建成任务半夜跑，删掉了下次拉取又回来。现在要给这类脚本建任务，就在订阅设置里填默认规则。
+	defaultCron, ignoredDefaultCron := subscriptionDefaultCronRule()
 
 	return subscriptionTaskSyncOptions{
-		autoAdd:     sub.AutoAddTask || isConfigEnabled("auto_add_cron", true),
-		autoDelete:  sub.AutoDelTask || isConfigEnabled("auto_del_cron", true),
-		defaultCron: defaultCron,
-		allowedExts: getSubscriptionAllowedExtensions(model.GetRegisteredConfig("repo_file_extensions")),
+		// 三态解析，不再是 `sub.AutoAddTask || 全局`：见 resolveSubscriptionAutoAddTask 的注释。
+		autoAdd:            resolveSubscriptionAutoAddTask(sub),
+		autoDelete:         resolveSubscriptionAutoDelTask(sub),
+		defaultCron:        defaultCron,
+		ignoredDefaultCron: ignoredDefaultCron,
+		allowedExts:        getSubscriptionAllowedExtensions(model.GetRegisteredConfig("repo_file_extensions")),
 	}
+}
+
+// subscriptionDefaultCronRule 读订阅设置里的默认 Cron 规则：合法就返回它，留空返回空串。
+// 库里的值 cron.Parse 不认时（normalizeDefaultCronRule 拒写非法值，只有直接改库 / 恢复旧备份能绕过去）当作没配，
+// 原值放进 ignored——设置页里看着是填了的，拉取日志要说清它被忽略了。
+func subscriptionDefaultCronRule() (rule, ignored string) {
+	value := strings.TrimSpace(model.GetRegisteredConfig("default_cron_rule"))
+	if value != "" && !cron.Parse(value).Valid {
+		return "", value
+	}
+	return value, ""
 }
 
 func isConfigEnabled(key string, defaultValue bool) bool {
@@ -1514,21 +1760,46 @@ func subscriptionRelativeScriptPath(root, path string, info os.FileInfo) string 
 	return filepath.Base(path)
 }
 
+// shouldManageSubscriptionFile 是单文件判定：扩展名、子目录护栏、白 / 黑名单都过了才建任务。
+// 扫描整个目录时走 subscriptionFilterMatcher（每次同步只编译一次），这里是给测试与零散调用的包装。
+//
+// 子目录护栏是「完整检出」开关的配套：`sub_path` 在整个 service 里只有 sparse-checkout 那一处引用，
+// 它对建任务范围的约束一直靠「不在子目录里的文件根本不落盘」间接实现；打开完整检出、依赖规则的正则片段
+// 把检出放宽成整仓（#129）、或依赖规则的普通片段并进检出范围之后，子目录外也有文件落盘，这条间接约束随之失效，
+// 要在 Go 侧补回来。这几种情况的语义都是「多落一些文件到磁盘上给脚本自己读」，不是「多建一堆任务」。
+// 细节见 newSubscriptionFilterMatcher。
 func shouldManageSubscriptionFile(sub *model.Subscription, filePath string, allowedExts map[string]bool) bool {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	if !allowedExts[ext] {
-		return false
-	}
-	return matchesSubscriptionFilters(sub, filePath)
+	return newSubscriptionFilterMatcher(sub).shouldManage(filePath, allowedExts)
 }
 
+// collectSubscriptionTaskCandidates 返回任务候选，以及「仅因依赖规则落盘、刻意不建任务」
+// 的文件相对路径（调用方负责打日志——这个项目的历史教训就是静默失配最难查）。
+// 签名保持不变（有测试直接调它）；同步还需要「本次读到的全部文件」，走 scanSubscriptionTaskCandidates。
 func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscriptionTaskSyncOptions) (map[string]subscriptionTaskCandidate, []string) {
+	scan := scanSubscriptionTaskCandidates(sub, options)
+	return scan.candidates, scan.dependencyOnly
+}
+
+// subscriptionCandidateScan 是一次扫描的完整结果。
+type subscriptionCandidateScan struct {
+	candidates     map[string]subscriptionTaskCandidate
+	dependencyOnly []string
+	// seenFiles：本次扫描读到的全部文件（任意扩展名，未经任何规则过滤），路径与候选命令同根。
+	// 自动删除分支靠它区分「文件在、被规则排除」（照删）与「文件在、扫描没读到」（保留并提示）。
+	seenFiles []string
+	// undeclaredCron：过了扩展名、子目录、白/黑名单与依赖规则，不是辅助脚本，但没声明 cron、默认规则又留空，
+	// 本次不建任务的文件（路径与 seenFiles 同根）。它们仍是订阅在管的脚本：自动删除分支据此保留已有任务，
+	// 拉取日志据此提示「未建任务」（#134）。
+	undeclaredCron []string
+}
+
+func scanSubscriptionTaskCandidates(sub *model.Subscription, options subscriptionTaskSyncOptions) subscriptionCandidateScan {
 	candidates := make(map[string]subscriptionTaskCandidate)
 	saveDir := subscriptionSaveDir(sub)
 	scriptsDir := filepath.Join(config.C.Data.ScriptsDir, saveDir)
 
 	if _, err := os.Stat(scriptsDir); err != nil {
-		return candidates, nil
+		return subscriptionCandidateScan{candidates: candidates}
 	}
 
 	// 收集"所有受支持扩展名的文件"。用 walk + 兜底的 ReadDir，确保:
@@ -1541,6 +1812,7 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 		info    os.FileInfo
 	}
 	var allFiles []fileEntry
+	var seenFiles []string
 	seen := map[string]bool{}
 
 	addEntry := func(path string, info os.FileInfo) {
@@ -1573,6 +1845,7 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 			}
 			return nil
 		}
+		seenFiles = append(seenFiles, path)
 		addEntry(path, info)
 		return nil
 	})
@@ -1593,6 +1866,7 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 					continue
 				}
 			}
+			seenFiles = append(seenFiles, fullPath)
 			addEntry(fullPath, info)
 		}
 	}
@@ -1604,11 +1878,14 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 	//     兜底一触发就会把 sendNotify.js / utils/*.js 这些库文件全建成定时任务 ——
 	//     正好是「依赖规则改成功能性」最需要避免的副作用。摘掉之后 allFiles 的内容
 	//     与改造前（依赖文件压根不落盘）等价，兜底 #2 的判定结果也就完全不变。
+	// 三个过滤字段每次同步只编译一次（正则片段要编译，不能对每个文件重来一遍）。
+	matcher := newSubscriptionFilterMatcher(sub)
+
 	var dependencyOnly []string
 	if strings.TrimSpace(sub.DependOn) != "" {
 		kept := allFiles[:0]
 		for _, f := range allFiles {
-			if isSubscriptionDependencyOnlyFile(sub, f.relPath) {
+			if matcher.isDependencyOnly(f.relPath) {
 				dependencyOnly = append(dependencyOnly, filepath.ToSlash(f.relPath))
 				continue
 			}
@@ -1617,45 +1894,47 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 		allFiles = kept
 	}
 
-	// 兜底 #2：白/黑名单填错了导致全部被过滤 → 自动忽略过滤规则
-	effectiveSub := sub
+	// 兜底 #2：白/黑名单填错了导致全部被过滤 → 自动忽略过滤规则。
+	// 依赖规则的正则片段把检出放宽成整仓时，只按放宽前本来就会落盘的范围判断，见 countsTowardWhitelistFallback；
+	// 白名单自己的正则片段让本次检出整仓时不兜底，见 allowsWhitelistFallback。
+	effective := matcher
 	if (sub.Whitelist != "" || sub.Blacklist != "") && len(allFiles) > 0 {
 		matchedCount := 0
 		for _, f := range allFiles {
-			if matchesSubscriptionFilters(sub, f.relPath) {
+			if matcher.countsTowardWhitelistFallback(f.relPath) && matcher.matchesFilters(f.relPath) {
 				matchedCount++
 			}
 		}
-		if matchedCount == 0 && hasNonWildcardSubscriptionFilter(sub.Whitelist) {
-			fallback := *sub
-			fallback.Whitelist = ""
-			fallback.Blacklist = ""
-			effectiveSub = &fallback
+		if matchedCount == 0 && matcher.whitelist.hasNonWildcard() && matcher.allowsWhitelistFallback() {
+			effective = matcher.withoutWhiteBlacklist()
 		}
 	}
 
+	var undeclaredCron []string
 	for _, f := range allFiles {
 		path := f.path
 		info := f.info
 
-		if !shouldManageSubscriptionFile(effectiveSub, f.relPath, options.allowedExts) {
+		if !effective.shouldManage(f.relPath, options.allowedExts) {
 			continue
 		}
 
 		// 先尝试从脚本头部识别 cron。脚本明确写了 cron 就完全按它来。
-		cronExpr := resolveCronForSubscriptionTask(path, "")
+		cronExpr := resolveSubscriptionScriptCron(path)
+		defaultRule := false
 		if cronExpr == "" {
-			// 脚本头没 cron 注释。两种处理：
-			//   1) 已知是通知/工具辅助脚本（sendNotify.js / notify.py 等）→ 不建任务
-			//   2) 否则用兜底 cron（系统配置 default_cron_rule，或硬兜底每天 0 点）
-			//      —— 保证 git 拉到的业务脚本必定变成任务，不会"明明拉成功但任务列表空"
+			// 脚本头没 cron 注释：
+			//   1) 已知是通知/工具辅助脚本（sendNotify.js / notify.py 等）→ 不建任务，也不算「未建任务」
+			//   2) 订阅设置填了默认 Cron 规则 → 按规则建
+			//   3) 默认规则留空 → 不建（#134），记进 undeclaredCron
 			if isSubscriptionHelperScript(info.Name()) {
 				continue
 			}
-			cronExpr = options.defaultCron
-			if cronExpr == "" {
+			if options.defaultCron == "" {
+				undeclaredCron = append(undeclaredCron, path)
 				continue
 			}
+			cronExpr, defaultRule = options.defaultCron, true
 		}
 
 		relPath, err := filepath.Rel(config.C.Data.ScriptsDir, path)
@@ -1668,10 +1947,11 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 			Name:           taskName,
 			Command:        command,
 			CronExpression: cronExpr,
+			DefaultRule:    defaultRule,
 		}
 	}
 
-	return candidates, dependencyOnly
+	return subscriptionCandidateScan{candidates: candidates, dependencyOnly: dependencyOnly, seenFiles: seenFiles, undeclaredCron: undeclaredCron}
 }
 
 func queryTasksByLabel(label string) *gorm.DB {
@@ -1684,47 +1964,88 @@ func queryTasksByLabel(label string) *gorm.DB {
 	)
 }
 
-func resolveCronForSubscriptionTask(path string, defaultCron string) string {
+// subscriptionScriptHeadLines 是订阅同步读脚本头部（cron 声明、任务名）的行数上限，两处共用。
+// 以前 cron 只看前 50 行、任务名看 120 行：声明写在 51～120 行的脚本名字认得出、cron 却认不出（#134）。
+const subscriptionScriptHeadLines = 120
+
+// subscriptionScriptHeadLineMax 是单行参与匹配的最大字节数，与 bufio.Scanner 原来能处理的最长行一致。
+const subscriptionScriptHeadLineMax = bufio.MaxScanTokenSize
+
+// eachSubscriptionScriptHeadLine 逐行读脚本的前 subscriptionScriptHeadLines 行，fn 返回 false 时提前结束；文件打不开就什么都不做。
+//
+// 不用 bufio.Scanner：它遇到超过 64KB 的行（压缩、混淆过的单行代码很常见）报 ErrTooLong 后静默停止，
+// 后面的 cron 声明一行都读不到（#134）。这里超长的行只取前 subscriptionScriptHeadLineMax 参与匹配，
+// 余下的丢掉，照常往下读、照常计一行。行尾的 \n、\r\n 与 Scanner 一样去掉。
+// 首行开头的 UTF-8 BOM 也去掉：Windows 编辑器保存的脚本常带 BOM，正则里的 \s 不匹配 U+FEFF，第 1 行的声明会认不出。
+//
+// 读缓冲用默认大小、长行才另攒：每个文件都开一块 64KB 缓冲的话，一次同步要读几千个文件，
+// 分配量是 Scanner 的十来倍（实测 3000 次读 194MB 对 18MB），NAS / Magisk 这类小内存机器上 GC 明显变频繁。
+func eachSubscriptionScriptHeadLine(path string, fn func(line string) bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	lineCount := 0
-	scriptBase := strings.ToLower(filepath.Base(path))
-	for scanner.Scan() {
-		lineCount++
-		if lineCount > 50 {
-			break
+	reader := bufio.NewReader(f)
+	for lineNo := 1; lineNo <= subscriptionScriptHeadLines; lineNo++ {
+		chunk, err := reader.ReadSlice('\n')
+		line := string(chunk) // ReadSlice 的切片下次读取就会被覆盖，先拷出来
+		if err == bufio.ErrBufferFull {
+			// 比读缓冲长的行：接着读到行尾，最多攒到 subscriptionScriptHeadLineMax，其余丢掉。
+			buf := []byte(line)
+			for err == bufio.ErrBufferFull {
+				chunk, err = reader.ReadSlice('\n')
+				if room := subscriptionScriptHeadLineMax - len(buf); room > 0 {
+					buf = append(buf, chunk[:min(len(chunk), room)]...)
+				}
+			}
+			line = string(buf)
 		}
-		line := scanner.Text()
-		if expr := extractSubscriptionCronExpression(line, scriptBase); expr != "" {
-			return expr
+		if line == "" && err != nil {
+			return
 		}
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if lineNo == 1 {
+			line = strings.TrimPrefix(line, "\uFEFF")
+		}
+		if !fn(line) || err != nil {
+			return
+		}
+	}
+}
+
+func resolveCronForSubscriptionTask(path string, defaultCron string) string {
+	if expr := resolveSubscriptionScriptCron(path); expr != "" {
+		return expr
 	}
 	return strings.TrimSpace(defaultCron)
 }
 
+// resolveSubscriptionScriptCron 读脚本头部，返回脚本自己声明的 cron，认不出返回空串。
+func resolveSubscriptionScriptCron(path string) string {
+	scriptBase := strings.ToLower(filepath.Base(path))
+	expr := ""
+	eachSubscriptionScriptHeadLine(path, func(line string) bool {
+		expr = extractSubscriptionCronExpression(line, scriptBase)
+		return expr == ""
+	})
+	return expr
+}
+
+// resolveSubscriptionTaskName 从脚本头部推断任务名，优先级：
+//
+//	new Env('名称')  >  注释头 `// name: 名称`  >  fallback（去掉扩展名的文件名）
+//
+// new Env 必须排在前面：它是青龙沿用至今的写法，存量任务名都是由它决定的。
+// 订阅同步从 #125 起不再改已有任务的名称，但用户删掉任务重新拉取时，新建出来的名称仍要和原来一致；
+// 让后加的注释头抢先，重建出来的任务就会换个名字。
+// 所以这里两种声明都扫完再决定，而不是「哪个先在文件里出现就用哪个」。
 func resolveSubscriptionTaskName(path, fallback string) string {
 	fallback = strings.TrimSpace(fallback)
 
-	f, err := os.Open(path)
-	if err != nil {
-		return fallback
-	}
-	defer f.Close()
-
 	var envName, labelName string
-	scanner := bufio.NewScanner(f)
-	lineCount := 0
-	for scanner.Scan() {
-		lineCount++
-		if lineCount > 120 {
-			break
-		}
-		line := scanner.Text()
+	eachSubscriptionScriptHeadLine(path, func(line string) bool {
 		if envName == "" {
 			if matches := subscriptionTaskNameRe.FindStringSubmatch(line); len(matches) > 1 {
 				envName = strings.TrimSpace(matches[1])
@@ -1733,10 +2054,8 @@ func resolveSubscriptionTaskName(path, fallback string) string {
 		if labelName == "" {
 			labelName = extractSubscriptionTaskNameFromLabel(line)
 		}
-		if envName != "" && labelName != "" {
-			break
-		}
-	}
+		return envName == "" || labelName == ""
+	})
 
 	if envName != "" {
 		return envName
@@ -1747,6 +2066,9 @@ func resolveSubscriptionTaskName(path, fallback string) string {
 	return fallback
 }
 
+// extractSubscriptionTaskNameFromLabel 解析单行注释头里的任务名。
+// 除了正则本身，还要收尾处理块注释/HTML 注释的结束标记和包裹引号，
+// 否则 `<!-- name: X -->` 会把 `-->` 也算进名字里。
 func extractSubscriptionTaskNameFromLabel(line string) string {
 	matches := subscriptionTaskNameLabelRe.FindStringSubmatch(line)
 	if len(matches) < 2 {
@@ -1760,6 +2082,8 @@ func extractSubscriptionTaskNameFromLabel(line string) string {
 	if name == "" {
 		return ""
 	}
+
+	// 任务名列是 VARCHAR(128)，注释里写超长句子时截断，避免建出一条离谱的任务名。
 	if runes := []rune(name); len(runes) > 128 {
 		name = strings.TrimSpace(string(runes[:128]))
 	}
@@ -1789,16 +2113,27 @@ func extractSubscriptionCronExpression(line, scriptBase string) string {
 // 当行尾跟随文件名提示（例如 `cron 8 10 * * *  qtx.js`）时，只截取前 5 或 6 个字段做 cron。
 func extractSubscriptionCronExpressionFromLabel(line string) string {
 	matches := cronLabelPrefixRe.FindStringSubmatch(line)
-	if len(matches) < 2 {
+	if len(matches) < 3 {
 		return ""
 	}
-	rest := strings.TrimSpace(matches[1])
+	rest := strings.TrimSpace(matches[2])
 	if rest == "" {
 		return ""
 	}
 
 	if cron.Parse(rest).Valid {
 		return rest
+	}
+
+	// `cron: "0 8 * * *"` / `cron: '0 8 * * *'`：青龙用 grep + xargs 取值，引号被 xargs 去掉，能认；面板以前认不出（#134）。
+	// 只剥「成对包住整个值」的引号，不放宽别的写法；而且只在 cron 前面带注释标记（# // * @）或顶格（Python docstring 常见）时剥——
+	// 缩进的裸 `  cron: '0 0 * * *'` 是 JS / TS 对象字面量的属性，不能认成声明（末尾带逗号的本来就认不出，没逗号的最后一个属性靠这条挡）。
+	if prefix := matches[1]; prefix == "" || strings.ContainsAny(prefix, "#*@/") {
+		if n := len(rest); n >= 2 && (rest[0] == '"' || rest[0] == '\'') && rest[n-1] == rest[0] {
+			if unquoted := strings.TrimSpace(rest[1 : n-1]); unquoted != "" && cron.Parse(unquoted).Valid {
+				return unquoted
+			}
+		}
 	}
 
 	fields := strings.Fields(rest)
@@ -1855,4 +2190,204 @@ func normalizeSubscriptionCronScriptToken(token string) string {
 	token = strings.TrimRight(token, ",;:)")
 	token = strings.TrimLeft(token, "(")
 	return strings.TrimSpace(token)
+}
+
+// resolveSubscriptionSSHKeyPath 解析订阅可用的 SSH 私钥临时文件路径：
+//  1. 订阅自带密封私钥（HasSSHKeySecret）→ 解封写临时文件；
+//  2. 引用 ssh_keys 表（SSHKeyID）→ OpenSSHKeyPrivateKey 解封后写临时文件；
+//  3. 其余情况返回空路径（不需要 SSH）。
+// 返回的 cleanup 必须由调用方 defer，负责删除临时私钥。
+func resolveSubscriptionSSHKeyPath(ctx context.Context, sub *model.Subscription) (string, func(), error) {
+	cleanup := func() {}
+	if sub == nil || sub.EffectiveAuthType() != model.SubAuthTypeSSH {
+		return "", cleanup, nil
+	}
+
+	if sub.HasSSHKeySecret() {
+		path, err := writeSubscriptionSSHKeySecret(ctx, sub)
+		if err != nil {
+			return "", cleanup, err
+		}
+		return path, func() { _ = os.Remove(path) }, nil
+	}
+
+	if sub.SSHKeyID == nil {
+		return "", cleanup, nil
+	}
+	var sshKey model.SSHKey
+	if err := database.DB.First(&sshKey, *sub.SSHKeyID).Error; err != nil {
+		return "", cleanup, nil
+	}
+	privateKey, err := OpenSSHKeyPrivateKey(ctx, &sshKey)
+	if err != nil {
+		return "", cleanup, err
+	}
+	tmpFile, err := writeTempSSHKey(privateKey)
+	if err != nil {
+		return "", cleanup, fmt.Errorf("写入 SSH 密钥失败: %w", err)
+	}
+	return tmpFile, func() { _ = os.Remove(tmpFile) }, nil
+}
+
+// subscriptionWorktreeJournal 记录一次订阅目录替换的中间状态：进程被杀后下次启动据此回滚。
+type subscriptionWorktreeJournal struct {
+	DestDir    string `json:"dest_dir"`
+	BackupDir  string `json:"backup_dir"`
+	StagingDir string `json:"staging_dir"`
+	Phase      string `json:"phase"`
+}
+
+// replaceSubscriptionGitWorktree 把订阅克隆到 staging 目录，核对通过后原子替换正式目录。
+func replaceSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir, saveDir string, env []string, emit PullCallback) (string, error) {
+	parent := filepath.Dir(destDir)
+	base := filepath.Base(destDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", fmt.Errorf("创建订阅目录失败: %w", err)
+	}
+
+	stagingDir, err := os.MkdirTemp(parent, "."+base+".staging-*")
+	if err != nil {
+		return "", fmt.Errorf("创建订阅 staging 工作区失败: %w", err)
+	}
+	stagingActive := true
+	defer func() {
+		if stagingActive {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
+
+	var fullOutput strings.Builder
+	emit(fmt.Sprintf("[git clone] %s -> %s (staging)", authCfg.DisplayURL, saveDir))
+	output, err := cloneSubscriptionGitWorktree(ctx, sub, authCfg, stagingDir, env, emit)
+	fullOutput.WriteString(output)
+	if err != nil {
+		return fullOutput.String(), err
+	}
+	if err := runSubscriptionHookInWorkDir(ctx, sub, stagingDir, emit); err != nil {
+		return fullOutput.String(), err
+	}
+
+	emit("[原子切换] 正在用新工作区替换当前订阅目录")
+	if err := atomicReplaceSubscriptionWorktree(destDir, stagingDir); err != nil {
+		return fullOutput.String(), err
+	}
+	stagingActive = false
+	emit("[已完成] 已原子切换到新的健康订阅工作区")
+	return fullOutput.String(), nil
+}
+
+func cloneSubscriptionGitWorktree(ctx context.Context, sub *model.Subscription, authCfg gitAuthConfig, destDir string, env []string, emit PullCallback) (string, error) {
+	args := []string{"clone", "--depth", "1"}
+	sparsePatterns, sparseWarnings := buildSubscriptionSparseCheckoutPatterns(sub)
+	if len(sparsePatterns) == 0 {
+		for _, warning := range sparseWarnings {
+			emit(warning)
+		}
+	}
+	if len(sparsePatterns) > 0 {
+		args = append(args, "--filter=blob:none", "--no-checkout")
+	}
+	if sub.Branch != "" {
+		args = append(args, "-b", sub.Branch)
+	}
+	args = append(args, authCfg.RemoteURL, destDir)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = config.C.Data.ScriptsDir
+	cmd.Env = env
+	output, err := runCmdWithCallback(ctx, cmd, emit)
+	if err != nil {
+		return output, err
+	}
+	if len(sparsePatterns) > 0 {
+		var fullOutput strings.Builder
+		fullOutput.WriteString(output)
+		if spErr := applySparseCheckout(ctx, destDir, sub, env, emit); spErr != nil {
+			return fullOutput.String(), spErr
+		}
+		emit("[checkout] 正在按子目录/白名单规则检出订阅文件")
+		cmd = exec.CommandContext(ctx, "git", "checkout", "HEAD")
+		cmd.Dir = destDir
+		cmd.Env = env
+		output, err = runCmdWithCallback(ctx, cmd, emit)
+		fullOutput.WriteString(output)
+		return fullOutput.String(), err
+	}
+	return output, nil
+}
+
+// atomicReplaceSubscriptionWorktree 用 staging 目录原子替换正式目录：
+// 先写 journal，再「旧目录改名备份 → staging 改名发布」，任一步被杀都能由 journal 恢复。
+func atomicReplaceSubscriptionWorktree(destDir, stagingDir string) error {
+	backupDir := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".previous")
+	journalPath := filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+".replace-journal.json")
+	if err := recoverSubscriptionWorktreeJournal(journalPath); err != nil {
+		return err
+	}
+	backupActive := false
+	_ = os.RemoveAll(backupDir)
+
+	if _, err := os.Stat(destDir); err == nil {
+		if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "backup"}); err != nil {
+			return err
+		}
+		if err := os.Rename(destDir, backupDir); err != nil {
+			return fmt.Errorf("备份当前订阅工作区失败: %w", err)
+		}
+		backupActive = true
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查当前订阅工作区失败: %w", err)
+	}
+
+	if err := writeSubscriptionWorktreeJournal(journalPath, subscriptionWorktreeJournal{DestDir: destDir, BackupDir: backupDir, StagingDir: stagingDir, Phase: "publish"}); err != nil {
+		return err
+	}
+	if err := os.Rename(stagingDir, destDir); err != nil {
+		if backupActive {
+			_ = os.Rename(backupDir, destDir)
+		}
+		return fmt.Errorf("发布新订阅工作区失败: %w", err)
+	}
+
+	_ = os.Remove(journalPath)
+	_ = backupActive
+	return nil
+}
+
+func writeSubscriptionWorktreeJournal(path string, journal subscriptionWorktreeJournal) error {
+	data, err := json.Marshal(journal)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("写入订阅工作区 crash journal 失败: %w", err)
+	}
+	return nil
+}
+
+func recoverSubscriptionWorktreeJournal(path string) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取订阅工作区 crash journal 失败: %w", err)
+	}
+	var journal subscriptionWorktreeJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return fmt.Errorf("解析订阅工作区 crash journal 失败: %w", err)
+	}
+	if journal.DestDir == "" || journal.BackupDir == "" {
+		return fmt.Errorf("订阅工作区 crash journal 缺少路径")
+	}
+	if _, err := os.Stat(journal.DestDir); os.IsNotExist(err) {
+		if _, backupErr := os.Stat(journal.BackupDir); backupErr == nil {
+			if restoreErr := os.Rename(journal.BackupDir, journal.DestDir); restoreErr != nil {
+				return fmt.Errorf("恢复订阅工作区 crash journal 失败: %w", restoreErr)
+			}
+		}
+	} else if err != nil {
+		return fmt.Errorf("检查订阅工作区 crash journal 目标失败: %w", err)
+	}
+	_ = os.Remove(path)
+	return nil
 }

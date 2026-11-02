@@ -21,7 +21,24 @@ func (h *TaskHandler) LatestLog(c *gin.Context) {
 
 	var taskLog model.TaskLog
 	if err := database.DB.Where("task_id = ?", taskID).Order("started_at DESC").First(&taskLog).Error; err != nil {
-		response.NotFound(c, "暂无日志")
+		// 查不到日志行不等于「从来没跑过」：日志清理是物理删除（service/log_cleanup.go 按
+		// log_retention_days 直接删 task_logs 行，默认 7 天），删完之后任务上的 last_run_at /
+		// last_run_status 还留着，列表「上次结果」列照样写着成功或失败。
+		// 这时再统一回「暂无日志」，同一屏里就出现两个互相矛盾的说法，
+		// 把「跑过、但日志被清了」误导成「从来没跑过」，所以按跑没跑过分两种文案。
+		var task model.Task
+		if err := database.DB.First(&task, taskID).Error; err == nil && task.LastRunAt != nil {
+			// Local()：SQLite 驱动取回来的时间可能是 UTC，转成本机时区再格式化，
+			// 否则文案里的时间会比用户在列表上看到的早几个小时。
+			response.NotFound(c, fmt.Sprintf("该任务的日志已按保留策略清理（最近一次运行 %s），保留天数可在设置里调整",
+				task.LastRunAt.Local().Format("2006-01-02 15:04:05")))
+			return
+		}
+		// 任务不存在、或确实一次都没跑过。
+		// 文案与面板日志抽屉里一直显示的那句保持一致：前端现在会优先把这里的 message 直接显示出来
+		// （为的是让上面「日志被清理」那句能透出去），如果这里还回原来的「暂无日志」，
+		// 用户在同一个位置看到的说法就会毫无理由地从「该任务还没有日志记录」变短、变生硬。
+		response.NotFound(c, "该任务还没有日志记录")
 		return
 	}
 
@@ -177,6 +194,9 @@ func (h *TaskHandler) CleanLogs(c *gin.Context) {
 		days = defaultDays
 	}
 
-	count := service.CleanOldLogs(config.C.Data.LogDir, days)
-	response.Success(c, gin.H{"message": fmt.Sprintf("已清理 %d 个日志文件（保留最近 %d 天）", count, days)})
+	// 与 /logs/clean、后台自动清理统一成同一语义（issue #144 / v3.3.2）。
+	// 这颗按钮原来只删磁盘文件、不删日志记录，和执行日志页那颗正好相反，
+	// 而两页的菜单项都叫「清理日志」，用户根本分不出点下去会发生什么。
+	records, files := service.CleanLogsOlderThan(days)
+	response.Success(c, gin.H{"message": fmt.Sprintf("已清理 %d 条日志记录、%d 个日志文件（保留最近 %d 天）", records, files, days)})
 }

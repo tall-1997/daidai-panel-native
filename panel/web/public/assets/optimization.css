@@ -4,3 +4,16 @@ body {
   transform-origin: left top;
   width: 100.01%;
 }
+
+/* 手机上撤掉（v3.3.3 / issue #148）：上面这条是 v1.9.8 为「桌面浏览器缩放下环境变量表格卡顿」加的，
+   强制 body 走合成层；手机端环境变量页是卡片列表、没有表格，用不上它，却把全局挂在了 body 上。
+   body 带 transform 会成为所有 position:fixed 元素的包含块和层叠上下文：弹窗遮罩、演示横幅、抽屉在手机上
+   就不再相对视口固定；iOS WebKit 对「transform 祖先里的 fixed」另走一条特殊路径，会和原地弹窗被
+   滚动容器裁剪的缺陷（WebKit bug 160953，见 MainLayout.vue 移动端 .layout-main）叠在一起。
+   所以 body 的 transform 只允许出现在桌面。同特异性、写在后面，覆盖上面那条。 */
+@media (max-width: 768px) {
+  body {
+    transform: none;
+    width: auto;
+  }
+}

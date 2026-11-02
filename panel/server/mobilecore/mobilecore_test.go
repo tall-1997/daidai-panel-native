@@ -732,7 +732,7 @@ func TestStartFailureCloseErrorReturnsRecoveryRequiredWithoutOverwritingGlobals(
 		return errors.New("bootstrap failed")
 	}
 	oldClose := closeDatabase
-	closeDatabase = func() error { return errors.New("close failed") }
+	closeDatabase = func(timeout ...time.Duration) error { return errors.New("close failed") }
 	t.Cleanup(func() {
 		initApp = oldInit
 		closeDatabase = oldClose
@@ -780,7 +780,7 @@ func TestCommittedRollbackCloseFailurePreservesCandidateAndPointer(t *testing.T)
 	config.C = currentConfig
 	database.DB = currentDB
 	oldClose := closeDatabase
-	closeDatabase = func() error { return errors.New("candidate close failed") }
+	closeDatabase = func(timeout ...time.Duration) error { return errors.New("candidate close failed") }
 	oldOpen := openDatabase
 	openCalls := 0
 	openDatabase = func(*config.DatabaseConfig, io.Writer) error {
@@ -820,7 +820,7 @@ func TestRecoveryRequiredPersistsInLifecycleAndBlocksRestart(t *testing.T) {
 		return errors.New("bootstrap failed")
 	}
 	oldClose := closeDatabase
-	closeDatabase = func() error { return errors.New("close failed") }
+	closeDatabase = func(timeout ...time.Duration) error { return errors.New("close failed") }
 	t.Cleanup(func() {
 		initApp = oldInit
 		closeDatabase = oldClose
@@ -845,7 +845,7 @@ func TestRecoveryRequiredPersistsInLifecycleAndBlocksRestart(t *testing.T) {
 	if second.ErrorCode != codeRecoveryFailed || second.Status != "cleanup_required" {
 		t.Fatalf("second=%+v", second)
 	}
-	closeDatabase = func() error {
+	closeDatabase = func(timeout ...time.Duration) error {
 		database.DB = nil
 		return nil
 	}
@@ -882,9 +882,7 @@ func TestStartCoreMigrationFailureKeepsOldGenerationAndGateClosed(t *testing.T) 
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, "config.sh"), "stable")
 	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
-	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
-		t.Fatal(err)
-	}
+	database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")})
 	if err := database.CheckpointWALAndClose(); err != nil {
 		t.Fatal(err)
 	}
@@ -1503,9 +1501,7 @@ func TestStartCoreRuntimeWorkersStartOnlyAfterMarkReadySuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
-	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
-		t.Fatal(err)
-	}
+	database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")})
 	if err := database.CheckpointWALAndClose(); err != nil {
 		t.Fatal(err)
 	}
@@ -1551,9 +1547,7 @@ func TestStartCoreMarkReadyFailurePreventsRuntimeWorkerStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
-	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
-		t.Fatal(err)
-	}
+	database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")})
 	if err := database.CheckpointWALAndClose(); err != nil {
 		t.Fatal(err)
 	}
@@ -1605,9 +1599,7 @@ func TestStartCoreRuntimeWorkerStartRequiresRecoveryGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(oldGeneration, ".jwt_secret"), testLocalToken)
-	if err := database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")}); err != nil {
-		t.Fatal(err)
-	}
+	database.Init(&config.DatabaseConfig{Path: filepath.Join(oldGeneration, "daidai.db")})
 	if err := database.CheckpointWALAndClose(); err != nil {
 		t.Fatal(err)
 	}

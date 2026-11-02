@@ -109,7 +109,9 @@ func TestEffectivePipMirrorFallsBackToDefaultAcceleratedMirror(t *testing.T) {
 		want  string
 	}{
 		{name: "empty uses default", input: "", want: DefaultPipMirror},
-		{name: "official uses default", input: "https://pypi.org/simple", want: DefaultPipMirror},
+		// issue #165：以前官方源会被换成默认加速源，导致用户怎么都设不上官方源；现在只有留空才回落。
+		{name: "official preserved", input: "https://pypi.org/simple", want: "https://pypi.org/simple"},
+		{name: "legacy official host preserved", input: "https://pypi.python.org/simple", want: "https://pypi.python.org/simple"},
 		{name: "custom mirror preserved", input: "https://pypi.tuna.tsinghua.edu.cn/simple", want: "https://pypi.tuna.tsinghua.edu.cn/simple"},
 	}
 
@@ -127,7 +129,9 @@ func TestEffectiveNpmMirrorFallsBackToDefaultAcceleratedMirror(t *testing.T) {
 		want  string
 	}{
 		{name: "empty uses default", input: "", want: "https://registry.npmmirror.com/"},
-		{name: "official uses default", input: "https://registry.npmjs.org/", want: "https://registry.npmmirror.com/"},
+		// issue #165 同一个根因：npm 官方源也要原样保留，不再被换成 npmmirror。
+		{name: "official preserved", input: "https://registry.npmjs.org/", want: "https://registry.npmjs.org/"},
+		{name: "official without trailing slash preserved", input: "https://registry.npmjs.org", want: "https://registry.npmjs.org/"},
 		{name: "custom mirror preserved", input: "https://mirrors.cloud.tencent.com/npm/", want: "https://mirrors.cloud.tencent.com/npm/"},
 	}
 
@@ -156,6 +160,61 @@ func TestSetPipMirrorWritesAndClearsConfig(t *testing.T) {
 	}
 	if got := CurrentPipMirror(); got != "" {
 		t.Fatalf("expected cleared pip mirror, got %q", got)
+	}
+}
+
+// issue #165：页面上选「PyPI 官方」保存后，pip.conf 里存的、GET /deps/mirrors 回显的、
+// 装包时注入的 PIP_INDEX_URL 都必须是官方源，不能在任何一环被换成默认加速源。
+func TestSetPipMirrorKeepsOfficialMirror(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	const official = "https://pypi.org/simple"
+	if err := SetPipMirror(official); err != nil {
+		t.Fatalf("set pip mirror: %v", err)
+	}
+	if got := CurrentPipMirror(); got != official {
+		t.Fatalf("expected pip.conf to keep official mirror, got %q", got)
+	}
+	if got := EffectivePipMirror(CurrentPipMirror()); got != official {
+		t.Fatalf("expected effective pip mirror to be official, got %q", got)
+	}
+	if got := CurrentDependencyMirrorSettings().PipMirror; got != official {
+		t.Fatalf("expected mirror settings to echo official mirror, got %q", got)
+	}
+
+	env := PipInstallEnv([]string{"PATH=/usr/bin"}, CurrentPipMirror())
+	hasIndex, hasTrusted := false, false
+	for _, entry := range env {
+		if entry == "PIP_INDEX_URL="+official {
+			hasIndex = true
+		}
+		if entry == "PIP_TRUSTED_HOST=pypi.org" {
+			hasTrusted = true
+		}
+	}
+	if !hasIndex || !hasTrusted {
+		t.Fatalf("expected official PIP_INDEX_URL / PIP_TRUSTED_HOST injected, env=%v", env)
+	}
+}
+
+// issue #165 同一个根因的 npm 侧：选「npm 官方」保存后，.npmrc 与生效值都是官方源。
+func TestSetNpmMirrorKeepsOfficialMirror(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
+
+	const official = "https://registry.npmjs.org/"
+	if err := SetNpmMirror(official); err != nil {
+		t.Fatalf("set npm mirror: %v", err)
+	}
+	if got := CurrentNpmMirror(); got != official {
+		t.Fatalf("expected .npmrc to keep official registry, got %q", got)
+	}
+	if got := CurrentEffectiveNpmMirror(); got != official {
+		t.Fatalf("expected effective npm mirror to be official, got %q", got)
 	}
 }
 

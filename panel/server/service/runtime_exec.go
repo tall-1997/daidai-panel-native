@@ -199,19 +199,85 @@ func BuildManagedRuntimeEnvMap(workDir, scriptsDir string, defaultChannelID *uin
 // 全部改用 BuildManagedRuntimeEnvMapWithScriptToken 并在用完后 RevokeScriptToken。
 // 保留这两个包装只是给不关心凭据回收的测试用；新增调用方前请先确认你真的不需要吊销。
 func BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, error) {
-	envMap, _, err := BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, defaultChannelID, ttl, pythonVersion)
+	envMap, _, err := BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, defaultChannelID, ttl, pythonVersion, nil)
 	return envMap, err
+}
+
+// RuntimeEnvScope 是任务级「可用环境变量」的范围（#168）。传 nil = 全部已启用变量（与改动前一致）。
+// 非 nil 时只注入「已启用，且变量名在 Names 里、或分组与 Groups 有交集」的变量；两个列表都空 = 一个用户变量都不注入。
+type RuntimeEnvScope struct {
+	Groups []string
+	Names  []string
+	// InjectedNames 由 BuildManagedRuntimeEnvMapWithScriptToken 回填：按范围实际注入的用户变量名（按注入顺序、已去重），
+	// 只给任务日志开头那一行用，不含值。
+	InjectedNames []string
+}
+
+// TaskRuntimeEnvScope 取任务的环境变量范围：只有「指定」才返回非 nil，「全部」与老数据都返回 nil。
+func TaskRuntimeEnvScope(task *model.Task) *RuntimeEnvScope {
+	if task == nil || task.GetEnvScope() != model.TaskEnvScopeSelected {
+		return nil
+	}
+	return &RuntimeEnvScope{Groups: task.GetEnvGroups(), Names: task.GetEnvNames()}
+}
+
+// taskEnvScopeLogMaxNames 是任务日志开头那一行最多列出的变量名个数，超出的只写个数。
+const taskEnvScopeLogMaxNames = 20
+
+// formatTaskEnvScopeLogLine 生成「指定」范围时写在任务日志开头的那一行（#168），只写变量名、不写值。
+func formatTaskEnvScopeLogLine(names []string) string {
+	if len(names) == 0 {
+		return "[环境变量] 已按任务设置只注入 0 个（没有命中任何已启用的变量）\n"
+	}
+	if len(names) <= taskEnvScopeLogMaxNames {
+		return fmt.Sprintf("[环境变量] 已按任务设置只注入 %d 个：%s\n", len(names), strings.Join(names, "、"))
+	}
+	return fmt.Sprintf("[环境变量] 已按任务设置只注入 %d 个：%s 等，另有 %d 个未列出\n",
+		len(names), strings.Join(names[:taskEnvScopeLogMaxNames], "、"), len(names)-taskEnvScopeLogMaxNames)
 }
 
 // BuildManagedRuntimeEnvMapWithScriptToken 额外返回注入凭据的 jti / 到期时间，
 // 让调用方能在任务结束时调 RevokeScriptToken 立刻作废它。
-func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, *ScriptTokenInfo, error) {
+//
+// envScope 只有任务执行会传（#168）；ddp python/shell、脚本调试运行、run-code 都传 nil，行为不变。
+// 指定范围时只过滤用户变量：config.sh、青龙兼容变量、TZ、PATH、NO_PROXY、DAIDAI_* 照常注入；
+// 注入的脚本令牌改签只能发通知的那种。
+func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string, envScope *RuntimeEnvScope) (map[string]string, *ScriptTokenInfo, error) {
 	var envVarRecords []model.EnvVar
 	// 按稳定顺序读取：置顶 > 组内位置 > 创建时间 > id；避免无 ORDER BY 导致同名变量的相对顺序抖动
 	database.DB.Where("enabled = ?", true).
 		Order("sort_order DESC, position ASC, created_at ASC, id ASC").
 		Find(&envVarRecords)
 	envVarRecords = OpenEnvVarsForRuntime(context.Background(), envVarRecords)
+
+	// 任务指定了范围：只留命中变量名或分组的记录，再走下面原有的按名合并（同名多条照样用 & 拼接）
+	if envScope != nil {
+		allowedNames := make(map[string]bool, len(envScope.Names))
+		for _, name := range envScope.Names {
+			allowedNames[name] = true
+		}
+		allowedGroups := make(map[string]bool, len(envScope.Groups))
+		for _, group := range envScope.Groups {
+			allowedGroups[group] = true
+		}
+		filtered := make([]model.EnvVar, 0, len(envVarRecords))
+		for _, ev := range envVarRecords {
+			matched := allowedNames[ev.Name]
+			if !matched {
+				// 一条变量可以属于多个分组（逗号拼接），任一分组命中就算
+				for _, group := range model.SplitEnvGroups(ev.Group) {
+					if allowedGroups[group] {
+						matched = true
+						break
+					}
+				}
+			}
+			if matched {
+				filtered = append(filtered, ev)
+			}
+		}
+		envVarRecords = filtered
+	}
 
 	// 先按 name 分组保持顺序，再用 joinTaskEnvValues 做带转义合并，
 	// 解决值内含 '&' 时脚本按 '&' 切分会错位的问题（与 splitTaskEnvValues 对称）。
@@ -223,6 +289,9 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 		}
 		grouped[ev.Name] = append(grouped[ev.Name], ev.Value)
 	}
+	if envScope != nil {
+		envScope.InjectedNames = append([]string{}, order...)
+	}
 
 	envMap := make(map[string]string, len(grouped))
 	for _, name := range order {
@@ -230,8 +299,66 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 	}
 
 	loadConfigShellVars(envMap)
+	// 青龙兼容变量（#110）：只在 key 还不存在时才写。
+	//
+	// ⚠️ 这与紧接着下面的 TZ、以及 DAIDAI_* 那批「保留名」语义**完全相反**，不要顺手统一掉：
+	// QL_DIR 等不是面板独占的名字，用户完全可能已经在环境变量页（或 config.sh 里）
+	// 手建了一个 QL_DIR 指向他自己的青龙路径，脚本也早就照那个值跑通了。
+	// 无条件覆盖等于静默改掉现有行为，而且用户在页面上看到自己设的值、实际却不生效，
+	// 排查起来毫无线索。这批变量的定位是「用户没配就给个能用的默认值」。
+	for key, value := range buildQingLongCompatEnv() {
+		if _, exists := envMap[key]; !exists {
+			envMap[key] = value
+		}
+	}
+	// PLAYWRIGHT_BROWSERS_PATH（#142）与上面的青龙兼容变量同一语义：用户没配才补默认值。
+	// 必须落在 envMap 里：任务、调试运行、run-code、ddp python/shell 的子进程都是白名单环境，
+	// 只靠进程环境（entrypoint export / main.go 的 os.Setenv）根本传不进去。
+	applyPlaywrightBrowsersPathDefault(envMap)
 	// 面板时区是全局运行时配置，优先级高于普通环境变量，避免任务脚本继续继承 UTC。
 	envMap["TZ"] = CurrentPanelTimezone()
+
+	// 回环直连白名单（#111）：面板开代理后，Python 的 urllib 会把发往
+	// 127.0.0.1:5701 的 notify 回调也交给代理，代理连不上回环就回 HTTP 502。
+	//
+	// 为什么落在 envMap 而不是进程环境：env.json / env.sh 是在子进程内**最后**落地的，
+	// 只写进程环境的话，用户自己设的同名变量会把它整个盖回去。
+	//
+	// 语义是「在用户已有值上合并追加」而不是覆盖 —— 用户可能已经设了
+	// NO_PROXY=corp.internal 之类的内网白名单，覆盖会把它洗掉。
+	// 大小写两个键的已有值都要读进来：只读大写、大写为空才退小写的写法，
+	// 会静默丢掉用户只设了小写 no_proxy 的那份值。
+	// 合并结果最后同时写回大小写两个键，保证不同运行时读哪个都一致。
+	noProxyPresent := make(map[string]struct{}, 8)
+	noProxyItems := make([]string, 0, 8)
+	for _, existing := range []string{envMap["NO_PROXY"], envMap["no_proxy"]} {
+		for _, item := range strings.Split(existing, ",") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			// 幂等判定统一按小写比较：用户写成 ` 127.0.0.1 ` 或 `LocalHost`
+			// 也算已存在，不再重复追加一遍。
+			lower := strings.ToLower(item)
+			if _, exists := noProxyPresent[lower]; exists {
+				continue
+			}
+			noProxyPresent[lower] = struct{}{}
+			noProxyItems = append(noProxyItems, item)
+		}
+	}
+	// 指定了非回环监听地址时也补上面板自身地址（#162）；它可能是带大写的主机名，同样按小写判重
+	for _, host := range loopbackNoProxyHostList() {
+		lower := strings.ToLower(host)
+		if _, exists := noProxyPresent[lower]; exists {
+			continue
+		}
+		noProxyPresent[lower] = struct{}{}
+		noProxyItems = append(noProxyItems, host)
+	}
+	mergedNoProxy := strings.Join(noProxyItems, ",")
+	envMap["NO_PROXY"] = mergedNoProxy
+	envMap["no_proxy"] = mergedNoProxy
 
 	pythonVersion = NormalizePythonVersionOrDefault(pythonVersion)
 	if !PythonVersionSupportedByCurrentRuntime(pythonVersion) {
@@ -252,7 +379,7 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 	AppendScriptHelperPaths(envMap, scriptsDir)
 	var helperErr error
 	var scriptToken *ScriptTokenInfo
-	if helperEnv, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl); err == nil {
+	if helperEnv, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl, envScope != nil); err == nil {
 		for key, value := range helperEnv {
 			envMap[key] = value
 		}
@@ -619,6 +746,9 @@ func ensureManagedPythonVenv(syncCreate bool) bool {
 	return ensureManagedPythonVenvForVersion("", syncCreate)
 }
 
+// ensureManagedPythonVenvForVersion 每条返回 true 的路径，结尾都是一次通过的 managedPythonVenvHealthyForVersion。
+// 两个 ResolveManaged*BinaryForPythonVersion 与两个 createManagedPython* 靠这一点不再自己查第二遍（#158）：
+// 以后要给这里加缓存、「刚查过就直接返回 true」之类的捷径，必须同时改那四处，否则会把坏掉的 venv 里的 pip / python 交出去。
 func ensureManagedPythonVenvForVersion(pythonVersion string, syncCreate bool) bool {
 	pythonVersion = NormalizePythonVersionOrDefault(pythonVersion)
 	if !PythonVersionSupportedByCurrentRuntime(pythonVersion) {
@@ -764,12 +894,13 @@ func ResolveManagedPipBinaryForPythonVersion(pythonVersion string) string {
 	if !PythonVersionSupportedByCurrentRuntime(pythonVersion) {
 		return ""
 	}
-	EnsureManagedPythonVenvForVersion(pythonVersion)
-	venvDir := ManagedPythonVenvDir(pythonVersion)
-	if !managedPythonVenvHealthyForVersion(venvDir, pythonVersion) {
+	// Ensure 返回 true 时刚做过一遍通过的健康检查（或刚建好 / 修好 venv，结尾同样查过一遍），这里不再自己查第二遍：
+	// 每查一遍要起 2 个子进程（python -c 核对版本 + pip --version），慢 NAS 上一个就几秒（#158）。
+	// 返回 false（venv 建不出来也修不好）时照旧返回空，由调用方走各自原有的回退（系统 pip、venv 里残留的 pip）。
+	if !EnsureManagedPythonVenvForVersion(pythonVersion) {
 		return ""
 	}
-	return resolveManagedPipBinaryInVenv(venvDir)
+	return resolveManagedPipBinaryInVenv(ManagedPythonVenvDir(pythonVersion))
 }
 
 // ResolveManagedPythonBinary 返回面板默认版本托管 venv 的 python 可执行文件路径，
@@ -783,12 +914,11 @@ func ResolveManagedPythonBinaryForPythonVersion(pythonVersion string) string {
 	if !PythonVersionSupportedByCurrentRuntime(pythonVersion) {
 		return ""
 	}
-	EnsureManagedPythonVenvForVersion(pythonVersion)
-	venvDir := ManagedPythonVenvDir(pythonVersion)
-	if !managedPythonVenvHealthyForVersion(venvDir, pythonVersion) {
+	// 同 ResolveManagedPipBinaryForPythonVersion：Ensure 返回 true 就不再查第二遍（#158）。
+	if !EnsureManagedPythonVenvForVersion(pythonVersion) {
 		return ""
 	}
-	return resolveManagedPythonBinaryInVenv(venvDir)
+	return resolveManagedPythonBinaryInVenv(ManagedPythonVenvDir(pythonVersion))
 }
 
 func createManagedPythonCommand(scriptPath string, scriptArgs []string, workDir string, envVars map[string]string, runtimePaths managedRuntimePaths, pythonVersion string) (*exec.Cmd, func(), error) {
@@ -796,15 +926,23 @@ func createManagedPythonCommand(scriptPath string, scriptArgs []string, workDir 
 	if !PythonVersionSupportedByCurrentRuntime(pythonVersion) {
 		return nil, nil, fmt.Errorf("当前镜像不支持 Python %s，请切换到对应 Python 版本镜像或 all 镜像", pythonVersion)
 	}
-	EnsureManagedPythonVenvForVersion(pythonVersion)
+	venvReady := EnsureManagedPythonVenvForVersion(pythonVersion)
 	runtimePaths = currentManagedRuntimePathsForPythonVersion(pythonVersion)
-	preferredDirs := append([]string{runtimePaths.VenvBin}, windowsPythonPreferredDirsForVersion(pythonVersion)...)
 	pythonBin := ""
-	for _, name := range []string{"python", "python3", "python" + pythonVersion} {
-		candidate, err := resolveManagedBinary(name, preferredDirs, runtimePaths.searchDirs)
-		if err == nil && managedPythonBinaryMatchesVersion(candidate, pythonVersion) {
-			pythonBin = candidate
-			break
+	if venvReady {
+		// Ensure 返回 true 时，它的健康检查刚用 python -c 核对过 venv 里这个解释器（resolveManagedPythonBinaryInVenv 找到的同一个文件）的版本，
+		// 直接用，不再进下面的候选循环多起一次 python -c（#158）。
+		pythonBin = resolveManagedPythonBinaryInVenv(ManagedPythonVenvDir(pythonVersion))
+	}
+	if pythonBin == "" {
+		// venv 不可用（建不出来、修不好）时照旧按原顺序找：托管 venv、Windows 常见安装目录、PATH，逐个核对版本。
+		preferredDirs := append([]string{runtimePaths.VenvBin}, windowsPythonPreferredDirsForVersion(pythonVersion)...)
+		for _, name := range []string{"python", "python3", "python" + pythonVersion} {
+			candidate, err := resolveManagedBinary(name, preferredDirs, runtimePaths.searchDirs)
+			if err == nil && managedPythonBinaryMatchesVersion(candidate, pythonVersion) {
+				pythonBin = candidate
+				break
+			}
 		}
 	}
 	if pythonBin == "" {
@@ -842,15 +980,22 @@ func createManagedPythonModuleCommand(interpreter string, moduleName string, mod
 		return nil, nil, fmt.Errorf("当前镜像不支持 Python %s，请切换到对应 Python 版本镜像或 all 镜像", pythonVersion)
 	}
 
-	EnsureManagedPythonVenvForVersion(pythonVersion)
+	venvReady := EnsureManagedPythonVenvForVersion(pythonVersion)
 	runtimePaths := currentManagedRuntimePathsForPythonVersion(pythonVersion)
-	preferredDirs := append([]string{runtimePaths.VenvBin}, windowsPythonPreferredDirsForVersion(pythonVersion)...)
 	pythonBin := ""
-	for _, name := range []string{"python", "python3", "python" + pythonVersion} {
-		candidate, err := resolveManagedBinary(name, preferredDirs, runtimePaths.searchDirs)
-		if err == nil && managedPythonBinaryMatchesVersion(candidate, pythonVersion) {
-			pythonBin = candidate
-			break
+	if venvReady {
+		// 同 createManagedPythonCommand：Ensure 已核对过版本，直接用 venv 里的解释器，不再多起一次 python -c（#158）。
+		pythonBin = resolveManagedPythonBinaryInVenv(ManagedPythonVenvDir(pythonVersion))
+	}
+	if pythonBin == "" {
+		// venv 不可用时照旧按原顺序找：托管 venv、Windows 常见安装目录、PATH，逐个核对版本。
+		preferredDirs := append([]string{runtimePaths.VenvBin}, windowsPythonPreferredDirsForVersion(pythonVersion)...)
+		for _, name := range []string{"python", "python3", "python" + pythonVersion} {
+			candidate, err := resolveManagedBinary(name, preferredDirs, runtimePaths.searchDirs)
+			if err == nil && managedPythonBinaryMatchesVersion(candidate, pythonVersion) {
+				pythonBin = candidate
+				break
+			}
 		}
 	}
 	if pythonBin == "" {
@@ -1435,7 +1580,7 @@ try {
         '[任务疑似半路结束] 已判定为失败。若该脚本本来就会留下未完成的异步操作（属于误报），' +
         '有三种关法：脚本末尾加一行 globalThis.daidaiDone?.()；' +
         '给该任务加环境变量 DAIDAI_SILENT_EXIT_DETECT=0；' +
-        '或在「系统设置 - 任务」里关闭「检测脚本半路静默结束」。\n'
+        '或在「系统设置 - 任务运行」里关闭「检测脚本半路静默结束」。\n'
       );
       // 不覆盖脚本自己设过的退出码：它已经表达了失败，保留它更有信息量。
       if (!process.exitCode) process.exitCode = 75;
@@ -1483,6 +1628,27 @@ for (const [key, value] of Object.entries(envPayload)) {
   }
   process.env[key] = String(value);
 }
+// daidaiFlush：给脚本一个「等 stdout 真正写出去」的手段（#113-3）。
+// 用户在汇总输出之后写一行 await globalThis.daidaiFlush?.() 即可，
+// 老面板上没有这个函数时可选链会安静跳过，脚本不用改回去。
+// writable 必须是 true：脚本里出现同名变量赋值时，严格模式下给只读属性赋值会抛
+// TypeError 打断用户脚本（daidaiDone 那条是历史写法，不要照抄）。
+try {
+  Object.defineProperty(globalThis, 'daidaiFlush', {
+    value: function daidaiFlush() {
+      return new Promise(function (resolve) { process.stdout.write('', resolve); });
+    },
+    writable: true, enumerable: false, configurable: true,
+  });
+} catch (_) {}
+// 把 stdout 切成阻塞写：管道在 macOS 上是异步的，进程一旦自然退出，
+// 排在队列里还没落地的尾部输出就没了。Windows/Linux 本来就是同步写，这里是无害兜底。
+// _handle 在重定向到文件等场景下可能没有 setBlocking，全部用短路判断保护。
+try {
+  if (process.stdout && process.stdout._handle && typeof process.stdout._handle.setBlocking === 'function') {
+    process.stdout._handle.setBlocking(true);
+  }
+} catch (_) {}
 const originalJSONStringify = JSON.stringify;
 JSON.stringify = function(value, replacer, space) {
   if (value === process.env) {

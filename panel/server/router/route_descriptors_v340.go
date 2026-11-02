@@ -1,0 +1,76 @@
+package router
+
+// 本机版：上游 v3.4.0 新增路由的契约描述（原表只覆盖到 3.0.6）。
+// 独立成文件，避免与上游 descriptors.go 的大表互相踩踏；init 时补进 explicitRouteDescriptors。
+var upstreamV340RouteDescriptors = map[string]RouteDescriptor{
+	"DELETE /api/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_mcp"},
+	"DELETE /api/system/console/run/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_system_console_run_id"},
+	"DELETE /api/v1/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_v1_mcp"},
+	"DELETE /api/v1/system/console/run/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_v1_system_console_run_id"},
+	"DELETE /api/v1/wecom/triggers/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_v1_wecom_triggers_id"},
+	"DELETE /api/wecom/triggers/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/delete_api_wecom_triggers_id"},
+	"GET /api/auth/preferences": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_auth_preferences"},
+	"GET /api/deps/playwright": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_deps_playwright"},
+	"GET /api/envs/names": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_envs_names"},
+	"GET /api/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_mcp"},
+	"GET /api/open-api/trigger": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_open-api_trigger"},
+	"GET /api/system/badges": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_system_badges"},
+	"GET /api/system/console/meta": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_system_console_meta"},
+	"GET /api/system/console/run/:id/logs": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_system_console_run_id_logs"},
+	"GET /api/tasks/:id/log-files/archive": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_id_log-files_archive"},
+	"GET /api/tasks/:id/log-files/archive-ticket": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_id_log-files_archive-ticket"},
+	"GET /api/tasks/groups": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_groups"},
+	"GET /api/tasks/labels": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_tasks_labels"},
+	"GET /api/v1/auth/preferences": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_auth_preferences"},
+	"GET /api/v1/deps/playwright": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_deps_playwright"},
+	"GET /api/v1/envs/names": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_envs_names"},
+	"GET /api/v1/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_mcp"},
+	"GET /api/v1/open-api/trigger": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_open-api_trigger"},
+	"GET /api/v1/system/badges": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_system_badges"},
+	"GET /api/v1/system/console/meta": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_system_console_meta"},
+	"GET /api/v1/system/console/run/:id/logs": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_system_console_run_id_logs"},
+	"GET /api/v1/tasks/:id/log-files/archive": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_id_log-files_archive"},
+	"GET /api/v1/tasks/:id/log-files/archive-ticket": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_id_log-files_archive-ticket"},
+	"GET /api/v1/tasks/groups": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_groups"},
+	"GET /api/v1/tasks/labels": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_tasks_labels"},
+	"GET /api/v1/wecom/callback/:id": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_wecom_callback_id"},
+	"GET /api/v1/wecom/triggers": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_v1_wecom_triggers"},
+	"GET /api/wecom/callback/:id": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_wecom_callback_id"},
+	"GET /api/wecom/triggers": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/get_api_wecom_triggers"},
+	"POST /api/deps/playwright/install": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_deps_playwright_install"},
+	"POST /api/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_mcp"},
+	"POST /api/open-api/apps/:id/task-trigger-link": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_open-api_apps_id_task-trigger-link"},
+	"POST /api/open-api/task-trigger-links/revoke": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_open-api_task-trigger-links_revoke"},
+	"POST /api/system/console/run": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_system_console_run"},
+	"POST /api/tasks/delete-preview": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_tasks_delete-preview"},
+	"POST /api/tasks/run-by-name": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_tasks_run-by-name"},
+	"POST /api/v1/deps/playwright/install": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_deps_playwright_install"},
+	"POST /api/v1/mcp": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_mcp"},
+	"POST /api/v1/open-api/apps/:id/task-trigger-link": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_open-api_apps_id_task-trigger-link"},
+	"POST /api/v1/open-api/task-trigger-links/revoke": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_open-api_task-trigger-links_revoke"},
+	"POST /api/v1/system/console/run": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_system_console_run"},
+	"POST /api/v1/tasks/delete-preview": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_tasks_delete-preview"},
+	"POST /api/v1/tasks/run-by-name": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_tasks_run-by-name"},
+	"POST /api/v1/wecom/callback/:id": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_wecom_callback_id"},
+	"POST /api/v1/wecom/triggers": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_wecom_triggers"},
+	"POST /api/wecom/callback/:id": {AuthContract: "public", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_wecom_callback_id"},
+	"POST /api/wecom/triggers": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_wecom_triggers"},
+	"PUT /api/auth/preferences": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_auth_preferences"},
+	"PUT /api/system/console/run/:id/stop": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_system_console_run_id_stop"},
+	"PUT /api/tasks/batch/notify": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_tasks_batch_notify"},
+	"PUT /api/tasks/sort": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_tasks_sort"},
+	"PUT /api/v1/auth/preferences": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_auth_preferences"},
+	"PUT /api/v1/system/console/run/:id/stop": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_system_console_run_id_stop"},
+	"PUT /api/v1/tasks/batch/notify": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_tasks_batch_notify"},
+	"PUT /api/v1/tasks/sort": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_tasks_sort"},
+	"PUT /api/v1/wecom/triggers/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_wecom_triggers_id"},
+	"PUT /api/wecom/triggers/:id": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_wecom_triggers_id"},
+}
+
+func init() {
+	for key, descriptor := range upstreamV340RouteDescriptors {
+		if _, exists := explicitRouteDescriptors[key]; !exists {
+			explicitRouteDescriptors[key] = descriptor
+		}
+	}
+}

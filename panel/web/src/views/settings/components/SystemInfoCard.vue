@@ -89,10 +89,9 @@ async function handleCopyMachineCode(code: string) {
 
 .mt-card {
   margin-top: 16px;
-  // 圆角/边框/阴影对齐设计令牌（含暗色修补，原写死 #f0f0f0/阴影在暗色下不正确）
-  border-radius: var(--dd-card-radius);
+  // 扁平化：无阴影，层次只靠 1px 描边表达（边框色走令牌，暗色下自动跟随）；卡片本体 → surface 档
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: var(--dd-shadow-card);
 }
 
 .system-info-grid {

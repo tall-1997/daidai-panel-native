@@ -46,25 +46,43 @@ type orderedRuntimeContainer struct {
 func newServiceRuntimeContainer() RuntimeContainer {
 	return newOrderedRuntimeContainer([]runtimeComponent{
 		{
-			name:  "scheduler",
-			start: service.StartSchedulerV2,
-			stop:  service.StopSchedulerV2,
+			name: "scheduler",
+			start: func(ctx context.Context) error {
+				service.InitSchedulerV2()
+				return nil
+			},
+			stop: func(ctx context.Context) error {
+				service.ShutdownSchedulerV2()
+				return nil
+			},
 			health: func() bool {
 				return service.GetSchedulerV2() != nil && service.GetTaskExecutor() != nil
 			},
 		},
 		{
-			name:  "subscription_scheduler",
-			start: service.StartSubscriptionScheduler,
-			stop:  service.StopSubscriptionScheduler,
+			name: "subscription_scheduler",
+			start: func(ctx context.Context) error {
+				service.InitSubscriptionScheduler()
+				return nil
+			},
+			stop: func(ctx context.Context) error {
+				service.ShutdownSubscriptionScheduler(deadlineFromContext(ctx))
+				return nil
+			},
 			health: func() bool {
 				return service.GetSubscriptionScheduler() != nil
 			},
 		},
 		{
-			name:  "backup_scheduler",
-			start: service.StartBackupScheduler,
-			stop:  service.StopBackupScheduler,
+			name: "backup_scheduler",
+			start: func(ctx context.Context) error {
+				service.InitBackupScheduler()
+				return nil
+			},
+			stop: func(ctx context.Context) error {
+				service.ShutdownBackupScheduler(deadlineFromContext(ctx))
+				return nil
+			},
 			health: func() bool {
 				return service.GetBackupScheduler() != nil
 			},
@@ -76,6 +94,15 @@ func newServiceRuntimeContainer() RuntimeContainer {
 			health: service.LogCleanupWorkerRunning,
 		},
 	})
+}
+
+// deadlineFromContext 从 ctx 里取截止时间；没带截止时间时兜底 runtimeLifecycleTimeout，
+// 与面板主关停流程一致：到点不再等正在跑的定时作业。
+func deadlineFromContext(ctx context.Context) time.Time {
+	if deadline, ok := ctx.Deadline(); ok {
+		return deadline
+	}
+	return time.Now().Add(runtimeLifecycleTimeout)
 }
 
 func newOrderedRuntimeContainer(components []runtimeComponent) RuntimeContainer {

@@ -53,6 +53,129 @@ func CanonicalizePythonPackageName(spec string) string {
 	return name
 }
 
+// PythonExtrasCovered 报告同一个基础包下，已登记的写法 existingSpec 的 extras 是否已经覆盖了
+// 本次请求的写法 requestedSpec 的 extras（即旧 extras 集合 ⊇ 新 extras 集合）。
+//
+// 为什么需要它（issue #166）：CanonicalizePythonPackageName 会剥掉 extras，查重时 httpx[http2] 与已装的
+// httpx 是同一条记录。这本身是对的（一包一条），但如果就此「已存在跳过」，h2 这个可选依赖就永远装不上；
+// 自动安装登记时不改名，重建容器后按旧名字重装也会把 h2 丢掉。调用方据此决定要不要原地改名并重装。
+//
+// extras 名按小写 + PEP 503 分隔符折叠后比较（HTTP_2 与 http-2 视为同一个）。
+// 只比 extras，不比基础名和版本号 —— 调用方已经用归一化键确认过是同一个包。
+func PythonExtrasCovered(existingSpec, requestedSpec string) bool {
+	// 取出一个写法里的 extras 集合：只看环境标记 `;` 之前第一对方括号里的内容。
+	extrasOf := func(spec string) map[string]bool {
+		extras := map[string]bool{}
+		if idx := strings.IndexByte(spec, ';'); idx >= 0 {
+			spec = spec[:idx]
+		}
+		start := strings.IndexByte(spec, '[')
+		if start < 0 {
+			return extras
+		}
+		end := strings.IndexByte(spec[start:], ']')
+		if end < 0 {
+			// 方括号没闭合属于写错了，按「没有 extras」处理，交给 pip 去报错。
+			return extras
+		}
+		for _, extra := range strings.Split(spec[start+1:start+end], ",") {
+			extra = strings.ToLower(strings.TrimSpace(extra))
+			extra = pep503SeparatorPattern.ReplaceAllString(extra, "-")
+			if extra != "" {
+				extras[extra] = true
+			}
+		}
+		return extras
+	}
+
+	existing := extrasOf(existingSpec)
+	for extra := range extrasOf(requestedSpec) {
+		if !existing[extra] {
+			return false
+		}
+	}
+	return true
+}
+
+// MergePythonSpecExtras 把本次写法的 extras 合并进已登记的写法，得到原地升级后的新记录名（issue #166）。
+// 只在 PythonExtrasCovered 返回 false 时用。
+//
+// 为什么要合并而不是整串换成本次写法：记录名就是重建容器后自动重装用的写法。
+// 已装 httpx==0.27.0 再补一个 httpx[http2]，若记录名直接变成 httpx[http2]，下次重装版本锁定就没了；
+// 已装 httpx[socks] 再补 httpx[http2]，socks 又会丢 —— 修好了 h2，却把用户原有的东西弄丢。
+//
+// 规则：
+//   - 基础名用本次写法的（大小写按用户新输入的来）；
+//   - extras = 旧写法的 extras（保持原顺序、原拼写）+ 本次写法里旧写法没有的（比较口径同 PythonExtrasCovered）；
+//   - extras 后面那一段（版本约束、`@ url`、`; marker`，原样保留前导空白）：本次写法有就用本次的，没有就沿用旧的。
+//
+// 例：httpx==0.27.0 + httpx[http2] -> httpx[http2]==0.27.0；httpx[socks] + httpx[http2] -> httpx[socks,http2]。
+func MergePythonSpecExtras(existingSpec, requestedSpec string) string {
+	// 把一个写法拆成：基础名、extras（逐个原样）、extras 之后剩下的部分。
+	// 基础名只认 PEP 508 包名字符；基础名和 `[` 之间允许有空白（`httpx [http2]` 也是合法写法）。
+	split := func(spec string) (base string, extras []string, rest string) {
+		spec = strings.TrimSpace(spec)
+		i := 0
+		for i < len(spec) {
+			ch := spec[i]
+			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_' {
+				i++
+				continue
+			}
+			break
+		}
+		base = spec[:i]
+		rest = spec[i:]
+		afterSpace := strings.TrimLeft(rest, " \t")
+		if !strings.HasPrefix(afterSpace, "[") {
+			// 没有 extras：基础名之后整段都是 rest（如 `; python_version >= "3.8"`），前导空白原样保留。
+			return base, nil, rest
+		}
+		end := strings.IndexByte(afterSpace, ']')
+		if end < 0 {
+			// 方括号没闭合：PythonExtrasCovered 已按「没有 extras」处理，这里同样不认 extras，
+			// 后面那截残缺内容 pip 也解析不了，直接丢掉，不再带进新名字。
+			return base, nil, ""
+		}
+		for _, extra := range strings.Split(afterSpace[1:end], ",") {
+			if extra = strings.TrimSpace(extra); extra != "" {
+				extras = append(extras, extra)
+			}
+		}
+		return base, extras, afterSpace[end+1:]
+	}
+
+	_, oldExtras, oldRest := split(existingSpec)
+	newBase, newExtras, newRest := split(requestedSpec)
+	if newBase == "" {
+		// 本次写法连包名都拆不出来（调用方已按归一化键确认过是同一个包，正常走不到），原样返回本次写法兜底。
+		return strings.TrimSpace(requestedSpec)
+	}
+
+	// extras 去重口径与 PythonExtrasCovered 一致：小写 + PEP 503 分隔符折叠。
+	seen := map[string]bool{}
+	merged := make([]string, 0, len(oldExtras)+len(newExtras))
+	for _, extra := range append(append([]string{}, oldExtras...), newExtras...) {
+		key := pep503SeparatorPattern.ReplaceAllString(strings.ToLower(extra), "-")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, extra)
+	}
+
+	rest := oldRest
+	if strings.TrimSpace(newRest) != "" {
+		rest = newRest
+	}
+
+	result := newBase
+	if len(merged) > 0 {
+		result += "[" + strings.Join(merged, ",") + "]"
+	}
+	return result + rest
+}
+
 // stripPythonVersionSpecifier 在第一个版本算符 / 空白 / 括号 / 逗号处截断，仅保留包名部分。
 func stripPythonVersionSpecifier(name string) string {
 	for i := 0; i < len(name); i++ {

@@ -1,18 +1,23 @@
 <script setup lang="ts">
 import { Connection, Plus, Refresh } from '@element-plus/icons-vue'
 import { useResponsive } from '@/composables/useResponsive'
+import { formatDateTime } from '@/utils/datetime'
 
 const showAddIPDialog = defineModel<boolean>('showAddIPDialog', { required: true })
 const newIP = defineModel<string>('newIP', { required: true })
 const newIPRemarks = defineModel<string>('newIPRemarks', { required: true })
 
-defineProps<{
+withDefaults(defineProps<{
   ipWhitelist: any[]
   ipWhitelistLoading: boolean
+  // 添加 IP 的在途锁由 useSettingsSecurity 持有，本卡片只负责把按钮锁住；默认 false
+  ipAdding?: boolean
   onLoadIPWhitelist: () => void | Promise<void>
   onAddIP: () => void | Promise<void>
   onRemoveIP: (id: number) => void | Promise<void>
-}>()
+}>(), {
+  ipAdding: false
+})
 
 const { isMobile, dialogFullscreen } = useResponsive()
 </script>
@@ -50,7 +55,7 @@ const { isMobile, dialogFullscreen } = useResponsive()
           <div class="dd-mobile-card__grid">
             <div class="dd-mobile-card__field">
               <span class="dd-mobile-card__label">创建时间</span>
-              <span class="dd-mobile-card__value">{{ new Date(row.created_at).toLocaleString() }}</span>
+              <span class="dd-mobile-card__value">{{ formatDateTime(row.created_at) }}</span>
             </div>
           </div>
           <div class="dd-mobile-card__actions ip-card__actions">
@@ -70,7 +75,7 @@ const { isMobile, dialogFullscreen } = useResponsive()
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="170">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
@@ -94,7 +99,7 @@ const { isMobile, dialogFullscreen } = useResponsive()
     </el-form>
     <template #footer>
       <el-button @click="showAddIPDialog = false">取消</el-button>
-      <el-button type="primary" @click="onAddIP">添加</el-button>
+      <el-button type="primary" :loading="ipAdding" :disabled="ipAdding" @click="onAddIP">添加</el-button>
     </template>
   </el-dialog>
 </template>
@@ -104,7 +109,8 @@ const { isMobile, dialogFullscreen } = useResponsive()
 
 .card-header-buttons {
   padding: 2px;
-  border-radius: 12px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
   display: flex;
   gap: 8px;

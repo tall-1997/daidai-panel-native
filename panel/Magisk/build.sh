@@ -3,26 +3,51 @@
 # 呆呆面板 Magisk 模块打包脚本 (容器方案 v2.0.6+)
 #
 # 用法（版本号必填）:
-#   bash Magisk/build.sh 3.0.6                # arm64 + alpine
-#   bash Magisk/build.sh 3.0.6 all            # 同时打包 arm64 + amd64
-#   bash Magisk/build.sh 3.0.6 arm64 debian   # Debian(glibc) flavor
+#   bash Magisk/build.sh 3.4.0                # arm64 + alpine
+#   bash Magisk/build.sh 3.4.0 all            # 同时打包 arm64 + amd64
+#   bash Magisk/build.sh 3.4.0 arm64 debian   # Debian(glibc) flavor
+#
+# 自检（不构建、不打包、不需要 go）:
+#   bash Magisk/build.sh --check-dist         # 只校验已存在的 web/dist 是不是发布版产物
 #
 # 产物:
 #   alpine（默认）: dist/daidai-panel-magisk-v<版本>.zip
 #   debian        : dist/daidai-panel-magisk-debian-v<版本>.zip
 #
 # 模块内部不再内置 Python/Node；改为在 customize.sh 里用 rurima + rootfs 构建一个
-# 容器，再用 apk / apt-get 装出 python3 / nodejs / npm / git 等：
-#   alpine —— Alpine 3.18 minirootfs（musl，体积小）
-#   debian —— CI 自建的 Debian bookworm 精简 rootfs（glibc，能跑官方预编译产物）
+# 容器，再用 apk / apt-get 装出 python3 / nodejs / npm / git 等（全部安装时联网下载，
+# ZIP 里不带任何离线包）：
+#   alpine —— Alpine 3.23 minirootfs（musl，体积小）
+#   debian —— CI 自建的 Debian bookworm 精简 rootfs（glibc，能跑官方预编译产物；
+#             Node.js 装的是 nodejs.org 官方 v24 二进制，不走 apt）
 ##########################################################################
 
 set -euo pipefail
 
+# --check-dist：只跑「已存在的 web/dist 是不是发布版产物」这一道前置检查然后退出。
+# 不构建、不打包，也【不要求 go / npm / zip 在 PATH 上】—— 后面那些 command -v 检查
+# 排在守卫前面，不给这条早退路径的话，守卫在没配 Go 的机器上根本没法被单独跑一次。
+#
+# 它存在的唯一理由是让这道守卫可以被验证【失败一次】：
+#   (cd web && npm run build:demo) && bash Magisk/build.sh --check-dist   # 期望 exit 1
+#   (cd web && npm run build)      && bash Magisk/build.sh --check-dist   # 期望 exit 0
+# 参见 .trellis/spec/guides/cross-layer-thinking-guide.md 的
+# 「一条永远为真的断言等于没有断言」。
+CHECK_DIST_ONLY=0
+if [ "${1:-}" = "--check-dist" ]; then
+  CHECK_DIST_ONLY=1
+  shift
+fi
+
 # 版本号必填。原来这里有个默认值，但它每次发版都会漏更新（v3.0.1 就漏了），
 # 结果本地不传参会打出一个标着旧版本号的包 —— 那种包看不出错，装上才发现不对。
 # CI 一直是显式传参的（release.yml 的 magisk-module job），所以改成必填不影响它。
-VERSION="${1:?用法: bash Magisk/build.sh <版本号> [arm64|amd64|all] [alpine|debian]}"
+if [ "$CHECK_DIST_ONLY" = "1" ]; then
+  # --check-dist 不产出任何文件，版本号在这条路径上没有意义，不要为它设门槛。
+  VERSION="${1:-0.0.0}"
+else
+  VERSION="${1:?用法: bash Magisk/build.sh <版本号> [arm64|amd64|all] [alpine|debian]}"
+fi
 TARGETS="${2:-arm64}"     # arm64 / amd64 / all
 FLAVOR="${3:-alpine}"     # alpine / debian —— 不传时行为与产物名与历史完全一致
 
@@ -44,6 +69,72 @@ OUTZIP="$DIST/daidai-panel-magisk${FLAVOR_SUFFIX}-v${VERSION}.zip"
 info()  { printf "\033[1;32m[INFO]\033[0m %s\n" "$*" >&2; }
 warn()  { printf "\033[1;33m[WARN]\033[0m %s\n" "$*" >&2; }
 error() { printf "\033[1;31m[ERR ]\033[0m %s\n" "$*" >&2; }
+
+# ⚠️ 复用已存在的 web/dist 之前必须先确认它是【发布版】产物。
+#    web 侧有两条构建，写的是【同一个】 web/dist：
+#      npm run build       -> 发布版：无 mock 层、robots=noindex、根相对路径
+#      npm run build:demo  -> 在线演示 Demo：浏览器内 mock 层 + --base=/daidai-panel/
+#    跑过 build:demo 之后直接跑本脚本，下面那句 cp web/dist 会把整套 mock 顶替层打进
+#    模块 ZIP。装上去的表现是「面板能开、数据全是假的、一个错都不报」——比白屏难查得多。
+#
+#    .github/workflows/checks.yml 里那两条产物门禁够不着这条路径：CI 每次都是全新
+#    runner，永远不存在「预先躺在那儿的 dist」，所以这个坑【只在本地复现】。
+assert_release_dist() {
+  local dist="$ROOT/web/dist"
+
+  if [ ! -f "$dist/index.html" ] || [ ! -d "$dist/assets" ]; then
+    error "web/dist 存在但结构不完整（缺 index.html 或 assets/），像是一次被中断的构建"
+    error "解决：rm -rf web/dist 后重跑本脚本（会自动重新构建）"
+    exit 1
+  fi
+
+  # 判据 1：Demo mock 层的哨兵字符串。
+  # 必须用【字符串字面量】而不是函数名 / 模块路径 —— 后者会被 esbuild 压成单字母，
+  # 或者压根不出现在产物里，拿它们做判据是恒不命中的空转门禁。
+  # 缘由见 web/src/demo/marker.ts 顶部注释。
+  local demo_hits
+  demo_hits="$(grep -rl '__DAIDAI_DEMO_MOCK__' "$dist/assets" 2>/dev/null || true)"
+  if [ -n "$demo_hits" ]; then
+    error "web/dist 是 Demo 产物：命中 mock 哨兵 __DAIDAI_DEMO_MOCK__，绝不能打进模块 ZIP"
+    printf '%s\n' "$demo_hits" | head -n 5 >&2 || true
+    error "解决：rm -rf web/dist && (cd web && npm run build)，然后重跑本脚本"
+    exit 1
+  fi
+
+  # 判据 2：robots meta。
+  # 发布版恒为 noindex（web/index.html 里的静态默认值），只有 build:demo 会被
+  # vite.config.ts 的 robotsMetaPlugin 改写成 index, follow。
+  # 它和判据 1 有重叠，留着是为了守「哨兵哪天被改名 / 被 tree-shake 掉」的情况。
+  if grep -qE '<meta[^>]+name="robots"[^>]+content="index, follow"' "$dist/index.html"; then
+    error "web/dist 的 robots meta 是 index, follow —— 这是 Demo 构建专有的改写，发布版恒为 noindex"
+    error "解决：rm -rf web/dist && (cd web && npm run build)，然后重跑本脚本"
+    exit 1
+  fi
+
+  # 判据 3：子路径构建。
+  # 前两条只认得出 Demo，认不出「没有 mock 层、但带了 base 前缀」的产物
+  # （例如有人手动跑 npx vite build --base=/daidai-panel/ 做验证后忘了还原）。
+  # 模块把前端挂在服务根上，带前缀的产物装上去是【所有资源 404】。
+  if ! grep -qE '<script[^>]+src="/assets/' "$dist/index.html"; then
+    error "web/dist 的入口脚本不是根相对路径（/assets/...），疑似子路径构建（--base=...）"
+    error "模块把前端挂在服务根上，带 base 前缀的产物装上去所有资源都会 404"
+    error "index.html 里实际的入口脚本如下："
+    grep -oE '<script[^>]*src="[^"]*"' "$dist/index.html" | head -n 3 >&2 || true
+    error "解决：rm -rf web/dist && (cd web && npm run build)，然后重跑本脚本"
+    exit 1
+  fi
+
+  info "web/dist 校验通过：发布版产物（无 mock 哨兵 / robots=noindex / 根相对路径）"
+}
+
+if [ "$CHECK_DIST_ONLY" = "1" ]; then
+  if [ ! -d "$ROOT/web/dist" ]; then
+    info "web/dist 不存在 —— 没有可复用的产物，本检查无对象（真正打包时会自动构建发布版）"
+    exit 0
+  fi
+  assert_release_dist
+  exit 0
+fi
 
 command -v go   >/dev/null || { error "缺少 go"; exit 1; }
 command -v npm  >/dev/null || { error "缺少 npm"; exit 1; }
@@ -68,11 +159,16 @@ if ! command -v zip >/dev/null; then
 fi
 
 # 1. 前端构建
+# assert_release_dist 的定义与「为什么需要它」在文件上方（挪到 command -v go 之前，
+# 好让 --check-dist 在没配 Go 的机器上也能单独跑）。
 if [ ! -d "$ROOT/web/dist" ]; then
   info "前端 dist 不存在，开始构建..."
   (cd "$ROOT/web" && npm ci && npm run build)
 else
   info "已存在 web/dist，跳过前端构建（如需强制重建请先删除 web/dist）"
+  # 刻意【不】替用户重建：一次误操作换来一次几分钟的静默重建，用户根本不知道
+  # 自己的 dist 被换掉了。直接 exit 1 说清楚怎么办，比"贴心"地帮他修更安全。
+  assert_release_dist
 fi
 
 # 2. 后端交叉编译（Alpine musl 环境下也能跑 CGO_ENABLED=0 的 Go 静态二进制）
@@ -133,14 +229,6 @@ else
   exit 1
 fi
 
-# 离线 apk（linux-pam / shadow）—— 只有 alpine flavor 需要。
-# 这两个包是 aarch64 Alpine 专用，Debian 侧同等能力由 apt 的 passwd / libpam 提供，
-# 塞进 Debian ZIP 只会白白撑大体积、并让 customize.sh 里多一条永远走不到的分支。
-if [ "$FLAVOR" = "alpine" ] && [ -d "$MODDIR/apk" ]; then
-  mkdir -p "$STAGING/apk"
-  cp -f "$MODDIR/apk/"*.apk "$STAGING/apk/" 2>/dev/null || true
-fi
-
 # scripts/
 if [ -d "$MODDIR/scripts" ]; then
   mkdir -p "$STAGING/scripts"
@@ -194,6 +282,8 @@ if [ "$FLAVOR" = "debian" ]; then
 fi
 
 # 前端静态资源
+# 这里没有任何校验，是因为上面的 assert_release_dist 已经在【复用已存在 dist】那条
+# 分支上把关了（Demo mock 层 / robots / base 前缀三条判据）。改动那段时记得这里依赖它。
 cp -rf "$ROOT/web/dist/"* "$STAGING/web/"
 
 # 4. 打包 ZIP

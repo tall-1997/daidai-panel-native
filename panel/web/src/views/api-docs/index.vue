@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
+import DdBadge from '@/components/ui/DdBadge.vue'
 import type { ApiCategory, ApiEndpoint } from './apiData'
 
 type ApiDocsModule = typeof import('./apiData')
@@ -117,6 +118,13 @@ function handleCopy(text: string, key: string) {
   }
 }
 
+// 鉴权提示条样式：jwt=Bearer 鉴权，ticket=只认 URL 票据（原始日志直传下载），其余按无需鉴权。
+function authBannerClass(auth?: ApiEndpoint['auth']) {
+  if (auth === 'jwt') return 'auth-jwt'
+  if (auth === 'ticket') return 'auth-ticket'
+  return 'auth-none'
+}
+
 function methodClass(method: string) {
   const m = method.toLowerCase()
   if (m === 'get') return 'method-get'
@@ -148,7 +156,15 @@ function methodClass(method: string) {
       </div>
       <div class="sider-menu">
         <template v-for="cat in filteredCategories" :key="cat.key">
-          <div class="menu-group-title">{{ cat.label }} ({{ cat.endpoints.length }})</div>
+          <div class="menu-group-title">
+            <span class="menu-group-label">{{ cat.label }}</span>
+            <DdBadge
+              :value="cat.endpoints.length"
+              level="info"
+              show-zero
+              :title="`${cat.label} 接口数`"
+            />
+          </div>
           <div
             v-for="ep in cat.endpoints" :key="ep.id"
             class="menu-item" :class="{ active: selectedId === ep.id }"
@@ -169,7 +185,15 @@ function methodClass(method: string) {
         </div>
         <div class="sider-menu">
           <template v-for="cat in filteredCategories" :key="cat.key">
-            <div class="menu-group-title">{{ cat.label }} ({{ cat.endpoints.length }})</div>
+            <div class="menu-group-title">
+              <span class="menu-group-label">{{ cat.label }}</span>
+              <DdBadge
+                :value="cat.endpoints.length"
+                level="info"
+                show-zero
+                :title="`${cat.label} 接口数`"
+              />
+            </div>
             <div
               v-for="ep in cat.endpoints" :key="ep.id"
               class="menu-item" :class="{ active: selectedId === ep.id }"
@@ -183,7 +207,15 @@ function methodClass(method: string) {
       </div>
 
       <div class="api-content">
-        <template v-if="!apiLoading && currentEndpoint && currentCategory">
+        <!-- 切换左侧接口时右侧整块内容是硬替换的，看不出「换了一篇」。
+             这里只做纯淡入淡出：本页正文很长，一旦带位移，滚动容器里的长内容会跟着抖。
+             key 绑 selectedId —— 绑分类或索引都不会在同分类内切换时触发。 -->
+        <Transition name="dd-apidocs-switch" mode="out-in">
+          <div
+            v-if="!apiLoading && currentEndpoint && currentCategory"
+            :key="selectedId"
+            class="api-doc-body"
+          >
           <div class="api-breadcrumb">{{ currentCategory.label }} / {{ currentEndpoint.title }}</div>
           <h2 class="api-endpoint-title">{{ currentEndpoint.title }}</h2>
 
@@ -199,11 +231,16 @@ function methodClass(method: string) {
 
           <p class="api-description">{{ currentEndpoint.description }}</p>
 
-          <div class="auth-banner" :class="currentEndpoint.auth === 'jwt' ? 'auth-jwt' : 'auth-none'">
+          <div class="auth-banner" :class="authBannerClass(currentEndpoint.auth)">
             <el-icon v-if="currentEndpoint.auth === 'jwt'"><Lock /></el-icon>
+            <el-icon v-else-if="currentEndpoint.auth === 'ticket'"><Key /></el-icon>
             <el-icon v-else><Unlock /></el-icon>
             <span v-if="currentEndpoint.auth === 'jwt'">
               使用 JWT Token 鉴权，请在请求头中添加 <code>Authorization: Bearer &lt;TOKEN&gt;</code>
+            </span>
+            <span v-else-if="currentEndpoint.auth === 'ticket'">
+              票据鉴权：本接口不走 JWT，只认 URL 上的 <code>?ticket=</code>（先调同路径的 <code>-ticket</code> 接口换票）。
+              只带 <code>Authorization: Bearer &lt;TOKEN&gt;</code> 而不带票据同样会被拒绝
             </span>
             <span v-else>此接口无需鉴权即可访问</span>
           </div>
@@ -350,7 +387,8 @@ function methodClass(method: string) {
               <span class="status-dot" />
               200 成功
             </span>
-            <span class="response-type">application/json</span>
+            <!-- 文件流类接口（如原始日志直传下载）返回的不是 JSON，按条目声明的类型展示 -->
+            <span class="response-type">{{ currentEndpoint.responseContentType || 'application/json' }}</span>
           </div>
 
           <div class="response-section">
@@ -386,8 +424,9 @@ function methodClass(method: string) {
             </div>
           </div>
         </el-card>
-        </template>
-        <el-empty v-else description="正在加载接口文档..." />
+          </div>
+          <el-empty v-else description="正在加载接口文档..." />
+        </Transition>
       </div>
     </div>
   </div>
@@ -430,10 +469,9 @@ function methodClass(method: string) {
   width: 280px;
   flex-shrink: 0;
   background: var(--el-bg-color);
-  // 圆角对齐卡片令牌、阴影引用全局静置卡片阴影，使侧栏与右侧文档卡观感统一
-  border-radius: var(--dd-card-radius);
+  // 1px 边框 + 圆角刻度，使侧栏与右侧文档卡观感统一（不再用阴影浮起）
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: var(--dd-shadow-card);
   overflow: hidden;
   height: 100%;
   display: flex;
@@ -457,41 +495,53 @@ function methodClass(method: string) {
   flex: 1;
 }
 
+// 分类计数从「分类名 (N)」的括号写法换成右对齐的 DdBadge（中性计数，描边不实心）。
+// text-transform / letter-spacing 只留给标题文字：留在容器上会连角标数字一起加字距，
+// 让等宽数字看起来偏散。
 .menu-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 12px 20px 4px;
   font-weight: 600;
   font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.menu-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--el-text-color-secondary);
 }
 
 .menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  // 左侧留出 3px 透明边框位，选中时染成品牌色指示条（原为 inset 阴影）
+  padding: 6px 12px 6px 9px;
+  border-left: 3px solid transparent;
   margin: 2px 8px;
-  border-radius: var(--dd-radius-sm);
+  border-radius: var(--dd-radius-control);
   cursor: pointer;
   // 选中/hover 过渡走令牌（快 + 标准缓动），与全站侧边菜单观感一致
   transition:
     background-color var(--dd-motion-fast) var(--dd-ease-standard),
     color var(--dd-motion-fast) var(--dd-ease-standard),
-    box-shadow var(--dd-motion-fast) var(--dd-ease-standard);
+    border-color var(--dd-motion-fast) var(--dd-ease-standard);
 
   &:hover:not(.active) {
     background: var(--el-fill-color-light);
   }
 
-  // 选中态对齐全局菜单：品牌色浅底渐变 + 左侧品牌色指示条
+  // 选中态对齐全局菜单：品牌色浅底纯色 + 左侧品牌色指示条
   &.active {
-    background: linear-gradient(
-      135deg,
-      var(--el-color-primary-light-8),
-      var(--el-color-primary-light-9)
-    );
-    box-shadow: inset 3px 0 0 var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
+    border-left-color: var(--el-color-primary);
 
     .menu-item-text {
       color: var(--el-color-primary);
@@ -514,7 +564,7 @@ function methodClass(method: string) {
   justify-content: center;
   min-width: 52px;
   padding: 1px 8px;
-  border-radius: 4px;
+  border-radius: var(--dd-radius-control);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -528,21 +578,21 @@ function methodClass(method: string) {
   padding: 0 5px;
   font-size: 10px;
   line-height: 18px;
-  border-radius: 3px;
+  border-radius: var(--dd-radius-control);
 }
 
-.method-get { background: linear-gradient(135deg, #52c41a, #73d13d); }
-.method-post { background: linear-gradient(135deg, #1677ff, #4096ff); }
-.method-put { background: linear-gradient(135deg, #fa8c16, #ffa940); }
-.method-delete { background: linear-gradient(135deg, #ff4d4f, #ff7875); }
+// 方法色标改纯色（原为渐变）
+.method-get { background: #52c41a; }
+.method-post { background: #1677ff; }
+.method-put { background: #fa8c16; }
+.method-delete { background: #ff4d4f; }
 
 .api-content {
   flex: 1;
   background: var(--el-bg-color);
-  // 圆角对齐卡片令牌、阴影引用全局静置卡片阴影
-  border-radius: var(--dd-card-radius);
+  // 1px 边框 + 圆角刻度，不再用阴影浮起
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: var(--dd-shadow-card);
   padding: 28px 32px;
   overflow: auto;
   min-width: 0;
@@ -570,17 +620,14 @@ function methodClass(method: string) {
   padding: 12px 20px;
   background: var(--el-fill-color-lighter);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--dd-radius-sm);
+  border-radius: var(--dd-radius-surface);
   margin-bottom: 24px;
   flex-wrap: wrap;
-  // 过渡走令牌（标准缓动），hover 阴影引用全局静置卡片阴影（暗色自动适配）
-  transition:
-    border-color var(--dd-motion-normal) var(--dd-ease-standard),
-    box-shadow var(--dd-motion-normal) var(--dd-ease-standard);
+  // hover 只加深描边，不再叠阴影
+  transition: border-color var(--dd-motion-normal) var(--dd-ease-standard);
 
   &:hover {
     border-color: var(--el-border-color);
-    box-shadow: var(--dd-shadow-card);
   }
 }
 
@@ -603,16 +650,22 @@ function methodClass(method: string) {
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border-radius: var(--dd-radius-sm);
+  border-radius: var(--dd-radius-surface);
   margin-bottom: 20px;
   font-size: 13px;
+  line-height: 1.7;
+
+  // 票据鉴权那条说明会换行，图标不能被文字挤扁
+  .el-icon {
+    flex-shrink: 0;
+  }
 
   code {
     font-size: 12px;
     // 用 color-mix 基于当前文字色生成半透明底，明暗双主题都自适应
     background: color-mix(in srgb, currentColor 10%, transparent);
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: var(--dd-radius-control);
   }
 
   // JWT / 无鉴权两种状态：用 Element Plus 语义色 + color-mix 生成浅底，明暗双主题自适应
@@ -620,6 +673,13 @@ function methodClass(method: string) {
     background: color-mix(in srgb, var(--el-color-warning) 10%, var(--el-bg-color));
     border: 1px solid color-mix(in srgb, var(--el-color-warning) 32%, transparent);
     color: var(--el-color-warning);
+  }
+
+  // 票据鉴权：既不是常规 Bearer，也不是「无需鉴权」，用品牌色单列一档避免被误读成公开接口
+  &.auth-ticket {
+    background: color-mix(in srgb, var(--el-color-primary) 10%, var(--el-bg-color));
+    border: 1px solid color-mix(in srgb, var(--el-color-primary) 32%, transparent);
+    color: var(--el-color-primary);
   }
 
   &.auth-none {
@@ -630,11 +690,9 @@ function methodClass(method: string) {
 }
 
 .api-card {
-  // 圆角对齐卡片令牌；这些卡用了 shadow="never"，全局静置阴影不会生效，
-  // 故给容器自身一条 lighter 边框 + 静置卡片阴影令牌，保持与全站卡片观感一致（暗色自动适配）。
-  border-radius: var(--dd-card-radius);
+  // 这些卡用了 shadow="never"，层次全部交给自身的 1px lighter 边框（暗色自动适配）。
+  border-radius: var(--dd-radius-surface);
   border: 1px solid var(--el-border-color-lighter);
-  box-shadow: var(--dd-shadow-card);
   margin-bottom: 20px;
   overflow: hidden;
 
@@ -664,8 +722,9 @@ function methodClass(method: string) {
     top: 3px;
     bottom: 3px;
     width: 3px;
-    border-radius: 2px;
-    background: linear-gradient(180deg, var(--el-color-primary), var(--el-color-primary-light-3));
+    // 3px 宽的品牌色指示条属于天然胶囊，吃 pill 档：直角模式是细方条，圆角模式两端收圆
+    border-radius: var(--dd-radius-pill);
+    background: var(--el-color-primary);
   }
 }
 
@@ -682,7 +741,7 @@ function methodClass(method: string) {
   font-size: 12px;
   background: var(--el-fill-color);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--dd-radius-control);
 }
 
 .param-example {
@@ -706,7 +765,7 @@ function methodClass(method: string) {
 
 .code-block-wrapper {
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--dd-radius-surface);
   overflow: hidden;
   margin: 0;
 
@@ -735,7 +794,8 @@ function methodClass(method: string) {
   right: 10px;
   z-index: 2;
   opacity: 0;
-  transition: opacity 0.2s ease;
+  // 时长/缓动走令牌：写死毫秒会绕过 prefers-reduced-motion 的降级
+  transition: opacity var(--dd-motion-fast) var(--dd-ease-standard);
 }
 
 .response-status {
@@ -750,20 +810,23 @@ function methodClass(method: string) {
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  border-radius: 999px;
+  // 「200 OK」这类状态 chip 属于天然胶囊，吃 pill 档
+  border-radius: var(--dd-radius-pill);
   font-size: 13px;
   font-weight: 600;
 
   .status-dot {
     width: 8px;
     height: 8px;
+    // 圆形承载语义：状态指示圆点，圆形是通用可供性，方块会被误读成色块装饰。
+    // 两种圆角模式下都保持圆形，不吃 --dd-radius-* 令牌。
     border-radius: 50%;
     background: var(--el-color-success);
     display: inline-block;
   }
 }
 
-// 200 成功胶囊：用 Element Plus success 语义色 + color-mix 浅底，明暗双主题自适应
+// 200 成功标签：用 Element Plus success 语义色 + color-mix 浅底，明暗双主题自适应
 .status-200 {
   background: color-mix(in srgb, var(--el-color-success) 12%, var(--el-bg-color));
   color: var(--el-color-success);
@@ -853,5 +916,24 @@ function methodClass(method: string) {
 // 轻微错落：侧栏先入，右侧文档区略晚
 .api-content {
   animation-delay: 60ms;
+}
+
+// ===== 接口切换过渡 =====
+// 只做 opacity，**不带任何位移**：本页正文长达数屏、外层 .api-content 自己是滚动容器，
+// 位移会让滚动条与长代码块一起抖。out-in 保证不会出现新旧两篇文档同时占位、
+// 把容器高度顶成两倍的情况。
+// 进入的容器（.api-content）自身带 dd-apidocs-rise-in，而 Transition 没有 appear，
+// 所以首屏只播一次入场动画，不会和这里的淡入叠加。
+.dd-apidocs-switch-enter-active {
+  transition: opacity var(--dd-motion-normal) var(--dd-ease-decelerate);
+}
+
+.dd-apidocs-switch-leave-active {
+  transition: opacity var(--dd-motion-fast) var(--dd-ease-standard);
+}
+
+.dd-apidocs-switch-enter-from,
+.dd-apidocs-switch-leave-to {
+  opacity: 0;
 }
 </style>

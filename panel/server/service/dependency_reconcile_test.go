@@ -11,6 +11,33 @@ import (
 	"daidai-panel/testutil"
 )
 
+// stubDependencyReconcile 把启动校验的三个注入点替换成测试替身，返回恢复函数。
+// v3.4.0 的注入点是包级函数变量（dependencyInstalledFunc / dependencyReinstallBatchFunc /
+// dependencyRestartReinstallBatchFunc），不再是 dependency reconcile runner 结构体。
+func stubDependencyReconcile(
+	t *testing.T,
+	installed func(depType, name, pythonVersion string) bool,
+	reinstall func(deps []model.Dependency),
+	restartReinstall func(deps []model.Dependency),
+) {
+	t.Helper()
+	originalInstalled := dependencyInstalledFunc
+	originalReinstall := dependencyReinstallBatchFunc
+	originalRestartReinstall := dependencyRestartReinstallBatchFunc
+	originalSnapshot := pythonInstalledPackagesFunc
+	dependencyInstalledFunc = installed
+	dependencyReinstallBatchFunc = reinstall
+	dependencyRestartReinstallBatchFunc = restartReinstall
+	// Python 走逐条校验，避免真起 pip list。
+	pythonInstalledPackagesFunc = func(string) (map[string]bool, error) { return nil, nil }
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyReinstallBatchFunc = originalReinstall
+		dependencyRestartReinstallBatchFunc = originalRestartReinstall
+		pythonInstalledPackagesFunc = originalSnapshot
+	})
+}
+
 func TestReconcileDependenciesAfterRestartKeepsPrivateDependenciesInstalled(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	pythonVersion := "3.11"
@@ -30,14 +57,12 @@ func TestReconcileDependenciesAfterRestartKeepsPrivateDependenciesInstalled(t *t
 	}
 
 	reinstallCalls := 0
-	runner := dependencyReconcileRunner{
-		installed: DependencyInstalledForPythonVersion,
-		reinstall: func(deps []model.Dependency) { reinstallCalls += len(deps) },
-		restartReinstall: func(deps []model.Dependency) {
-			reinstallCalls += len(deps)
-		},
-	}
-	reconcileDependenciesAfterRestart(runner)
+	stubDependencyReconcile(t,
+		func(depType, name, pythonVersion string) bool { return true },
+		func(deps []model.Dependency) { reinstallCalls += len(deps) },
+		func(deps []model.Dependency) { reinstallCalls += len(deps) },
+	)
+	ReconcileDependenciesAfterRestart()
 
 	if reinstallCalls != 0 {
 		t.Fatalf("expected private dependencies to survive restart, got %d reinstall calls", reinstallCalls)
@@ -65,12 +90,12 @@ func TestReconcileDependenciesAfterRestartRecoversInterruptedOperation(t *testin
 		t.Fatalf("create operation: %v", err)
 	}
 
-	runner := dependencyReconcileRunner{
-		installed:        func(depType, name, pythonVersion string) bool { return false },
-		reinstall:        func(deps []model.Dependency) {},
-		restartReinstall: func(deps []model.Dependency) {},
-	}
-	reconcileDependenciesAfterRestart(runner)
+	stubDependencyReconcile(t,
+		func(depType, name, pythonVersion string) bool { return false },
+		func(deps []model.Dependency) {},
+		func(deps []model.Dependency) {},
+	)
+	ReconcileDependenciesAfterRestart()
 
 	var recovered model.Operation
 	if err := database.DB.First(&recovered, "id = ?", "dep_recover").Error; err != nil {
@@ -88,7 +113,7 @@ func TestReconcileDependenciesAfterRestartRecoversInterruptedOperation(t *testin
 		t.Fatalf("expected queued dependency reset to failed, got %+v", reloaded)
 	}
 
-	reconcileDependenciesAfterRestart(runner)
+	ReconcileDependenciesAfterRestart()
 
 	var reconciledAgain model.Dependency
 	if err := database.DB.First(&reconciledAgain, dep.ID).Error; err != nil {
@@ -111,12 +136,12 @@ func TestReconcileDependenciesAfterRestartFinishesDetectedInterruptedOperation(t
 		t.Fatalf("create operation: %v", err)
 	}
 
-	runner := dependencyReconcileRunner{
-		installed:        func(depType, name, pythonVersion string) bool { return true },
-		reinstall:        func(deps []model.Dependency) {},
-		restartReinstall: func(deps []model.Dependency) {},
-	}
-	reconcileDependenciesAfterRestart(runner)
+	stubDependencyReconcile(t,
+		func(depType, name, pythonVersion string) bool { return true },
+		func(deps []model.Dependency) {},
+		func(deps []model.Dependency) {},
+	)
+	ReconcileDependenciesAfterRestart()
 
 	var recovered model.Operation
 	if err := database.DB.First(&recovered, "id = ?", op.ID).Error; err != nil {
@@ -140,15 +165,15 @@ func TestReconcileDependenciesAfterRestartIsReentrantForRestartReinstall(t *test
 	}
 
 	var scheduled [][]model.Dependency
-	runner := dependencyReconcileRunner{
-		installed: func(depType, name, pythonVersion string) bool { return false },
-		reinstall: func(deps []model.Dependency) {},
-		restartReinstall: func(deps []model.Dependency) {
+	stubDependencyReconcile(t,
+		func(depType, name, pythonVersion string) bool { return false },
+		func(deps []model.Dependency) {},
+		func(deps []model.Dependency) {
 			scheduled = append(scheduled, append([]model.Dependency(nil), deps...))
 		},
-	}
-	reconcileDependenciesAfterRestart(runner)
-	reconcileDependenciesAfterRestart(runner)
+	)
+	ReconcileDependenciesAfterRestart()
+	ReconcileDependenciesAfterRestart()
 
 	var recovered []model.Dependency
 	if err := database.DB.Order("id ASC").Find(&recovered).Error; err != nil {

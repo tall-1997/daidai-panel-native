@@ -13,7 +13,6 @@ interface GeeTestCaptchaObject {
   onSuccess: (callback: () => void) => GeeTestCaptchaObject
   onError: (callback: (error?: unknown) => void) => GeeTestCaptchaObject
   onClose?: (callback: () => void) => GeeTestCaptchaObject
-  destroy?: () => void
 }
 
 interface GeeTestWindow extends Window {
@@ -32,7 +31,6 @@ export interface GeeTestInstance {
   show: () => void
   reset: () => void
   getResult: () => GeeTestValidateResult | null
-  destroy: () => void
 }
 
 export interface GeeTestInstanceOptions {
@@ -116,8 +114,7 @@ export async function createGeeTestInstance(
             reset: () => {
               captchaObj.reset?.()
             },
-            getResult: () => captchaObj.getValidate() || null,
-            destroy: () => captchaObj.destroy?.()
+            getResult: () => captchaObj.getValidate() || null
           }
 
           captchaObj

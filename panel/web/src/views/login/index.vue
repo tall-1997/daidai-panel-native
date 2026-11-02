@@ -9,6 +9,7 @@ import {
   Hide,
   Key,
   Lock,
+  Monitor,
   Moon,
   Sunny,
   User,
@@ -20,6 +21,7 @@ import {
   type GeeTestInstance,
   type GeeTestValidateResult,
 } from "@/utils/geetest";
+import { shouldReduceMotion } from "@/utils/panelAppearance";
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -55,8 +57,6 @@ const captchaResult = ref<GeeTestValidateResult | null>(null);
 const captchaStatusText = ref("");
 let captchaInstance: GeeTestInstance | null = null;
 let captchaInitPromise: Promise<GeeTestInstance> | null = null;
-let captchaInstanceId = "";
-let captchaGeneration = 0;
 let pendingSubmitAfterCaptcha = false;
 
 const lockCountdown = ref(0);
@@ -79,12 +79,19 @@ function startLockCountdown(seconds: number) {
 
 onUnmounted(() => {
   if (lockTimer) clearInterval(lockTimer);
-  destroyCaptchaInstance();
+  resetCaptchaProof();
 });
 
+// 在线演示 Demo 构建（npm run build:demo）才为真。
+// VITE_DEMO 是编译期常量，发布版构建里恒为 ''，下面这些分支会被整段消除，
+// 真实面板的登录页不会有任何预填与文案改动。
+const isDemoBuild = import.meta.env.VITE_DEMO === "1";
+
+// 演示站落地页就是这张真实的登录页，账号密码预先填好，
+// 访客只需要点一下按钮即可进入面板（后端由浏览器内 mock 层顶替，密码不做校验）。
 const form = ref({
-  username: "",
-  password: "",
+  username: isDemoBuild ? "demo" : "",
+  password: isDemoBuild ? "demo" : "",
   confirmPassword: "",
   totp_code: "",
 });
@@ -111,17 +118,37 @@ onMounted(async () => {
     await loadCaptchaConfig(form.value.username);
   }
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const vRes = await fetch("/api/system/public-version", { signal: controller.signal });
-    clearTimeout(timer);
-    const vData = await vRes.json();
-    if (vData.version) panelVersion.value = vData.version;
+    // 在线演示 Demo 分叉：这一发是【裸 fetch】，不经过 axios，所以 demo 的 mock
+    // adapter 拦不到它，在静态站上会 404 然后被下面那个空 catch 悄悄吞掉
+    // —— 表现就是登录页右下角永远没有版本号。
+    //
+    // 守卫必须保持「编译期常量 + 动态 import」这个形状：发布版里 VITE_DEMO 是 ''，
+    // 整个分支连同 demo chunk 会被 rollup 剔除，真实面板走的还是原来那发 fetch。
+    if (import.meta.env.VITE_DEMO === "1") {
+      const { demoPublicVersion } = await import("@/demo/shortcuts");
+      const version = demoPublicVersion();
+      if (version) panelVersion.value = version;
+    } else {
+      const vRes = await fetch("/api/system/public-version");
+      const vData = await vRes.json();
+      if (vData.version) panelVersion.value = vData.version;
+    }
   } catch {}
 });
 
+/**
+ * 卡通形象跟随鼠标。
+ *
+ * 需要减少动效时直接不更新位移 —— 插画保持在中位不动。
+ * CSS 那边的 transition 时长虽然会被令牌降到 1ms，但那只是让位移【瞬间完成】，
+ * 插画仍然会跟着鼠标跳；对明确要求减少动效的用户来说，这比平滑跟随更难受。
+ * 真正要关掉的是位移本身，只能在 JS 层判断。
+ *
+ * 「需要减少动效」要综合个人设置页的「界面动效」三档（C8），口径见 utils/panelAppearance.ts 的 shouldReduceMotion()。
+ */
 function handleMouseMove(e: MouseEvent) {
   if (!containerRef.value) return;
+  if (shouldReduceMotion()) return;
   const rect = containerRef.value.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
@@ -143,26 +170,12 @@ function resetCaptchaProof(keepVisible = false) {
   }
 }
 
-function destroyCaptchaInstance() {
-  captchaGeneration++;
-  captchaInstance?.destroy();
-  captchaInstance = null;
-  captchaInstanceId = "";
-  captchaInitPromise = null;
-  captchaReady.value = false;
-  captchaVerified.value = false;
-  captchaResult.value = null;
-}
-
 async function loadCaptchaConfig(
   username = form.value.username,
   silent = true,
 ) {
   try {
     const res = await authApi.captchaConfig(username || undefined);
-    if ((res.captcha_id || "") !== captchaInstanceId && captchaInstanceId) {
-      destroyCaptchaInstance();
-    }
     captchaConfig.value = {
       enabled: res.enabled,
       captcha_id: res.captcha_id || "",
@@ -194,8 +207,7 @@ async function loadCaptchaConfig(
 }
 
 async function ensureCaptchaInstance() {
-  const captchaId = captchaConfig.value.captcha_id;
-  if (captchaInstance && captchaInstanceId === captchaId) {
+  if (captchaInstance) {
     return captchaInstance;
   }
   if (!captchaConfig.value.enabled || !captchaConfig.value.captcha_id) {
@@ -203,9 +215,8 @@ async function ensureCaptchaInstance() {
   }
 
   if (!captchaInitPromise) {
-    const generation = ++captchaGeneration;
     captchaPreparing.value = true;
-    const initPromise = createGeeTestInstance(
+    captchaInitPromise = createGeeTestInstance(
       {
         captchaId: captchaConfig.value.captcha_id,
         language: "zho",
@@ -245,21 +256,13 @@ async function ensureCaptchaInstance() {
       },
     )
       .then((instance) => {
-        if (generation !== captchaGeneration || captchaId !== captchaConfig.value.captcha_id) {
-          instance.destroy();
-          throw new Error("验证码配置已更新，请重试");
-        }
         captchaInstance = instance;
-        captchaInstanceId = captchaId;
         return instance;
       })
       .finally(() => {
-        if (captchaInitPromise === initPromise) {
-          captchaPreparing.value = false;
-          captchaInitPromise = null;
-        }
+        captchaPreparing.value = false;
+        captchaInitPromise = null;
       });
-    captchaInitPromise = initPromise;
   }
 
   return captchaInitPromise;
@@ -362,7 +365,6 @@ async function handleTOTPSubmit() {
 }
 
 async function handleSubmit() {
-  if (loading.value) return;
   if (!form.value.username || !form.value.password) {
     ElMessage.warning("请输入用户名和密码");
     return;
@@ -443,9 +445,6 @@ async function handleSubmit() {
       startLockCountdown(data.remaining_seconds);
     }
     if (data?.captcha_id) {
-      if (data.captcha_id !== captchaConfig.value.captcha_id) {
-        destroyCaptchaInstance();
-      }
       captchaConfig.value.captcha_id = data.captcha_id;
     }
     if (typeof data?.require_after_failures === "number") {
@@ -491,19 +490,35 @@ const titleText = computed(() => (isInit.value ? "欢迎回来!" : "初始化管
 const subtitleText = computed(() =>
   isInit.value ? "请输入您的登录信息" : "首次使用，请设置管理员账号",
 );
-const btnText = computed(() => (isInit.value ? "登 录" : "初始化并登录"));
-const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
+const btnText = computed(() => {
+  if (!isInit.value) return "初始化并登录";
+  // 演示站把主按钮文案换成「进入演示环境」，让访客一眼看懂这里不需要真的注册账号
+  return isDemoBuild ? "进入演示环境" : "登 录";
+});
+// 主题三档（v3.3.2，issue #145）：与顶栏那颗按钮同一套口径，跟随系统时显示显示器图标。
+// Monitor 必须在本文件【局部 import】：themeIcon 是返回组件对象的 computed，
+// main.ts 的全局注册只对模板里直接写 <Monitor /> 生效，漏了这行登录页会直接报 Monitor is not defined。
+const themeIcon = computed(() =>
+  themeStore.mode === "system" ? Monitor : themeStore.isDark ? Sunny : Moon,
+);
+const themeTitle = computed(() => {
+  if (themeStore.mode === "system") return "跟随系统 · 点击切换明暗";
+  return themeStore.isDark ? "暗夜 · 点击切换明暗" : "明亮 · 点击切换明暗";
+});
 </script>
 
 <template>
   <div class="login-page" @mousemove="handleMouseMove">
     <div class="theme-toggle">
+      <!-- 只改 :icon / :title，别动这里的 DOM 结构：暗色样式挂在下方【非 scoped】style 块的
+           `html.dark .theme-toggle .theme-toggle-btn` 上，换成原生 button 会让那段选择器失配 -->
       <el-button
         :icon="themeIcon"
         text
-        circle
         size="large"
         class="theme-toggle-btn"
+        :title="themeTitle"
+        :aria-label="themeTitle"
         @click="themeStore.toggleTheme"
       />
     </div>
@@ -527,7 +542,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
         <template v-else>
           <div class="login-header">
             <div class="login-logo">
-              <img src="/favicon.svg" alt="呆呆面板" width="48" height="48" />
+              <img src="/favicon-512.webp" alt="呆呆面板" width="48" height="48" />
             </div>
             <h2>{{ titleText }}</h2>
             <p>{{ subtitleText }}</p>
@@ -592,6 +607,11 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
               </el-button>
             </el-form-item>
           </el-form>
+
+          <!-- 演示站说明：先讲清数据只存在访客自己的浏览器里，避免误以为在操作真实实例 -->
+          <p v-if="isDemoBuild" class="login-demo-tip">
+            演示数据仅存于你的浏览器，刷新页面即可恢复初始状态
+          </p>
 
           <div class="login-version">
             呆呆面板{{ panelVersion ? ` v${panelVersion}` : "" }}
@@ -665,7 +685,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
 /* ================= 2FA dialog ================= */
 :deep(.totp-dialog) {
   .el-dialog {
-    border-radius: 16px;
+    border-radius: var(--dd-radius-surface);
     overflow: hidden;
   }
 
@@ -693,13 +713,13 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
 .totp-dialog-badge {
   width: 38px;
   height: 38px;
-  border-radius: 10px;
+  border-radius: var(--dd-radius-control);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(135deg, #1677ff, #22c3aa);
-  box-shadow: 0 6px 16px -8px rgba(24, 144, 255, 0.45);
+  /* 纯色底，去掉渐变与辉光 */
+  background: #1677ff;
   flex-shrink: 0;
 }
 
@@ -723,7 +743,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
 
 .totp-field {
   :deep(.el-input__wrapper) {
-    border-radius: 12px;
+    border-radius: var(--dd-radius-control);
     padding: 6px 14px;
   }
 
@@ -742,7 +762,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   color: var(--el-text-color-secondary);
   min-height: 18px;
   line-height: 1.4;
-  transition: color 0.2s;
+  transition: color var(--dd-motion-fast) var(--dd-ease-standard);
 
   &--error {
     color: var(--el-color-danger);
@@ -756,16 +776,16 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   gap: 8px;
 }
 
+/* 提交按钮：纯色底，去掉渐变与辉光，hover 只加深底色；圆角吃控件档令牌 */
 .totp-submit-btn {
-  border-radius: 10px;
+  border-radius: var(--dd-radius-control);
   padding: 0 18px;
-  background: linear-gradient(135deg, #1677ff, #22c3aa);
+  background: #1677ff;
   border: none;
-  box-shadow: 0 8px 20px -12px rgba(22, 119, 255, 0.35);
 
   &:hover,
   &:focus {
-    background: linear-gradient(135deg, #1565d8, #1da98f);
+    background: #1565d8;
     border: none;
   }
 
@@ -784,7 +804,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   padding: 24px;
   overflow: hidden;
   position: relative;
-  transition: background 0.4s ease;
+  transition: background var(--dd-motion-slow) var(--dd-ease-standard);
 }
 
 .theme-toggle {
@@ -793,51 +813,57 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   right: 24px;
   z-index: 10;
 
+  /* 主题切换：普通图标按钮（原 circle），hover 只换底色不上浮；圆角吃控件档令牌 */
   .theme-toggle-btn {
     width: 44px;
     height: 44px;
+    padding: 0;
+    border-radius: var(--dd-radius-control);
     font-size: 20px;
     color: #666;
     background: rgba(255, 255, 255, 0.7);
     backdrop-filter: blur(8px);
     border: 1px solid rgba(0, 0, 0, 0.06);
-    transition: all 0.3s;
+    transition:
+      color 0.3s,
+      background-color 0.3s,
+      border-color 0.3s;
 
     &:hover {
       background: rgba(255, 255, 255, 0.9);
-      transform: translateY(-1px);
     }
   }
 }
 
+/* 登录卡：1px 边框划分层次，不再用投影浮起；圆角吃表面档令牌 */
 .login-container {
   display: flex;
   width: 940px;
   max-width: 100%;
   min-height: 560px;
-  border-radius: 24px;
+  border-radius: var(--dd-radius-surface);
   overflow: hidden;
-  box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.08),
-    0 4px 12px rgba(0, 0, 0, 0.04);
-  animation: loginSlideUp 0.6s ease-out;
-  transition: box-shadow 0.4s ease;
+  border: 1px solid var(--el-border-color-lighter);
+  // 时长/缓动改吃令牌：原来写死 0.6s ease-out，是全站少数几个绕过
+  // prefers-reduced-motion 降级的动效之一（那段补丁压不到写死的值）。
+  animation: loginSlideUp var(--dd-motion-slow) var(--dd-ease-decelerate);
 }
 
 @keyframes loginSlideUp {
   from {
     opacity: 0;
-    transform: translateY(30px) scale(0.97);
+    transform: translateY(30px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
+/* 插画区底色：纯色（原为上下渐变）；插画本身在 Characters.vue，不受影响 */
 .login-left {
   flex: 1;
-  background: linear-gradient(180deg, #f7fafc 0%, #eef4f8 100%);
+  background: #f7fafc;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -845,13 +871,19 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   overflow: hidden;
   padding: 32px 24px 0;
   cursor: default;
-  transition: background 0.4s ease;
+  transition: background var(--dd-motion-slow) var(--dd-ease-standard);
 }
 
 .characters-wrap {
   width: 100%;
   max-width: 360px;
-  transition: transform 0.1s ease-out;
+  // 卡通形象跟随鼠标的位移。这是【插画元素】，不属于被禁的 hover 形变
+  // （design-system 的圆形白名单里也单独放行了登录页插画）。
+  // 时长改吃令牌：原来写死 0.1s 会绕过 prefers-reduced-motion 降级，
+  // 是全站少数几个「用户明确要求减少动效、它却照动不误」的地方。
+  // 令牌降到 1ms 后跟随变成瞬时，配合下面 JS 层的 matchMedia 守卫（不再更新位移），
+  // 减少动效模式下这个插画就是静止的。
+  transition: transform var(--dd-motion-fast) var(--dd-ease-decelerate);
 }
 
 .login-right {
@@ -861,7 +893,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   flex-direction: column;
   justify-content: center;
   padding: 52px 44px;
-  transition: background 0.4s ease;
+  transition: background var(--dd-motion-slow) var(--dd-ease-standard);
 }
 
 .login-loading {
@@ -873,9 +905,28 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   font-size: 14px;
 }
 
+// 「检查初始化状态」的 loading 结束后，表单是【硬替换】出现的（v-if / v-else 切换），
+// 这是访客看到面板的第一眼，却是全站唯一一处连淡入都没有的主内容切换。
+// 这里给出现的两块内容各补一次入场：只用 opacity + translateY，走令牌，
+// header 先、form 后错开 60ms（与全站列表页 rise-in 的错落口径一致）。
+//
+// 不用 <Transition mode="out-in"> 是因为 v-else 那一支是 <template>（多个根节点），
+// Transition 要单根；为它包一层 div 会插进 .login-right 的 flex 链，得不偿失。
+@keyframes dd-login-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .login-header {
   text-align: center;
   margin-bottom: 36px;
+  animation: dd-login-content-in var(--dd-motion-normal) var(--dd-ease-decelerate) both;
 
   .login-logo {
     width: 48px;
@@ -886,7 +937,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
     justify-content: center;
 
     img {
-      border-radius: 12px;
+      border-radius: var(--dd-radius-control);
     }
   }
 
@@ -895,36 +946,42 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
     font-weight: 700;
     color: #1f1f1f;
     margin: 0 0 8px;
-    transition: color 0.4s;
+    transition: color var(--dd-motion-slow) var(--dd-ease-standard);
   }
 
   p {
     font-size: 14px;
     color: #8c8c8c;
     margin: 0;
-    transition: color 0.4s;
+    transition: color var(--dd-motion-slow) var(--dd-ease-standard);
   }
 }
 
 .login-form {
+  // 比 header 晚 60ms 出现，形成轻微错落（与全站列表页 rise-in 同一口径）。
+  // 60ms 是范式允许的错落延迟上限，reduced-motion 下 global.scss 的补丁会把
+  // animation-delay 一并归零，不会出现「先隐身 60ms 再瞬现」的闪烁。
+  animation: dd-login-content-in var(--dd-motion-normal) var(--dd-ease-decelerate) both;
+  animation-delay: 60ms;
+
   :deep(.el-form-item) {
     margin-bottom: 18px;
   }
 
+  /* inset 1px 是 Element Plus 输入框的边框实现（功能性，非装饰阴影），保留；
+     只去掉聚焦时外扩的 3px 辉光。圆角吃控件档令牌 */
   :deep(.el-input__wrapper) {
-    border-radius: 10px;
+    border-radius: var(--dd-radius-control);
     height: 46px;
     box-shadow: 0 0 0 1px #e0e0e0 inset;
-    transition: all 0.3s;
+    transition: box-shadow var(--dd-motion-normal) var(--dd-ease-standard);
 
     &:hover {
       box-shadow: 0 0 0 1px #1890ff inset;
     }
 
     &.is-focus {
-      box-shadow:
-        0 0 0 1px #1890ff inset,
-        0 0 0 3px rgba(24, 144, 255, 0.15);
+      box-shadow: 0 0 0 1px #1890ff inset;
     }
   }
 }
@@ -932,32 +989,39 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
 .pwd-toggle {
   cursor: pointer;
   color: #8c8c8c;
-  transition: color 0.3s;
+  transition: color var(--dd-motion-normal) var(--dd-ease-standard);
 
   &:hover {
     color: #1890ff;
   }
 }
 
+/* 登录按钮：纯色底，hover 只加深底色，不上浮不加投影；圆角吃控件档令牌 */
 .login-btn {
   width: 100%;
   height: 46px;
-  border-radius: 10px;
+  border-radius: var(--dd-radius-control);
   font-weight: 600;
   font-size: 15px;
   background: #1f1f1f;
   border: none;
-  transition: all 0.3s;
+  transition:
+    color 0.3s,
+    background-color 0.3s,
+    border-color 0.3s;
 
   &:hover {
     background: #333 !important;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
+}
 
-  &:active {
-    transform: translateY(0);
-  }
+/* 演示站说明文案：与版本号同一档次的辅助信息，直角纯文本，不加任何装饰 */
+.login-demo-tip {
+  text-align: center;
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
 }
 
 .login-version {
@@ -965,7 +1029,7 @@ const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon));
   margin-top: 16px;
   font-size: 12px;
   color: #bfbfbf;
-  transition: color 0.4s;
+  transition: color var(--dd-motion-slow) var(--dd-ease-standard);
 }
 
 @media (max-width: 768px) {
@@ -1008,11 +1072,11 @@ html.dark {
   }
 
   .login-container {
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    border-color: var(--el-border-color-lighter);
   }
 
   .login-left {
-    background: linear-gradient(180deg, #17212f 0%, #111927 100%);
+    background: #17212f;
   }
 
   .login-right {
@@ -1033,6 +1097,7 @@ html.dark {
   }
 
   .login-form {
+    // 同亮色：inset 1px 是输入框边框实现，保留；聚焦不再外扩辉光
     .el-input__wrapper {
       background: #252540;
       box-shadow: 0 0 0 1px #3a3a55 inset;
@@ -1042,9 +1107,7 @@ html.dark {
       }
 
       &.is-focus {
-        box-shadow:
-          0 0 0 1px #1890ff inset,
-          0 0 0 3px rgba(24, 144, 255, 0.2);
+        box-shadow: 0 0 0 1px #1890ff inset;
       }
     }
 
@@ -1075,7 +1138,6 @@ html.dark {
 
     &:hover {
       background: #1677ff !important;
-      box-shadow: 0 4px 16px rgba(24, 144, 255, 0.35);
     }
   }
 

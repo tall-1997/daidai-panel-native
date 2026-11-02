@@ -39,6 +39,8 @@ type ProcessResult struct {
 	TimedOut bool
 	Canceled bool
 	Output   string
+	// Err 是 Wait 的原始错误：调用方据此判断是否被信号终止（describeTerminationSignal）。
+	Err error
 }
 
 type SupervisedProcess interface {
@@ -91,7 +93,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}
-	cmd := androidManagedCommandContext(ctx, argv[0], argv[1:], workDir)
+	// 不用 CommandContext：ctx 到期时它会直接 SIGKILL 主进程，绕过「先 TERM 再宽限」的语义。
+	// 超时 / 取消的终止统一由 Wait 的 select 分支处理。
+	cmd := androidManagedCommand(argv[0], argv[1:], workDir)
 	cmd.Env = filterProcessEnv(spec.Env)
 	androidFinalizeCommand(cmd)
 	setPgid(cmd)
@@ -109,12 +113,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 		cancel()
 		return nil, err
 	}
-	go func() {
-		<-ctx.Done()
-		if ctx.Err() != nil {
-			KillProcessGroup(cmd.Process)
-		}
-	}()
+	// 不在这里挂「ctx 结束就杀整组」的协程：Wait 正常收尾时也会 cancel，
+	// 那会把任务有意留在后台的进程（nohup / &）一起杀掉，清理与否必须由调用方按配置决定。
+	// 超时 / 取消的整组终止在 Wait 的 select 分支里做。
 	return proc, nil
 }
 
@@ -139,7 +140,17 @@ func (p *defaultSupervisedProcess) PID() int {
 }
 
 func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
-	err := p.cmd.Wait()
+	// 等主进程退出；ctx 超时 / 取消时终止整组，再等回收。
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-p.ctx.Done():
+		// 先 SIGTERM 再宽限后 SIGKILL（TerminateProcessGroup 不阻塞），让 trap 了 TERM 的脚本能收尾。
+		TerminateProcessGroup(p.cmd.Process)
+		err = <-done
+	}
 	p.cancel()
 	exitCode := 0
 	if err != nil {
@@ -158,7 +169,7 @@ func (p *defaultSupervisedProcess) Wait() (ProcessResult, error) {
 	p.outputMu.Lock()
 	output := p.output.String()
 	p.outputMu.Unlock()
-	return ProcessResult{ExitCode: exitCode, TimedOut: timedOut, Canceled: canceled, Output: output}, err
+	return ProcessResult{ExitCode: exitCode, TimedOut: timedOut, Canceled: canceled, Output: output, Err: err}, err
 }
 
 func (p *defaultSupervisedProcess) Cancel() error {

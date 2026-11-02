@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"daidai-panel/config"
 	"daidai-panel/database"
@@ -33,16 +33,23 @@ func TestReconcileDependenciesAfterRestartResumesRestoreJobs(t *testing.T) {
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	var resumed []model.Dependency
-	runner := dependencyReconcileRunner{
-		installed: func(depType, name, pythonVersion string) bool { return false },
-		reinstall: func(deps []model.Dependency) {
-			resumed = append(resumed, deps...)
-		},
-		restartReinstall: func(deps []model.Dependency) {},
+	originalInstalled := dependencyInstalledFunc
+	originalReinstallBatch := dependencyReinstallBatchFunc
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyReinstallBatchFunc = originalReinstallBatch
+	})
+
+	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
+		return false
 	}
 
-	reconcileDependenciesAfterRestart(runner)
+	var resumed []model.Dependency
+	dependencyReinstallBatchFunc = func(deps []model.Dependency) {
+		resumed = append(resumed, deps...)
+	}
+
+	ReconcileDependenciesAfterRestart()
 
 	if len(resumed) != 1 {
 		t.Fatalf("expected 1 dependency to resume, got %d", len(resumed))
@@ -76,16 +83,23 @@ func TestReconcileDependenciesAfterRestartReinstallsMissingLinuxDeps(t *testing.
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	var resumed []model.Dependency
-	runner := dependencyReconcileRunner{
-		installed: func(depType, name, pythonVersion string) bool { return false },
-		reinstall: func(deps []model.Dependency) {},
-		restartReinstall: func(deps []model.Dependency) {
-			resumed = append(resumed, deps...)
-		},
+	originalInstalled := dependencyInstalledFunc
+	originalRestartReinstallBatch := dependencyRestartReinstallBatchFunc
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyRestartReinstallBatchFunc = originalRestartReinstallBatch
+	})
+
+	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
+		return false
 	}
 
-	reconcileDependenciesAfterRestart(runner)
+	var resumed []model.Dependency
+	dependencyRestartReinstallBatchFunc = func(deps []model.Dependency) {
+		resumed = append(resumed, deps...)
+	}
+
+	ReconcileDependenciesAfterRestart()
 
 	if len(resumed) != 1 {
 		t.Fatalf("expected 1 linux dependency to auto-reinstall, got %d", len(resumed))
@@ -119,18 +133,23 @@ func TestReconcileDependenciesAfterRestartMarksLinuxInstalledWhenDetected(t *tes
 		t.Fatalf("create dependency: %v", err)
 	}
 
-	reinstallCalled := false
-	runner := dependencyReconcileRunner{
-		installed: func(depType, name, pythonVersion string) bool {
-			return depType == model.DepTypeLinux && name == "curl"
-		},
-		reinstall: func(deps []model.Dependency) {
-			reinstallCalled = true
-		},
-		restartReinstall: func(deps []model.Dependency) {},
+	originalInstalled := dependencyInstalledFunc
+	originalReinstallBatch := dependencyReinstallBatchFunc
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyReinstallBatchFunc = originalReinstallBatch
+	})
+
+	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
+		return depType == model.DepTypeLinux && name == "curl"
 	}
 
-	reconcileDependenciesAfterRestart(runner)
+	reinstallCalled := false
+	dependencyReinstallBatchFunc = func(deps []model.Dependency) {
+		reinstallCalled = true
+	}
+
+	ReconcileDependenciesAfterRestart()
 
 	if reinstallCalled {
 		t.Fatal("expected no reinstall batch when linux dependency is already detected")
@@ -145,6 +164,92 @@ func TestReconcileDependenciesAfterRestartMarksLinuxInstalledWhenDetected(t *tes
 	}
 	if !strings.Contains(updated.Log, "已同步状态为已安装") {
 		t.Fatalf("expected installed reconcile log, got %q", updated.Log)
+	}
+}
+
+// 一键安装 / 批量重装排到一半时面板重启：排队协程只活在内存里，剩下的 queued 记录没人再接手，
+// 而删除、重装、取消、再点一键安装都把 queued 当「正在处理」拒掉 —— 不在启动时收口就永远卡住。
+// 已经装上的同步成 installed，没装上的置 failed 并写明原因；恢复备份的续装分支不受影响。
+func TestReconcileDependenciesAfterRestartSettlesQueuedRecords(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	mustCreate := func(dep model.Dependency) model.Dependency {
+		t.Helper()
+		if err := database.DB.Create(&dep).Error; err != nil {
+			t.Fatalf("create dependency %s: %v", dep.Name, err)
+		}
+		return dep
+	}
+	queuedLinux := mustCreate(model.Dependency{Type: model.DepTypeLinux, Name: "libnss3", Status: model.DepStatusQueued,
+		Log: "[Playwright 一键安装] 已加入顺序队列（3/27）"})
+	queuedPython := mustCreate(model.Dependency{Type: model.DepTypePython, Name: "playwright", PythonVersion: "3.12", Status: model.DepStatusQueued,
+		Log: "[Playwright 一键安装] 已加入顺序队列（27/27）"})
+	queuedPresent := mustCreate(model.Dependency{Type: model.DepTypeLinux, Name: "libgbm1", Status: model.DepStatusQueued,
+		Log: "[Playwright 一键安装] 已加入顺序队列（4/27）"})
+	restoring := mustCreate(model.Dependency{Type: model.DepTypeNodeJS, Name: "left-pad", Status: model.DepStatusInstalling,
+		Log: "[恢复备份] 已提交依赖重装"})
+
+	originalInstalled := dependencyInstalledFunc
+	originalReinstallBatch := dependencyReinstallBatchFunc
+	originalRestartReinstallBatch := dependencyRestartReinstallBatchFunc
+	originalPythonPackages := pythonInstalledPackagesFunc
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyReinstallBatchFunc = originalReinstallBatch
+		dependencyRestartReinstallBatchFunc = originalRestartReinstallBatch
+		pythonInstalledPackagesFunc = originalPythonPackages
+	})
+	dependencyInstalledFunc = func(depType, name, pythonVersion string) bool {
+		return depType == model.DepTypeLinux && name == "libgbm1"
+	}
+	// 这里有一条 Python 记录：不打桩的话 stale 轮会真去建 venv、跑 pip list。
+	// 返回 nil = 列举失败，退回上面的 dependencyInstalledFunc，判定口径与原来一致。
+	pythonInstalledPackagesFunc = func(pythonVersion string) (map[string]bool, error) {
+		return nil, errors.New("测试里不列举真实的 Python 包")
+	}
+	var resumed []model.Dependency
+	dependencyReinstallBatchFunc = func(deps []model.Dependency) {
+		resumed = append(resumed, deps...)
+	}
+	dependencyRestartReinstallBatchFunc = func(deps []model.Dependency) {
+		t.Errorf("没有 installed 记录丢失，不应触发重启重装，实际 %d 条", len(deps))
+	}
+
+	ReconcileDependenciesAfterRestart()
+
+	reload := func(id uint) model.Dependency {
+		t.Helper()
+		var dep model.Dependency
+		if err := database.DB.First(&dep, id).Error; err != nil {
+			t.Fatalf("reload dependency %d: %v", id, err)
+		}
+		return dep
+	}
+	for _, dep := range []model.Dependency{queuedLinux, queuedPython} {
+		got := reload(dep.ID)
+		if got.Status != model.DepStatusFailed {
+			t.Fatalf("%s: 没装上的排队记录应置为 failed，实际 %q", dep.Name, got.Status)
+		}
+		if !strings.Contains(got.Log, "[启动校验] 排队中的任务因服务重启而中断，未执行，可重新安装") ||
+			!strings.Contains(got.Log, dep.Log) {
+			t.Fatalf("%s: 日志应保留原内容并写明因重启中断，实际 %q", dep.Name, got.Log)
+		}
+	}
+	if got := reload(queuedPresent.ID); got.Status != model.DepStatusInstalled || !strings.Contains(got.Log, "已同步状态为已安装") {
+		t.Fatalf("已经装上的排队记录应同步为 installed，实际 %q：%q", got.Status, got.Log)
+	}
+
+	if len(resumed) != 1 || resumed[0].ID != restoring.ID {
+		t.Fatalf("恢复备份的续装应照旧只续这一条，实际 %+v", resumed)
+	}
+	if got := reload(restoring.ID); got.Status != model.DepStatusInstalling {
+		t.Fatalf("恢复备份续装的记录应保持 installing，实际 %q", got.Status)
+	}
+
+	var leftover int64
+	database.DB.Model(&model.Dependency{}).Where("status = ?", model.DepStatusQueued).Count(&leftover)
+	if leftover != 0 {
+		t.Fatalf("启动校验之后不应再有 queued 记录，实际 %d 条", leftover)
 	}
 }
 
@@ -181,6 +286,60 @@ func TestReinstallDependencyUsesCurrentLinuxPackageManagerFlowOnApt(t *testing.T
 	if !called {
 		t.Fatal("expected restart reinstall path to use linux package manager builder")
 	}
+}
+
+// 重启重装的 Linux 分支必须与网页端安装 / 卸载共用 LockLinuxPackageOperation，而且在构造命令之前就要拿到：
+// 构造时会判断 apt 索引要不要刷新、写镜像源；重建后两边都会先跑 apt-get update，lists 锁不等待，撞上就失败。
+// 命令结束后锁必须放掉，否则网页端之后的 Linux 依赖操作会被永远堵住。
+func TestReinstallDependencyLinuxWaitsForSharedPackageLock(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	dep := model.Dependency{Type: model.DepTypeLinux, Name: "curl", Status: model.DepStatusInstalling}
+	if err := database.DB.Create(&dep).Error; err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+
+	originalBuild := buildLinuxDependencyInstallCommandFunc
+	t.Cleanup(func() { buildLinuxDependencyInstallCommandFunc = originalBuild })
+	built := make(chan struct{})
+	buildLinuxDependencyInstallCommandFunc = func(packageName string) (*exec.Cmd, error) {
+		close(built)
+		if _, err := exec.LookPath("cmd"); err == nil {
+			return exec.Command("cmd", "/c", "exit", "0"), nil
+		}
+		return exec.Command("sh", "-c", "exit 0"), nil
+	}
+
+	// 模拟网页端正在装另一个 Linux 包。
+	unlock := LockLinuxPackageOperation()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		reinstallDependency(dep, "[启动校验]")
+	}()
+
+	select {
+	case <-built:
+		unlock()
+		t.Fatal("网页端持有 Linux 包操作锁期间，重启重装不应开始构造命令")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("放锁后重启重装应能继续执行完")
+	}
+	select {
+	case <-built:
+	default:
+		t.Fatal("放锁后应构造并执行安装命令")
+	}
+	if !linuxPackageOperationMu.TryLock() {
+		t.Fatal("重启重装结束后必须放掉 Linux 包操作锁")
+	}
+	linuxPackageOperationMu.Unlock()
 }
 
 func TestRestoreBackupManifestPreservesCurrentPanelUsers(t *testing.T) {
@@ -487,11 +646,13 @@ func TestRestoreBackupManifestReplacesCoreBusinessData(t *testing.T) {
 					{Key: "panel_title", Value: "备份里的标题"},
 				},
 			},
-			Tasks: []model.Task{
+			Tasks: []BackupTask{
 				{
-					Name:    "restored-task",
-					Command: "python3 restored.py",
-					Status:  model.TaskStatusEnabled,
+					Task: model.Task{
+						Name:    "restored-task",
+						Command: "python3 restored.py",
+						Status:  model.TaskStatusEnabled,
+					},
 				},
 			},
 			EnvVars: []BackupEnvVar{
@@ -758,73 +919,135 @@ func TestCreateBackupSkipsQuarantinedScriptEntriesInArchive(t *testing.T) {
 	}
 }
 
-func TestRestoreModernKotlinJSONUsesManifestSelectionAndScriptContent(t *testing.T) {
+// 归档里的重名不会随升级被清洗：v3.0.10 时代导出的备份里可能有两条都叫「推送」的通知渠道
+// （当时完全合法），而 v3.1.0 给这些表加了名称唯一索引。
+// 恢复时必须自己改名让路，否则第二条 Create 会撞 UNIQUE 约束 → 整个事务 rollback →
+// 用户拿着一份永远恢复不了的备份，任务 / 环境变量 / 订阅全部白做，且没有任何自救入口。
+//
+// open_apps 这一条同时守住青龙导入：青龙 app 表的 name 没有唯一约束，
+// 青龙用户有两个同名应用时，以前会让整个青龙导入直接失败。
+func TestRestoreBackupManifestRenamesDuplicateNamesFromLegacyArchive(t *testing.T) {
 	testutil.SetupTestEnv(t)
-	keep := model.EnvVar{Name: "KEEP_ENV", Value: "keep", Enabled: true}
-	if err := database.DB.Create(&keep).Error; err != nil {
-		t.Fatalf("create preserved env: %v", err)
-	}
 
 	manifest := BackupManifest{
 		Format:  "daidai-panel-backup",
 		Version: "0.4.0",
-		Source:  "android-kotlin-fallback",
+		Source:  "daidai-panel",
 		Selection: BackupSelection{
-			Tasks:   true,
-			Scripts: true,
+			Configs:       true,
+			Subscriptions: true,
+			TaskViews:     true,
 		},
 		Data: BackupPayload{
-			Tasks:   []model.Task{{ID: 42, Name: "kotlin-task", Command: "echo ok", TaskType: model.TaskTypeManual, Status: model.TaskStatusEnabled, Labels: "mobile,backup"}},
-			Scripts: []ScriptFile{{Path: "nested/contract.sh", Content: base64.StdEncoding.EncodeToString([]byte("echo contract\n"))}},
+			Configs: BackupConfigBundle{
+				NotifyChannels: []BackupNotifyChannel{
+					{ID: 1, Name: "推送", Type: "webhook", Config: `{"url":"https://example.com/a"}`, Enabled: true},
+					{ID: 2, Name: "推送", Type: "webhook", Config: `{"url":"https://example.com/b"}`, Enabled: true},
+				},
+				OpenApps: []BackupOpenApp{
+					// app_key 本身是唯一索引，这里必须错开，才能确保撞的是我们要测的 name 约束。
+					{Name: "我的应用", AppKey: "key-a", AppSecret: "secret-a", Scopes: "tasks", Enabled: true},
+					{Name: "我的应用", AppKey: "key-b", AppSecret: "secret-b", Scopes: "tasks", Enabled: true},
+				},
+			},
+			SSHKeys: []BackupSSHKey{
+				{ID: 1, Name: "我的密钥", PrivateKey: "-----BEGIN KEY A-----"},
+				{ID: 2, Name: "我的密钥", PrivateKey: "-----BEGIN KEY B-----"},
+			},
+			TaskViews: []model.TaskView{
+				{Name: "我的视图"},
+				{Name: "我的视图"},
+			},
 		},
 	}
-	payload, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	if err := restoreJSONBytes(payload); err != nil {
-		t.Fatalf("restore modern Kotlin JSON: %v", err)
+
+	if err := restoreBackupManifest(manifest, t.TempDir()); err != nil {
+		t.Fatalf("含重名的老备份必须能恢复成功，实际失败：%v", err)
 	}
 
-	var envCount int64
-	if err := database.DB.Model(&model.EnvVar{}).Where("name = ?", "KEEP_ENV").Count(&envCount).Error; err != nil || envCount != 1 {
-		t.Fatalf("unselected env vars must be preserved: count=%d err=%v", envCount, err)
+	var channels []model.NotifyChannel
+	if err := database.DB.Order("id ASC").Find(&channels).Error; err != nil {
+		t.Fatalf("list notify channels: %v", err)
 	}
-	var task model.Task
-	if err := database.DB.Where("name = ?", "kotlin-task").First(&task).Error; err != nil {
-		t.Fatalf("restored task missing: %v", err)
+	if len(channels) != 2 {
+		t.Fatalf("两条同名渠道都要恢复回来，实际 %d 条", len(channels))
 	}
-	if task.Labels != "mobile,backup" {
-		t.Fatalf("task labels were not preserved: %q", task.Labels)
+	if channels[0].Name != "推送" || channels[1].Name != "推送 (2)" {
+		t.Fatalf("重名渠道应被改名而不是丢弃，实际 %q / %q", channels[0].Name, channels[1].Name)
 	}
-	script, err := os.ReadFile(filepath.Join(config.C.Data.ScriptsDir, "nested", "contract.sh"))
-	if err != nil || string(script) != "echo contract\n" {
-		t.Fatalf("portable script mismatch: %q err=%v", script, err)
+	// 改名只能动名字，配置必须原样搬回来 —— 重复渠道里也可能存着用户唯一一份 webhook 地址。
+	if !strings.Contains(channels[1].Config, "https://example.com/b") {
+		t.Fatalf("被改名的渠道配置丢了，实际 %q", channels[1].Config)
+	}
+
+	var apps []model.OpenApp
+	if err := database.DB.Order("id ASC").Find(&apps).Error; err != nil {
+		t.Fatalf("list open apps: %v", err)
+	}
+	if len(apps) != 2 || apps[0].Name != "我的应用" || apps[1].Name != "我的应用 (2)" {
+		t.Fatalf("重名 OpenAPI 应用应被改名后全部恢复，实际 %+v", apps)
+	}
+
+	var keys []model.SSHKey
+	if err := database.DB.Order("id ASC").Find(&keys).Error; err != nil {
+		t.Fatalf("list ssh keys: %v", err)
+	}
+	if len(keys) != 2 || keys[0].Name != "我的密钥" || keys[1].Name != "我的密钥 (2)" {
+		t.Fatalf("重名 SSH 密钥应被改名后全部恢复，实际 %+v", keys)
+	}
+	// 私钥往往只有备份里这一份，改名绝不能把它带丢。
+	if keys[1].PrivateKey != "-----BEGIN KEY B-----" {
+		t.Fatalf("被改名的 SSH 密钥私钥丢了，实际 %q", keys[1].PrivateKey)
+	}
+
+	var views []model.TaskView
+	if err := database.DB.Order("id ASC").Find(&views).Error; err != nil {
+		t.Fatalf("list task views: %v", err)
+	}
+	if len(views) != 2 || views[0].Name != "我的视图" || views[1].Name != "我的视图 (2)" {
+		t.Fatalf("重名任务视图应被改名后全部恢复，实际 %+v", views)
 	}
 }
 
-func TestRestoreLegacyKotlinJSONPreservesNotificationConfigAndContentBase64(t *testing.T) {
+// 归档里已经存在一条叫「推送 (2)」的记录时，改名不能二次撞车。
+// 与启动迁移 DeduplicateBeforeUniqueIndex 共用 database.NextAvailableName，行为必须一致。
+func TestRestoreBackupManifestSkipsOccupiedRenameCandidates(t *testing.T) {
 	testutil.SetupTestEnv(t)
-	payload := []byte(`{
-  "version":"0.4.0-kotlin-json",
-  "created_at":"2026-08-21T00:00:00Z",
-  "tasks":[],"env_vars":[],"subscriptions":[],"system_configs":[],"dependencies":[],
-  "notify_channels":[{"id":7,"name":"contract","type":"webhook","config":{"url":"https://example.invalid/hook"},"push_scope":"bound","enabled":true}],
-  "scripts":[{"path":"legacy.sh","content_base64":"ZWNobyBsZWdhY3kK"}]
-}`)
-	if err := restoreLegacyJSONBytes(payload); err != nil {
-		t.Fatalf("restore legacy Kotlin JSON: %v", err)
+
+	manifest := BackupManifest{
+		Format:  "daidai-panel-backup",
+		Version: "0.4.0",
+		Source:  "daidai-panel",
+		Selection: BackupSelection{
+			Configs: true,
+		},
+		Data: BackupPayload{
+			Configs: BackupConfigBundle{
+				NotifyChannels: []BackupNotifyChannel{
+					{ID: 1, Name: "推送", Type: "webhook", Config: `{"url":"https://example.com/a"}`, Enabled: true},
+					{ID: 2, Name: "推送 (2)", Type: "webhook", Config: `{"url":"https://example.com/b"}`, Enabled: true},
+					{ID: 3, Name: "推送", Type: "webhook", Config: `{"url":"https://example.com/c"}`, Enabled: true},
+				},
+			},
+		},
 	}
-	var channel model.NotifyChannel
-	if err := database.DB.Where("name = ?", "contract").First(&channel).Error; err != nil {
-		t.Fatalf("restored notification missing: %v", err)
+
+	if err := restoreBackupManifest(manifest, t.TempDir()); err != nil {
+		t.Fatalf("恢复应成功，实际失败：%v", err)
 	}
-	if !strings.Contains(channel.Config, "example.invalid") || channel.PushScope != model.NotifyPushScopeBound {
-		t.Fatalf("notification config mismatch: %+v", channel)
+
+	var channels []model.NotifyChannel
+	if err := database.DB.Order("id ASC").Find(&channels).Error; err != nil {
+		t.Fatalf("list notify channels: %v", err)
 	}
-	script, err := os.ReadFile(filepath.Join(config.C.Data.ScriptsDir, "legacy.sh"))
-	if err != nil || string(script) != "echo legacy\n" {
-		t.Fatalf("legacy script mismatch: %q err=%v", script, err)
+	want := []string{"推送", "推送 (2)", "推送 (3)"}
+	if len(channels) != len(want) {
+		t.Fatalf("期望恢复 %d 条渠道，实际 %d 条", len(want), len(channels))
+	}
+	for i, expected := range want {
+		if channels[i].Name != expected {
+			t.Fatalf("第 %d 条渠道名不符：期望 %q，实际 %q", i, expected, channels[i].Name)
+		}
 	}
 }
 

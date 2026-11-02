@@ -194,6 +194,19 @@ ui_print "- 访问地址: http://127.0.0.1:${PANEL_PORT}"
 ui_print "- rootfs  : $rootfs"
 ui_print "- 数据目录: $rootfs/app/Dumb-Panel"
 
+# ---- SSH 状态 -----------------------------------------------------------
+# README 一直写着「点动作按钮能看到 PANEL_PORT / SSH_PORT 的监听情况」，
+# 但代码里只查了 PANEL_PORT —— SSH 一旦不通，用户在这里拿不到任何线索。
+SSH_PORT_INFO=$(netstat -ltn 2>/dev/null | grep ":${SSH_PORT}\b" | head -n2)
+if [ -n "$SSH_PORT_INFO" ]; then
+  ui_print "- SSH 监听:"
+  echo "$SSH_PORT_INFO" | while IFS= read -r line; do
+    ui_print "    $line"
+  done
+else
+  ui_print "- SSH 监听: 未检测到 (${SSH_PORT} 未监听)"
+fi
+
 # ---- 容器运行时自检 ----------------------------------------------------
 if [ -x "$RURIMA" ] && [ -d "$rootfs" ]; then
   ui_print " "
@@ -211,6 +224,30 @@ if [ -x "$RURIMA" ] && [ -d "$rootfs" ]; then
         echo "$c: 缺失"
       fi
     done
+  ' 2>/dev/null | while IFS= read -r line; do
+    ui_print "$line"
+  done
+
+  # 容器 SSH 自检：SSH 连不上时这一段是唯一能自证的地方。
+  # 六项一次查完，正好对应六类根因：包没装成 / 配置丢了 / 特权分离用户缺失 /
+  # 没有 host key / 密码没写进去 / 配置本身跑不过 sshd -t。
+  ui_print " "
+  ui_print "--- 容器 SSH ---"
+  "$RURIMA" ruri -p -N -S -A "$rootfs" "$CTR_SHELL" -c '
+    if [ -x /usr/sbin/sshd ]; then
+      echo "sshd: /usr/sbin/sshd | $(/usr/sbin/sshd -V 2>&1 | head -n1)"
+    else
+      echo "sshd: 缺失（openssh-server 没装成）"
+    fi
+    [ -f /etc/ssh/sshd_config ] && echo "sshd_config: 存在" || echo "sshd_config: 缺失"
+    echo "特权分离用户 sshd: $(id -u sshd 2>/dev/null || echo 缺失)"
+    echo "host key 数量: $(ls /etc/ssh/ssh_host_*_key 2>/dev/null | wc -l | tr -d " ")"
+    case "$(grep "^root:" /etc/shadow 2>/dev/null | cut -d: -f2)" in
+      \$*) echo "root 密码: 已设置" ;;
+      *)   echo "root 密码: 未设置（密码登录必然被拒）" ;;
+    esac
+    mkdir -p /run/sshd
+    /usr/sbin/sshd -t 2>&1 | sed "s/^/sshd -t: /"
   ' 2>/dev/null | while IFS= read -r line; do
     ui_print "$line"
   done
@@ -236,6 +273,32 @@ if [ -f "$SERVER_LOG" ]; then
   done
 else
   ui_print "(暂无 $SERVER_LOG)"
+fi
+
+# ---- 容器内 service.log / sshd.log ---------------------------------------
+# 宿主侧 service.log（上面那段）和容器内的 service.log 是两个不同的文件：
+# SSH 状态快照、容器启动脚本的日志全在容器那一份里，原来这里根本没展示。
+CTR_SERVICE_LOG="$rootfs/app/Dumb-Panel/service.log"
+SSHD_LOG="$rootfs/app/Dumb-Panel/sshd.log"
+
+ui_print " "
+ui_print "--- 容器 service.log (最近 30 行, 含 SSH 状态快照) ---"
+if [ -f "$CTR_SERVICE_LOG" ]; then
+  tail -n 30 "$CTR_SERVICE_LOG" 2>/dev/null | while IFS= read -r line; do
+    ui_print "$line"
+  done
+else
+  ui_print "(暂无 $CTR_SERVICE_LOG)"
+fi
+
+ui_print " "
+ui_print "--- sshd.log (最近 30 行) ---"
+if [ -f "$SSHD_LOG" ]; then
+  tail -n 30 "$SSHD_LOG" 2>/dev/null | while IFS= read -r line; do
+    ui_print "$line"
+  done
+else
+  ui_print "(暂无 $SSHD_LOG)"
 fi
 
 ui_print " "

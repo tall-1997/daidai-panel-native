@@ -2,9 +2,13 @@
 import { ref, watch } from 'vue'
 import { useResponsive } from '@/composables/useResponsive'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: boolean
-}>()
+  // 提交在途标记：父组件批量改名请求期间置位，防止连点/连按回车重复提交
+  submitting?: boolean
+}>(), {
+  submitting: false
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -19,6 +23,10 @@ function closeDialog() {
 }
 
 function handleConfirm() {
+  // 输入框上还挂着回车提交，光靠按钮 loading 拦不住，这里再兜一道在途判断
+  if (props.submitting) {
+    return
+  }
   emit('confirm', { name: newName.value })
 }
 
@@ -59,7 +67,7 @@ watch(
     </el-form>
     <template #footer>
       <el-button @click="closeDialog">取消</el-button>
-      <el-button type="primary" @click="handleConfirm">确定</el-button>
+      <el-button type="primary" :loading="submitting" :disabled="submitting" @click="handleConfirm">确定</el-button>
     </template>
   </el-dialog>
 </template>

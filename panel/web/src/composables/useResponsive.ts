@@ -1,7 +1,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-const MOBILE_BREAKPOINT = 768
-const TABLET_BREAKPOINT = 1024
+// 这两条断点现在有组件外的消费者：utils/editorEngine.ts 的 auto 解析要用 TABLET_BREAKPOINT
+// 判断「窄到该给 CodeMirror 了没有」。所以改成具名导出，让阈值只有这一个真源——
+// 在别处重抄一个 1024，表现会是「侧栏已经收成移动版了，编辑器还在按桌面规则挑引擎」。
+export const MOBILE_BREAKPOINT = 768
+export const TABLET_BREAKPOINT = 1024
 
 export function useResponsive() {
   const width = ref(typeof window !== 'undefined' ? window.innerWidth : TABLET_BREAKPOINT)

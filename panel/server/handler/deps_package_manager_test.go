@@ -95,53 +95,5 @@ func TestLinuxInstallCommandSpec(t *testing.T) {
 	}
 }
 
-func TestRewriteAPTListLine(t *testing.T) {
-	line := "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted"
-	updated, changed := rewriteAPTListLine(line, "ubuntu", "https://mirrors.aliyun.com/ubuntu")
-	if !changed {
-		t.Fatalf("expected apt list line to change")
-	}
-	if updated != "deb [arch=amd64] https://mirrors.aliyun.com/ubuntu jammy main restricted" {
-		t.Fatalf("unexpected updated line: %s", updated)
-	}
-
-	defaulted, changed := rewriteAPTListLine(updated, "ubuntu", "")
-	if changed {
-		t.Fatalf("expected apt list line already using default accelerated mirror to remain unchanged")
-	}
-	if defaulted != "deb [arch=amd64] https://mirrors.aliyun.com/ubuntu jammy main restricted" {
-		t.Fatalf("unexpected defaulted line: %s", defaulted)
-	}
-}
-
-func TestRewriteAPTSourcesContent(t *testing.T) {
-	content := "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main restricted\n"
-	updated, changed := rewriteAPTSourcesContent(content, "ubuntu", "https://mirrors.aliyun.com/ubuntu")
-	if !changed {
-		t.Fatalf("expected apt sources content to change")
-	}
-	if !strings.Contains(updated, "URIs: https://mirrors.aliyun.com/ubuntu") {
-		t.Fatalf("unexpected rewritten sources content: %s", updated)
-	}
-}
-
-func TestEffectiveLinuxMirrorFallsBackToDefaultAcceleratedMirror(t *testing.T) {
-	apkManager := linuxPackageManager{Name: "apk", Binary: "apk"}
-	if got := effectiveLinuxMirror(apkManager, "", ""); got != "https://repo.huaweicloud.com/alpine" {
-		t.Fatalf("expected apk default mirror, got %q", got)
-	}
-	if got := effectiveLinuxMirror(apkManager, "", "https://dl-cdn.alpinelinux.org/alpine"); got != "https://repo.huaweicloud.com/alpine" {
-		t.Fatalf("expected apk official mirror to fall back to accelerated mirror, got %q", got)
-	}
-
-	aptManager := linuxPackageManager{Name: "apt", Binary: "apt-get"}
-	if got := effectiveLinuxMirror(aptManager, "ubuntu", ""); got != "https://mirrors.aliyun.com/ubuntu" {
-		t.Fatalf("expected ubuntu default mirror, got %q", got)
-	}
-	if got := effectiveLinuxMirror(aptManager, "debian", "http://deb.debian.org/debian"); got != "https://mirrors.aliyun.com/debian" {
-		t.Fatalf("expected debian official mirror to fall back to accelerated mirror, got %q", got)
-	}
-	if got := effectiveLinuxMirror(aptManager, "ubuntu", "https://mirrors.aliyun.com/ubuntu"); got != "https://mirrors.aliyun.com/ubuntu" {
-		t.Fatalf("expected custom ubuntu mirror to be preserved, got %q", got)
-	}
-}
+// 镜像源改写（rewriteAPTListLine / rewriteAPTSourcesContent / EffectiveLinuxMirror）的用例
+// 随实现一起搬到了 server/service/linux_mirror_test.go，断言原样保留。

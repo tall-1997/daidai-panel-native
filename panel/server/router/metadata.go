@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const upstreamSourceVersion = "9a7c27e2a03ed30d3ac632adf58fec60009e601c"
+const upstreamSourceVersion = "9deab3cf45e54e564eaee35d8799aff63fc96930"
 
 type RouteMetadata struct {
 	AuthContract    string
@@ -72,9 +72,7 @@ var extensionRouteDescriptors = map[string]RouteDescriptor{
 	"POST /api/system/stop":                              {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_system_stop"},
 	"POST /api/v1/system/stop":                           {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/post_api_v1_system_stop"},
 	"PUT /api/envs/by-name":                              {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_envs_by-name"},
-	"PUT /api/tasks/:id/restore-subscription-default":    {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_tasks_id_restore-subscription-default"},
 	"PUT /api/v1/envs/by-name":                           {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_envs_by-name"},
-	"PUT /api/v1/tasks/:id/restore-subscription-default": {AuthContract: "jwt", StreamContract: "none", TestCase: "TestMobileRouteContract/put_api_v1_tasks_id_restore-subscription-default"},
 }
 
 var terminalRouteDescriptors = func() map[string]RouteDescriptor {

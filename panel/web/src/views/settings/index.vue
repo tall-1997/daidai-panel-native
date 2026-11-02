@@ -4,8 +4,10 @@ import { useAuthStore } from '@/stores/auth'
 import AlertConfigCard from './components/AlertConfigCard.vue'
 import BackupManagementCard from './components/BackupManagementCard.vue'
 import CaptchaConfigCard from './components/CaptchaConfigCard.vue'
+import ExtraConfigCard from './components/ExtraConfigCard.vue'
 import IPWhitelistCard from './components/IPWhitelistCard.vue'
 import LoginLogsCard from './components/LoginLogsCard.vue'
+import McpConfigCard from './components/McpConfigCard.vue'
 import OverviewHeroCard from './components/OverviewHeroCard.vue'
 import OverviewStatsCard from './components/OverviewStatsCard.vue'
 import PanelLogCard from './components/PanelLogCard.vue'
@@ -15,8 +17,8 @@ import SessionManagementCard from './components/SessionManagementCard.vue'
 import SystemConfigCard from './components/SystemConfigCard.vue'
 import SystemHealthCard from './components/SystemHealthCard.vue'
 import SystemInfoCard from './components/SystemInfoCard.vue'
-import UpdateSettingsCard from './components/UpdateSettingsCard.vue'
 import TaskExecutionCard from './components/TaskExecutionCard.vue'
+import WecomTriggerCard from './components/WecomTriggerCard.vue'
 import { useSettingsConfig } from './useSettingsConfig'
 import { useSettingsOverview } from './useSettingsOverview'
 import { usePanelLogViewer } from './usePanelLogViewer'
@@ -31,7 +33,8 @@ const activeTab = ref('overview')
 
 const overview = useSettingsOverview()
 const config = useSettingsConfig()
-const panelLogViewer = usePanelLogViewer()
+// 只在「面板日志」子标签激活时自动刷新（#159 修复 E），停在别的子标签不再后台轮询
+const panelLogViewer = usePanelLogViewer(computed(() => activeTab.value === 'panel-log'))
 const security = useSettingsSecurity()
 
 const {
@@ -42,9 +45,7 @@ const {
   updateStatus,
   checkingUpdate,
   updatingPanel,
-  autoUpdateEnabled,
-  savingAutoUpdate,
-  lastCheckTime,
+  stoppingPanel,
   releaseNotesVisible,
   updateProgressVisible,
   updateProgressStatus,
@@ -54,11 +55,10 @@ const {
   loadSystemInfo,
   loadSystemStats,
   loadVersion,
-  loadUpdatePreferences,
   handleCheckUpdate,
   handleUpdatePanel,
   handleRestartPanel,
-  handleToggleAutoUpdate,
+  handleStopPanel,
   openReleaseNotes,
   closeReleaseNotes,
   openGitHub,
@@ -70,6 +70,11 @@ const {
   configsLoading,
   configsSaving,
   configForm,
+  configSchema,
+  autoUpdateLastCheckedAt,
+  extraConfigGroups,
+  extraConfigDraft,
+  handleSaveExtraConfigs,
   loadSystemConfigs,
   handleSaveSystemConfig,
   handleSaveAlertConfig,
@@ -80,6 +85,8 @@ const {
   handleSaveProxy,
   handleSaveCaptcha,
   handleSaveSessionConfig,
+  handleSaveMcpConfig,
+  handleSaveWecomTriggerConfig,
   handleSaveBackupSchedule
 } = config
 
@@ -115,6 +122,8 @@ const {
   backupScheduleSelection,
   uploadProgress,
   uploadUploading,
+  // 创建备份的在途锁，透传给备份卡片绑「创建」按钮的 loading
+  backupCreating,
   showRestoreDialog,
   restoreFilename,
   restorePassword,
@@ -147,6 +156,8 @@ const {
   showAddIPDialog,
   newIP,
   newIPRemarks,
+  // 添加 IP 白名单的在途锁，透传给白名单卡片绑「添加」按钮的 loading
+  ipAdding,
   loadBackups,
   handleCreateBackup,
   handleUploadBackup,
@@ -215,8 +226,7 @@ function handleTabChange(tab: string) {
     void loadVersion()
     void loadSystemStats()
     void loadSystemInfo()
-    void loadUpdatePreferences()
-  } else if (tab === 'config' || tab === 'task-exec' || tab === 'proxy' || tab === 'captcha' || tab === 'alert') {
+  } else if (tab === 'config' || tab === 'task-exec' || tab === 'proxy' || tab === 'captcha' || tab === 'alert' || tab === 'mcp' || tab === 'wecom') {
     void loadSystemConfigs()
   } else if (tab === 'panel-log') {
     void loadPanelLogs()
@@ -225,14 +235,21 @@ function handleTabChange(tab: string) {
     void loadSystemConfigs()
   } else if (tab === 'security') {
     void load2FAStatus()
+    if (securityTab.value === 'sessions') void loadSystemConfigs()
   }
+}
+
+// 「会话管理」里的会话数上限也走 useSettingsConfig 的保存，没成功加载过配置时保存会被拦下，
+// 所以进这个子标签也要拉一次配置（顺带让上限显示服务端的真实值，而不是本地默认的 1）
+function handleSecuritySubTabChange(tab: string) {
+  handleSecurityTabChange(tab)
+  if (tab === 'sessions') void loadSystemConfigs()
 }
 
 onMounted(() => {
   void loadVersion()
   void loadSystemStats()
   void loadSystemInfo()
-  void loadUpdatePreferences()
   if (!isAdmin.value) {
     securityTab.value = 'password-2fa'
   }
@@ -263,10 +280,10 @@ watch(
             :current-version="currentVersion"
             :update-info="updateInfo"
             :update-status="updateStatus"
+            :system-info="systemInfo"
             :checking-update="checkingUpdate"
             :updating-panel="updatingPanel"
-            :auto-update-enabled="autoUpdateEnabled"
-            :saving-auto-update="savingAutoUpdate"
+            :stopping-panel="stoppingPanel"
             :release-notes-visible="releaseNotesVisible"
             :update-progress-visible="updateProgressVisible"
             :update-progress-status="updateProgressStatus"
@@ -274,18 +291,11 @@ watch(
             :on-check-update="handleCheckUpdate"
             :on-start-update="handleUpdatePanel"
             :on-restart-panel="handleRestartPanel"
-            :on-toggle-auto-update="handleToggleAutoUpdate"
+            :on-stop-panel="handleStopPanel"
             :on-open-release-notes="openReleaseNotes"
             :on-close-release-notes="closeReleaseNotes"
             :on-open-git-hub="openGitHub"
             :on-close-update-progress="closeUpdateProgress"
-          />
-
-          <UpdateSettingsCard
-            :version="currentVersion"
-            :last-check-time="lastCheckTime"
-            :auto-update-enabled="autoUpdateEnabled"
-            @update:auto-update-enabled="handleToggleAutoUpdate"
           />
         </div>
 
@@ -301,16 +311,33 @@ watch(
         </div>
       </el-tab-pane>
 
-      <el-tab-pane v-if="isAdmin" label="面板外观" name="config">
-        <SystemConfigCard
-          :configs-loading="configsLoading"
-          :configs-saving="configsSaving"
-          :form="configForm"
-          :on-save="handleSaveSystemConfig"
-          :on-icon-upload="handleIconUpload"
-          :on-log-background-upload="handleLogBackgroundUpload"
-          :on-appearance-preview="previewPanelAppearance"
-        />
+      <!-- name 仍是 config：handleTabChange 靠它加载配置，标签名改成「通用设置」不影响这里 -->
+      <el-tab-pane v-if="isAdmin" label="通用设置" name="config">
+        <div class="config-grid">
+          <SystemConfigCard
+            :configs-loading="configsLoading"
+            :configs-saving="configsSaving"
+            :form="configForm"
+            :config-schema="configSchema"
+            :on-save="handleSaveSystemConfig"
+            :on-icon-upload="handleIconUpload"
+            :on-log-background-upload="handleLogBackgroundUpload"
+            :on-appearance-preview="previewPanelAppearance"
+          />
+
+          <!--
+            兜底卡片：渲染面板注册了、但本页没有专属表单的配置项，按服务端 schema 分组展示；
+            哪些项进兜底区由 useSettingsConfig 的差集算出，不在这里写死。没有这类配置项时整卡不渲染。
+          -->
+          <ExtraConfigCard
+            v-if="extraConfigGroups.length"
+            :configs-loading="configsLoading"
+            :configs-saving="configsSaving"
+            :groups="extraConfigGroups"
+            :draft="extraConfigDraft"
+            :on-save="handleSaveExtraConfigs"
+          />
+        </div>
       </el-tab-pane>
 
       <el-tab-pane v-if="isAdmin" label="任务运行" name="task-exec">
@@ -318,6 +345,7 @@ watch(
           :configs-loading="configsLoading"
           :configs-saving="configsSaving"
           :form="configForm"
+          :config-schema="configSchema"
           :on-save="handleSaveTaskConfig"
         />
       </el-tab-pane>
@@ -361,8 +389,10 @@ watch(
 
       <el-tab-pane v-if="isAdmin" label="代理设置" name="proxy">
         <ProxyConfigCard
+          :configs-loading="configsLoading"
           :configs-saving="configsSaving"
           :form="configForm"
+          :auto-update-last-checked-at="autoUpdateLastCheckedAt"
           :on-save="handleSaveProxy"
         />
       </el-tab-pane>
@@ -373,6 +403,26 @@ watch(
           :form="configForm"
           :captcha-feature-implemented="captchaFeatureImplemented"
           :on-save="handleSaveCaptcha"
+        />
+      </el-tab-pane>
+
+      <el-tab-pane v-if="isAdmin" label="MCP 服务" name="mcp">
+        <McpConfigCard
+          :configs-loading="configsLoading"
+          :configs-saving="configsSaving"
+          :form="configForm"
+          :on-save="handleSaveMcpConfig"
+        />
+      </el-tab-pane>
+
+      <!-- lazy：这张卡挂载时会自己去拉接入配置与开放 API 应用两份列表，
+           不加 lazy 的话设置页一打开（哪怕从不切到这个标签）就会白发两个请求 -->
+      <el-tab-pane v-if="isAdmin" label="企业微信触发" name="wecom" lazy>
+        <WecomTriggerCard
+          :configs-loading="configsLoading"
+          :configs-saving="configsSaving"
+          :form="configForm"
+          :on-save="handleSaveWecomTriggerConfig"
         />
       </el-tab-pane>
 
@@ -403,6 +453,7 @@ watch(
           :restore-progress-error="restoreProgressError"
           :upload-progress="uploadProgress"
           :upload-uploading="uploadUploading"
+          :backup-creating="backupCreating"
           :on-create-backup="handleCreateBackup"
           :on-upload-backup="handleUploadBackup"
           :on-confirm-create-backup="confirmCreateBackup"
@@ -416,7 +467,7 @@ watch(
       </el-tab-pane>
 
       <el-tab-pane label="账号安全" name="security">
-        <el-tabs v-model="securityTab" @tab-change="handleSecurityTabChange">
+        <el-tabs v-model="securityTab" @tab-change="handleSecuritySubTabChange">
           <el-tab-pane name="password-2fa">
             <template #label>
               <span class="sub-tab-label"><el-icon :size="14"><Lock /></el-icon>密码与2FA</span>
@@ -477,6 +528,7 @@ watch(
               v-model:new-i-p-remarks="newIPRemarks"
               :ip-whitelist="ipWhitelist"
               :ip-whitelist-loading="ipWhitelistLoading"
+              :ip-adding="ipAdding"
               :on-load-i-p-whitelist="loadIPWhitelist"
               :on-add-i-p="handleAddIP"
               :on-remove-i-p="handleRemoveIP"
@@ -497,7 +549,8 @@ watch(
   align-items: center;
   margin-bottom: 12px;
   padding: 4px;
-  border-radius: 14px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
 }
 
@@ -527,12 +580,23 @@ watch(
   font-weight: 500;
 }
 
-// 概览主网格：入场淡入上移，幅度小、走切页动效令牌（reduced-motion 由 global.scss 统一降级）
+// 「通用设置」页：左「面板外观」、右「其它配置项」两栏 1:1，间距与概览信息网格一致（16px）。
+// 两卡高度不同，顶部对齐、不拉伸，短卡下方不拖一截空白卡身（同 config-file 页 .side-panel）。
+// 固定两栏、不按兜底卡在不在切单栏：兜底卡要等配置加载完才出现，动态切栏会让左卡宽度跳一下
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+// 概览主区：只剩「产品与版本」一张卡，单列水平居中并限宽，宽屏上不拉成通栏；
+// 入场淡入上移走切页动效令牌（reduced-motion 由 global.scss 统一降级）
 .overview-grid {
   display: grid;
   animation: dd-settings-rise-in var(--dd-motion-page) var(--dd-ease-decelerate) both;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(0, 720px);
+  justify-content: center;
   margin-bottom: 16px;
 }
 
@@ -571,7 +635,8 @@ watch(
   // 下划线指示条：品牌色，跟随选中项滑动，无填充背景不会被裁切
   .el-tabs__active-bar {
     height: 3px;
-    border-radius: 3px;
+    // 3px 高的下划线指示条属天然胶囊（与进度条同类）→ pill 档
+    border-radius: var(--dd-radius-pill);
     background-color: var(--el-color-primary);
   }
 }
@@ -606,8 +671,14 @@ watch(
   }
 }
 
+// 「通用设置」两栏在 ≤960px 收成单栏，断点沿用仪表盘页已有的 960 档
+@media (max-width: 960px) {
+  .config-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 768px) {
-  .overview-grid { grid-template-columns: 1fr; }
+  // 手机端「产品与版本」卡占满整行
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
   .overview-info-grid { grid-template-columns: 1fr; }
   .page-header {
     flex-direction: column;

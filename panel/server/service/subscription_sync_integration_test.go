@@ -68,7 +68,9 @@ const $ = new Env("吉利雷达");
 		t.Fatalf("create subscription: %v", err)
 	}
 
-	// 必须有 schedulerV2，否则 AddJob 段会 panic
+	// 起真实调度器模拟面板运行中，让自动添加的任务落库后照线上那样走 AddJob 注册调度（下面只断言任务行落库，不查调度器）。
+	// 不起也不会 panic：AddJob 对 nil 接收者安全、调用点也判了空，只是跳过注册；调度器为 nil 的情形见
+	// panel_shutdown_test.go 的 TestSubscriptionSyncAfterSchedulerShutdownStillCreatesTasks。
 	InitSchedulerV2()
 	defer ShutdownSchedulerV2()
 
@@ -184,23 +186,26 @@ func TestSyncSubscriptionTasksUsesSystemDefaultWhenSubFlagOff(t *testing.T) {
 	}
 }
 
-// 用户的"git 拉了但任务列表空"场景：脚本头没写 cron 注释。
-// v2.2.10 起必须用 default_cron_rule 兜底建任务（每天 0 点），
-// 同时通知辅助脚本 sendNotify.js / notify.py 不应被误建。
-func TestSyncSubscriptionTasksFallsBackToDefaultCronForBusinessScripts(t *testing.T) {
+// #134：脚本头没写 cron 注释。v2.2.10 ～ v3.2.8 会用硬兜底「每天 0 点」建成启用任务，
+// 连 config.py、mysend.py 这类库文件也被建成任务半夜跑；现在改为：
+//   - default_cron_rule 留空（出厂默认）→ 不建，拉取日志提示有几个、是哪些，以及出路；
+//   - 填了合法规则 → 按规则建启用任务，日志标明来自默认规则。
+//
+// 通知辅助脚本 sendNotify.js / notify.py 两种情况下都不建。
+func TestSyncSubscriptionTasksUndeclaredCronFollowsDefaultRule(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
 	saveDir := "no_cron_repo"
 	scriptsRoot := filepath.Join(config.C.Data.ScriptsDir, saveDir)
 	os.MkdirAll(scriptsRoot, 0o755)
 
-	// 业务脚本：没 cron 头，必须用 default_cron_rule 兜底建任务
+	// 业务脚本：没 cron 头
 	os.WriteFile(filepath.Join(scriptsRoot, "biz.js"),
 		[]byte("const $ = new Env('业务');\n// 这个脚本作者忘了写 cron 头\nconsole.log('biz');\n"), 0o644)
 	os.WriteFile(filepath.Join(scriptsRoot, "another.py"),
 		[]byte("# 业务脚本\nimport os\nprint('another')\n"), 0o644)
 
-	// 通知辅助脚本：即使没 cron 头也**不**应被建任务
+	// 通知辅助脚本：即使没 cron 头也**不**应被建任务，也不算进「未建定时任务」的提示
 	os.WriteFile(filepath.Join(scriptsRoot, "sendNotify.js"),
 		[]byte("// 通知 helper\nmodule.exports = { sendNotify: () => {} };\n"), 0o644)
 	os.WriteFile(filepath.Join(scriptsRoot, "notify.py"),
@@ -218,36 +223,83 @@ func TestSyncSubscriptionTasksFallsBackToDefaultCronForBusinessScripts(t *testin
 	InitSchedulerV2()
 	defer ShutdownSchedulerV2()
 
+	// 第一次：默认规则留空 → 一个都不建。
 	var logs []string
 	syncSubscriptionTasks(sub, func(s string) { logs = append(logs, s) })
+	joined := strings.Join(logs, "\n")
 
 	var tasks []model.Task
 	queryTasksByLabel(subscriptionTaskLabel(sub.ID)).Find(&tasks)
-
-	// 期望：biz.js + another.py 用 default cron 建任务（2 个），辅助脚本不建
-	if len(tasks) != 2 {
-		t.Logf("logs: %v", logs)
+	if len(tasks) != 0 {
 		for _, task := range tasks {
 			t.Logf("  task: name=%q cmd=%q cron=%q", task.Name, task.Command, task.CronExpression)
 		}
-		t.Fatalf("expected 2 tasks (biz.js + another.py, helpers skipped), got %d", len(tasks))
+		t.Fatalf("default_cron_rule is empty: scripts without cron must not become tasks, got %d\n%s", len(tasks), joined)
+	}
+	if !strings.Contains(joined, "识别出 0 个声明 cron 的脚本") {
+		t.Errorf("scan summary must only count scripts that declare cron\n%s", joined)
+	}
+	wantHint := "[提示] 2 个脚本没有识别到 cron 声明，未建定时任务（another.py、biz.js）。需要的话在订阅设置填写「默认 Cron 规则」，或手动为脚本建任务"
+	if !strings.Contains(joined, wantHint) {
+		t.Errorf("missing hint %q\n%s", wantHint, joined)
+	}
+	for _, helper := range []string{"sendNotify.js", "notify.py", "sendNofity.js"} {
+		if strings.Contains(joined, helper) {
+			t.Errorf("helper script %s must not be mentioned\n%s", helper, joined)
+		}
+	}
+	if strings.Contains(joined, "0 0 * * *") || strings.Contains(joined, "[默认 Cron 规则]") {
+		t.Errorf("no fallback cron may be used when default_cron_rule is empty\n%s", joined)
 	}
 
+	// 第二次：用户在订阅设置里填了默认规则 → 按规则建启用任务，辅助脚本照样不建。
+	if err := model.SetConfig("default_cron_rule", "15 3 * * *"); err != nil {
+		t.Fatalf("set default_cron_rule: %v", err)
+	}
+	logs = nil
+	syncSubscriptionTasks(sub, func(s string) { logs = append(logs, s) })
+	joined = strings.Join(logs, "\n")
+
+	tasks = nil
+	queryTasksByLabel(subscriptionTaskLabel(sub.ID)).Find(&tasks)
+	if len(tasks) != 2 {
+		for _, task := range tasks {
+			t.Logf("  task: name=%q cmd=%q cron=%q", task.Name, task.Command, task.CronExpression)
+		}
+		t.Fatalf("expected 2 tasks (biz.js + another.py, helpers skipped), got %d\n%s", len(tasks), joined)
+	}
 	for _, task := range tasks {
 		if !strings.Contains(task.Command, "biz.js") && !strings.Contains(task.Command, "another.py") {
 			t.Errorf("unexpected task created: %s (cron: %s)", task.Command, task.CronExpression)
 		}
-		// 必须是 FallbackSubscriptionCron 兜底（每天 0 点）
-		if task.CronExpression != FallbackSubscriptionCron {
-			t.Errorf("expected fallback cron %q, got %q for task %s",
-				FallbackSubscriptionCron, task.CronExpression, task.Command)
+		if task.CronExpression != "15 3 * * *" {
+			t.Errorf("expected default rule %q, got %q for task %s", "15 3 * * *", task.CronExpression, task.Command)
 		}
+		if task.Status != model.TaskStatusEnabled {
+			t.Errorf("task %s built from the default rule must be enabled, got status %v", task.Command, task.Status)
+		}
+	}
+	for _, want := range []string{
+		"识别出 0 个声明 cron 的脚本",
+		"[默认 Cron 规则] 2 个脚本没有识别到 cron 声明，使用订阅设置里的默认规则 15 3 * * *",
+		"[自动添加任务] 业务 (cron: 15 3 * * *，默认规则)",
+		"[自动添加任务] another (cron: 15 3 * * *，默认规则)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing log %q\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "未建定时任务") {
+		t.Errorf("with a default rule nothing is left unbuilt, the hint must not appear\n%s", joined)
 	}
 }
 
 // 脚本头明确写了 cron 时，用脚本里的；不能被 default cron 覆盖。
 func TestSyncSubscriptionTasksScriptCronTakesPriorityOverDefault(t *testing.T) {
 	testutil.SetupTestEnv(t)
+	if err := model.SetConfig("default_cron_rule", "15 3 * * *"); err != nil {
+		t.Fatalf("set default_cron_rule: %v", err)
+	}
 
 	saveDir := "mixed"
 	scriptsRoot := filepath.Join(config.C.Data.ScriptsDir, saveDir)
@@ -268,7 +320,9 @@ func TestSyncSubscriptionTasksScriptCronTakesPriorityOverDefault(t *testing.T) {
 	InitSchedulerV2()
 	defer ShutdownSchedulerV2()
 
-	syncSubscriptionTasks(sub, func(string) {})
+	var logs []string
+	syncSubscriptionTasks(sub, func(s string) { logs = append(logs, s) })
+	joined := strings.Join(logs, "\n")
 
 	var tasks []model.Task
 	queryTasksByLabel(subscriptionTaskLabel(sub.ID)).Find(&tasks)
@@ -282,8 +336,19 @@ func TestSyncSubscriptionTasksScriptCronTakesPriorityOverDefault(t *testing.T) {
 	if cron := cronByCmd["task "+filepath.Join(saveDir, "with_cron.js")]; cron != "7 8 * * *" {
 		t.Errorf("script with explicit cron should keep its cron, got %q", cron)
 	}
-	if cron := cronByCmd["task "+filepath.Join(saveDir, "no_cron.js")]; cron != FallbackSubscriptionCron {
-		t.Errorf("script without cron should use fallback %q, got %q", FallbackSubscriptionCron, cron)
+	if cron := cronByCmd["task "+filepath.Join(saveDir, "no_cron.js")]; cron != "15 3 * * *" {
+		t.Errorf("script without cron should use the configured default rule %q, got %q", "15 3 * * *", cron)
+	}
+	// 计数分开：声明了 cron 的 1 个，默认规则的 1 个；脚本声明的那条建任务日志不带「默认规则」。
+	for _, want := range []string{
+		"识别出 1 个声明 cron 的脚本",
+		"[默认 Cron 规则] 1 个脚本没有识别到 cron 声明",
+		"[自动添加任务] have cron (cron: 7 8 * * *)\n",
+		"[自动添加任务] no cron (cron: 15 3 * * *，默认规则)",
+	} {
+		if !strings.Contains(joined+"\n", want) {
+			t.Errorf("missing log %q\n%s", want, joined)
+		}
 	}
 }
 

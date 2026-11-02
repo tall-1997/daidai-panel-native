@@ -94,6 +94,9 @@ func registerFullHandlers(engine *gin.Engine) {
 	sponsorHandler := handler.NewSponsorHandler()
 	androidRuntimeHandler := handler.NewAndroidRuntimeHandler()
 	terminalHandler := handler.NewTerminalHandler()
+	consoleHandler := handler.NewConsoleHandler()
+	mcpHandler := handler.NewMCPHandler(engine)
+	wecomCallbackHandler := handler.NewWecomCallbackHandler(engine)
 
 	for _, prefix := range []string{"/api/v1", "/api"} {
 		group := engine.Group(prefix)
@@ -115,6 +118,9 @@ func registerFullHandlers(engine *gin.Engine) {
 		sponsorHandler.RegisterRoutes(group)
 		androidRuntimeHandler.RegisterRoutes(group)
 		terminalHandler.RegisterRoutes(group)
+		consoleHandler.RegisterRoutes(group)
+		mcpHandler.RegisterRoutes(group)
+		wecomCallbackHandler.RegisterRoutes(group)
 	}
 }
 

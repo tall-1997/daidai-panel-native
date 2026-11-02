@@ -27,10 +27,15 @@ func (p *Platform) ToDict() map[string]interface{} {
 }
 
 type PlatformToken struct {
-	ID          uint       `gorm:"primarykey" json:"id"`
-	PlatformID  uint       `gorm:"index;not null" json:"platform_id"`
-	Name        string     `gorm:"size:128;not null" json:"name"`
-	Token       string     `gorm:"type:text;not null" json:"-"`
+	ID uint `gorm:"primarykey" json:"id"`
+	// 令牌唯一键是「平台 + 名称」的复合键，不是裸 name：
+	// 令牌本来就按平台分组管理（List 支持 platform_id 过滤、删平台会连带删令牌），
+	// 「京东」和「淘宝」下各有一条叫「主号」的令牌是完全正常的用法，卡裸 name 会误伤。
+	// 老库里同一平台下的同名残留由 database.DeduplicateBeforeUniqueIndex() 在 AutoMigrate 之前改名让路。
+	PlatformID uint   `gorm:"index;not null;uniqueIndex:idx_platform_tokens_platform_name,priority:1" json:"platform_id"`
+	Name       string `gorm:"size:128;not null;uniqueIndex:idx_platform_tokens_platform_name,priority:2" json:"name"`
+	Token      string `gorm:"type:text;not null" json:"-"`
+	// --- 本机版（Android）扩展：Keystore 密封 ---
 	TokenHash   string     `gorm:"size:128;default:''" json:"-"`
 	Sealed      string     `gorm:"type:text;default:''" json:"-"`
 	Service     string     `gorm:"size:64;default:''" json:"service"`
@@ -57,7 +62,6 @@ func (t *PlatformToken) ToDict() map[string]interface{} {
 		"service_user": t.ServiceUser,
 		"remarks":      t.Remarks,
 		"enabled":      t.Enabled,
-		"token":        "********",
 		"sealed":       t.Sealed != "",
 		"expires_at":   t.ExpiresAt,
 		"created_at":   t.CreatedAt,

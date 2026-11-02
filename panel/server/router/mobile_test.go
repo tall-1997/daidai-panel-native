@@ -19,8 +19,8 @@ func TestMobileRouteContract(t *testing.T) {
 	mobileRoutes := routeKeys(CanonicalMobileRoutes())
 	engine := gin.New()
 	SetupMobileFull(engine, ManagementSecurity{LocalToken: "token", Host: "127.0.0.1"}, NewMobilePlatform(CapabilitySnapshot{Version: 1}))
-	if len(contracts) != 449 {
-		t.Fatalf("contracts=%d want=449", len(contracts))
+	if len(contracts) != 509 {
+		t.Fatalf("contracts=%d want=509", len(contracts))
 	}
 	for _, contract := range contracts {
 		contract := contract
@@ -73,8 +73,8 @@ func TestMobileRouteContract(t *testing.T) {
 func TestSetupMobileFullRegistersEveryServerRoute(t *testing.T) {
 	server := CanonicalServerRoutes()
 	mobile := CanonicalMobileRoutes()
-	if len(server) != 449 {
-		t.Fatalf("canonical server routes=%d want=449", len(server))
+	if len(server) != 509 {
+		t.Fatalf("canonical server routes=%d want=509", len(server))
 	}
 	if diff := DiffRoutes(server, mobile); len(diff.MissingFromMobile) != 0 || len(diff.MissingFromServer) != 0 {
 		t.Fatalf("mobile route diff is not empty: %+v", diff)

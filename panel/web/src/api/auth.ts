@@ -4,7 +4,7 @@ import type { GeeTestValidateResult } from '@/utils/geetest'
 
 export const authApi = {
   checkInit() {
-    return request.get('/auth/check-init', { timeout: 10000 }) as Promise<{ need_init: boolean }>
+    return request.get('/auth/check-init') as Promise<{ need_init: boolean }>
   },
 
   init(username: string, password: string) {
@@ -34,13 +34,12 @@ export const authApi = {
   refresh() {
     const refreshToken = localStorage.getItem('refresh_token')
     return axios.post('/api/auth/refresh', null, {
-      timeout: 10000,
       headers: {
         Authorization: `Bearer ${refreshToken}`,
         'X-Client-Type': 'web',
         'X-Client-App': 'daidai-panel-web'
       }
-    }).then(res => res.data) as Promise<{ access_token: string; refresh_token?: string }>
+    }).then(res => res.data) as Promise<{ access_token: string }>
   },
 
   getUser() {
@@ -82,5 +81,44 @@ export const authApi = {
 
   changeUsername(username: string) {
     return request.put('/auth/username', { username }) as Promise<{ message: string; user: any }>
+  },
+
+  // 当前登录用户的界面偏好：editor 一组（编辑器）+ list 一组（列表页每页条数与视图栏显隐，v3.3.1）。
+  // 只要登录就能读写自己的那份，不限角色 —— 脚本页 operator 就能进，
+  // 不能要求管理员权限才允许改自己的编辑器开关。
+  // stored 表示「服务端是否真的存过这个用户的【editor】偏好」，与 list 组无关。它不是冗余字段：
+  // 服务端对「没存过」的用户下发的是一整套默认值，与「用户主动选了默认值」逐字相同，
+  // 客户端只有靠这个标记才能区分两者 —— 没存过时要把本机偏好上行迁移，
+  // 而不是拿默认值把本机（可能是 v3.2.2 存下来的）选择覆盖掉。
+  // list 是稀疏对象：只含用户存过且合法的键；老服务端（v3.3.0 及以前）没有这个字段，
+  // utils/listPreferences.ts 靠「list 是不是对象」判断服务端认不认识这一组。
+  getPreferences() {
+    return request.get('/auth/preferences') as Promise<{
+      editor: Record<string, any>
+      stored?: boolean
+      list?: Record<string, unknown>
+    }>
+  },
+
+  // 只提交改动过的键，服务端做字段级合并，两个标签页各改各的开关不会互相覆盖。
+  updatePreferences(editor: Record<string, string | boolean>) {
+    return request.put('/auth/preferences', { editor }) as Promise<{
+      editor: Record<string, any>
+      stored?: boolean
+      list?: Record<string, unknown>
+    }>
+  },
+
+  // 列表页偏好（utils/listPreferences.ts 专用）。body 只带 list 一组：服务端按组可选写入，
+  // editor 列一个字节都不碰，editor 的 stored 也不会因此翻成 true。
+  // 同样只提交改动过的键，服务端逐键合并；值的类型必须对（条数 number、环境变量条数 string、开关 bool），
+  // 白名单外的值服务端回 400。
+  // 🔴 只能发给认识 list 的服务端（v3.3.1+）：老服务端会无视 list、把整套 editor 默认值写进库。
+  updateListPreferences(list: Record<string, string | number | boolean>) {
+    return request.put('/auth/preferences', { list }) as Promise<{
+      editor: Record<string, any>
+      stored?: boolean
+      list?: Record<string, unknown>
+    }>
   }
 }

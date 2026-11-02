@@ -84,17 +84,28 @@ func SetupTwoFactor(userID uint) (string, string, error) {
 	var existing model.TwoFactorAuth
 	err := silentDB().Where("user_id = ?", userID).First(&existing).Error
 	if err == nil {
-		database.DB.Model(&existing).Updates(map[string]interface{}{
+		// 这条分支才是「重新设置 2FA」的常走路径（库里已经有 two_factor_auths 行）。
+		// 和下面的 Create 一样必须接 .Error：写库失败时如果照样往下走，
+		// 函数会把**新** secret 和二维码返回给前端，而库里存的还是**旧** secret，
+		// 用户扫完码输入的验证码永远对不上，且没有任何线索能看出发生了什么。
+		if err := database.DB.Model(&existing).Updates(map[string]interface{}{
 			"secret":  secret,
 			"enabled": false,
-		})
+		}).Error; err != nil {
+			return "", "", err
+		}
 	} else {
 		tfa := model.TwoFactorAuth{
 			UserID:  userID,
 			Secret:  secret,
 			Enabled: false,
 		}
-		database.DB.Create(&tfa)
+		// 原来这行没接 .Error：two_factor_auths.user_id 是唯一索引，重复/并发的开启请求
+		// 会撞唯一约束而插入失败，却被静默吞掉 —— 用户扫完二维码怎么都验证不过，
+		// 因为库里压根没有这条 secret。这里把错误抛给 handler，由它统一返回「设置 2FA 失败」。
+		if err := database.DB.Create(&tfa).Error; err != nil {
+			return "", "", err
+		}
 	}
 
 	var user model.User

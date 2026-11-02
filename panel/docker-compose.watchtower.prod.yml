@@ -19,13 +19,26 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5700/api/health >/dev/null || exit 1"]
+      # 镜像自带的探测脚本，地址跟着 PANEL_HOST 走（v3.3.7 起）；旧镜像没有这个脚本时回落到原来的探测，避免变 unhealthy
+      test: ["CMD-SHELL", "if [ -x /app/healthcheck.sh ]; then /app/healthcheck.sh; else curl -fsS http://127.0.0.1:5700/api/health >/dev/null; fi"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 20s
 
   watchtower:
+    # 必须使用 Watchtower v1.20.0（2026-07-21）或更新的版本。
+    # 下面的 WATCHTOWER_HTTP_API_ENDPOINTS 是 v1.20.0 才引入的环境变量，更早的版本只认命令行
+    # 参数 --http-api-update，并且遇到不认识的环境变量会静默忽略：容器照常启动、日志也不报错，
+    # 但 HTTP API 的 8080 端口从头到尾不会打开，面板触发更新时只会拿到 connection refused。
+    # 另外 watchtower 自己带了 com.centurylinklabs.watchtower.enable=false，不会自我更新，
+    # 本地这份 latest 是哪天拉的就停在哪天的版本。老部署升级前请先手动拉一次：
+    #   docker compose -f docker-compose.watchtower.prod.yml pull watchtower
+    #   docker compose -f docker-compose.watchtower.prod.yml up -d watchtower
+    # 想确认实际版本就看 watchtower 的启动日志（这份配置带了 --no-startup-message，
+    # 看不到版本号时临时去掉它重启一次即可）。
+    # 走国内镜像加速站时还要留意：加速站上的 latest 可能是很旧的缓存，必要时改拉具体版本
+    # （例如 nickfedor/watchtower:1.21.2）或临时直连 Docker Hub 拉一次。
     image: nickfedor/watchtower:latest
     container_name: ${WATCHTOWER_CONTAINER_NAME:-daidai-watchtower}
     restart: unless-stopped

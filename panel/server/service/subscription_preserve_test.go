@@ -64,22 +64,52 @@ func TestGitHasWorkingTreeChangesDetectsTrackedAndUntrackedFiles(t *testing.T) {
 	}
 }
 
-func TestApplySubscriptionForceOverwriteSettingUsesGlobalConfig(t *testing.T) {
-	_ = testutil.SetupTestEnv(t)
-
-	forceOverwrite := true
-	sub := &model.Subscription{
-		Type:           model.SubTypeGitRepo,
-		ForceOverwrite: &forceOverwrite,
+// TestResolveSubscriptionForceOverwrite 锁死覆盖拉取的三态优先级：
+// 订阅显式选了 force / preserve 就以订阅为准，全局开关只在 inherit（含空串、脏值）时才生效。
+// 这条替换了老的 TestApplySubscriptionForceOverwriteSettingUsesGlobalConfig ——
+// 那条断言的正是「全局值无条件盖掉订阅值」，也就是本次要推翻的行为。
+func TestResolveSubscriptionForceOverwrite(t *testing.T) {
+	cases := []struct {
+		name         string
+		mode         string
+		globalConfig string
+		want         bool
+	}{
+		{"inherit 跟随全局开", model.SubOverwriteInherit, "true", true},
+		{"inherit 跟随全局关", model.SubOverwriteInherit, "false", false},
+		{"force 覆盖全局关", model.SubOverwriteForce, "false", true},
+		{"preserve 覆盖全局开", model.SubOverwritePreserve, "true", false},
+		{"空串按 inherit 处理", "", "false", false},
+		{"脏值按 inherit 处理", "not-a-mode", "true", true},
 	}
 
-	if err := model.SetConfig("subscription_force_overwrite", "false"); err != nil {
-		t.Fatalf("set subscription_force_overwrite: %v", err)
-	}
-	applySubscriptionForceOverwriteSetting(sub)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = testutil.SetupTestEnv(t)
 
-	if sub.ForceOverwrite == nil || *sub.ForceOverwrite {
-		t.Fatalf("expected global subscription_force_overwrite=false to override subscription field, got %#v", sub.ForceOverwrite)
+			if err := model.SetConfig("subscription_force_overwrite", tc.globalConfig); err != nil {
+				t.Fatalf("set subscription_force_overwrite: %v", err)
+			}
+
+			// 旧列刻意反着设：验证它已经彻底不参与判定，只剩只读兼容。
+			legacy := !tc.want
+			sub := &model.Subscription{
+				Type:           model.SubTypeGitRepo,
+				OverwriteMode:  tc.mode,
+				ForceOverwrite: &legacy,
+			}
+
+			if got := resolveSubscriptionForceOverwrite(sub); got != tc.want {
+				t.Fatalf("overwrite_mode=%q 全局=%s 期望 %v，实际 %v", tc.mode, tc.globalConfig, tc.want, got)
+			}
+			// 解析器不能改写 sub —— 这个对象稍后还会被 database.DB.Model(sub).Updates(...) 用到。
+			if sub.OverwriteMode != tc.mode {
+				t.Fatalf("expected resolve to leave overwrite_mode untouched, got %q", sub.OverwriteMode)
+			}
+			if sub.ForceOverwrite == nil || *sub.ForceOverwrite != legacy {
+				t.Fatalf("expected resolve to leave legacy force_overwrite untouched, got %#v", sub.ForceOverwrite)
+			}
+		})
 	}
 }
 
@@ -99,14 +129,15 @@ func TestPullGitRepoWithCallbackPreserveModeSkipsFalseConflictWhenRepoIsClean(t 
 	runGit(t, worktreeDir, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	runGit(t, worktreeDir, "push", "origin", "HEAD:main")
 
-	forceOverwrite := false
+	// 走订阅级「保留本地修改」。旧列 ForceOverwrite 已经不参与判定，
+	// 这里必须用 OverwriteMode 表达，否则会落到 inherit → 全局默认 true → 跑成覆盖模式。
 	sub := &model.Subscription{
-		Name:           "preserve-sub",
-		Type:           model.SubTypeGitRepo,
-		URL:            remoteDir,
-		Branch:         "main",
-		SaveDir:        "preserve-repo",
-		ForceOverwrite: &forceOverwrite,
+		Name:          "preserve-sub",
+		Type:          model.SubTypeGitRepo,
+		URL:           remoteDir,
+		Branch:        "main",
+		SaveDir:       "preserve-repo",
+		OverwriteMode: model.SubOverwritePreserve,
 	}
 
 	authCfg, err := buildGitAuthConfig(os.Environ(), sub.URL, sub, "")

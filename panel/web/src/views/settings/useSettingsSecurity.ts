@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onDeactivated, ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { systemApi, type BackupSelection, type RestoreProgressState } from '@/api/system'
 import { securityApi } from '@/api/security'
@@ -6,6 +6,7 @@ import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createQrCodeDataUrl } from '@/utils/qrcode'
+import { toast } from '@/utils/toast'
 
 const backupUploadMaxSize = 512 * 1024 * 1024
 
@@ -51,6 +52,9 @@ export function useSettingsSecurity() {
   })
   const uploadProgress = ref(-1)
   const uploadUploading = ref(false)
+  // 创建备份的在途锁。备份是长耗时操作，连点最容易打出多份重复备份，
+  // 刻意与导入用的 uploadUploading 分开，避免一个动作把另一个按钮也锁住。
+  const backupCreating = ref(false)
 
   const showRestoreDialog = ref(false)
   const restoreFilename = ref('')
@@ -67,7 +71,7 @@ export function useSettingsSecurity() {
   const restoreProgressError = ref('')
   const restoreRestartCountdown = ref(0)
   let restoreProgressPollTimer: ReturnType<typeof setInterval> | null = null
-  let restartProbeTimer: ReturnType<typeof setTimeout> | null = null
+  let restartProbeTimer: ReturnType<typeof setInterval> | null = null
   let restartProbeDelayTimer: ReturnType<typeof setTimeout> | null = null
 
   const oldPassword = ref('')
@@ -94,6 +98,8 @@ export function useSettingsSecurity() {
   const showAddIPDialog = ref(false)
   const newIP = ref('')
   const newIPRemarks = ref('')
+  // 添加 IP 白名单的在途锁，独立一把，不与备份/导入共用
+  const ipAdding = ref(false)
 
   async function loadBackups() {
     backupsLoading.value = true
@@ -159,6 +165,8 @@ export function useSettingsSecurity() {
         ElMessage.warning('请至少选择一个备份项')
         return
       }
+      // 校验通过后才置位，复位统一放 finally（上面的早退分支也会走到 finally，不会把按钮锁死）
+      backupCreating.value = true
       await systemApi.backup(backupPassword.value, backupSelection.value, backupName.value)
       ElMessage.success('备份创建成功')
       showBackupDialog.value = false
@@ -167,6 +175,8 @@ export function useSettingsSecurity() {
       void loadBackups()
     } catch {
       ElMessage.error('备份失败')
+    } finally {
+      backupCreating.value = false
     }
   }
 
@@ -228,7 +238,7 @@ export function useSettingsSecurity() {
       restartProbeDelayTimer = null
     }
     if (restartProbeTimer) {
-      clearTimeout(restartProbeTimer)
+      clearInterval(restartProbeTimer)
       restartProbeTimer = null
     }
   }
@@ -378,18 +388,29 @@ export function useSettingsSecurity() {
   }
 
   function waitForRestart() {
+    // 在线演示 Demo 分叉：整段短路，一次探针都不能发。
+    //
+    // 下面的轮询是 `fetch('/', { method: 'HEAD', cache: 'no-store' })` → res.ok
+    // → window.location.reload()，而演示站是纯静态站：本地静态预览下 `/` 恒 200，
+    // GitHub Pages 上目前是 404 但只要建了同名根仓库就会变成 200。
+    // 一旦 reload，纯内存的演示数据全部清零。
+    //
+    // 这一处是三处 HEAD 探针里【唯一真的够得着】的：doRestart() 里的
+    // `await systemApi.restart()` 被包在 try/catch 里，演示环境返回 403 也照样往下走，
+    // 直接就调到了这里。另外两处（useSettingsOverview）会被各自的 catch 挡在门外。
+    if (import.meta.env.VITE_DEMO === '1') return
+
     stopRestartProbe()
     let attempts = 0
     restartProbeDelayTimer = setTimeout(() => {
       restartProbeDelayTimer = null
-      const probe = async () => {
+      restartProbeTimer = setInterval(async () => {
         attempts += 1
         try {
           const res = await fetch('/', { method: 'HEAD', cache: 'no-store' })
           if (res.ok) {
             stopRestartProbe()
             window.location.reload()
-            return
           }
         } catch {
           // ignore
@@ -400,12 +421,13 @@ export function useSettingsSecurity() {
           restoreProgressStatus.value = 'restart-timeout'
           restoreProgressMessage.value = '恢复已经完成，但暂时还没有检测到面板重新上线。'
           restoreProgressError.value = '重启等待超时，请稍后手动刷新页面，或检查容器/反向代理是否仍在重建。'
-          ElMessage.warning('重启超时，请稍后手动刷新页面')
-          return
+          // 与 useSettingsOverview 的两处超时保持一致：把「请手动刷新」变成一个能点的按钮。
+          // 恢复完成后面板往往已经起来了，只是探针没赶上，用户不该还要自己去按 F5。
+          toast.warning('重启超时，面板可能已经起来了', {
+            action: { text: '立即刷新', handler: () => window.location.reload() },
+          })
         }
-        restartProbeTimer = setTimeout(probe, 2000)
-      }
-      restartProbeTimer = setTimeout(probe, 0)
+      }, 2000)
     }, 3000)
   }
 
@@ -590,6 +612,8 @@ export function useSettingsSecurity() {
       ElMessage.warning('IP 或网段不能为空')
       return
     }
+    // IP 非空校验通过后才置位，复位放 finally
+    ipAdding.value = true
     try {
       await securityApi.addIPWhitelist({ ip: newIP.value.trim(), remarks: newIPRemarks.value })
       ElMessage.success('添加成功')
@@ -599,6 +623,8 @@ export function useSettingsSecurity() {
       void loadIPWhitelist()
     } catch {
       ElMessage.error('添加失败')
+    } finally {
+      ipAdding.value = false
     }
   }
 
@@ -638,12 +664,6 @@ export function useSettingsSecurity() {
     stopRestartProbe()
   })
 
-  onDeactivated(() => {
-    stopRestoreCountdown()
-    stopRestoreProgressPolling()
-    stopRestartProbe()
-  })
-
   return {
     securityTab,
     backups,
@@ -655,6 +675,7 @@ export function useSettingsSecurity() {
     backupScheduleSelection,
     uploadProgress,
     uploadUploading,
+    backupCreating,
     showRestoreDialog,
     restoreFilename,
     restorePassword,
@@ -688,6 +709,7 @@ export function useSettingsSecurity() {
     showAddIPDialog,
     newIP,
     newIPRemarks,
+    ipAdding,
     loadBackups,
     handleCreateBackup,
     handleUploadBackup,

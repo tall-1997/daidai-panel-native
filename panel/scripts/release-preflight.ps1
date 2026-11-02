@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Version
 )
@@ -77,6 +77,31 @@ if (-not (Test-Path $releaseNotePath)) {
 }
 
 Assert-FileContains -Path $releaseNotePath -Pattern '<!--\s*release-title:\s*.+?\s*-->' -Description "release notes title marker"
+# 只校验「注释存在」是不够的：release.yml 那条 grep 曾经因为用了可变长度后顾断言而
+# 直接报错、被 `|| true` 吞掉，于是 v3.0.0~v3.2.0 每一版的 Release 标题都静默退化成裸 tag，
+# 而这道守卫全程是绿的。所以这里要按 release.yml 的**同一条正则**再抽一次，
+# 抽不出非空摘要就判红 —— 守的是「标题真能生成」，不是「注释真存在」。
+$releaseNoteText = Get-Content -Path $releaseNotePath -Raw -Encoding UTF8
+$titleMatch = [regex]::Match($releaseNoteText, '<!--\s*release-title:\s*(?<summary>.*?)\s*-->')
+if (-not $titleMatch.Success -or [string]::IsNullOrWhiteSpace($titleMatch.Groups['summary'].Value)) {
+    Fail-Step "release-title marker exists but yields an empty summary; GitHub Release title would fall back to the bare tag."
+}
+Write-Host ("  release title -> {0}：{1}" -f $tagVersion, $titleMatch.Groups['summary'].Value)
+# Release body 里不许出现相对链接。已实测：gh api 取 v3.2.3 的 body，里面是
+# [定时任务不执行 / 没有日志](../task-not-running.md)，而 GitHub Release 页面把它渲染成
+# href="/linzixuanzz/daidai-panel/blob/task-not-running.md" —— 没有 ref、没有目录，是一个 404。
+# 根因是 Release body 没有「源文件路径」这个上下文，`../` 无从解析。
+# 所以从 v3.2.5 起本版 notes 一律写绝对 URL。历史文件不动：它们在仓库里点是对的，
+# 只是在 Release 页面上坏，改它们等于改历史陈述。
+# ⚠️ 先剥掉围栏代码块与行内代码再匹配：发布说明本身会**引用**这种坏写法当反面例子
+# （v3.2.5 那篇就是这么写的），包在反引号里的不是一条真链接，判红就是误报。
+$scannableNoteText = [regex]::Replace($releaseNoteText, '(?s)```.*?```', '')
+$scannableNoteText = [regex]::Replace($scannableNoteText, '`[^`\r\n]*`', '')
+$relativeLinks = [regex]::Matches($scannableNoteText, '\]\((?<target>\.{1,2}/[^)]*)\)')
+if ($relativeLinks.Count -gt 0) {
+    $samples = (($relativeLinks | ForEach-Object { $_.Groups['target'].Value } | Sort-Object -Unique) | Select-Object -First 5) -join ", "
+    Fail-Step "Release notes must use absolute URLs. Found relative link target(s): $samples`nA GitHub Release body has no source-file path context, so [x](../task-not-running.md) is rendered as href=`"/linzixuanzz/daidai-panel/blob/task-not-running.md`" - no ref, no directory, a guaranteed 404 (verified against the v3.2.3 release body).`nWrite https://github.com/linzixuanzz/daidai-panel/blob/main/docs/<file> instead. Historical notes are intentionally left alone."
+}
 $readmeContent = Get-Content -Path (Join-Path $repoRoot "README.md") -Raw -Encoding UTF8
 if (($readmeContent -notmatch [regex]::Escape($tagVersion)) -or ($readmeContent -notmatch [regex]::Escape("./docs/release-notes/$tagVersion.md"))) {
     Fail-Step "README latest version block not synced."
@@ -168,11 +193,12 @@ $expectedDockerMatrix = @(
     [pscustomobject]@{ Job = "alpine"; Tag = "latest-3.10";  LegacyTag = "latest3.10"; Mode = "single"; Python = "3.10"; Suffix = "-3.10";            LegacySuffix = "";             FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
     [pscustomobject]@{ Job = "alpine"; Tag = "latest-3.11";  LegacyTag = "latest3.11"; Mode = "single"; Python = "3.11"; Suffix = "-3.11";            LegacySuffix = "";             FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
     [pscustomobject]@{ Job = "alpine"; Tag = "latest-all";   LegacyTag = "latestall";  Mode = "all";    Python = "3.12"; Suffix = "-all";             LegacySuffix = "";             FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
-    [pscustomobject]@{ Job = "debian"; Tag = "debian";       LegacyTag = "";           Mode = "single"; Python = "3.12"; Suffix = "-debian";          LegacySuffix = "";             FullTools = "false"; Platforms = "linux/amd64,linux/arm64,linux/arm/v7" };
-    [pscustomobject]@{ Job = "debian"; Tag = "debian-full";  LegacyTag = "";           Mode = "single"; Python = "3.12"; Suffix = "-debian-full";     LegacySuffix = "";             FullTools = "true";  Platforms = "linux/amd64,linux/arm64,linux/arm/v7" };
-    [pscustomobject]@{ Job = "debian"; Tag = "debian-3.10";  LegacyTag = "debian3.10"; Mode = "single"; Python = "3.10"; Suffix = "-debian-3.10";     LegacySuffix = "-debian3.10";  FullTools = "false"; Platforms = "linux/amd64,linux/arm64,linux/arm/v7" };
-    [pscustomobject]@{ Job = "debian"; Tag = "debian-3.11";  LegacyTag = "debian3.11"; Mode = "single"; Python = "3.11"; Suffix = "-debian-3.11";     LegacySuffix = "-debian3.11";  FullTools = "false"; Platforms = "linux/amd64,linux/arm64,linux/arm/v7" };
-    [pscustomobject]@{ Job = "debian"; Tag = "debian-all";   LegacyTag = "debianall";  Mode = "all";    Python = "3.12"; Suffix = "-debian-all";      LegacySuffix = "-debianall";   FullTools = "false"; Platforms = "linux/amd64,linux/arm64,linux/arm/v7" }
+    # Debian 只发 amd64 / arm64：node:24 基础镜像没有 linux/386 与 linux/arm/v7 manifest，写进去构建必失败。
+    [pscustomobject]@{ Job = "debian"; Tag = "debian";       LegacyTag = "";           Mode = "single"; Python = "3.12"; Suffix = "-debian";          LegacySuffix = "";             FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
+    [pscustomobject]@{ Job = "debian"; Tag = "debian-full";  LegacyTag = "";           Mode = "single"; Python = "3.12"; Suffix = "-debian-full";     LegacySuffix = "";             FullTools = "true";  Platforms = "linux/amd64,linux/arm64" };
+    [pscustomobject]@{ Job = "debian"; Tag = "debian-3.10";  LegacyTag = "debian3.10"; Mode = "single"; Python = "3.10"; Suffix = "-debian-3.10";     LegacySuffix = "-debian3.10";  FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
+    [pscustomobject]@{ Job = "debian"; Tag = "debian-3.11";  LegacyTag = "debian3.11"; Mode = "single"; Python = "3.11"; Suffix = "-debian-3.11";     LegacySuffix = "-debian3.11";  FullTools = "false"; Platforms = "linux/amd64,linux/arm64" };
+    [pscustomobject]@{ Job = "debian"; Tag = "debian-all";   LegacyTag = "debianall";  Mode = "all";    Python = "3.12"; Suffix = "-debian-all";      LegacySuffix = "-debianall";   FullTools = "false"; Platforms = "linux/amd64,linux/arm64" }
 )
 
 $alpineJobText = $alpineJobMatch.Groups["body"].Value
@@ -288,8 +314,27 @@ foreach ($compose in @(
         -or -not $composeText.Contains('http://watchtower:8080')) {
         Fail-Step "$($compose.Name) must expose the stable watchtower service URL only to the panel."
     }
-    if (-not $composeText.Contains($compose.Endpoint) -or $composeText.Contains('--http-api-update')) {
-        Fail-Step "$($compose.Name) must enable the update endpoint without the deprecated --http-api-update flag."
+    # 正向断言（必须含）与负向断言（不得含）拆成两条，不再共用一个 -or 和一句文案。
+    # 原来合并写法有两个毛病：一是失败时看不出到底缺了哪半边；二是正向那半边形同虚设 ——
+    # 谁误删了 WATCHTOWER_HTTP_API_ENDPOINTS 那一行，读到的仍是一句“deprecated flag”，
+    # 与真实原因南辕北辙。
+    #
+    # 匹配用“非注释行 + 子串”，既不做整行精确匹配，也不用裸 Contains：
+    #   - 裸 Contains 会被注释喂饱。compose 里 watchtower 镜像上方写了最低版本说明注释，
+    #     正文必然提到 WATCHTOWER_HTTP_API_ENDPOINTS 与 --http-api-update 这两个名字，
+    #     于是正向检查删掉真配置也全绿、负向检查没人用那个 flag 也照样红。
+    #   - 整行精确匹配则不许行尾追加 YAML 行内注释，多写一句说明就会红。
+    # 一律用 -c* 大小写敏感版本：原来的 .Contains() 是 ordinal 比较，环境变量名对 watchtower
+    # 也是大小写敏感的，换成默认的 -match 会把 watchtower_http_api_endpoints 这种写法放行。
+    $endpointLinePattern = '(?m)^[^#\r\n]*' + [regex]::Escape($compose.Endpoint)
+    if ($composeText -cnotmatch $endpointLinePattern) {
+        # watchtower 只有读到 WATCHTOWER_HTTP_API_ENDPOINTS 才会启动 HTTP API 服务器并监听 8080。
+        # 少了这一行，容器照样正常启动、日志一声不吭，但面板点更新会直接拿到
+        # dial tcp ...:8080: connect: connection refused —— 正是 issue #108 的形态。
+        Fail-Step "$($compose.Name) must keep '$($compose.Endpoint)' on the watchtower service.`nWithout it watchtower never starts its HTTP API listener on 8080: the container still boots and logs nothing unusual, but every panel update fails with 'connect: connection refused' (issue #108)."
+    }
+    if ($composeText -cmatch '(?m)^[^#\r\n]*--http-api-update') {
+        Fail-Step "$($compose.Name) must not pass the deprecated --http-api-update flag; WATCHTOWER_HTTP_API_ENDPOINTS replaces it and the legacy flag is dropped in watchtower v2."
     }
 }
 

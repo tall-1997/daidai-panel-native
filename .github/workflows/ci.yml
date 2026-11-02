@@ -145,7 +145,17 @@ jobs:
           cache-dependency-path: panel/server/go.sum
 
       - name: Run all Go tests
-        run: go test ./...
+        run: |
+          set +e
+          go test ./... > /tmp/gotest-all.log 2>&1
+          status=$?
+          if [ $status -ne 0 ]; then
+            grep -E '^--- FAIL|^FAIL|^panic:|^# |_test\.go:[0-9]+:' /tmp/gotest-all.log | head -60 | while IFS= read -r line; do
+              echo "::error title=go-test-failure::$line"
+            done
+            tail -80 /tmp/gotest-all.log
+          fi
+          exit $status
 
       - name: Run Go vet
         run: go vet ./...
@@ -170,7 +180,17 @@ jobs:
           cache-dependency-path: panel/server/go.sum
 
       - name: Run race detector on critical packages
-        run: go test -race -count=1 ./router ./database
+        run: |
+          set +e
+          go test -race -count=1 ./router ./database > /tmp/race.log 2>&1
+          status=$?
+          if [ $status -ne 0 ]; then
+            grep -E '^--- FAIL|^FAIL|WARNING: DATA RACE|^panic:|_test\.go:[0-9]+:' /tmp/race.log | head -60 | while IFS= read -r line; do
+              echo "::error title=go-race-failure::$line"
+            done
+            tail -60 /tmp/race.log
+          fi
+          exit $status
 
   route-contract:
     name: Route contract

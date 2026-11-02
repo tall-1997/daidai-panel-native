@@ -7,9 +7,24 @@ import (
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
+
+// ListLabels 列出全部任务用过的自定义标签及各自的任务数（#157 契约 L1），
+// 给网页任务表单与「批量添加标签」弹窗的「已有标签」候选用。
+//
+// 查询与口径都在 service.ListTaskLabelCounts（trim、跳过内部前缀、同任务去重、字节序升序），这里只管调用与响应：
+// 返回裸数组 [{name, count}]，一个标签都没有时是 []，与 GET /tasks/groups 同形。
+func (h *TaskHandler) ListLabels(c *gin.Context) {
+	labels, err := service.ListTaskLabelCounts()
+	if err != nil {
+		response.InternalError(c, "加载任务标签失败")
+		return
+	}
+	response.Success(c, labels)
+}
 
 // BatchAddLabels 批量给任务追加标签。
 // 语义为「追加」：保留任务原有全部标签（含 分组:/subscription: 等内部标签），
@@ -63,7 +78,8 @@ func sanitizeIncomingLabels(labels []string) []string {
 		if label == "" {
 			continue
 		}
-		if isInternalLabel(label) {
+		// 与 GET /tasks/labels 的候选共用同一个判定，两边口径不会漂开。
+		if service.IsInternalTaskLabel(label) {
 			continue
 		}
 		if _, ok := seen[label]; ok {
@@ -98,9 +114,4 @@ func mergeLabels(existing, newLabels []string) []string {
 		result = append(result, label)
 	}
 	return result
-}
-
-// isInternalLabel 判断是否为带保留前缀的内部标签（分组: / subscription:）。
-func isInternalLabel(label string) bool {
-	return strings.HasPrefix(label, taskGroupLabelPrefix) || strings.HasPrefix(label, "subscription:")
 }

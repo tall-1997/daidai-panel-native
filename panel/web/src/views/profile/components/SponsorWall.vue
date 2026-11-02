@@ -127,11 +127,11 @@ function rankLabel(rank: number) {
 </script>
 
 <template>
-  <el-card shadow="hover" class="sponsor-wall">
+  <el-card shadow="never" class="sponsor-wall">
     <template #header>
       <div class="sponsor-wall__header">
         <div class="card-title-bar sponsor-wall__header-copy">
-          <span class="title-dot" style="background: linear-gradient(180deg, #f97316, #facc15)"></span>
+          <span class="title-dot" style="background: #f97316"></span>
           <span class="title-text">赞助名单</span>
         </div>
         <div class="sponsor-wall__summary" v-if="summary">
@@ -213,12 +213,16 @@ function rankLabel(rank: number) {
 </template>
 
 <style scoped lang="scss">
+/* 赞助墙：纯琥珀底 + 1px 描边，去掉两层圆形光晕与底色渐变
+   （暗色由 global.scss 的 `.sponsor-wall` 覆盖为纯色 #1e293b，与此处一致）
+
+   模板上的 el-card 必须用 shadow="never"（与全站其余 el-card 保持一致）。
+   一旦写成 shadow="hover"/"always"，就会命中 EP 自带的 `.el-card.is-hover-shadow:hover`
+   / `.el-card.is-always-shadow` 规则重新长出悬浮阴影，与 R3-a「去阴影」冲突；
+   这两条 EP 规则特异度是 (0,2,0)，压得过本文件里的 `.sponsor-wall`。 */
 .sponsor-wall {
   overflow: hidden;
-  background:
-    radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 28%),
-    radial-gradient(circle at bottom left, rgba(250, 204, 21, 0.14), transparent 25%),
-    linear-gradient(135deg, rgba(255, 251, 235, 0.96), rgba(255, 247, 237, 0.92));
+  background: #fff7ed;
   border: 1px solid rgba(249, 115, 22, 0.1);
 }
 
@@ -234,10 +238,17 @@ function rankLabel(rank: number) {
   gap: 8px;
 }
 
+/* 注意：类名叫 dot，实际是 3×14 的竖条色标（不是状态灯），所以不进圆形白名单。
+
+   归档为「装饰性细指示条」→ pill 档，与 api-docs 的 .api-card 品牌色竖条、
+   ScriptsSidebar 当前项的左缘条同类，全站这一类统一走 pill。
+   ⚠️ 这里换档是【为了归类一致，不是为了改观感】：3px 宽的盒子上，CSS 圆角等比收缩会把
+   control(6px) 和 pill(999px) 一起夹到 1.5px（= 半个宽度），两者渲染结果完全相同。
+   写 pill 是为了让「细条 = 胶囊」这条判据在代码里读得出来，避免后人以为它属于控件类。 */
 .title-dot {
   width: 3px;
   height: 14px;
-  border-radius: 2px;
+  border-radius: var(--dd-radius-pill);
   display: inline-block;
   flex-shrink: 0;
 }
@@ -259,8 +270,9 @@ function rankLabel(rank: number) {
 
 .summary-pill {
   padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.62);
+  /* 「N 位支持者 / 累计金额」计数角标，天然胶囊 → pill 档 */
+  border-radius: var(--dd-radius-pill);
+  background: #ffffff;
   border: 1px solid rgba(249, 115, 22, 0.12);
 }
 
@@ -270,12 +282,14 @@ function rankLabel(rank: number) {
   gap: 12px;
 }
 
+/* 骨架屏：占位块；::after 的横向流光是加载指示（非装饰），保留 */
 .sponsor-loading__card {
   position: relative;
   overflow: hidden;
   min-height: 88px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.7);
+  /* 占位块要和真实的 .sponsor-card 同形，否则加载完会看到形状跳变 → 同取 surface 档 */
+  border-radius: var(--dd-radius-surface);
+  background: #ffffff;
   border: 1px solid rgba(251, 146, 60, 0.16);
 
   &::after {
@@ -297,8 +311,9 @@ function rankLabel(rank: number) {
 .sponsor-empty {
   position: relative;
   padding: 28px 24px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
+  /* 空状态面板是容器类表面 → surface 档 */
+  border-radius: var(--dd-radius-surface);
+  background: #ffffff;
   border: 1px dashed rgba(249, 115, 22, 0.24);
   text-align: center;
 
@@ -365,27 +380,16 @@ function rankLabel(rank: number) {
   justify-content: center;
   gap: 10px;
   padding: 18px 16px 16px;
-  border-radius: 22px;
+  /* 纯色卡：去掉顶部圆形高光、投影与 hover 上浮，层次交给 1px 描边。卡片本体 → surface 档 */
+  border-radius: var(--dd-radius-surface);
   text-align: center;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.52), transparent 44%),
-    rgba(255, 255, 255, 0.84);
+  background: #ffffff;
   border: 1px solid rgba(249, 115, 22, 0.16);
-  box-shadow: 0 12px 24px rgba(180, 83, 9, 0.08);
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 16px 28px rgba(180, 83, 9, 0.12);
-  }
 }
 
+/* 第一名：用更暖的琥珀底与其余两名区分（原为渐变） */
 .podium-card--first {
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.56), transparent 46%),
-    linear-gradient(180deg, rgba(255, 252, 235, 0.96), rgba(255, 247, 237, 0.9));
+  background: #fffbeb;
 }
 
 .podium-card__rank {
@@ -393,8 +397,9 @@ function rankLabel(rank: number) {
   top: 12px;
   left: 12px;
   padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
+  /* 「No.1」名次标签，是卡片里的小标签而非状态胶囊 → control 档（与 .dd-stat-card__delta 同档） */
+  border-radius: var(--dd-radius-control);
+  background: #ffffff;
   border: 1px solid rgba(249, 115, 22, 0.18);
   font-size: 11px;
   font-weight: 700;
@@ -410,16 +415,18 @@ function rankLabel(rank: number) {
   span {
     width: 100%;
     height: 100%;
-    border-radius: 18px;
+    /* 白名单：形状承载语义 —— 这里直接渲染 GitHub 头像，头像本身按圆形构图，
+       方切后人像被裁到角上观感最差。两种 shape 模式下都固定圆形，不吃 --dd-radius-* 刻度。
+       （底色也保留纯橙，只是去掉了渐变与投影） */
+    border-radius: 50%;
     object-fit: cover;
-    background: linear-gradient(135deg, #c2410c, #f97316);
+    background: #ea580c;
     color: #fff;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     font-size: 20px;
     font-weight: 700;
-    box-shadow: 0 8px 16px rgba(194, 65, 12, 0.16);
   }
 }
 
@@ -449,12 +456,11 @@ function rankLabel(rank: number) {
   font-size: 19px;
 }
 
+/* 领奖台底座：纯色块，去掉渐变与顶部内高光。它与上方卡片之间有 gap，是独立的容器类表面 → surface 档 */
 .podium-base {
-  border-radius: 18px 18px 14px 14px;
+  border-radius: var(--dd-radius-surface);
   border: 1px solid rgba(249, 115, 22, 0.14);
-  background:
-    linear-gradient(180deg, rgba(255, 247, 237, 0.92), rgba(253, 230, 138, 0.72));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  background: #fef3c7;
 }
 
 .podium-base--first {
@@ -480,10 +486,10 @@ function rankLabel(rank: number) {
   align-items: center;
   gap: 12px;
   padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.78);
+  /* 赞助者列表卡片本体 → surface 档 */
+  border-radius: var(--dd-radius-surface);
+  background: #ffffff;
   border: 1px solid rgba(253, 186, 116, 0.18);
-  box-shadow: 0 8px 18px rgba(180, 83, 9, 0.05);
 }
 
 .sponsor-card__avatar {
@@ -495,9 +501,10 @@ function rankLabel(rank: number) {
   span {
     width: 100%;
     height: 100%;
-    border-radius: 14px;
+    /* 白名单：形状承载语义 —— 同 .podium-card__avatar，直接渲染 GitHub 头像，固定圆形 */
+    border-radius: 50%;
     object-fit: cover;
-    background: linear-gradient(135deg, #c2410c, #f97316);
+    background: #ea580c;
     color: #fff;
     display: inline-flex;
     align-items: center;
@@ -563,11 +570,9 @@ function rankLabel(rank: number) {
 }
 
 :global(html.dark) {
+  // 暗色同样走纯色底（global.scss 里还有一层 !important 覆盖为 #1e293b，取值一致）
   .sponsor-wall {
-    background:
-      radial-gradient(circle at top right, rgba(249, 115, 22, 0.12), transparent 28%),
-      radial-gradient(circle at bottom left, rgba(250, 204, 21, 0.1), transparent 25%),
-      linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.94));
+    background: #1e293b;
     border-color: rgba(249, 115, 22, 0.18);
   }
 
@@ -590,8 +595,9 @@ function rankLabel(rank: number) {
     border-color: rgba(249, 115, 22, 0.18);
   }
 
+  // 与 global.scss 的 `.sponsor-wall .podium-base` 覆盖取值保持一致的纯色
   .podium-base {
-    background: linear-gradient(180deg, rgba(71, 85, 105, 0.9), rgba(51, 65, 85, 0.88));
+    background: #334155;
     border-color: rgba(249, 115, 22, 0.16);
   }
 }

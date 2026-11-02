@@ -1,0 +1,858 @@
+{
+  "data": {
+    "auto_add_cron": {
+      "default_value": "true",
+      "description": "订阅拉取后自动为新脚本创建定时任务（未单独设置的订阅使用此默认值）",
+      "group": "subscription",
+      "group_label": "订阅拉取",
+      "label": "自动添加定时任务（默认）",
+      "order": 16,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "auto_del_cron": {
+      "default_value": "true",
+      "description": "订阅里脚本消失后自动删除对应定时任务（未单独设置的订阅使用此默认值）",
+      "group": "subscription",
+      "group_label": "订阅拉取",
+      "label": "自动删除失效任务（默认）",
+      "order": 17,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "auto_install_deps": {
+      "default_value": "true",
+      "description": "脚本缺依赖时自动尝试安装",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "自动安装缺失依赖",
+      "order": 9,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "auto_update_enabled": {
+      "default_value": "false",
+      "description": "静默更新开关（每 24 小时自动检查并在有新版本时尝试更新）",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "静默更新",
+      "order": 5,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "auto_update_last_checked_at": {
+      "default_value": "",
+      "description": "上次自动检查更新时间",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "上次检查更新时间",
+      "order": 6,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "backup_schedule_enabled": {
+      "default_value": "false",
+      "description": "启用定时备份",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "启用定时备份",
+      "order": 35,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "backup_schedule_frequency": {
+      "default_value": "daily",
+      "description": "定时备份频率",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "备份频率",
+      "options": [
+        {
+          "value": "daily",
+          "label": "每天"
+        },
+        {
+          "value": "weekly",
+          "label": "每周"
+        },
+        {
+          "value": "monthly",
+          "label": "每月"
+        }
+      ],
+      "order": 36,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "daily",
+      "value_type": "enum"
+    },
+    "backup_schedule_monthday": {
+      "default_value": "1",
+      "description": "每月备份执行日",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "每月执行日",
+      "max": 28,
+      "min": 1,
+      "order": 39,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "1",
+      "value_type": "int"
+    },
+    "backup_schedule_name": {
+      "default_value": "",
+      "description": "定时备份文件名前缀",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "文件名前缀",
+      "order": 40,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "backup_schedule_password": {
+      "default_value": "",
+      "description": "定时备份加密密码",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "加密密码",
+      "order": 41,
+      "registered": true,
+      "secret": true,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "backup_schedule_selection": {
+      "default_value": "configs,tasks,subscriptions,env_vars,logs,scripts,dependencies,task_views",
+      "description": "定时备份包含的内容（逗号分隔）",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "备份内容",
+      "order": 42,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "configs,tasks,subscriptions,env_vars,logs,scripts,dependencies,task_views",
+      "value_type": "string"
+    },
+    "backup_schedule_time": {
+      "default_value": "03:00",
+      "description": "定时备份执行时间（24 小时制 HH:MM）",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "执行时间",
+      "order": 37,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "03:00",
+      "value_type": "string"
+    },
+    "backup_schedule_weekday": {
+      "default_value": "1",
+      "description": "每周备份执行日（0=周日，1=周一）",
+      "group": "backup",
+      "group_label": "定时备份",
+      "label": "每周执行日",
+      "options": [
+        {
+          "value": "0",
+          "label": "周日"
+        },
+        {
+          "value": "1",
+          "label": "周一"
+        },
+        {
+          "value": "2",
+          "label": "周二"
+        },
+        {
+          "value": "3",
+          "label": "周三"
+        },
+        {
+          "value": "4",
+          "label": "周四"
+        },
+        {
+          "value": "5",
+          "label": "周五"
+        },
+        {
+          "value": "6",
+          "label": "周六"
+        }
+      ],
+      "order": 38,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "1",
+      "value_type": "enum"
+    },
+    "binary_update_proxy": {
+      "default_value": "",
+      "description": "二进制更新下载加速源（留空直连 GitHub Release）",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "二进制更新加速源",
+      "order": 26,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "captcha_enabled": {
+      "default_value": "false",
+      "description": "极验验证码开关（开启后每次登录触发）",
+      "group": "security",
+      "group_label": "安全",
+      "label": "启用极验验证码",
+      "order": 48,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "captcha_fail_mode": {
+      "default_value": "open",
+      "description": "验证码上游异常策略：open=放行，strict=严格拦截",
+      "group": "security",
+      "group_label": "安全",
+      "label": "上游异常策略",
+      "options": [
+        {
+          "value": "open",
+          "label": "宽松放行"
+        },
+        {
+          "value": "strict",
+          "label": "严格拦截"
+        }
+      ],
+      "order": 51,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "open",
+      "value_type": "enum"
+    },
+    "captcha_id": {
+      "default_value": "",
+      "description": "验证码平台 ID",
+      "group": "security",
+      "group_label": "安全",
+      "label": "Captcha ID",
+      "order": 49,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "captcha_key": {
+      "default_value": "",
+      "description": "验证码平台密钥（服务端 Key）",
+      "group": "security",
+      "group_label": "安全",
+      "label": "Captcha Key",
+      "order": 50,
+      "registered": true,
+      "secret": true,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "cleanup_leftover_processes": {
+      "default_value": "true",
+      "description": "定时、手动任务的主命令结束后，结束它留在后台的进程（如 nohup、\u0026 启动的），避免越积越多占用内存；开机任务不清理。需要常驻的进程请用 setsid nohup … \u0026 启动，或关闭此项",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "任务结束后清理残留进程",
+      "order": 11,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "console_timeout_minutes": {
+      "default_value": "30",
+      "description": "系统命令行里单条命令的最长执行时间，超时会终止整个进程组",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "系统命令行超时(分钟)",
+      "max": 720,
+      "min": 1,
+      "order": 4,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "30",
+      "value_type": "int"
+    },
+    "cpu_warn": {
+      "default_value": "80",
+      "description": "CPU 告警阈值（%）",
+      "group": "alerts",
+      "group_label": "告警通知",
+      "label": "CPU 阈值 (%)",
+      "max": 100,
+      "min": 1,
+      "order": 13,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "80",
+      "value_type": "int"
+    },
+    "default_cron_rule": {
+      "default_value": "",
+      "description": "订阅脚本未声明 cron 时使用；留空则不为这类脚本建定时任务",
+      "group": "subscription",
+      "group_label": "订阅拉取",
+      "label": "默认 Cron 规则",
+      "order": 19,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "dependency_install_timeout_minutes": {
+      "default_value": "20",
+      "description": "单个依赖安装/卸载的最长执行时间。安装 opencv 等需要现场编译的大包时可调大",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "依赖安装超时(分钟)",
+      "max": 720,
+      "min": 5,
+      "order": 3,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "20",
+      "value_type": "int"
+    },
+    "detect_silent_exit": {
+      "default_value": "true",
+      "description": "Node 任务因 Promise 永不完成而提前退出时判定为失败，而不是记成成功",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "检测脚本半路静默结束",
+      "order": 10,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "disk_warn": {
+      "default_value": "90",
+      "description": "磁盘告警阈值（%）",
+      "group": "alerts",
+      "group_label": "告警通知",
+      "label": "磁盘阈值 (%)",
+      "max": 100,
+      "min": 1,
+      "order": 15,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "90",
+      "value_type": "int"
+    },
+    "editor_background_color": {
+      "default_value": "",
+      "description": "脚本编辑器背景颜色（留空使用默认样式）",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "编辑器背景颜色",
+      "order": 31,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "log_background_color": {
+      "default_value": "",
+      "description": "日志视图背景颜色（留空跟随当前主题）",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "日志背景颜色",
+      "order": 32,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "log_background_image": {
+      "default_value": "",
+      "description": "日志视图背景图片（data URL）",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "日志背景图片",
+      "order": 33,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "log_retention_days": {
+      "default_value": "7",
+      "description": "日志保留天数",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "日志保留天数",
+      "max": 3650,
+      "min": 1,
+      "order": 1,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "7",
+      "value_type": "int"
+    },
+    "max_app_sessions": {
+      "default_value": "1",
+      "description": "同一用户最大 APP 端会话数（多设备同时在线）",
+      "group": "security",
+      "group_label": "安全",
+      "label": "APP 端会话上限",
+      "max": 20,
+      "min": 1,
+      "order": 47,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "1",
+      "value_type": "int"
+    },
+    "max_concurrent_tasks": {
+      "default_value": "5",
+      "description": "定时任务最大并发数",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "定时任务并发数",
+      "max": 128,
+      "min": 1,
+      "order": 0,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "5",
+      "value_type": "int"
+    },
+    "max_log_content_size": {
+      "default_value": "102400000",
+      "description": "任务日志内容最大保留字节数",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "日志内容上限",
+      "max": 524288000,
+      "min": 1024,
+      "order": 2,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "102400000",
+      "value_type": "int"
+    },
+    "max_web_sessions": {
+      "default_value": "1",
+      "description": "同一用户最大网页端会话数（多设备同时在线）",
+      "group": "security",
+      "group_label": "安全",
+      "label": "网页端会话上限",
+      "max": 20,
+      "min": 1,
+      "order": 46,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "1",
+      "value_type": "int"
+    },
+    "mcp_allow_mutations": {
+      "default_value": "false",
+      "description": "开启后，AI 可以运行、停止、启用或禁用任务，增删改环境变量，保存与运行脚本，拉取订阅；关闭时只提供查询类工具。注意：应用拥有 scripts 权限就等于可以执行任意代码",
+      "group": "mcp",
+      "group_label": "MCP 服务",
+      "label": "允许写入与执行工具",
+      "order": 53,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "mcp_enabled": {
+      "default_value": "false",
+      "description": "开启后，AI 客户端可以通过 POST /api/v1/mcp（HTTP）或容器内的 ddp mcp（stdio）连接面板，用开放 API 应用凭据（app_key / app_secret）或登录令牌鉴权；能访问哪些模块由应用的权限范围决定",
+      "group": "mcp",
+      "group_label": "MCP 服务",
+      "label": "启用 MCP 服务",
+      "order": 52,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "memory_warn": {
+      "default_value": "80",
+      "description": "内存告警阈值（%）",
+      "group": "alerts",
+      "group_label": "告警通知",
+      "label": "内存阈值 (%)",
+      "max": 100,
+      "min": 1,
+      "order": 14,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "80",
+      "value_type": "int"
+    },
+    "notify_on_login": {
+      "default_value": "false",
+      "description": "登录成功发送通知",
+      "group": "security",
+      "group_label": "安全",
+      "label": "登录成功发送通知",
+      "order": 23,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "notify_on_resource_warn": {
+      "default_value": "false",
+      "description": "资源超限发送通知",
+      "group": "alerts",
+      "group_label": "告警通知",
+      "label": "资源超限发送通知",
+      "order": 21,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "notify_panel_label": {
+      "default_value": "",
+      "description": "通知标题前缀的面板名称（多面板区分用，留空不附带）",
+      "group": "alerts",
+      "group_label": "告警通知",
+      "label": "通知面板名称",
+      "order": 22,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "panel_icon": {
+      "default_value": "",
+      "description": "面板图标（SVG data URL）",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "面板图标 (SVG)",
+      "order": 30,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "panel_runtime_mode": {
+      "default_value": "auto",
+      "description": "二进制运行时日志输出策略：auto=Docker 输出到 stdout，裸机输出到 panel.log；stdout=同时输出到 stdout 和 panel.log；file=仅写 panel.log",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "运行时日志输出",
+      "options": [
+        {
+          "value": "auto",
+          "label": "自动"
+        },
+        {
+          "value": "stdout",
+          "label": "输出到 stdout"
+        },
+        {
+          "value": "file",
+          "label": "仅写文件"
+        }
+      ],
+      "order": 43,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "auto",
+      "value_type": "enum"
+    },
+    "panel_service_manager": {
+      "default_value": "none",
+      "description": "面板二进制守护方式；启用后更新流程会尝试先停止守护再启动守护",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "守护方式",
+      "options": [
+        {
+          "value": "none",
+          "label": "无"
+        },
+        {
+          "value": "systemd",
+          "label": "systemd"
+        }
+      ],
+      "order": 44,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "none",
+      "value_type": "enum"
+    },
+    "panel_service_name": {
+      "default_value": "daidai-panel",
+      "description": "systemd 服务名称",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "systemd 服务名",
+      "order": 45,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "daidai-panel",
+      "value_type": "string"
+    },
+    "panel_shape_style": {
+      "default_value": "square",
+      "description": "网页端界面的圆角风格。直角=扁平工具型（默认）；圆角=各控件与卡片带圆角。仅网页端生效，APP 不受影响。",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "界面圆角",
+      "options": [
+        {
+          "value": "square",
+          "label": "直角"
+        },
+        {
+          "value": "rounded",
+          "label": "圆角"
+        }
+      ],
+      "order": 34,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "square",
+      "value_type": "enum"
+    },
+    "panel_title": {
+      "default_value": "呆呆面板",
+      "description": "面板标题",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "面板标题",
+      "order": 28,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "呆呆面板",
+      "value_type": "string"
+    },
+    "proxy_url": {
+      "default_value": "",
+      "description": "出站请求代理地址",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "代理地址",
+      "order": 24,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "python_default_version": {
+      "default_value": "3.12",
+      "description": "默认 Python 运行版本",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "默认 Python 版本",
+      "options": [
+        {
+          "value": "3.10",
+          "label": "Python 3.10"
+        },
+        {
+          "value": "3.11",
+          "label": "Python 3.11"
+        },
+        {
+          "value": "3.12",
+          "label": "Python 3.12"
+        }
+      ],
+      "order": 12,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "3.12",
+      "value_type": "enum"
+    },
+    "random_delay": {
+      "default_value": "0",
+      "description": "任务执行前随机延迟最大秒数",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "随机延迟最大秒数",
+      "max": 86400,
+      "min": 0,
+      "order": 7,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "0",
+      "value_type": "int"
+    },
+    "random_delay_extensions": {
+      "default_value": "",
+      "description": "随机延迟仅对指定脚本后缀生效",
+      "group": "tasks",
+      "group_label": "任务运行",
+      "label": "延迟文件后缀",
+      "order": 8,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "repo_file_extensions": {
+      "default_value": "py js mjs ts sh",
+      "description": "订阅自动识别任务时扫描的脚本后缀",
+      "group": "subscription",
+      "group_label": "订阅拉取",
+      "label": "拉取文件后缀",
+      "order": 20,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "py js mjs ts sh",
+      "value_type": "string"
+    },
+    "subscription_force_overwrite": {
+      "default_value": "true",
+      "description": "订阅拉取时覆盖本地修改（未单独设置的订阅使用此默认值）",
+      "group": "subscription",
+      "group_label": "订阅拉取",
+      "label": "覆盖拉取（默认）",
+      "order": 18,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "true",
+      "value_type": "bool"
+    },
+    "timezone": {
+      "default_value": "Asia/Shanghai",
+      "description": "面板时区（影响日志、定时任务日期判断和脚本 TZ）",
+      "group": "branding",
+      "group_label": "面板与运行时",
+      "label": "面板时区",
+      "order": 29,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "Asia/Shanghai",
+      "value_type": "string"
+    },
+    "trusted_proxy_cidrs": {
+      "default_value": "127.0.0.1/32\n::1/128\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16",
+      "description": "可信代理 CIDR/IP 列表（逗号、空格或换行分隔）",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "可信代理 CIDR",
+      "order": 27,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "127.0.0.1/32\n::1/128\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16",
+      "value_type": "string"
+    },
+    "update_image_mirror": {
+      "default_value": "",
+      "description": "旧 Docker Socket 更新链路使用的可选镜像源（Watchtower 部署请通过 DAIDAI_PANEL_IMAGE 配置仓库）",
+      "group": "network",
+      "group_label": "网络代理",
+      "label": "系统更新镜像源",
+      "order": 25,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "",
+      "value_type": "string"
+    },
+    "wecom_trigger_allow_run": {
+      "default_value": "false",
+      "description": "开启后，企业微信侧的指令与菜单链接才会真的运行任务；关闭时回调仍可验签联通（方便先在企业微信后台把配置保存成功），但不会执行任何任务。可触发的任务范围还受每条接入配置的任务白名单限制",
+      "group": "wecom",
+      "group_label": "企业微信触发",
+      "label": "允许企业微信触发执行",
+      "order": 55,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    },
+    "wecom_trigger_enabled": {
+      "default_value": "false",
+      "description": "开启后，企业微信自建应用可以通过回调（/api/v1/wecom/callback/:id）或菜单链接（/api/v1/open-api/trigger）拉起面板任务。要求企业微信服务器能访问到面板（公网可达），建议使用 80/443 端口，且在企业微信后台配好回调 URL、Token、EncodingAESKey 与可信 IP",
+      "group": "wecom",
+      "group_label": "企业微信触发",
+      "label": "启用企业微信触发",
+      "order": 54,
+      "registered": true,
+      "secret": false,
+      "updated_at": null,
+      "value": "false",
+      "value_type": "bool"
+    }
+  }
+}

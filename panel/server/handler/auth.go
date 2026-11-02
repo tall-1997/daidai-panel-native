@@ -181,6 +181,39 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	user, accessToken, refreshToken, accessInfo, refreshInfo, err := h.authService.Login(req.Username, req.Password, req.TOTPCode)
+	if err == nil {
+		// 先落会话行，落成了才算登录成功。这枚 access 的会话号就是会话行的 jti，撤销全部会话、改密、禁用、删除
+		// 都靠遍历会话行找到它；会话行写不进去还照发 token，签出的就是一枚永远撤销不掉的登录令牌。
+		if sessionErr := service.CreateSessionWithRefresh(user.ID, user.Username, accessInfo.JTI, refreshInfo.JTI, clientType, clientName, ip, ua, accessInfo.ExpiresAt, refreshInfo.ExpiresAt); sessionErr != nil {
+			response.InternalError(c, "登录失败")
+			return
+		}
+
+		// 会话行落库之后，按 id 重读一次用户，与这次校验时读到的那份比：启用状态、角色、密码哈希、用户名。
+		// 为什么要这一步：管理员的禁用 / 降权 / 重置密码 / 改名 / 删号会调 RevokeAllUserSessions，它只能撤掉
+		// 「当时已经在库里」的会话行。改动如果恰好落在「登录校验完、会话行还没落库」之间，这次的会话行就不在
+		// 那次撤销的范围里，之后也没有路径会再撤它；新令牌每请求只查黑名单、不查用户状态，
+		// 这枚令牌就能在账号已被禁用的情况下一直用到自然过期。
+		// 为什么这样就关住了窗口：管理员的更新早于这次重读，这里看得见，当场撤掉刚建的会话；
+		// 晚于这次重读，会话行已经在库里，管理员随后的 RevokeAllUserSessions 一定遍历得到它。
+		// 本推理依赖「先把用户状态落库、再调 RevokeAllUserSessions」的顺序（删号就是先删用户行、再撤销）：
+		// 反过来先撤销后落库，登录能落在撤销的 Find 之后、落库之前，重读看不到变化，会话行也躲过了那次撤销。
+		// 新增改用户状态的入口必须遵守这个顺序。
+		// 代价是每次登录多一条查询，不在每请求路径上。
+		// 有变化就走下面原有的失败分支：被禁用回 403；其余回 401——密码被重置、改名、删号时这份凭据本来就登不上了，
+		// 角色变了也按 401 处理：这次校验用的账号快照已经过时，重新登录一次就按新角色签发。
+		var latest model.User
+		if database.DB.First(&latest, user.ID).Error != nil || latest.Username != user.Username {
+			err = service.ErrUserNotFound
+		} else if !latest.Enabled {
+			err = service.ErrUserDisabled
+		} else if latest.Password != user.Password || latest.Role != user.Role {
+			err = service.ErrInvalidPassword
+		}
+		if err != nil {
+			service.RevokeSession(accessInfo.JTI, accessInfo.ExpiresAt)
+		}
+	}
 	if err != nil {
 		switch err {
 		case service.ErrUserNotFound, service.ErrInvalidPassword:
@@ -238,7 +271,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				user.Username, time.Now().Format("2006-01-02 15:04:05"), ip),
 		)
 	}
-	service.CreateSessionWithRefresh(user.ID, user.Username, accessInfo.JTI, refreshInfo.JTI, clientType, clientName, ip, ua, accessInfo.ExpiresAt, refreshInfo.ExpiresAt)
 
 	response.Success(c, gin.H{
 		"message":       "登录成功",
@@ -249,8 +281,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
-	jti, _ := c.Get("jti")
-	service.RevokeSession(jti.(string))
+	// 按会话号撤销整个会话，而不是只拉黑发起退出的这一枚：两端退出时手里的几乎总是续期得来的 access，
+	// 同一会话的其它 access（别的标签页）与 refresh 必须一起作废。
+	service.RevokeSession(c.GetString("sid"), c.GetTime("token_expires_at"))
 	response.Success(c, gin.H{"message": "已退出登录"})
 }
 
@@ -502,6 +535,10 @@ func (h *AuthHandler) RegisterRoutes(r *gin.RouterGroup) {
 		auth.GET("/user", middleware.JWTAuth(), h.GetUser)
 		auth.PUT("/password", middleware.JWTAuth(), h.ChangePassword)
 		auth.PUT("/username", middleware.JWTAuth(), h.ChangeUsername)
+		// 编辑器偏好是 per-user 的，只要登录就能读写自己那份，刻意不加 RequireAdmin：
+		// 脚本页 operator 就能打开编辑器，不能要求管理员权限才允许改自己的开关。
+		auth.GET("/preferences", middleware.JWTAuth(), h.GetPreferences)
+		auth.PUT("/preferences", middleware.JWTAuth(), h.UpdatePreferences)
 		auth.GET("/captcha-config", h.CaptchaConfig)
 		auth.POST("/avatar", middleware.JWTAuth(), h.UploadAvatar)
 		auth.DELETE("/avatar", middleware.JWTAuth(), h.DeleteAvatar)

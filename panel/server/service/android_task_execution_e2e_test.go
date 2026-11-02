@@ -170,8 +170,9 @@ func TestSupervisedRuntimeCommandPreservesLogTruncationSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run supervised command: %v", err)
 	}
+	// ScriptResult 只保留 ReturnCode；截断提示与截断后的正文走 onOutput 流式回调。
 	const expected = "12345\n[日志已截断，超过最大大小限制]"
-	if !result.Truncated || result.Output != expected || streamed.String() != expected {
-		t.Fatalf("unexpected truncation result: truncated=%v output=%q streamed=%q", result.Truncated, result.Output, streamed.String())
+	if result.ReturnCode != 0 || streamed.String() != expected {
+		t.Fatalf("unexpected streaming result: rc=%d streamed=%q", result.ReturnCode, streamed.String())
 	}
 }

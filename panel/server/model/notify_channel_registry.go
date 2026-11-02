@@ -110,6 +110,10 @@ func notifySelect(key, label, placeholder string, options []SystemConfigOption) 
 	return field
 }
 
+// notifyChannelProxyPlaceholder 是渠道级正向代理字段（telegram / wecom_app 的 proxy）共用的提示文案。
+// 两个渠道语义一致（留空回落系统设置 proxy_url），文案也保持一致，免得用户以为两边规则不同。
+const notifyChannelProxyPlaceholder = "http/socks5 代理，如 http://127.0.0.1:7890；留空使用系统设置中的代理"
+
 // required 标记「留空时 notifier.go 会直接返回错误」。加这个标记前先去 notifier.go 里确认。
 func (f NotifyFieldDefinition) required() NotifyFieldDefinition {
 	f.Required = true
@@ -191,7 +195,10 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 			notifyInput("message_thread_id", "Topic ID (可选)", "群组话题 ID，留空则发到默认话题"),
 			notifyInput("api_host", "API 地址 (可选)", "自定义 API 地址，留空使用官方").
 				withDefault("https://api.telegram.org"),
-			notifyInput("proxy", "代理地址 (可选)", "http/socks5 代理地址"),
+			// placeholder 与 wecom_app 的 proxy 统一成同一句（#123）：两者语义完全一致
+			// （留空回落系统设置 proxy_url），只改文案、不改语义。
+			// 不写 Default：留空是「回落」而不是某个固定值，理由同 wecom_app。
+			notifyInput("proxy", "代理地址 (可选)", notifyChannelProxyPlaceholder),
 		},
 	},
 	{
@@ -248,7 +255,21 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 			notifyInput("corp_id", "企业 ID", "企业微信 CorpID").required(),
 			notifyPassword("secret", "应用 Secret", "应用 Secret").required(),
 			notifyInput("agent_id", "Agent ID", "应用 AgentId").required(),
-			notifyInput("base_url", "反代基础地址 (可选)", "留空使用 https://qyapi.weixin.qq.com，也可填你的 Nginx 反代地址"),
+			// base_url 就是 wxchat 这类「微信代理」要填的地方（#152）：它们把 qyapi 的 gettoken / message/send
+			// 等几条路径原样转发出去，面板正好只打这两条。label 点名「微信代理」是为了让 NAS 用户认得出来；
+			// 下面那一栏「代理地址」是正向代理，填 wxchat 进去是填错的。只改文案，键与语义不动。
+			notifyInput("base_url", "反代基础地址 / 微信代理 (可选)", "留空使用 https://qyapi.weixin.qq.com；wxchat 等微信代理填 http://VPS地址:端口"),
+			// proxy 是正向代理（http/https/socks5），与上面的 base_url（反向代理基础地址）是两件事，可以叠加：
+			// 先按 base_url 拼出请求地址，再经 proxy 发出。取 token 与发消息两次请求都走它。
+			// 留空回落系统设置 proxy_url，再空走进程环境变量 HTTP(S)_PROXY / 直连 —— 与 telegram 完全一致。
+			//
+			// 主要场景是企业微信「企业可信 IP」（#123，2022-06 之后新建的自建应用都受限）：
+			// 让请求从已加入可信 IP 的机器出网，避免 errcode 60020。
+			//
+			// 不写 Default：留空的语义是「回落」，没有固定的回退值（口径见 NotifyFieldDefinition.Default）。
+			// 不标 required：notifier.go 不对它判空。非法值在保存期（ValidateNotifyChannelConfig）
+			// 与发送期（sendWecomAppWithContext）都会显式报错，不会静默直连。
+			notifyInput("proxy", "代理地址 (可选)", notifyChannelProxyPlaceholder),
 			notifyInput("to_user", "成员账号 (可选)", "多个成员用 | 分隔，留空默认 @all"),
 			notifyInput("to_party", "部门 ID (可选)", "多个部门用 | 分隔"),
 			notifyInput("to_tag", "标签 ID (可选)", "多个标签用 | 分隔"),
@@ -317,6 +338,12 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 		Fields: []NotifyFieldDefinition{
 			notifyInput("token", "Token", "PushPlus 用户 Token").required(),
 			notifyInput("topic", "群组编码 (可选)", "一对多推送时的群组编码"),
+			// 只放这 4 个通用排版模板。PushPlus 官方现在还有 cloudMonitor / jenkins /
+			// route / pay / form / doc / excel，**刻意不补齐**，别看到「少了」就往里加：
+			//   - cloudMonitor / jenkins / route / pay 是特定场景的专用排版，面板发的是
+			//     任务执行结果，套上去只会把消息排得面目全非；
+			//   - form / doc / excel 还必须额外带一个 pushId 参数，而面板没有「表单/文档」
+			//     这个概念，也就没地方产出 pushId —— 摆进下拉框等于给用户挖坑：选了必失败。
 			notifySelect("template", "模板 (可选)", "消息模板", []SystemConfigOption{
 				{Value: "html", Label: "默认 (html)"},
 				{Value: "json", Label: "JSON"},
@@ -326,20 +353,33 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 			// 不写 Default：留空等于完全不发送 channel 参数，由 PushPlus 按账号默认
 			// （微信公众号）处理，没有可言的回退值。写了 Default 会让老渠道编辑保存一次
 			// 就凭空多出一个键，行为反而变了。
-			notifySelect("channel", "发送渠道 (可选)", "留空按 PushPlus 账号默认（微信公众号）", []SystemConfigOption{
+			//
+			// 选项顺序：免费渠道在前，消耗积分的 sms / voice 垫底，避免用户顺手选中要花钱的。
+			// qq 是官方新增的免费渠道，排在同样需要填 option 的 webhook / cp 之后、mail 之前，
+			// 让「选了它下面会多出一个编码输入框」的三个渠道在下拉里挨着。
+			notifySelect("channel", "发送渠道 (可选)", "留空按 PushPlus 账号默认（微信公众号）；QQ 机器人建议配 txt 或 markdown 模板，单条约 2000 字", []SystemConfigOption{
 				{Value: "wechat", Label: "微信公众号 (wechat)"},
 				{Value: "app", Label: "App (app)"},
 				{Value: "extension", Label: "浏览器扩展 (extension)"},
 				{Value: "webhook", Label: "第三方 Webhook (webhook)"},
 				{Value: "clawbot", Label: "微信 ClawBot (clawbot)"},
 				{Value: "cp", Label: "企业微信应用 (cp)"},
+				{Value: "qq", Label: "QQ 机器人 (qq)"},
 				{Value: "mail", Label: "邮箱 (mail)"},
 				{Value: "sms", Label: "短信 (sms，消耗 10 积分/条)"},
 				{Value: "voice", Label: "语音 (voice，消耗 30 积分/条)"},
 			}),
-			// webhook 填的是 PushPlus 后台的 webhook 编码，不是 URL；cp 填企业微信自定义应用编码。
+			// option 是 PushPlus 对原 webhook 参数的改名，同一个键在三种渠道下含义完全不同：
+			//   webhook -> PushPlus 后台的 webhook 编码（是编码，不是 URL）
+			//   cp      -> 企业微信自定义应用编码
+			//   qq      -> 目标 QQ 群的「配置编码」（先在 PushPlus 渠道配置里为该群建一条群配置）；
+			//              发给**个人**时留空即可，填了反而会被当成群消息。
 			// 其余渠道不需要这个参数，所以用 show_when 收起来，避免误填。
-			notifyInput("option", "渠道编码", "webhook 渠道填 webhook 编码，企业微信应用渠道填自定义应用编码").showWhen("channel", "webhook", "cp"),
+			//
+			// 官方还规定 QQ 群消息不能同时带 topic —— 但 show_when 只能单键等值命中，
+			// 表达不了「channel=qq 且 option 非空时隐藏 topic」，所以这条只在文案里提示，
+			// 不在 schema 里硬拦（硬拦要么扩表达力、要么把 topic 对 QQ 一刀切禁掉，两者代价都更大）。
+			notifyInput("option", "渠道编码 (按所选渠道填)", "webhook 填 webhook 编码；企业微信应用填自定义应用编码；QQ 填群配置编码（发给个人留空，且群消息不能再填群组编码）").showWhen("channel", "webhook", "cp", "qq"),
 		},
 	},
 	{
@@ -347,7 +387,12 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 		Fields: []NotifyFieldDefinition{
 			// notifier.go 的 sendServerchan 不做任何判空，直接把 key 拼进 URL。
 			// 按本文件的 required 口径，这里不标 required。
-			notifyInput("key", "SendKey", "Server酱的 SendKey (SCT...)"),
+			//
+			// 两代 SendKey 共用这一个输入框：sendServerchan 按开头自动选接口（sctp 开头走 Server酱³，
+			// 其余走 Turbo 版），所以 placeholder 把两种开头都写出来，免得 Server酱³ 用户以为填不了。
+			// 渠道名保持「Server酱」不改：type / name 是冻结的公开契约
+			// （TestNotifyChannelTypesRemainBackwardCompatible），老客户端只认这两项。
+			notifyInput("key", "SendKey", "Server酱的 SendKey (Turbo 版 SCT... / Server酱³ sctp...)"),
 		},
 	},
 	{
@@ -485,6 +530,24 @@ var registeredNotifyChannels = []NotifyChannelDefinition{
 			notifyTextarea("headers", "Headers (JSON)", `{"Authorization": "Bearer xxx"}`),
 			notifyTextarea("body", "Body 模板", "使用 {{title}} 和 {{content}} 作为占位符").
 				withDefault(`{"title":"{{title}}","content":"{{content}}"}`),
+		},
+	},
+	// 本机版（Android）扩展渠道：
+	//   - android_local：走应用内通知桥（mobilecore 注入 androidLocalNotificationSend）；
+	//   - external_webhook：外部 Webhook，支持模板请求体/请求头/Bearer Token。
+	{
+		Type: "android_local", Name: "本机通知", Icon: "android",
+		Fields: []NotifyFieldDefinition{
+			notifyInput("channel", "通知渠道", "default").withDefault("default"),
+		},
+	},
+	{
+		Type: "external_webhook", Name: "外部 Webhook", Icon: "webhook",
+		Fields: []NotifyFieldDefinition{
+			notifyInput("url", "URL", "https://example.com/hook").required(),
+			notifyTextarea("body", "Body 模板", "支持 {{title}} / {{content}} 占位符"),
+			notifyTextarea("headers", "Headers (JSON)", `{"X-Token":"xxx"}`),
+			notifyPassword("bearer_token", "Bearer Token", "Authorization: Bearer <token>"),
 		},
 	},
 }

@@ -7,7 +7,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  NODE_VERSION: '20.19.x'
+  NODE_VERSION: '24.21.0'
   NPM_VERSION: '10.8.2'
 
 permissions:
@@ -21,12 +21,12 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '24.21.0'
 
       - name: Enforce Node package manager contract
         run: |
           npm install -g "npm@${NPM_VERSION}"
-          node --version | grep -Eq '^v20\.19\.'
+          node --version | grep -Eq '^v24\.21\.'
           test "$(npm --version)" = "${NPM_VERSION}"
 
       - uses: actions/setup-go@v6
@@ -201,14 +201,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '24.21.0'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
       - name: Enforce Node package manager contract
         run: |
           npm install -g "npm@${NPM_VERSION}"
-          node --version | grep -Eq '^v20\.19\.'
+          node --version | grep -Eq '^v24\.21\.'
           test "$(npm --version)" = "${NPM_VERSION}"
 
       - name: Build Frontend
@@ -460,7 +460,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.debian
-          # Debian runtime uses node:20.19.0-bookworm-slim, which has no linux/386 manifest.
+          # Debian runtime uses node:24.21.0-bookworm-slim, which has no linux/386 manifest.
           platforms: ${{ matrix.platforms }}
           push: true
           build-args: |

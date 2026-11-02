@@ -1,9 +1,9 @@
 package service
 
 import (
+	"context"
 	"bufio"
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,10 +20,10 @@ import (
 	"daidai-panel/pkg/pathutil"
 )
 
+// ScriptResult 只回报退出码。#159 修复 D 删掉了原来的 Output / Truncated：
+// 那份整段输出没有任何调用方读（执行器自己从 onOutput 收尾部），白白在堆里多存一份。
 type ScriptResult struct {
 	ReturnCode int
-	Output     string
-	Truncated  bool
 }
 
 // 日志回调现在直接传原始输出片段。
@@ -54,6 +54,14 @@ type CommandExecutionPlan struct {
 	Mode               commandExecutionMode
 	EnvName            string
 	AccountSpec        string
+
+	// ScriptToken 是命令里被认作脚本路径的那段原始文本（多个 token 按空格拼回），如 "./a.py"、"demo folder/my script.py"。
+	// 执行链路不读它。它存在的原因：FullPath 已经被 ResolveWithinBase 用 EvalSymlinks 解析过，
+	// 拿不到用户写的字面路径；而「删除任务时一并删除脚本」必须对字面路径做 Lstat 才能认出软链接
+	// （见 task_script_target.go）。只在解析出脚本文件时赋值，托管命令与 python -m 为空串。
+	ScriptToken string
+
+	ShouldCleanupProcessGroup func() bool // #159 修复 A：主命令结束后要不要清理它的进程组；nil = 不清（只有任务执行器的 runTask 会挂上判定）
 }
 
 type taskAccountSelection struct {
@@ -104,6 +112,7 @@ var extInterpreterMap = map[string]string{
 	".mjs": "node",
 	".ts":  "ts-node",
 	".sh":  "bash",
+	// 本机版（Android）：Go 脚本交给受管运行时（yaegi 解释器），不依赖宿主机 go 工具链。
 	".go":  RuntimeIDYaegiGo,
 }
 
@@ -116,6 +125,36 @@ var desiInterpreterMap = map[string]string{
 	".go":  RuntimeIDYaegiGo,
 }
 
+// commandRunnerKind 是执行器按命令首词选定的解析分支。
+type commandRunnerKind int
+
+const (
+	commandRunnerUnsupported commandRunnerKind = iota
+	commandRunnerTask
+	commandRunnerDesi
+	commandRunnerInterpreter
+	commandRunnerManaged
+)
+
+// classifyCommandRunner 是「首词认不认、按哪条分支解析」的唯一判定。
+// 订阅同步按脚本认任务（#125）也用它，不另写一份解释器列表：两边口径一旦分叉，
+// 执行器能跑的命令在同步里就认不出来，又会新建重复任务。
+func classifyCommandRunner(first string) commandRunnerKind {
+	switch first {
+	case "task":
+		return commandRunnerTask
+	case "desi":
+		return commandRunnerDesi
+	case "python", "python3", "python3.10", "python3.11", "python3.12", "node", "ts-node", "bash", "go", RuntimeIDYaegiGo:
+		return commandRunnerInterpreter
+	default:
+		if isManagedExecutableName(first) {
+			return commandRunnerManaged
+		}
+		return commandRunnerUnsupported
+	}
+}
+
 func ParseCommandExecutionPlan(command, scriptsDir string) (*CommandExecutionPlan, error) {
 	tokens, err := splitCommandTokens(command)
 	if err != nil {
@@ -125,17 +164,16 @@ func ParseCommandExecutionPlan(command, scriptsDir string) (*CommandExecutionPla
 		return nil, fmt.Errorf("命令格式无效")
 	}
 
-	switch tokens[0] {
-	case "task":
+	switch classifyCommandRunner(tokens[0]) {
+	case commandRunnerTask:
 		return parseTaskCommandPlan(tokens[1:], scriptsDir, "")
-	case "desi":
+	case commandRunnerDesi:
 		return parseTaskCommandPlan(tokens[1:], scriptsDir, commandModeDesi)
-	case "python", "python3", "python3.10", "python3.11", "python3.12", "node", "ts-node", "bash", "go", RuntimeIDYaegiGo:
+	case commandRunnerInterpreter:
 		return parseInterpreterCommandPlan(tokens[0], tokens[1:], scriptsDir)
+	case commandRunnerManaged:
+		return parseManagedCommandPlan(tokens, scriptsDir)
 	default:
-		if isManagedExecutableName(tokens[0]) {
-			return parseManagedCommandPlan(tokens, scriptsDir)
-		}
 		return nil, fmt.Errorf("不支持的解释器: %s", tokens[0])
 	}
 }
@@ -192,6 +230,7 @@ optionsDone:
 	}
 
 	plan.FullPath = fullPath
+	plan.ScriptToken = strings.Join(taskShellTokens[:pathTokenCount], " ")
 	plan.WorkDir = filepath.Dir(fullPath)
 	plan.ScriptArgs = scriptArgs
 	remainder := taskShellTokens[pathTokenCount:]
@@ -282,6 +321,7 @@ func parseInterpreterCommandPlan(interpreter string, tokens []string, scriptsDir
 	if err != nil {
 		return nil, err
 	}
+	// 本机版（Android）：直接写 `go xxx.go` 也归一到受管 yaegi 运行时。
 	if interpreter == "go" {
 		interpreter = RuntimeIDYaegiGo
 	}
@@ -289,6 +329,7 @@ func parseInterpreterCommandPlan(interpreter string, tokens []string, scriptsDir
 	return &CommandExecutionPlan{
 		Interpreter: interpreter,
 		FullPath:    fullPath,
+		ScriptToken: strings.Join(tokens[:pathTokenCount], " "),
 		WorkDir:     filepath.Dir(fullPath),
 		ScriptArgs:  append([]string{}, tokens[pathTokenCount:]...),
 		Mode:        commandModeNormal,
@@ -567,6 +608,14 @@ func parseTaskTimeoutSeconds(raw string) (int, error) {
 	return seconds * multiplier, nil
 }
 
+// leftoverProcessCleanupNotice 是 #159 修复 A 清理了残留后台进程时打进任务日志的那一行，前缀已登记到 panelMetaLinePrefixes。
+// 前后各一个 \n，和「被信号终止」那行同形：开头的 \n 让 conc 模式的 [ENV#N] 前缀单独占一行、提示行本身从行首开始，
+// isPanelMetaLine 才认得出；结尾的 \n 免得后面的「=== 执行结束」粘在这一行末尾。
+// 写的是「已发送结束信号，5 秒内不退出会被强制结束」而不是「已结束」：补刀在单独的协程里，面板在这 5 秒内退出时补不上。
+const leftoverProcessCleanupNotice = "\n[已结束残留的后台进程：主命令退出后，它的进程组里还有进程在运行（多为 nohup、& 放到后台的），" +
+	"已发送结束信号，5 秒内不退出会被强制结束。需要常驻请用 setsid nohup 命令 >/dev/null 2>&1 & 启动，" +
+	"或在「系统设置 → 任务运行」关闭「任务结束后清理残留进程」]\n"
+
 func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[string]string, maxLogSize int, onOutput OnOutputFunc, onProcessStart ...OnProcessStartFunc) (*ScriptResult, *os.Process, error) {
 	cmd, cleanup, err := buildCmd(plan, filepath.Dir(plan.FullPath), envVars)
 	if err != nil {
@@ -574,39 +623,35 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 	}
 	defer cleanup()
 
-	var outputBuilder strings.Builder
-	var outputMu sync.Mutex
+	// totalSize / truncated 决定 onOutput 什么时候开始截断（#159 修复 D 删掉了旁边那份没人读的 outputBuilder）
 	totalSize := 0
 	truncated := false
 
 	emitChunk := func(chunk string) {
-		outputMu.Lock()
-		defer outputMu.Unlock()
 		if truncated {
 			return
 		}
-		remaining := maxLogSize - totalSize
-		if remaining <= 0 {
+		if totalSize >= maxLogSize {
 			truncated = true
 			msg := "\n[日志已截断，超过最大大小限制]"
-			outputBuilder.WriteString(msg)
 			if onOutput != nil {
 				onOutput(msg)
 			}
 			return
 		}
+		// 本机版（Android）：与本地语义一致，超限的这一块从中间截断并立刻给出提示，
+		// 不是等下一块才补（否则最后一块超限时永远没有提示）。
+		remaining := maxLogSize - totalSize
 		if len(chunk) > remaining {
 			chunk = chunk[:remaining]
 			truncated = true
 		}
-		outputBuilder.WriteString(chunk)
 		totalSize += len(chunk)
-		if onOutput != nil {
+		if onOutput != nil && len(chunk) > 0 {
 			onOutput(chunk)
 		}
 		if truncated {
 			msg := "\n[日志已截断，超过最大大小限制]"
-			outputBuilder.WriteString(msg)
 			if onOutput != nil {
 				onOutput(msg)
 			}
@@ -618,8 +663,8 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		timeoutDuration = time.Duration(timeout) * time.Second
 	}
 
-	// Reserve one byte so the runner can observe that output exceeded its limit
-	// and preserve the existing truncation marker and ScriptResult semantics.
+	// 本机版（Android）：统一经 ProcessSupervisor 启动，配额/超时/取消与受管运行时共用一条链路。
+	// 预留 1 字节让截断提示照旧可被观察（保留既有 ScriptResult 语义）。
 	supervisorOutputLimit := int64(maxLogSize) + 1
 	proc, err := GetProcessSupervisor().Start(context.Background(), ProcessSpec{
 		Argv:        cmd.Args,
@@ -639,176 +684,160 @@ func runSingleCommand(plan *CommandExecutionPlan, timeout int, envVars map[strin
 		onProcessStart[0](process)
 	}
 	procResult, _ := proc.Wait()
-	outputMu.Lock()
-	if outputBuilder.Len() == 0 && procResult.Output != "" {
-		outputBuilder.WriteString(procResult.Output)
+
+	// #159 修复 A（本机版走 Supervisor 后在此补齐）：主命令自己结束时，若进程组里还留着后台进程
+	// （nohup / & 放到后台的），按任务执行器挂上的判定决定清不清理；清理成功时补一行提示。
+	if plan.ShouldCleanupProcessGroup != nil && plan.ShouldCleanupProcessGroup() && process != nil && processGroupAlive(process.Pid) {
+		// 非阻塞：先 TERM、宽限后 KILL 由 TerminateProcessGroup 自己安排，结算不等它（#159 修复 A）。
+		TerminateProcessGroup(process)
+		if onOutput != nil {
+			onOutput(leftoverProcessCleanupNotice)
+		}
 	}
-	currentOutput := outputBuilder.String()
-	outputMu.Unlock()
+
 	returnCode := procResult.ExitCode
 	if procResult.TimedOut {
 		returnCode = -1
 		msg := fmt.Sprintf("\n[任务超时，已在 %d 秒后终止]", timeout)
-		outputMu.Lock()
-		outputBuilder.WriteString(msg)
-		currentOutput = outputBuilder.String()
-		outputMu.Unlock()
+		if onOutput != nil {
+			onOutput(msg)
+		}
+	} else if signalName := describeTerminationSignal(procResult.Err); signalName != "" {
+		// 被信号终止时给用户可读解释（OOM / 手动停止 / 外部 kill），与旧执行路径同文案。
+		msg := fmt.Sprintf("\n[脚本进程被信号终止：%s（退出码 %d）。常见原因：内存超限被系统 OOM Killer 杀掉、面板或用户手动停止、外部 kill]\n", signalName, returnCode)
 		if onOutput != nil {
 			onOutput(msg)
 		}
 	}
 
-	return &ScriptResult{
-		ReturnCode: returnCode,
-		Output:     currentOutput,
-		Truncated:  truncated,
-	}, process, nil
+	return &ScriptResult{ReturnCode: returnCode}, process, nil
 }
 
-func runSingleCommandLegacy(cmd *exec.Cmd, cleanup func(), timeout int, maxLogSize int, onOutput OnOutputFunc, onProcessStart ...OnProcessStartFunc) (*ScriptResult, *os.Process, error) {
-	stdout, stdoutWriter, err := os.Pipe()
-	if err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stdoutWriter
-
-	if err := cmd.Start(); err != nil {
-		_ = stdout.Close()
-		_ = stdoutWriter.Close()
-		cleanup()
-		return nil, nil, fmt.Errorf("failed to start process: %w", err)
-	}
-	_ = stdoutWriter.Close()
-
-	process := cmd.Process
-	if len(onProcessStart) > 0 && onProcessStart[0] != nil {
-		onProcessStart[0](process)
-	}
-
-	var outputBuilder strings.Builder
-	totalSize := 0
-	truncated := false
+func pumpAndWait(cmd *exec.Cmd, stdout io.Reader, timeout time.Duration, emit func(string)) (error, bool, error) {
+	// 不用 Scanner 按行切，因为终端进度条常用裸 \r 覆盖当前行。
+	// 这里按字节流切片，把 \n / \r / \r\n 都当成边界保留下来，
+	// 让实时日志、历史日志和前端渲染都能还原真实终端语义。
 	reader := bufio.NewReaderSize(stdout, 256*1024)
 
-	emitChunk := func(chunk string) {
-		if truncated {
-			return
-		}
-		if totalSize >= maxLogSize {
-			truncated = true
-			msg := "\n[日志已截断，超过最大大小限制]"
-			outputBuilder.WriteString(msg)
-			if onOutput != nil {
-				onOutput(msg)
-			}
-			return
-		}
-		outputBuilder.WriteString(chunk)
-		totalSize += len(chunk)
-		if onOutput != nil {
-			onOutput(chunk)
-		}
-	}
-
-	done := make(chan error, 1)
+	drained := make(chan error, 1)
 	go func() {
-		defer close(done)
-		defer stdout.Close()
-		var chunkBuf strings.Builder
-		for {
-			text, err := reader.ReadString('\n')
-			if len(text) > 0 {
-				lastBoundaryIndex := -1
-				for i := 0; i < len(text); i++ {
-					chunkBuf.WriteByte(text[i])
-					if text[i] == '\r' {
-						if i+1 < len(text) && text[i+1] == '\n' {
-							chunkBuf.WriteByte(text[i+1])
-							i++
-						}
-						emitChunk(chunkBuf.String())
-						chunkBuf.Reset()
-						lastBoundaryIndex = i
-						continue
-					}
-					if text[i] == '\n' {
-						emitChunk(chunkBuf.String())
-						chunkBuf.Reset()
-						lastBoundaryIndex = i
-					}
-				}
-				if lastBoundaryIndex == -1 {
-				}
-			}
-			if err != nil {
-				if chunkBuf.Len() > 0 {
-					emitChunk(chunkBuf.String())
-					chunkBuf.Reset()
-				}
-				done <- err
-				return
-			}
-		}
+		drained <- pumpTerminalChunks(reader, emit)
+	}()
+
+	type outcome struct {
+		readErr error
+		waitErr error
+	}
+	outcomeCh := make(chan outcome, 1)
+	go func() {
+		// ⚠️ 这两行的先后顺序是本函数的核心契约，不要交换（理由见上方注释）。
+		//
+		// 实测数据（把这两行换回旧顺序、交叉编译成 Linux 版跑真面板）：
+		// 一个输出 2000 行后立刻退出的 Python 脚本，落库的日志只剩 23 行 ——
+		// 丢了 98.85%，而且末尾照样写着「执行结束 退出码 0」，
+		// 用户完全看不出日志被截断过。
+		// 单元测试 TestPumpAndWaitKeepsTailOutput 守着这一条，交换即红。
+		readErr := <-drained
+		waitErr := cmd.Wait()
+		outcomeCh <- outcome{readErr: readErr, waitErr: waitErr}
 	}()
 
 	var timerC <-chan time.Time
-	var timer *time.Timer
 	if timeout > 0 {
-		timer = time.NewTimer(time.Duration(timeout) * time.Second)
-		timerC = timer.C
+		timer := time.NewTimer(timeout)
 		defer timer.Stop()
+		timerC = timer.C
 	}
 
-	type commandWaitResult struct {
-		waitErr error
-		readErr error
-	}
-	waitCh := make(chan commandWaitResult, 1)
-	go func() {
-		waitErr := cmd.Wait()
-		readErr := <-done
-		cleanup()
-		waitCh <- commandWaitResult{waitErr: waitErr, readErr: readErr}
-	}()
-
-	var returnCode int
 	select {
-	case waitResult := <-waitCh:
-		if waitResult.waitErr != nil {
-			if exitErr, ok := waitResult.waitErr.(*exec.ExitError); ok {
-				returnCode = exitErr.ExitCode()
-			} else {
-				returnCode = 1
-			}
-		}
-		if waitResult.readErr != nil && waitResult.readErr != io.EOF && totalSize < maxLogSize && !truncated {
-			if !isBenignProcessPipeReadError(waitResult.readErr) {
-				emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", waitResult.readErr.Error()))
-			}
-		}
+	case oc := <-outcomeCh:
+		return oc.waitErr, false, normalizePumpReadError(oc.readErr)
 	case <-timerC:
-		KillProcessGroup(cmd.Process)
-		waitResult := <-waitCh
-		returnCode = -1
-		msg := fmt.Sprintf("\n[任务超时，已在 %d 秒后终止]", timeout)
-		outputBuilder.WriteString(msg)
-		if onOutput != nil {
-			onOutput(msg)
+		// #159 修复 B：先对整组发 SIGTERM，给 trap 了 TERM 的脚本最多 groupTermGrace（5 秒）收尾；
+		// 组里的进程都退了就提前结束，到点还有进程（包括攥着管道、忽略 TERM 的后台进程）再整组 SIGKILL。
+		// 「超时杀整组」的语义不变。Windows 没有 SIGTERM（signalGroupTerm 恒为 false），照旧立刻 KillProcessGroup。
+		// 等的是「整组退空」而不是 outcome：outcome 到了只说明主进程和攥着输出管道的进程退了，
+		// 只等它会放过不攥管道、又忽略 TERM 的后台进程，而超时之后修复 A 不再清理，它们就留下来了。
+		// 任务主命令、任务钩子（60 秒）、订阅的拉取前指令 / 拉取后钩子（900 秒）都经这里，一视同仁。
+		if !signalGroupTerm(cmd.Process.Pid) || !waitProcessGroupGone(cmd.Process.Pid, groupTermGrace) {
+			KillProcessGroup(cmd.Process)
 		}
-		if waitResult.readErr != nil && waitResult.readErr != io.EOF && totalSize < maxLogSize && !truncated && !isBenignProcessPipeReadError(waitResult.readErr) {
-			emitChunk(fmt.Sprintf("[读取脚本输出失败] %s\n", waitResult.readErr.Error()))
-		}
+		// 进程都结束 → 管道写端关闭 → 读协程读到 EOF → drained 有值 → Wait 返回。
+		// 所以这里等 outcomeCh 不会永久阻塞。
+		oc := <-outcomeCh
+		return oc.waitErr, true, normalizePumpReadError(oc.readErr)
 	}
-
-	return &ScriptResult{
-		ReturnCode: returnCode,
-		Output:     outputBuilder.String(),
-		Truncated:  truncated,
-	}, process, nil
 }
 
+// pumpTerminalChunks 按终端语义把输出切成块交给 emit：
+// \n 落一新行、\r\n 整对作为一个边界、裸 \r 也是边界（进度条覆盖当前行）。
+// 读到结尾时把残留的不完整块也发出去，返回终止读取的那个 error（正常结束是 io.EOF）。
+func pumpTerminalChunks(reader *bufio.Reader, emit func(string)) error {
+	var chunkBuf strings.Builder
+	for {
+		text, err := reader.ReadString('\n')
+		for i := 0; i < len(text); i++ {
+			chunkBuf.WriteByte(text[i])
+			if text[i] == '\r' {
+				// 兼容 Windows 风格 \r\n，整对一起作为一个边界发出。
+				if i+1 < len(text) && text[i+1] == '\n' {
+					chunkBuf.WriteByte(text[i+1])
+					i++
+				}
+				emit(chunkBuf.String())
+				chunkBuf.Reset()
+				continue
+			}
+			if text[i] == '\n' {
+				emit(chunkBuf.String())
+				chunkBuf.Reset()
+			}
+		}
+		if err != nil {
+			// 收尾：没有换行结束的最后一段也要发出去，否则脚本用 print(end='')
+			// 或者进度条结尾不带换行时，最后一块会被吞掉。
+			if chunkBuf.Len() > 0 {
+				emit(chunkBuf.String())
+				chunkBuf.Reset()
+			}
+			return err
+		}
+	}
+}
+
+func exitCodeFromWaitError(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+// normalizePumpReadError 把「读到结尾」统一成 nil，只把真正的读失败往外传。
+func normalizePumpReadError(err error) error {
+	if err == io.EOF {
+		return nil
+	}
+	return err
+}
+
+// isBenignProcessPipeReadError 判断一个读错误要不要写进用户可见的日志。
+//
+// ⚠️ 这份名单曾经掩盖过一个真 bug（issue #102）。
+//
+// 前两项 "file already closed" / "read |0:" 正是 cmd.Wait() 抢在读协程之前关闭
+// StdoutPipe 时的报错。在 pumpAndWait 把顺序修正之前，它们每次都会命中这里被判成
+// 良性、静默丢弃 —— 于是「日志少了最后几行」这个现象连一条线索都不留。
+//
+// 现在 pumpAndWait 保证「先排空、再 Wait」，正常路径读到的是 io.EOF，
+// 超时路径是先 kill 再读到 EOF，**都不会**再产生这两个错误。
+// 所以如果你在日志里又看到它们被这个函数吞掉，几乎可以断定是有人把那个顺序改回去了，
+// 先去看 TestPumpAndWaitKeepsTailOutput 是不是红的。
+//
+// 名单继续保留是防御性的：进程被外部强杀等边缘情况下，用户看到一行
+// 「[读取脚本输出失败] file already closed」没有任何帮助。
 func isBenignProcessPipeReadError(err error) bool {
 	if err == nil || err == io.EOF {
 		return true
@@ -844,7 +873,7 @@ func runConcurrentCommand(plan *CommandExecutionPlan, timeout int, envVars map[s
 		return nil, nil, fmt.Errorf("未匹配到可执行的账号")
 	}
 
-	var outputBuilder strings.Builder
+	// totalSize / truncated 决定 onOutput 什么时候开始截断（#159 修复 D 删掉了旁边那份没人读的 outputBuilder）
 	totalSize := 0
 	truncated := false
 	var outputMu sync.Mutex
@@ -855,21 +884,30 @@ func runConcurrentCommand(plan *CommandExecutionPlan, timeout int, envVars map[s
 		outputMu.Lock()
 		defer outputMu.Unlock()
 
+		// 【为什么要先算一份 text】
+		// 进来的东西有两种：
+		//   a) conc 自己生成的行（开始执行 / 执行完成 / 执行错误 / 截断标记），末尾【没有】换行；
+		//   b) prefixedOutput 转发的脚本原始输出片段，末尾本来就带 \n 或裸 \r。
+		// 老写法是无条件给已删掉的 outputBuilder 补一个 "\n"、却完全不给 onOutput 补：
+		// 实时流（onOutput）里 a 类行会和紧跟其后的脚本输出粘成一行。
+		// 现在统一成「本来就以换行/裸 \r 收尾就不动，否则才补一个 \n」，
+		// 既修掉粘行，也不会写重 \n；裸 \r 保持原样，进度条的覆盖刷新语义不受影响。
+		text := line
+		if !strings.HasSuffix(text, "\n") && !strings.HasSuffix(text, "\r") {
+			text += "\n"
+		}
+
 		if totalSize < maxLogSize {
-			outputBuilder.WriteString(line)
-			outputBuilder.WriteString("\n")
-			totalSize += len(line) + 1
+			totalSize += len(text)
 			if onOutput != nil {
-				onOutput(line)
+				onOutput(text)
 			}
 			return
 		}
 
 		if !truncated {
 			truncated = true
-			msg := "[日志已截断，超过最大大小限制]"
-			outputBuilder.WriteString(msg)
-			outputBuilder.WriteString("\n")
+			msg := "[日志已截断，超过最大大小限制]\n"
 			if onOutput != nil {
 				onOutput(msg)
 			}
@@ -943,8 +981,6 @@ func runConcurrentCommand(plan *CommandExecutionPlan, timeout int, envVars map[s
 
 	return &ScriptResult{
 		ReturnCode: overallCode,
-		Output:     outputBuilder.String(),
-		Truncated:  truncated,
 	}, firstProcess, overallErr
 }
 
@@ -1141,37 +1177,12 @@ func buildCmd(plan *CommandExecutionPlan, workDir string, envVars map[string]str
 		_ = NormalizeShellScriptFile(plan.FullPath)
 	}
 
+	// 本机版（Android）：Go / Go 构建器走 RuntimeLocator 解析出的受管可执行文件。
 	if isScriptRuntimeID(plan.Interpreter) {
 		return CreateScriptRuntimeCommand(plan.Interpreter, plan.FullPath, plan.ScriptArgs, workDir, envVars)
 	}
 
 	return CreateManagedCommand(plan.Interpreter, plan.FullPath, plan.ScriptArgs, workDir, envVars)
-}
-
-func isScriptRuntimeID(interpreter string) bool {
-	switch interpreter {
-	case RuntimeIDYaegiGo, RuntimeIDGoBuilderAndroidARM:
-		return true
-	default:
-		return false
-	}
-}
-
-func CreateScriptRuntimeCommand(runtimeID, scriptPath string, scriptArgs []string, workDir string, envVars map[string]string) (*exec.Cmd, func(), error) {
-	executable, err := RuntimeLocatorInstance().Resolve(runtimeID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if runtimeID == RuntimeIDGoBuilderAndroidARM {
-		return nil, nil, fmt.Errorf("runtime %s only supports build export", runtimeID)
-	}
-
-	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
-	cmd := androidManagedCommand(executable.Path, args, workDir)
-	cmd.Env = buildEnv(envVars)
-	androidFinalizeCommand(cmd)
-	setPgid(cmd)
-	return cmd, func() {}, nil
 }
 
 func buildEnv(envVars map[string]string) []string {
@@ -1206,16 +1217,119 @@ func buildEnv(envVars map[string]string) []string {
 	return AppendProxyEnv(env)
 }
 
-// runStreamingManagedCommand 启动一个已创建但未 Start 的命令，把 stdout/stderr 合并后按行
-// 回调给 onOutput，并在命令结束（或触发超时/取消）后等待输出完全刷出再返回。
-//
-// 输出通过一个非 *os.File 的 io.Writer 交给 os/exec，由 exec 内部的拷贝 goroutine 串行写入，
-// 这样同时消除两类缺陷：
-//  1. 使用 StdoutPipe 时，Wait 会在读取完成前关闭管道，负载高时尾部输出会被丢弃；
-//  2. onOutput 在函数返回后不得再被调用，否则调用方持有的切片/缓冲会出现数据竞争
-//     —— Wait 保证拷贝 goroutine 已结束后才返回，WaitDelay 进一步兜底后台子进程持有管道的情况。
-//
-// cancel 为 nil 时表示不监听取消；cancelErr/timeoutErr 用于让调用方保留各自的错误语义。
+func RunInlineScript(content, scriptsDir string, envVars map[string]string, timeout int, onOutput OnOutputFunc, scriptArgs ...string) error {
+	return runInlineScript(content, scriptsDir, envVars, timeout, onOutput, nil, scriptArgs...)
+}
+
+// runInlineScript 是 RunInlineScript 的本体。onStart 非空时，钩子进程一启动就回调它：
+// 任务执行器借此登记前置 / 后置钩子，面板关停时按进程组杀掉（原来钩子不在任何登记里，关停要白等它跑完）。
+func runInlineScript(content, scriptsDir string, envVars map[string]string, timeout int, onOutput OnOutputFunc, onStart OnProcessStartFunc, scriptArgs ...string) error {
+	tmpFile := filepath.Join(scriptsDir, fmt.Sprintf(".hook_%d.sh", time.Now().UnixNano()))
+	if err := os.WriteFile(tmpFile, NormalizeShellLineEndings([]byte(content)), 0755); err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile)
+
+	cmd, cleanup, err := CreateManagedCommand("bash", tmpFile, scriptArgs, scriptsDir, envVars)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if onStart != nil {
+		onStart(cmd.Process)
+	}
+
+	// 走统一的 pumpAndWait：原来这里是「读协程完全不同步 + 直接 cmd.Wait()」，
+	// 与 runSingleCommand 是同一个丢尾巴的 bug（见 pumpAndWait 的注释），
+	// 而且更严重 —— 连等读协程结束的 channel 都没有。
+	emit := func(chunk string) {
+		if onOutput != nil {
+			onOutput(chunk)
+		}
+	}
+	waitErr, timedOut, _ := pumpAndWait(cmd, stdout, time.Duration(timeout)*time.Second, emit)
+	if timedOut {
+		return fmt.Errorf("钩子脚本超时，已超过 %d 秒", timeout)
+	}
+	// 原样返回 cmd.Wait() 的错误（退出码非 0 时是 *exec.ExitError），
+	// 调用方对钩子失败的判断逻辑不变。
+	return waitErr
+}
+
+func RunHookScript(scriptName, scriptsDir string, envVars map[string]string, onOutput OnOutputFunc, scriptArgs ...string) {
+	runHookScript(scriptName, scriptsDir, envVars, onOutput, nil, scriptArgs...)
+}
+
+// runHookScript 是 RunHookScript 的本体，onStart 的用途同 runInlineScript。
+func runHookScript(scriptName, scriptsDir string, envVars map[string]string, onOutput OnOutputFunc, onStart OnProcessStartFunc, scriptArgs ...string) {
+	hookPath, err := pathutil.ResolveWithinBase(scriptsDir, scriptName, true)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		return
+	}
+	if err := NormalizeShellScriptFile(hookPath); err != nil {
+		if onOutput != nil {
+			onOutput(fmt.Sprintf("[hook %s line ending normalize failed: %s]", scriptName, err))
+		}
+		return
+	}
+
+	cmd, cleanup, err := CreateManagedCommand("bash", hookPath, scriptArgs, scriptsDir, envVars)
+	if err != nil {
+		if onOutput != nil {
+			onOutput(fmt.Sprintf("[hook %s failed to prepare: %s]", scriptName, err))
+		}
+		return
+	}
+	defer cleanup()
+
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		if onOutput != nil {
+			onOutput(fmt.Sprintf("[hook %s failed to start: %s]", scriptName, err))
+		}
+		return
+	}
+	if onStart != nil {
+		onStart(cmd.Process)
+	}
+
+	// 与上面两处同因：原来读协程不同步、直接 cmd.Wait()，钩子脚本的尾部输出会被吞掉。
+	// 统一走 pumpAndWait（见它的注释）。这个函数本身不返回错误，钩子失败只体现在日志里，
+	// 所以两个错误值都丢弃，但输出必须是完整的。
+	emit := func(chunk string) {
+		if onOutput != nil {
+			onOutput(chunk)
+		}
+	}
+	pumpAndWait(cmd, stdout, 60*time.Second, emit)
+}
+
+func cleanProcessArgs(args []string) []string {
+	cleaned := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			continue
+		}
+		cleaned = append(cleaned, arg)
+	}
+	return cleaned
+}
+
 func runStreamingManagedCommand(
 	cmd *exec.Cmd,
 	onOutput OnOutputFunc,
@@ -1267,6 +1381,7 @@ func runStreamingManagedCommand(
 // managedOutputStream 把子进程 stdout/stderr 按行回调给 onOutput。
 // 作为非 *os.File 的 io.Writer 交给 os/exec 后，Wait 会等待其内部拷贝 goroutine 结束
 // （并由 WaitDelay 兜底），因此函数返回后 onOutput 不会再被调用，调用方无需额外同步。
+
 type managedOutputStream struct {
 	mu       sync.Mutex
 	buffer   []byte
@@ -1300,58 +1415,30 @@ func (w *managedOutputStream) Flush() {
 	w.buffer = nil
 }
 
-func RunInlineScript(content, scriptsDir string, envVars map[string]string, timeout int, onOutput OnOutputFunc, scriptArgs ...string) error {
-	tmpFile := filepath.Join(scriptsDir, fmt.Sprintf(".hook_%d.sh", time.Now().UnixNano()))
-	if err := os.WriteFile(tmpFile, NormalizeShellLineEndings([]byte(content)), 0755); err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile)
-
-	cmd, cleanup, err := CreateManagedCommand("bash", tmpFile, scriptArgs, scriptsDir, envVars)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	return runStreamingManagedCommand(cmd, onOutput, time.Duration(timeout)*time.Second, nil, nil, fmt.Errorf("钩子脚本超时，已超过 %d 秒", timeout))
-}
-
-func RunHookScript(scriptName, scriptsDir string, envVars map[string]string, onOutput OnOutputFunc, scriptArgs ...string) {
-	hookPath, err := pathutil.ResolveWithinBase(scriptsDir, scriptName, true)
-	if os.IsNotExist(err) {
-		return
-	}
-	if err != nil {
-		return
-	}
-	if err := NormalizeShellScriptFile(hookPath); err != nil {
-		if onOutput != nil {
-			onOutput(fmt.Sprintf("[hook %s line ending normalize failed: %s]", scriptName, err))
-		}
-		return
-	}
-
-	cmd, cleanup, err := CreateManagedCommand("bash", hookPath, scriptArgs, scriptsDir, envVars)
-	if err != nil {
-		if onOutput != nil {
-			onOutput(fmt.Sprintf("[hook %s failed to prepare: %s]", scriptName, err))
-		}
-		return
-	}
-	defer cleanup()
-
-	if err := runStreamingManagedCommand(cmd, onOutput, 60*time.Second, nil, nil, fmt.Errorf("钩子脚本超时，已超过 60 秒")); err != nil && onOutput != nil {
-		onOutput(fmt.Sprintf("[hook %s] %s\n", scriptName, err))
+// isScriptRuntimeID 判断解释器名是否为本机受管运行时（yaegi Go 解释器 / Go 构建器）。
+func isScriptRuntimeID(interpreter string) bool {
+	switch interpreter {
+	case RuntimeIDYaegiGo, RuntimeIDGoBuilderAndroidARM:
+		return true
+	default:
+		return false
 	}
 }
 
-func cleanProcessArgs(args []string) []string {
-	cleaned := make([]string, 0, len(args))
-	for _, arg := range args {
-		if strings.ContainsRune(arg, 0) {
-			continue
-		}
-		cleaned = append(cleaned, arg)
+// CreateScriptRuntimeCommand 用 RuntimeLocator 解析运行时入口，再经 Android 受管命令包装执行。
+func CreateScriptRuntimeCommand(runtimeID, scriptPath string, scriptArgs []string, workDir string, envVars map[string]string) (*exec.Cmd, func(), error) {
+	executable, err := RuntimeLocatorInstance().Resolve(runtimeID)
+	if err != nil {
+		return nil, nil, err
 	}
-	return cleaned
+	if runtimeID == RuntimeIDGoBuilderAndroidARM {
+		return nil, nil, fmt.Errorf("runtime %s only supports build export", runtimeID)
+	}
+
+	args := append([]string{scriptPath}, cleanManagedProcessArgs(scriptArgs)...)
+	cmd := androidManagedCommand(executable.Path, args, workDir)
+	cmd.Env = buildEnv(envVars)
+	androidFinalizeCommand(cmd)
+	setPgid(cmd)
+	return cmd, func() {}, nil
 }

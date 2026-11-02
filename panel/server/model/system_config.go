@@ -143,6 +143,14 @@ func InitDefaultConfigs() error {
 		if def.Key == "repo_file_extensions" && strings.TrimSpace(existing.Value) == LegacyRepoFileExtensions {
 			normalizedValue = def.DefaultValue
 		}
+		// log_background_color 在 v1.8.0 ~ v2.2.3 的默认值是固定深色 #0f172a，v2.2.4 才改成
+		// 「留空跟随明暗主题」。老实例库里那行一直是旧默认，升级不会自愈，表现为浅色面板下
+		// 日志区仍然是黑底。库里存的正好等于旧默认 ⇒ 用户从没动过这项，抬到新默认（空串）；
+		// 用户自己选过的颜色（哪怕也是深色）一律不动。
+		// 写回空串后下次启动 existing.Value 已经是空串、不再命中这条分支，因此是幂等的。
+		if def.Key == "log_background_color" && strings.TrimSpace(existing.Value) == LegacyLogBackgroundColor {
+			normalizedValue = def.DefaultValue
+		}
 		if normalizedValue != existing.Value {
 			updates["value"] = normalizedValue
 		}

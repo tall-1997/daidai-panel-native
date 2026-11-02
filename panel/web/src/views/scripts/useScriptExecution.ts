@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { scriptApi } from '@/api/script'
 
@@ -27,10 +27,8 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   const runnerExitCode = ref<number | null>(null)
   const runnerError = ref('')
 
-  let debugTimer: ReturnType<typeof setTimeout> | null = null
-  let runnerTimer: ReturnType<typeof setTimeout> | null = null
-  let debugGeneration = 0
-  let runnerGeneration = 0
+  let debugTimer: ReturnType<typeof setInterval> | null = null
+  let runnerTimer: ReturnType<typeof setInterval> | null = null
 
   function getFileName(path: string) {
     return path.split('/').pop() || path
@@ -38,20 +36,19 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
 
   function clearDebugTimer() {
     if (debugTimer) {
-      clearTimeout(debugTimer)
+      clearInterval(debugTimer)
       debugTimer = null
     }
   }
 
   function clearRunnerTimer() {
     if (runnerTimer) {
-      clearTimeout(runnerTimer)
+      clearInterval(runnerTimer)
       runnerTimer = null
     }
   }
 
   async function stopDebugRun(options?: { keepalive?: boolean; preserveLogs?: boolean }) {
-    debugGeneration += 1
     const runId = debugRunId.value
     clearDebugTimer()
     debugRunning.value = false
@@ -89,7 +86,6 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   }
 
   async function stopRunnerRun(options?: { keepalive?: boolean }) {
-    runnerGeneration += 1
     const runId = runnerRunId.value
     clearRunnerTimer()
     runnerRunning.value = false
@@ -129,18 +125,15 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   })
 
   onMounted(() => {
+    // 只挂 pagehide、不挂 beforeunload：有未保存内容时 beforeunload 会弹离开确认（见 utils/chunkReload.ts），
+    // 挂在它上面的监听不管用户点不点「取消」都会执行，留在页面上的调试就被白白停掉了。
+    // pagehide 只在真正离开时派发：刷新、关标签页、跳走都会触发，离开确认被取消时不会。
+    // 进往返缓存时也会派发（persisted 为 true），handleWindowPageHide 不看 persisted、照停，不会漏停。
     window.addEventListener('pagehide', handleWindowPageHide)
-    window.addEventListener('beforeunload', handleWindowPageHide)
   })
 
   onBeforeUnmount(() => {
     window.removeEventListener('pagehide', handleWindowPageHide)
-    window.removeEventListener('beforeunload', handleWindowPageHide)
-    void stopDebugRun()
-    void stopRunnerRun()
-  })
-
-  onDeactivated(() => {
     void stopDebugRun()
     void stopRunnerRun()
   })
@@ -160,8 +153,6 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
 
   async function handleDebugStart(options?: { forceEditorContent?: boolean }) {
     if (!selectedFile.value) return
-    const generation = ++debugGeneration
-    clearDebugTimer()
     debugLogs.value = []
     debugError.value = ''
     debugExitCode.value = null
@@ -175,14 +166,9 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
             language: runnerLanguageForFile(selectedFile.value)
           })
         : await scriptApi.debugRun({ path: selectedFile.value })
-      if (generation !== debugGeneration) {
-        scriptApi.debugStopKeepalive(res.run_id)
-        return
-      }
       debugRunId.value = res.run_id
-      pollDebugLogs(res.run_id, generation)
+      pollDebugLogs()
     } catch (err: any) {
-      if (generation !== debugGeneration) return
       debugError.value = err?.response?.data?.error || err?.message || '调试运行失败'
       ElMessage.error(debugError.value)
       debugRunning.value = false
@@ -210,13 +196,15 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     return 'python'
   }
 
-  function pollDebugLogs(runId: string, generation: number) {
+  function pollDebugLogs() {
     clearDebugTimer()
-    debugTimer = setTimeout(async () => {
-      if (generation !== debugGeneration || debugRunId.value !== runId) return
+    debugTimer = setInterval(async () => {
+      if (!debugRunId.value) {
+        clearDebugTimer()
+        return
+      }
       try {
-        const res = await scriptApi.debugLogs(runId)
-        if (generation !== debugGeneration || debugRunId.value !== runId) return
+        const res = await scriptApi.debugLogs(debugRunId.value)
         debugLogs.value = res.data.logs || []
         if (res.data.done) {
           debugRunning.value = false
@@ -226,11 +214,8 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
             debugExitCode.value = res.data.exit_code ?? null
             debugError.value = 'failed'
           }
-        } else {
-          pollDebugLogs(runId, generation)
         }
       } catch {
-        if (generation !== debugGeneration || debugRunId.value !== runId) return
         debugRunning.value = false
         clearDebugTimer()
       }
@@ -257,22 +242,15 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
       ElMessage.warning('请输入代码')
       return
     }
-    const generation = ++runnerGeneration
-    clearRunnerTimer()
     runnerLogs.value = []
     runnerExitCode.value = null
     runnerError.value = ''
     runnerRunning.value = true
     try {
       const res = await scriptApi.runCode(runnerCode.value, runnerLanguage.value)
-      if (generation !== runnerGeneration) {
-        scriptApi.debugStopKeepalive(res.run_id)
-        return
-      }
       runnerRunId.value = res.run_id
-      pollRunnerLogs(res.run_id, generation)
+      pollRunnerLogs()
     } catch (err: any) {
-      if (generation !== runnerGeneration) return
       const msg = err?.response?.data?.error || err?.message || '运行失败'
       runnerError.value = msg
       ElMessage.error(msg)
@@ -280,13 +258,15 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     }
   }
 
-  function pollRunnerLogs(runId: string, generation: number) {
+  function pollRunnerLogs() {
     clearRunnerTimer()
-    runnerTimer = setTimeout(async () => {
-      if (generation !== runnerGeneration || runnerRunId.value !== runId) return
+    runnerTimer = setInterval(async () => {
+      if (!runnerRunId.value) {
+        clearRunnerTimer()
+        return
+      }
       try {
-        const res = await scriptApi.debugLogs(runId)
-        if (generation !== runnerGeneration || runnerRunId.value !== runId) return
+        const res = await scriptApi.debugLogs(runnerRunId.value)
         runnerLogs.value = res.data.logs || []
         if (res.data.done) {
           runnerRunning.value = false
@@ -296,11 +276,8 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
           }
           clearRunnerTimer()
           runnerRunId.value = ''
-        } else {
-          pollRunnerLogs(runId, generation)
         }
       } catch {
-        if (generation !== runnerGeneration || runnerRunId.value !== runId) return
         runnerRunning.value = false
         runnerError.value = '获取运行日志失败，请检查服务状态'
         clearRunnerTimer()

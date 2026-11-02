@@ -29,9 +29,7 @@ func TestEnsureColumnsAddsTaskSuccessExitCodesToLegacyDatabase(t *testing.T) {
 		t.Fatal("expected simulated legacy database to have no success_exit_codes column")
 	}
 
-	if err := database.EnsureColumns(); err != nil {
-		t.Fatalf("ensure columns: %v", err)
-	}
+	database.EnsureColumns()
 	if !database.DB.Migrator().HasColumn(&model.Task{}, "SuccessExitCodes") {
 		t.Fatal("expected EnsureColumns to add success_exit_codes")
 	}

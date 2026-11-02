@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Delete, Document, Refresh } from '@element-plus/icons-vue'
 import { useResponsive } from '@/composables/useResponsive'
+import { formatDateTime } from '@/utils/datetime'
 
 const loginLogsPage = defineModel<number>('loginLogsPage', { required: true })
 const { isMobile } = useResponsive()
@@ -52,7 +53,7 @@ defineProps<{
             </div>
             <div class="dd-mobile-card__field">
               <span class="dd-mobile-card__label">时间</span>
-              <span class="dd-mobile-card__value">{{ new Date(row.created_at).toLocaleString() }}</span>
+              <span class="dd-mobile-card__value">{{ formatDateTime(row.created_at) }}</span>
             </div>
             <div class="dd-mobile-card__field dd-mobile-card__field--full">
               <span class="dd-mobile-card__label">原因</span>
@@ -80,7 +81,7 @@ defineProps<{
       <el-table-column prop="method" label="登录方式" width="100" />
       <el-table-column prop="message" label="原因" show-overflow-tooltip />
       <el-table-column prop="created_at" label="时间" width="170">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
       </el-table-column>
     </el-table>
     <div class="pagination-container" v-if="loginLogsTotal > 15">
@@ -100,7 +101,8 @@ defineProps<{
 
 .card-header-buttons {
   padding: 2px;
-  border-radius: 12px;
+  // 按钮组的灰底槽 → control 档（与槽内按钮同档，圆角一致才不会露出内外错位的角）
+  border-radius: var(--dd-radius-control);
   background: color-mix(in srgb, var(--el-fill-color-light) 84%, transparent);
   display: flex;
   gap: 8px;

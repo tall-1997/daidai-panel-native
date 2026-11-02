@@ -89,7 +89,7 @@ type hookEnvRuntimeNotice struct {
 
 // hookEnvRuntimeCriticalNames 是「照常生效、但值得提醒一句」的运行时关键变量。
 //
-// 为什么是提示而不是保护：这四个键都是 PATH 类语义，「整体覆盖」和「追加」在 shell 里
+// 为什么是提示而不是保护：这几个键都是「列表拼接」语义，「整体覆盖」和「追加」在 shell 里
 // 都是合法且常见的写法——用户完全可能就是想把某个目录顶到最前面。把它们加进保护名单，
 // 等于连 `export PYTHONPATH=/my/lib:$PYTHONPATH` 这种**正确的追加写法**也一并挡掉，
 // 那是比问题本身更糟的回归。对照 hookEnvContractNames 里的 TZ：那类变量用户改了只会
@@ -98,7 +98,7 @@ type hookEnvRuntimeNotice struct {
 // 但它们又确实都是面板注入的：
 //   - PYTHONPATH / NODE_PATH / NODE_OPTIONS 由 AppendScriptHelperPaths 注入
 //     （venv 的 site-packages、托管 node_modules、sendNotify.js 的 --require）；
-//   - PATH 由 BuildManagedRuntimeEnvMapWithScriptToken 注入。
+//   - PATH / NO_PROXY 由 BuildManagedRuntimeEnvMapWithScriptToken 注入。
 //
 // 被整体覆盖之后坏掉的方式极难定位：目标脚本突然找不到全部已装依赖，或者脚本自己
 // fork 出来的嵌套 node 进程静默失去 notify 注入（目标脚本本身走 createManagedNodeCommand
@@ -120,6 +120,22 @@ var hookEnvRuntimeCriticalNames = map[string]hookEnvRuntimeNotice{
 	"NODE_OPTIONS": {
 		symptom:    "脚本再 fork 出来的 node 进程拿不到 sendNotify 注入",
 		appendHint: `export NODE_OPTIONS="$NODE_OPTIONS ..."`,
+	},
+	// NO_PROXY 是 #111 引入的回环直连白名单（localhost,127.0.0.1,::1；指定了非回环监听地址时还含该地址，#162）：
+	// 面板开代理后，靠它让脚本回调面板自身的请求绕开代理。
+	// 前置脚本一句 `export NO_PROXY=corp.internal` 就会把它整个顶掉，
+	// 表现成 notify.py 又开始报 502 —— 和「代理没配好」长得一模一样，极难联想。
+	// 同样走「放行但提示」：把内网域名加进白名单是完全合法的用法。
+	"NO_PROXY": {
+		symptom:    "脚本回调面板自身被代理接管、报 HTTP 502",
+		appendHint: `export NO_PROXY="$NO_PROXY,..."`,
+	},
+	// 大小写两个键都要登记：面板是同值注入两份的，而这张表是按 key 字面量查的。
+	// 只登记大写的话，前置脚本写 Linux 上更常见的 `export no_proxy=corp.internal`
+	// 会把小写那份整个顶掉、回环豁免失效，却一条提示都不会出 —— 正是这条 notice 要防的症状。
+	"no_proxy": {
+		symptom:    "脚本回调面板自身被代理接管、报 HTTP 502",
+		appendHint: `export no_proxy="$no_proxy,..."`,
 	},
 }
 

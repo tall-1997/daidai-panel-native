@@ -505,6 +505,12 @@ func buildQingLongWecomAppConfig(env map[string]string) map[string]string {
 	if len(parts) >= 5 && strings.TrimSpace(parts[4]) != "" {
 		cfg["msg_type"] = strings.TrimSpace(parts[4])
 	}
+	// QYWX_ORIGIN 是青龙的「企业微信代理地址」（wxchat 这类），对应本渠道的 base_url（#152）。
+	// 不带过来的话，在青龙里靠代理绕开企业可信 IP 的用户迁过来后会静默直连、开始报 60020。
+	// 只映射到企业微信应用：机器人 webhook 不受可信 IP 限制，wxchat 也不转发 webhook 路径。
+	if origin := strings.TrimSpace(env["QYWX_ORIGIN"]); origin != "" {
+		cfg["base_url"] = origin
+	}
 	return cfg
 }
 
@@ -586,7 +592,12 @@ func enrichManifestFromQingLongDB(dbPath string, manifest *BackupManifest) error
 	}
 	if len(tasks) > 0 {
 		manifest.Selection.Tasks = true
-		manifest.Data.Tasks = tasks
+		// 青龙的标签解析后落在 model.Task.Labels 逗号串里，
+		// 转成备份形态时必须把它拎成数组，否则清单序列化会把标签整列丢掉（issue #112 同一个坑）。
+		manifest.Data.Tasks = make([]BackupTask, 0, len(tasks))
+		for _, task := range tasks {
+			manifest.Data.Tasks = append(manifest.Data.Tasks, backupTaskFromModel(task))
+		}
 	}
 
 	subs, err := loadQingLongSubscriptions(db)
@@ -595,7 +606,11 @@ func enrichManifestFromQingLongDB(dbPath string, manifest *BackupManifest) error
 	}
 	if len(subs) > 0 {
 		manifest.Selection.Subscriptions = true
-		manifest.Data.Subscriptions = subs
+		// 青龙订阅没有 PAT 概念，转换后 auth_token 恒为空；这里只是把类型对齐。
+		manifest.Data.Subscriptions = make([]BackupSubscription, 0, len(subs))
+		for _, sub := range subs {
+			manifest.Data.Subscriptions = append(manifest.Data.Subscriptions, backupSubscriptionFromModel(sub))
+		}
 	}
 
 	deps, err := loadQingLongDependencies(db)
@@ -708,6 +723,8 @@ func loadQingLongTasks(db *sql.DB) ([]model.Task, error) {
 			NotifyOnFailure:        true,
 			NotifyOnSuccess:        false,
 			AllowMultipleInstances: sqliteRowBool(row, "allow_multiple_instances"),
+			// 这里刻意不填 LogRetentionDays：青龙没有「任务级日志保留天数」这个概念，
+			// 留空即 NULL，也就是跟随面板的全局设置（issue #144 / v3.3.2）。
 		}
 		if task.Name == "" {
 			task.Name = deriveTaskNameFromCommand(task.Command)
@@ -828,6 +845,20 @@ func loadQingLongSubscriptions(db *sql.DB) ([]model.Subscription, error) {
 			schedule = ""
 		}
 
+		// 青龙订阅行上这两列非 0 表示「这条订阅自己要建/删任务」，翻译成 enabled（强制开启）。
+		// 为 0 时留 inherit（跟随本面板的全局默认），**不能**翻成 disabled ——
+		// 青龙侧的 0 是「按青龙自己的全局配置来」，硬翻成强制关会把导入进来的订阅全部锁死，
+		// 而且用户在面板里不改一遍就永远建不出任务。
+		//
+		// 只写三态、不写旧布尔列：mode 已经带够信息了，而旧布尔列一旦被写成 true，
+		// 用户之后把这条订阅改成「跟随全局设置」，下次重启就会被启动回填提回 enabled
+		//（回填的幂等性依赖「源列恒 0」，见 model.ResolveSubscriptionTaskSyncModeInput）。
+		// 第一个参数传空串是有意的：青龙侧压根没有三态这个概念，只有一个布尔可说话。
+		autoAddTaskMode := model.ResolveSubscriptionTaskSyncModeInput("",
+			sqliteRowInt(row, "autoAddCron") != 0 || sqliteRowBool(row, "auto_add_cron"))
+		autoDelTaskMode := model.ResolveSubscriptionTaskSyncModeInput("",
+			sqliteRowInt(row, "autoDelCron") != 0 || sqliteRowBool(row, "auto_del_cron"))
+
 		result = append(result, model.Subscription{
 			ID:          uint(sqliteRowInt(row, "id")),
 			Name:        strings.TrimSpace(firstNonEmptySQLiteString(row, "name")),
@@ -838,8 +869,9 @@ func loadQingLongSubscriptions(db *sql.DB) ([]model.Subscription, error) {
 			Whitelist:   strings.TrimSpace(firstNonEmptySQLiteString(row, "whitelist")),
 			Blacklist:   strings.TrimSpace(firstNonEmptySQLiteString(row, "blacklist")),
 			DependOn:    strings.TrimSpace(firstNonEmptySQLiteString(row, "dependences", "depend_on")),
-			AutoAddTask: sqliteRowInt(row, "autoAddCron") != 0 || sqliteRowBool(row, "auto_add_cron"),
-			AutoDelTask: sqliteRowInt(row, "autoDelCron") != 0 || sqliteRowBool(row, "auto_del_cron"),
+			// 刻意不写 AutoAddTask / AutoDelTask：旧布尔列恒为 false（只读输出），见上面的注释。
+			AutoAddTaskMode: autoAddTaskMode,
+			AutoDelTaskMode: autoDelTaskMode,
 			Enabled:     !(sqliteRowBool(row, "is_disabled") || sqliteRowBool(row, "isDisabled")),
 			Status:      0,
 			Alias:       strings.TrimSpace(firstNonEmptySQLiteString(row, "alias")),

@@ -10,3 +10,6 @@
 - x86_64：`daidai-panel-native-2.0.3-stable-x86_64.apk`
 
 安装包和更新说明以仓库根目录 README 为准。
+- Alpine 侧累计约 150 MB（按 Alpine 3.23 aarch64 的 APKINDEX 统计，2026-09-17）
+
+| Alpine | Alpine 3.23，装依赖累计 | 约 150 MB，按 Alpine 3.23 aarch64 的 APKINDEX 统计 |

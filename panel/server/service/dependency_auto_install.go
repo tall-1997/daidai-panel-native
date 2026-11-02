@@ -15,7 +15,7 @@ var (
 	autoInstallNodeModuleRe = regexp.MustCompile(`(?:Cannot find module|Error \[ERR_MODULE_NOT_FOUND\].*)\s*'([^']+)'`)
 	autoInstallNodeHintRe   = regexp.MustCompile(`npm\s+install\s+([a-zA-Z@][a-zA-Z0-9_./@-]*)`)
 	autoInstallPyModuleRe   = regexp.MustCompile(`(?:ModuleNotFoundError|ImportError):\s*No module named\s+'([^']+)'`)
-	autoInstallPyHintRe     = regexp.MustCompile(`pip3?\s+install\s+([a-zA-Z][a-zA-Z0-9_.@-]*)`)
+	autoInstallPyHintRe     = regexp.MustCompile(`pip3?\s+install\s+["']?([a-zA-Z][a-zA-Z0-9_.@-]*(?:\[[a-zA-Z0-9_.,\s-]*\])?)`)
 	autoInstallGoModuleRe   = regexp.MustCompile(`(?:no required module provides package|missing go\.sum entry for module providing package)\s+([^\s:;]+)`)
 
 	thirdPartyExcludedModules = map[string]bool{
@@ -70,6 +70,11 @@ func DetectAutoInstallCandidate(ext, output, workDir string) *AutoInstallCandida
 				RecordName:    packageName,
 			}
 		}
+		// autoInstallPyHintRe 连 extras 一起捕获（issue #166）：httpx 缺 h2 时的提示是
+		// `pip install httpx[http2]`，以前字符集不含 `[`，被截成 httpx，装完 h2 仍然缺。
+		// 包名前允许一个引号，兼容 `pip install "httpx[http2]"` / `pip install 'httpx[http2]'` 这种写法。
+		// 捕获到的 httpx[http2] 原样交给 pip（exec 直接传参、不经 shell），登记时也按这个写法改名，见
+		// RecordAutoInstalledDepForPythonVersion。
 		if matches := autoInstallPyHintRe.FindStringSubmatch(output); len(matches) > 1 {
 			requested := strings.TrimSpace(matches[1])
 			if requested == "" || isPythonStdlib(requested) || thirdPartyExcludedModules[requested] {
@@ -149,6 +154,7 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 	case "python":
 		pythonVersion := ResolvePythonVersionFromEnv(envVars)
 		candidate.PythonVersion = pythonVersion
+		// 本机版（Android）：同一依赖的并发安装串行化，已装好的直接跳过。
 		unlock := LockDependencyInstall(model.DepTypePython, candidate.PackageName, pythonVersion)
 		defer unlock()
 		if DependencyInstalledForPythonVersion(model.DepTypePython, candidate.PackageName, pythonVersion) {
@@ -174,7 +180,6 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 				return AutoInstallResult{Log: string(out), Error: buildErr.Error()}
 			}
 			retry.Env = pipEnv
-			androidFinalizeCommand(retry)
 			retryOut, retryErr := retry.CombinedOutput()
 			combined := append([]byte{}, out...)
 			combined = append(combined, []byte("\n[PEP 668 检测到 externally-managed-environment，自动加 --break-system-packages --user 重试]\n")...)
@@ -299,10 +304,7 @@ func NewPipCommandForPythonVersion(pythonVersion string, args []string) (*exec.C
 	if err != nil {
 		return nil, err
 	}
-	cmd := spec.command(args)
-	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
-	androidFinalizeCommand(cmd)
-	return cmd, nil
+	return spec.command(args), nil
 }
 
 func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*exec.Cmd, error) {
@@ -310,6 +312,7 @@ func NewPipInstallCommandForPythonVersion(pythonVersion, packageName string) (*e
 	if err != nil {
 		return nil, err
 	}
+	// 本机版（Android）：装进受管私有 site-packages（--target），不碰系统环境。
 	target := ManagedPythonSitePackagesDir(pythonVersion)
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return nil, fmt.Errorf("创建 Python 私有依赖目录失败: %w", err)
@@ -341,27 +344,20 @@ func NewPipInstallCommandForPythonVersionWithFlags(pythonVersion, packageName st
 	return cmd, nil
 }
 
-func removeString(values []string, target string) []string {
-	result := values[:0]
-	for _, value := range values {
-		if value != target {
-			result = append(result, value)
-		}
-	}
-	return result
-}
-
 func NewPipUninstallCommandForPythonVersion(pythonVersion, packageName string, extraOptions ...string) (*exec.Cmd, error) {
 	spec, err := resolvePipCommandSpecForPythonVersion(pythonVersion, true)
 	if err != nil {
 		return nil, err
 	}
 	cmd := spec.command(BuildPipUninstallArgs(spec.extraFlags, packageName, extraOptions...))
+	// 本机版（Android）扩展：pip 运行在受管 rootfs / 容器里，PYTHONPATH 要映射成 guest 路径。
 	cmd.Env = ManagedPythonDependencyEnv(cmd.Env, pythonVersion)
 	androidFinalizeCommand(cmd)
 	return cmd, nil
 }
 
+// ManagedPythonDependencyEnv 为 pip 命令构造受管依赖环境：PYTHONPATH/PIP_TARGET 指向受管 site-packages，
+// Android 容器模式下映射为 guest 路径。本机版（Android）扩展。
 func ManagedPythonDependencyEnv(base []string, pythonVersion string) []string {
 	if len(base) == 0 {
 		base = os.Environ()
@@ -387,8 +383,20 @@ func ManagedPythonDependencyEnv(base []string, pythonVersion string) []string {
 	return appendEnvOverride(base, "PIP_TARGET", target)
 }
 
+// removeString 从切片里去掉所有等于 target 的元素。本机版（Android）扩展辅助函数。
+func removeString(values []string, target string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
 // BuildPipInstallArgs 把 install 子命令、附加 flag、包名拼成完整的 args。
 func BuildPipInstallArgs(extraFlags []string, packageName string) []string {
+	// 本机版（Android）：手机存储宝贵，pip 安装不保留下载缓存。
 	args := []string{"install", "--no-cache-dir"}
 	args = append(args, extraFlags...)
 	args = append(args, packageName)
@@ -397,9 +405,10 @@ func BuildPipInstallArgs(extraFlags []string, packageName string) []string {
 
 // BuildPipUninstallArgs 类似 BuildPipInstallArgs，但用于卸载场景。
 // 注意：--user 在 uninstall 时无意义，--break-system-packages 仍需要传以绕过 PEP 668。
+// 刻意不留「额外选项」参数：以前强制卸载经它塞进了 --no-deps，而 pip uninstall 根本没有这个选项，
+// 整条命令在参数解析阶段就以退出码 2 退出、一个包都不卸（#150）。卸载要的选项只有上面这些。
 func BuildPipUninstallArgs(extraFlags []string, packageName string, extraOptions ...string) []string {
 	args := []string{"uninstall", "-y"}
-	args = append(args, extraOptions...)
 	for _, flag := range extraFlags {
 		if flag == "--user" {
 			continue
