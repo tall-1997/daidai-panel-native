@@ -93,7 +93,9 @@ func (DefaultProcessSupervisor) Start(parent context.Context, spec ProcessSpec, 
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}
-	cmd := androidManagedCommandContext(ctx, argv[0], argv[1:], workDir)
+	// 不用 CommandContext：ctx 到期时它会直接 SIGKILL 主进程，绕过「先 TERM 再宽限」的语义。
+	// 超时 / 取消的终止统一由 Wait 的 select 分支处理。
+	cmd := androidManagedCommand(argv[0], argv[1:], workDir)
 	cmd.Env = filterProcessEnv(spec.Env)
 	androidFinalizeCommand(cmd)
 	setPgid(cmd)
