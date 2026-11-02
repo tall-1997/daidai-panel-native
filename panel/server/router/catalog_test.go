@@ -207,14 +207,14 @@ func TestCanonicalServerRoutesUnionsNamedFixtures(t *testing.T) {
 
 func TestBuildContractDocumentCarriesSourceAndFixtureMetadata(t *testing.T) {
 	document := BuildContractDocument(CanonicalServerRoutes(), CanonicalMobileRoutes())
-	if !strings.HasPrefix(document.SourceVersion, "9a7c27e2") {
+	if !strings.HasPrefix(document.SourceVersion, "9deab3cf") {
 		t.Fatalf("sourceVersion=%q", document.SourceVersion)
 	}
 	if len(document.Fixtures) == 0 || document.Fixtures[0] != "all-enabled-default" {
 		t.Fatalf("fixtures=%v", document.Fixtures)
 	}
-	if len(document.Routes) != 449 {
-		t.Fatalf("routes=%d want=449", len(document.Routes))
+	if len(document.Routes) != 497 {
+		t.Fatalf("routes=%d want=497", len(document.Routes))
 	}
 }
 
