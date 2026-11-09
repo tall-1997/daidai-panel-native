@@ -926,6 +926,10 @@ class LocalPanelStore(
             session.method == NanoHTTPD.Method.POST && uri == "/api/auth/avatar" -> authenticated(session) { userId -> uploadAvatar(session, userId) }
             session.method == NanoHTTPD.Method.DELETE && uri == "/api/auth/avatar" -> authenticated(session) { userId -> deleteAvatar(userId) }
             session.method == NanoHTTPD.Method.GET && uri == "/api/auth/avatar/file" -> authenticated(session) { userId -> serveAvatar(userId) }
+            session.method == NanoHTTPD.Method.GET && uri == "/api/auth/preferences" ->
+                authenticated(session) { userId -> getUserPreferences(userId) }
+            session.method == NanoHTTPD.Method.PUT && uri == "/api/auth/preferences" ->
+                authenticated(session) { userId -> updateUserPreferences(userId, body(session)) }
             else -> error(NanoHTTPD.Response.Status.NOT_FOUND, "认证接口不存在")
         }
     }
@@ -1893,11 +1897,13 @@ rejectIfUserCannotMutate(session)?.let { return it }
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
-        val reserved = setOf("views", "cron", "notification-channels", "export", "import", "batch")
+        val reserved = setOf("views", "cron", "notification-channels", "export", "import", "batch", "labels", "groups")
         return when {
             segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务 ID 必须是正整数")
             id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "任务 ID 必须是正整数")
             normalizedUri == "/tasks/views" || normalizedUri == "/tasks/views/reorder" || normalizedUri.startsWith("/tasks/views/") -> serveTaskViews(session, normalizedUri)
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/labels" -> taskLabelCounts()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/groups" -> taskGroupCounts()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/tasks/cron/templates" ->
                 cronTemplates()
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/tasks/cron/parse" ->
@@ -1985,11 +1991,12 @@ rejectIfUserCannotMutate(session)?.let { return it }
         val segments = normalizedUri.trim('/').split('/')
         val id = segments.getOrNull(1)?.toLongOrNull()
         val action = segments.getOrNull(2)
-        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort", "by-name")
+        val reserved = setOf("groups", "export", "export-all", "export-files", "import", "batch", "sort", "by-name", "names")
         return when {
             segments.size > 1 && segments[1] !in reserved && id == null -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
             id != null && id <= 0 -> error(NanoHTTPD.Response.Status.BAD_REQUEST, "环境变量 ID 必须是正整数")
             session.method == NanoHTTPD.Method.GET && normalizedUri.endsWith("/groups") -> envGroups()
+            session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/names" -> envNameCounts()
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export" -> exportEnvs(asObject = true)
             session.method == NanoHTTPD.Method.GET && normalizedUri == "/envs/export-all" -> exportEnvs(asObject = false)
             session.method == NanoHTTPD.Method.POST && normalizedUri == "/envs/export-files" -> exportEnvFiles(body(session))
@@ -6610,6 +6617,151 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             for (groupIndex in 0 until groups.length()) unique += groups.optString(groupIndex)
         }
         return ok(JSONObject().put("data", JSONArray(unique.toList())))
+    }
+
+    // ===== v2.1.1 补齐:任务标签/分组计数、变量名列表、系统角标、用户偏好、MCP、通知渠道别名 =====
+
+    private fun taskLabelCounts(): NanoHTTPD.Response {
+        val counts = mutableMapOf<String, Int>()
+        try {
+            readableDatabase.rawQuery(
+                "SELECT labels FROM tasks WHERE labels IS NOT NULL AND labels != '' AND labels != '[]'",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val raw = cursor.getString(0) ?: continue
+                    try {
+                        val arr = JSONArray(raw)
+                        for (i in 0 until arr.length()) {
+                            val label = arr.optString(i)
+                            if (label.isBlank() || label.startsWith("分组:") || label.startsWith("subscription:")) continue
+                            counts[label] = (counts[label] ?: 0) + 1
+                        }
+                    } catch (_: org.json.JSONException) { }
+                }
+            }
+        } catch (_: Exception) { }
+        val data = JSONArray()
+        counts.entries.sortedBy { it.key }.forEach { (name, count) ->
+            data.put(JSONObject().put("name", name).put("count", count))
+        }
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun taskGroupCounts(): NanoHTTPD.Response {
+        val counts = mutableMapOf<String, Int>()
+        try {
+            readableDatabase.rawQuery(
+                "SELECT labels FROM tasks WHERE labels LIKE ?",
+                arrayOf("%分组:%")
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val raw = cursor.getString(0) ?: continue
+                    try {
+                        val arr = JSONArray(raw)
+                        for (i in 0 until arr.length()) {
+                            val label = arr.optString(i)
+                            if (label.startsWith("分组:")) {
+                                val name = label.removePrefix("分组:")
+                                if (name.isNotBlank()) counts[name] = (counts[name] ?: 0) + 1
+                            }
+                        }
+                    } catch (_: org.json.JSONException) { }
+                }
+            }
+        } catch (_: Exception) { }
+        val data = JSONArray()
+        counts.entries.sortedBy { it.key }.forEach { (name, count) ->
+            data.put(JSONObject().put("name", name).put("count", count))
+        }
+        return ok(JSONObject().put("data", data))
+    }
+
+    private fun envNameCounts(): NanoHTTPD.Response {
+        val data = JSONArray()
+        try {
+            readableDatabase.rawQuery(
+                "SELECT name, COUNT(*) AS cnt FROM envs WHERE name != '' GROUP BY name ORDER BY name ASC",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    data.put(JSONObject().put("name", cursor.getString(0)).put("count", cursor.getInt(1)))
+                }
+            }
+        } catch (_: Exception) { }
+        return ok(JSONObject().put("data", data))
+    }
+
+    fun serveSystemBadges(): NanoHTTPD.Response {
+        val db = readableDatabase
+        val tasksRunning = try {
+            db.rawQuery("SELECT COUNT(*) FROM tasks WHERE status = 2", null).use { it.moveToFirst(); it.getLong(0) }
+        } catch (_: Exception) { 0L }
+        val today = java.time.LocalDate.now().atStartOfDay().toString()
+        val logsFailedToday = try {
+            db.rawQuery("SELECT COUNT(*) FROM task_logs_local WHERE created_at >= ? AND status = 1", arrayOf(today)).use { it.moveToFirst(); it.getLong(0) }
+        } catch (_: Exception) { 0L }
+        val subsFailed = try {
+            db.rawQuery("SELECT COUNT(*) FROM local_subscriptions WHERE status = 1", null).use { it.moveToFirst(); it.getLong(0) }
+        } catch (_: Exception) { 0L }
+        val depsFailed = try {
+            db.rawQuery("SELECT COUNT(*) FROM local_dependencies WHERE status = 'failed'", null).use { it.moveToFirst(); it.getLong(0) }
+        } catch (_: Exception) { 0L }
+        val depsInstalling = try {
+            db.rawQuery("SELECT COUNT(*) FROM local_dependencies WHERE status = 'installing'", null).use { it.moveToFirst(); it.getLong(0) }
+        } catch (_: Exception) { 0L }
+        return ok(JSONObject().put("data", JSONObject()
+            .put("tasks_running", tasksRunning)
+            .put("logs_failed_today", logsFailedToday)
+            .put("subs_failed", subsFailed)
+            .put("deps_failed", depsFailed)
+            .put("deps_installing", depsInstalling)))
+    }
+
+    private fun ensureUserPreferencesTable() {
+        writableDatabase.execSQL(
+            "CREATE TABLE IF NOT EXISTS user_preferences (user_id INTEGER PRIMARY KEY, preferences TEXT NOT NULL DEFAULT '{}')"
+        )
+    }
+
+    private fun getUserPreferences(userId: Long): NanoHTTPD.Response {
+        ensureUserPreferencesTable()
+        val stored = try {
+            readableDatabase.rawQuery(
+                "SELECT preferences FROM user_preferences WHERE user_id = ?",
+                arrayOf(userId.toString())
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        } catch (_: Exception) { null }
+        val payload = if (stored != null) {
+            try { JSONObject(stored) } catch (_: Exception) { JSONObject() }
+        } else {
+            JSONObject()
+        }
+        return ok(JSONObject().put("data", payload))
+    }
+
+    private fun updateUserPreferences(userId: Long, requestBody: String): NanoHTTPD.Response {
+        ensureUserPreferencesTable()
+        val payload = try {
+            JSONObject(requestBody)
+        } catch (_: Exception) {
+            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请求参数错误")
+        }
+        writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO user_preferences (user_id, preferences) VALUES (?, ?)",
+            arrayOf(userId.toString(), payload.toString())
+        )
+        return ok(JSONObject().put("message", "更新成功"))
+    }
+
+    fun serveNotificationChannelsList(): NanoHTTPD.Response {
+        return ok(JSONObject().put("data", notificationRows()))
+    }
+
+    fun serveMcp(): NanoHTTPD.Response {
+        // MCP 协议需要完整的 Go 运行时;本机实现按 Go 默认(未开启)口径回应,
+        // 与服务端 GET /mcp 在 mcp_enabled=false 时的行为逐字一致。
+        return error(NanoHTTPD.Response.Status.FORBIDDEN, "MCP 服务未开启，请管理员在「系统设置 → MCP 服务」中启用")
     }
 
     private fun normalizeGroups(json: JSONObject): JSONArray {
