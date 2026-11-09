@@ -6740,16 +6740,11 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
         return ok(JSONObject().put("data", payload))
     }
 
-    private fun updateUserPreferences(userId: Long, requestBody: String): NanoHTTPD.Response {
+    private fun updateUserPreferences(userId: Long, requestBody: JSONObject): NanoHTTPD.Response {
         ensureUserPreferencesTable()
-        val payload = try {
-            JSONObject(requestBody)
-        } catch (_: Exception) {
-            return error(NanoHTTPD.Response.Status.BAD_REQUEST, "请求参数错误")
-        }
         writableDatabase.execSQL(
             "INSERT OR REPLACE INTO user_preferences (user_id, preferences) VALUES (?, ?)",
-            arrayOf(userId.toString(), payload.toString())
+            arrayOf(userId.toString(), requestBody.toString())
         )
         return ok(JSONObject().put("message", "更新成功"))
     }
