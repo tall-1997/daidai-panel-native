@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.1 - 2026-11-09
+
+### 修复
+
+- 交互终端路由在服务端/移动端统一注册,API 面板与 App 共用同一套终端接口。
+- 任务标签列表(`GET /tasks/labels`)与分组列表(`GET /tasks/groups`)不再被 `GET /tasks/:id` 参数路由捕获,App 内标签筛选正常工作。
+- 环境变量名列表(`GET /envs/names`)不再被 `GET /envs/:id` 捕获。
+- 认证偏好(`GET+PUT /api/auth/preferences`)在移动端核心补齐注册,App 内用户偏好正常读写。
+- 侧栏角标(`GET /api/system/badges`)在移动端核心补齐注册。
+- MCP 服务状态路由在移动端核心补齐注册,默认未开启时与 Go 面板口径一致。
+- 通知渠道列表(`GET /api/notification-channels`)别名在移动端核心补齐。
+
+### 优化
+
+- 冒烟测试脚本路径修正(`/cron/templates` → `/tasks/cron/templates`)、MCP 默认 403 口径适配。
+- 冒烟测试新增移动端路由冲突 SKIP 逻辑,方便区分脚本误报与面板真 bug。
+
 ## v2.1.0 - 2026-11-02
 
 ### 面板同步
