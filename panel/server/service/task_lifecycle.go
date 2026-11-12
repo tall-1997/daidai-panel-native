@@ -70,9 +70,27 @@ func markActiveTasksInterrupted(reason string, resolve taskStatusResolver) int {
 	interruptedCount := 0
 	for i := range tasks {
 		task := &tasks[i]
-		duration := interruptedTaskDuration(task, now)
 		targetStatus := resolve(task)
 
+		if task.Status == model.TaskStatusQueued {
+			// 排队中的任务从未真正执行（执行线程还没为它写过 running 日志）：
+			// 只复位 status（清 pid/log_path），不写 last_run_status / last_running_time、
+			// 不结算日志，避免冷启动把没跑过的任务误标成停止/失败。
+			if err := database.DB.Model(task).Updates(map[string]interface{}{
+				"status":   targetStatus,
+				"pid":      gorm.Expr("NULL"),
+				"log_path": gorm.Expr("NULL"),
+			}).Error; err != nil {
+				log.Printf("reset queued task %d failed: %v", task.ID, err)
+			}
+			continue
+		}
+
+		duration := interruptedTaskDuration(task, now)
+
+		// status=running 视为确实跑过（或正在跑）：结算为中断、写 last_run_status；
+		// 有 running 日志就收口，没有（例如运行中的日志行被删）就另建一行失败日志——
+		// 同一次执行在趋势里算两次是已接受的例外（handler 层 H4 用例钉住）。
 		if err := database.DB.Model(task).Updates(map[string]interface{}{
 			"status":            targetStatus,
 			"last_run_status":   failedRunStatus,

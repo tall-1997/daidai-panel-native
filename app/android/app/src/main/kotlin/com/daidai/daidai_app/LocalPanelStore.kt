@@ -789,6 +789,7 @@ class LocalPanelStore(
         normalizeAndDeduplicateDependencies(db)
         db.execSQL("UPDATE notification_channels SET type='pushplus' WHERE lower(type)='pludplus'")
         cleanupStorage(db)
+        settleInterruptedTasksOnStartup(db)
     }
 
     private fun normalizeAndDeduplicateDependencies(db: SQLiteDatabase) {
@@ -3350,7 +3351,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
     private fun taskRunStatusCode(value: String): Any = when (value.trim().lowercase()) {
         "success" -> 0
         "failed" -> 1
-        "aborted", "stopped" -> 2
+        "aborted", "stopped" -> 3
         "running" -> 2
         else -> JSONObject.NULL
     }
@@ -4763,6 +4764,7 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
                 taskAbortRequested.add(id)
                 taskRetrySignals[id]?.countDown()
                 taskProcesses[id]?.let(::terminateTaskProcess)
+                settleInterruptedTask(id)
             }
             return ok(JSONObject().put("data", JSONObject().put("id", id).put("run_status", "aborting")))
         }
@@ -5027,6 +5029,72 @@ rejectIfUserBelowRole(session, "operator")?.let { return it }
             }, "id = ?", arrayOf(id.toString()))
             taskFinalizedIds.add(id)
             finalizeTaskOperation(id, result)
+        }
+    }
+
+    /**
+     * 停止路径拿到停止锁后立即结算库内运行态，不等执行线程自己收尾。
+     *
+     * 进程可能被强杀、执行线程未必走到 executeTaskAndSave 的 synchronized 收尾块，
+     * 库里的 status 会永远挂在 2.0（运行中）。这里在停止锁内立刻写回 status=1.0、
+     * last_run_status=aborted，并收口 running 日志；执行线程随后若仍能收尾，
+     * 会用相同口径覆盖，不冲突。
+     */
+    private fun settleInterruptedTask(id: Long) {
+        val startedAt = taskRunStartedAt[id] ?: return
+        val endedAt = Instant.now()
+        val duration = (endedAt.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0
+        val lines = taskRunLogsMemory[id]?.let { synchronized(it) { it.toList() } }.orEmpty()
+        val result = LocalScriptResult(JSONArray(lines), "aborted", true, 130)
+        taskRunLogIds[id]?.let { finishTaskLog(id, it, result, startedAt, endedAt) }
+        writableDatabase.update("tasks", ContentValues().apply {
+            put("status", 1.0)
+            put("last_run_status", "aborted")
+            put("last_run_logs", result.logs.toString())
+            put("last_running_time", duration)
+            taskRunLogIds[id]?.let { put("last_log_id", it) }
+            put("updated_at", endedAt.toString())
+        }, "id = ?", arrayOf(id.toString()))
+        taskFinalizedIds.add(id)
+    }
+
+    /**
+     * 冷启动结算：进程重启后内存进程表是空的，库里残留的 status=2（运行中）必须按真实进程结算。
+     * 有 running 日志的说明确实在跑过，收口为 aborted；没有 running 日志的只复位 status，
+     * 不写 last_run_status、不建日志，避免把没运行的任务误标成停止。
+     */
+    private fun settleInterruptedTasksOnStartup(db: SQLiteDatabase) {
+        val runningTaskIds = mutableListOf<Long>()
+        db.query("tasks", arrayOf("id"), "status = 2", null, null, null, null).use { cursor ->
+            while (cursor.moveToNext()) runningTaskIds += cursor.long("id")
+        }
+        if (runningTaskIds.isEmpty()) return
+        val now = Instant.now()
+        runningTaskIds.forEach { id ->
+            val hasRunningLog = db.query("task_logs_local", arrayOf("id"), "task_id = ? AND status = 2 AND ended_at = ''", arrayOf(id.toString()), null, null, null).use { cursor -> cursor.moveToFirst() }
+            if (hasRunningLog) {
+                var startedAt: Instant? = null
+                db.query("task_logs_local", arrayOf("started_at"), "task_id = ? AND status = 2 AND ended_at = ''", arrayOf(id.toString()), null, null, null).use { cursor ->
+                    if (cursor.moveToFirst()) startedAt = runCatching { Instant.parse(cursor.string("started_at")) }.getOrNull()
+                }
+                val duration = if (startedAt != null) (now.toEpochMilli() - startedAt.toEpochMilli()) / 1000.0 else 0.0
+                db.update("task_logs_local", ContentValues().apply {
+                    put("status", 3)
+                    put("ended_at", now.toString())
+                    put("duration", duration)
+                }, "task_id = ? AND status = 2 AND ended_at = ''", arrayOf(id.toString()))
+                db.update("tasks", ContentValues().apply {
+                    put("status", 1.0)
+                    put("last_run_status", "aborted")
+                    put("last_running_time", duration)
+                    put("updated_at", now.toString())
+                }, "id = ?", arrayOf(id.toString()))
+            } else {
+                db.update("tasks", ContentValues().apply {
+                    put("status", 1.0)
+                    put("updated_at", now.toString())
+                }, "id = ?", arrayOf(id.toString()))
+            }
         }
     }
 
