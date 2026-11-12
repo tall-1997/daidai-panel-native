@@ -70,36 +70,40 @@ func markActiveTasksInterrupted(reason string, resolve taskStatusResolver) int {
 	interruptedCount := 0
 	for i := range tasks {
 		task := &tasks[i]
-		duration := interruptedTaskDuration(task, now)
 		targetStatus := resolve(task)
 
-		// 只有确实在跑过的任务（库里有 running 日志）才结算为中断、写 last_run_status 并收口日志；
-		// 从没跑过的（status 只是残留、没有 running 日志）只复位 status，不写 last_run_status、
-		// 不新建中断日志，避免冷启动把未运行的任务误标成停止/失败。
-		var runningLog model.TaskLog
-		hasRunningLog := database.DB.
-			Where("task_id = ? AND status = ?", task.ID, model.LogStatusRunning).
-			Order("started_at DESC").
-			First(&runningLog).Error == nil
+		if task.Status == model.TaskStatusQueued {
+			// 排队中的任务从未真正执行（执行线程还没为它写过 running 日志）：
+			// 只复位 status（清 pid/log_path），不写 last_run_status / last_running_time、
+			// 不结算日志，避免冷启动把没跑过的任务误标成停止/失败。
+			if err := database.DB.Model(task).Updates(map[string]interface{}{
+				"status":   targetStatus,
+				"pid":      gorm.Expr("NULL"),
+				"log_path": gorm.Expr("NULL"),
+			}).Error; err != nil {
+				log.Printf("reset queued task %d failed: %v", task.ID, err)
+			}
+			continue
+		}
 
-		updates := map[string]interface{}{
+		duration := interruptedTaskDuration(task, now)
+
+		// status=running 视为确实跑过（或正在跑）：结算为中断、写 last_run_status；
+		// 有 running 日志就收口，没有（例如运行中的日志行被删）就另建一行失败日志——
+		// 同一次执行在趋势里算两次是已接受的例外（handler 层 H4 用例钉住）。
+		if err := database.DB.Model(task).Updates(map[string]interface{}{
 			"status":            targetStatus,
+			"last_run_status":   failedRunStatus,
 			"last_running_time": duration,
 			"pid":               gorm.Expr("NULL"),
 			"log_path":          gorm.Expr("NULL"),
-		}
-		if hasRunningLog {
-			updates["last_run_status"] = failedRunStatus
-		}
-		if err := database.DB.Model(task).Updates(updates).Error; err != nil {
+		}).Error; err != nil {
 			log.Printf("mark task %d interrupted failed: %v", task.ID, err)
 			continue
 		}
 
-		if hasRunningLog {
-			markTaskLogInterrupted(task, reason, now, duration)
-			interruptedCount++
-		}
+		markTaskLogInterrupted(task, reason, now, duration)
+		interruptedCount++
 	}
 
 	return interruptedCount
