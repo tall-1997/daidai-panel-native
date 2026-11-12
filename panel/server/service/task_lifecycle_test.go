@@ -161,7 +161,7 @@ func TestMarkActiveTasksInterruptedDoesNotMarkStaleTaskWithoutRunningLog(t *test
 	if updated.PID != nil {
 		t.Fatalf("expected pid to be cleared, got %#v", updated.PID)
 	}
-	if updated.LastRunStatus != nil && *updated.LastRunStatus != "" {
+	if updated.LastRunStatus != nil && *updated.LastRunStatus != 0 {
 		t.Fatalf("expected last_run_status empty for task without running log, got %#v", updated.LastRunStatus)
 	}
 
