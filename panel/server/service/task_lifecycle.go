@@ -73,19 +73,33 @@ func markActiveTasksInterrupted(reason string, resolve taskStatusResolver) int {
 		duration := interruptedTaskDuration(task, now)
 		targetStatus := resolve(task)
 
-		if err := database.DB.Model(task).Updates(map[string]interface{}{
+		// 只有确实在跑过的任务（库里有 running 日志）才结算为中断、写 last_run_status 并收口日志；
+		// 从没跑过的（status 只是残留、没有 running 日志）只复位 status，不写 last_run_status、
+		// 不新建中断日志，避免冷启动把未运行的任务误标成停止/失败。
+		var runningLog model.TaskLog
+		hasRunningLog := database.DB.
+			Where("task_id = ? AND status = ?", task.ID, model.LogStatusRunning).
+			Order("started_at DESC").
+			First(&runningLog).Error == nil
+
+		updates := map[string]interface{}{
 			"status":            targetStatus,
-			"last_run_status":   failedRunStatus,
 			"last_running_time": duration,
 			"pid":               gorm.Expr("NULL"),
 			"log_path":          gorm.Expr("NULL"),
-		}).Error; err != nil {
+		}
+		if hasRunningLog {
+			updates["last_run_status"] = failedRunStatus
+		}
+		if err := database.DB.Model(task).Updates(updates).Error; err != nil {
 			log.Printf("mark task %d interrupted failed: %v", task.ID, err)
 			continue
 		}
 
-		markTaskLogInterrupted(task, reason, now, duration)
-		interruptedCount++
+		if hasRunningLog {
+			markTaskLogInterrupted(task, reason, now, duration)
+			interruptedCount++
+		}
 	}
 
 	return interruptedCount

@@ -102,8 +102,9 @@ func TestMarkActiveTasksInterruptedUsesSchedulerRegistration(t *testing.T) {
 	}
 
 	count := MarkActiveTasksInterrupted("面板关闭，任务已中断")
-	if count != 1 {
-		t.Fatalf("expected 1 interrupted task, got %d", count)
+	// 修复后：没有 running 日志的任务不计入中断数（没真正跑过），但 status 仍被复位。
+	if count != 0 {
+		t.Fatalf("expected 0 interrupted tasks without running log, got %d", count)
 	}
 
 	var updated model.Task
@@ -112,5 +113,61 @@ func TestMarkActiveTasksInterruptedUsesSchedulerRegistration(t *testing.T) {
 	}
 	if updated.Status != model.TaskStatusEnabled {
 		t.Fatalf("expected registered manual task to return enabled, got %v", updated.Status)
+	}
+}
+
+func TestMarkActiveTasksInterruptedDoesNotMarkStaleTaskWithoutRunningLog(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	database.EnsureColumns()
+
+	previousScheduler := globalScheduler.Load()
+	globalScheduler.Store(NewSchedulerV2(SchedulerConfig{WorkerCount: 1, QueueSize: 10, RateInterval: time.Hour}, nil))
+	t.Cleanup(func() {
+		globalScheduler.Store(previousScheduler)
+	})
+
+	now := time.Now().Add(-1 * time.Minute)
+	pid := 99999
+	task := &model.Task{
+		Name:      "stale running without log",
+		Command:   "echo hi",
+		TaskType:  model.TaskTypeManual,
+		Status:    model.TaskStatusRunning,
+		LastRunAt: &now,
+		PID:       &pid,
+	}
+	if err := database.DB.Create(task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := globalScheduler.Load().AddJob(task); err != nil {
+		t.Fatalf("register task: %v", err)
+	}
+
+	var logCountBefore int64
+	database.DB.Model(&model.TaskLog{}).Where("task_id = ?", task.ID).Count(&logCountBefore)
+
+	count := MarkActiveTasksInterrupted("面板关闭，任务已中断")
+	if count != 0 {
+		t.Fatalf("expected 0 interrupted tasks without running log, got %d", count)
+	}
+
+	var updated model.Task
+	if err := database.DB.First(&updated, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if updated.Status != model.TaskStatusEnabled {
+		t.Fatalf("expected task to return to enabled, got %v", updated.Status)
+	}
+	if updated.PID != nil {
+		t.Fatalf("expected pid to be cleared, got %#v", updated.PID)
+	}
+	if updated.LastRunStatus != nil && *updated.LastRunStatus != "" {
+		t.Fatalf("expected last_run_status empty for task without running log, got %#v", updated.LastRunStatus)
+	}
+
+	var logCountAfter int64
+	database.DB.Model(&model.TaskLog{}).Where("task_id = ?", task.ID).Count(&logCountAfter)
+	if logCountAfter != logCountBefore {
+		t.Fatalf("expected no new log entries for stale task without running log, got %d (before: %d)", logCountAfter, logCountBefore)
 	}
 }
